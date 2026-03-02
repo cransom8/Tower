@@ -14,7 +14,7 @@ const app = express();
 app.use(cors());
 
 // Serve client at /client
-app.use("/client", express.static(path.join(__dirname, "..", "client")));
+app.use("/client", express.static(path.join(__dirname, "client")));
 
 const server = http.createServer(app);
 const io = new Server(server, {
