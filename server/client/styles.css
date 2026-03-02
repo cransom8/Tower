@@ -1352,3 +1352,406 @@ html, body {
 .ml-remove-ai-btn:hover {
   background: rgba(200, 64, 64, 0.15);
 }
+
+/* ── ML Mobile-First UI Redesign ────────────────────────────────────────────── */
+
+@keyframes barracksFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(40, 192, 176, 0); }
+  35%  { box-shadow: 0 0 0 60px rgba(40, 192, 176, 0.3); }
+  100% { box-shadow: 0 0 0 100px rgba(40, 192, 176, 0); }
+}
+
+#game-canvas-wrap.barracks-upgraded {
+  animation: barracksFlash 0.85s ease-out 1;
+}
+
+@keyframes mibGoldFlash {
+  0%   { color: var(--gold); text-shadow: none; }
+  30%  { color: #fff4a0; text-shadow: 0 0 10px rgba(255,240,100,0.9); }
+  100% { color: var(--gold); text-shadow: none; }
+}
+
+/* ── ML Info Bar ──────────────────────────────────────────────────────────── */
+
+#ml-info-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  display: none; /* set to flex in ML mode */
+  align-items: center;
+  gap: 0;
+  padding: 0 8px;
+  background: rgba(8, 11, 18, 0.94);
+  border-bottom: 2px solid var(--gold2);
+  z-index: 10;
+  pointer-events: auto;
+  font-family: 'Share Tech Mono', monospace;
+  overflow: hidden;
+}
+
+.mib-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border-right: 1px solid var(--muted2);
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.mib-icon {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+.mib-lives-group #mib-lives {
+  font-size: 1rem;
+  color: #ff7070;
+  font-weight: bold;
+}
+
+.mib-gold-group #mib-gold {
+  font-size: 1rem;
+  color: var(--gold);
+  font-weight: bold;
+}
+
+.mib-gold-val.mib-gold-flash {
+  animation: mibGoldFlash 0.55s ease-out 1;
+}
+
+.mib-income-group {
+  gap: 6px;
+}
+
+.mib-income-group #mib-income {
+  font-size: 0.75rem;
+  color: var(--green);
+}
+
+.mib-income-group #mib-timer {
+  font-size: 0.65rem;
+  color: var(--muted);
+  min-width: 24px;
+}
+
+.mib-timer-svg {
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+
+.mtr-track {
+  fill: none;
+  stroke: rgba(40, 192, 176, 0.2);
+  stroke-width: 3;
+}
+
+.mtr-fill {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s linear;
+}
+
+.mib-barracks-btn {
+  background: rgba(232, 168, 40, 0.1);
+  border: 1px solid var(--gold2);
+  border-radius: 5px;
+  color: var(--gold);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.6rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.mib-barracks-btn:hover:not(:disabled) {
+  background: rgba(232, 168, 40, 0.22);
+}
+
+.mib-barracks-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── ML Lane Tabs ─────────────────────────────────────────────────────────── */
+
+#ml-lane-tabs {
+  position: absolute;
+  top: 44px;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: none; /* set to flex in ML mode */
+  align-items: stretch;
+  overflow-x: auto;
+  background: rgba(8, 11, 18, 0.9);
+  border-bottom: 1px solid var(--muted2);
+  z-index: 10;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+
+#ml-lane-tabs::-webkit-scrollbar { display: none; }
+
+.lane-tab {
+  flex: 1;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.55rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-right: 1px solid var(--muted2);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.lane-tab:last-child { border-right: none; }
+.lane-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+
+.lane-tab-mine { color: var(--teal); }
+.lane-tab-mine.lane-tab-active {
+  border-bottom-color: var(--teal);
+  background: rgba(40, 192, 176, 0.08);
+  color: var(--teal);
+}
+
+.lane-tab-enemy { color: var(--muted); }
+.lane-tab-enemy.lane-tab-active {
+  border-bottom-color: var(--red);
+  background: rgba(255, 58, 58, 0.08);
+  color: #ff9090;
+}
+
+.lane-tab-lives {
+  font-size: 0.5rem;
+  color: #ff7070;
+}
+
+/* ── ML Command Bar ───────────────────────────────────────────────────────── */
+
+#ml-cmd-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 72px;
+  display: none; /* set to flex in ML mode */
+  align-items: stretch;
+  background: rgba(8, 11, 18, 0.95);
+  border-top: 1px solid var(--stone3);
+  z-index: 10;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.cmd-build-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-right: 1px solid var(--muted2);
+  flex-shrink: 0;
+}
+
+.cmd-wall-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 52px;
+  height: 56px;
+  background: rgba(40, 80, 100, 0.2);
+  border: 1px solid rgba(58, 144, 255, 0.4);
+  border-radius: 5px;
+  color: #7ab8e8;
+  font-family: 'Share Tech Mono', monospace;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.cmd-wall-btn:hover:not(:disabled) { background: rgba(40, 80, 100, 0.38); }
+.cmd-wall-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+.cwb-icon { font-size: 1.1rem; line-height: 1; }
+.cwb-label { font-size: 0.44rem; text-transform: uppercase; letter-spacing: 0.1em; }
+.cwb-cost  { font-size: 0.6rem; color: var(--gold); }
+
+.cmd-units-zone {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.cmd-units-zone::-webkit-scrollbar { display: none; }
+
+.cmd-unit-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  flex: 1;
+  min-width: 56px;
+  padding: 4px 4px;
+  background: rgba(232, 168, 40, 0.06);
+  border: none;
+  border-right: 1px solid rgba(60, 70, 80, 0.5);
+  border-left: 2px solid var(--teal);
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.cmd-unit-btn:hover:not(:disabled) { background: rgba(232, 168, 40, 0.14); }
+.cmd-unit-btn:active:not(:disabled) { background: rgba(232, 168, 40, 0.24); transform: scaleY(0.97); }
+.cmd-unit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.cmd-unit-btn.cmd-unit-nogold { opacity: 0.35; cursor: not-allowed; }
+.cmd-unit-btn.cmd-unit-nogold:hover { background: none; }
+.cmd-unit-btn:last-child { border-right: none; }
+
+.cub-auto {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.44rem;
+  font-weight: bold;
+  border-radius: 3px;
+  background: rgba(30, 40, 55, 0.8);
+  border: 1px solid var(--stone3);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.12s;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.cub-auto-on {
+  background: rgba(40, 192, 176, 0.25);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 0 5px rgba(40, 192, 176, 0.4);
+}
+
+.cub-num    { font-size: 0.44rem; color: var(--muted); line-height: 1; }
+.cub-name   { font-size: 0.62rem; font-weight: bold; color: var(--text); line-height: 1; }
+.cub-cost   { font-size: 0.62rem; color: var(--gold); line-height: 1; }
+.cub-income { font-size: 0.44rem; color: var(--green); line-height: 1; }
+
+.cmd-ctrl-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-left: 1px solid var(--muted2);
+  flex-shrink: 0;
+}
+
+.cmd-auto-btn {
+  width: 44px;
+  padding: 3px 4px;
+  background: rgba(40, 50, 60, 0.6);
+  border: 1px solid var(--stone3);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.44rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.12s;
+  line-height: 1.35;
+}
+
+.cmd-auto-btn:hover { background: rgba(40, 192, 176, 0.1); border-color: var(--teal); color: var(--teal); }
+.cmd-auto-btn.cmd-auto-on {
+  background: rgba(40, 192, 176, 0.2);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 0 6px rgba(40, 192, 176, 0.3);
+}
+
+.cmd-rate-row {
+  display: flex;
+  gap: 2px;
+}
+
+.cmd-rate-btn {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(40, 50, 60, 0.6);
+  border: 1px solid var(--stone3);
+  border-radius: 3px;
+  color: var(--muted);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.44rem;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.cmd-rate-btn:hover { border-color: var(--teal); color: var(--teal); }
+.cmd-rate-on {
+  background: rgba(40, 192, 176, 0.15);
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+/* ── Enemy lane tint / spectate notice ────────────────────────────────────── */
+
+#enemy-lane-tint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 3px solid rgba(255, 58, 58, 0.45);
+  z-index: 5;
+  display: none;
+}
+
+#ml-spectate-notice {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  background: rgba(255, 58, 58, 0.14);
+  border: 1px solid rgba(255, 58, 58, 0.4);
+  border-radius: 14px;
+  color: #ff9090;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  display: none;
+}
