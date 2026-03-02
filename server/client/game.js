@@ -42,7 +42,7 @@ const SNAPSHOT_MS = Math.floor(1000 / SNAPSHOT_HZ);
 let unitMeta = Object.assign({}, DEFAULT_UNIT_META);
 let towerMeta = Object.assign({}, DEFAULT_TOWER_META);
 let tickHz = 20;
-let gateHpStart = 100;
+let livesStart = 20;
 
 let lobbyState = 'idle';
 let myCode = null;
@@ -226,7 +226,7 @@ function drawWaiting() {
 function applyMatchConfig(config) {
   if (!config || typeof config !== 'object') return;
   if (Number.isFinite(config.tickHz)) tickHz = config.tickHz;
-  if (Number.isFinite(config.gateHpStart)) gateHpStart = config.gateHpStart;
+  if (Number.isFinite(config.livesStart)) livesStart = config.livesStart;
 
   if (config.unitDefs) {
     const next = {};
@@ -466,13 +466,13 @@ function localizeState(state) {
     me: {
       gold: Number(meRaw.gold) || 0,
       income: Number(meRaw.income) || 0,
-      gateHp: Number(meRaw.gateHp) || gateHpStart,
+      lives: Number(meRaw.lives) || livesStart,
       towers: localizeTowers(meRaw),
     },
     enemy: {
       gold: Number(enRaw.gold) || 0,
       income: Number(enRaw.income) || 0,
-      gateHp: Number(enRaw.gateHp) || gateHpStart,
+      lives: Number(enRaw.lives) || livesStart,
       towers: localizeTowers(enRaw),
     },
     units,
@@ -565,8 +565,8 @@ function drawBattlefield(local) {
   ctx.restore();
 
   // ── Castle gate structures ────────────────────────────────
-  drawCastleGateStructure(local.enemy.gateHp, gateHpStart, laneX, laneW, w, h * 0.06, '#ff3a3a', true);
-  drawCastleGateStructure(local.me.gateHp,    gateHpStart, laneX, laneW, w, h * 0.94, '#28c0b0', false);
+  drawCastleGateStructure(local.enemy.lives, livesStart, laneX, laneW, w, h * 0.06, '#ff3a3a', true);
+  drawCastleGateStructure(local.me.lives,    livesStart, laneX, laneW, w, h * 0.94, '#28c0b0', false);
 
   // ── Enemy tower icons + my tower slot positions ───────────
   drawTowerIcons(local.enemy.towers, false, laneX, laneW, h);
@@ -2255,19 +2255,19 @@ function drawMLGridLane(lane) {
 
   ctx.restore(); // end translate(offsetX, 0)
 
-  // Gate HP bar — full width at bottom
+  // Lives bar — full width at bottom
   const isMine = (viewingLaneIndex === myLaneIndex);
-  const gateRatio = Math.max(0, Math.min(1, lane.gateHp / gateHpStart));
+  const livesRatio = Math.max(0, Math.min(1, lane.lives / livesStart));
   const barY = h - 16;
   ctx.fillStyle = '#1a2030';
   ctx.fillRect(0, barY, w, 16);
   ctx.fillStyle = isMine ? '#28c0b0' : '#ff3a3a';
-  ctx.fillRect(0, barY, w * gateRatio, 16);
+  ctx.fillRect(0, barY, w * livesRatio, 16);
   ctx.fillStyle = '#dce7ef';
   ctx.font = '11px "Share Tech Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Gate HP: ' + Math.max(0, Math.floor(lane.gateHp)) + ' / ' + gateHpStart, w / 2, barY + 8);
+  ctx.fillText('♥ ' + Math.max(0, lane.lives) + ' / ' + livesStart, w / 2, barY + 8);
 
   // Eliminated overlay
   if (lane.eliminated) {

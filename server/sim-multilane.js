@@ -12,7 +12,7 @@ const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240; // 12 s
 const START_GOLD = 70;
-const GATE_HP_START = 100;
+const LIVES_START = 20;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 80;
 const GATE_KILL_BOUNTY = 10;
@@ -27,7 +27,6 @@ const CASTLE_YG = 27;
 const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 10×28 grid
 const MAX_WALLS = 100;
 const WALL_COST = 5;
-const ENGAGEMENT_SLOTS = 6;
 const SPLASH_RADIUS_TILES = 1.5;
 
 // pathSpeed = oldSpeedPerTick × GRID_H
@@ -212,7 +211,7 @@ function createMLGame(playerCount) {
       eliminated: false,
       gold: START_GOLD,
       income: 10,
-      gateHp: GATE_HP_START,
+      lives: LIVES_START,
       grid,
       path,
       wallCount: 0,
@@ -558,28 +557,21 @@ function mlTick(game) {
 
     // Unit movement
     const pathLen = lane.path ? lane.path.length : 1;
-    let engagedCount = 0;
-    for (const u of lane.units) {
-      if (u.hp > 0 && u.pathIdx >= pathLen - 1) engagedCount++;
-    }
 
     for (const u of lane.units) {
       if (u.hp <= 0) continue;
       const def = UNIT_DEFS[u.type];
 
-      // At gate
+      // Reached castle — remove 1 life and despawn
       if (u.pathIdx >= pathLen - 1) {
-        if (engagedCount <= ENGAGEMENT_SLOTS && u.atkCd <= 0) {
-          const structMult = def.structBonus ? (1 + def.structBonus) : 1;
-          lane.gateHp -= u.baseDmg * structMult;
-          u.atkCd = def.atkCdTicks;
-          if (lane.gateHp <= 0) {
-            lane.gateHp = 0;
-            lane.eliminated = true;
-            if (u.ownerLane !== lane.laneIndex) {
-              const ownerLane = game.lanes[u.ownerLane];
-              if (ownerLane) ownerLane.gold += GATE_KILL_BOUNTY;
-            }
+        lane.lives -= 1;
+        u.hp = 0; // despawn immediately
+        if (lane.lives <= 0) {
+          lane.lives = 0;
+          lane.eliminated = true;
+          if (u.ownerLane !== lane.laneIndex) {
+            const ownerLane = game.lanes[u.ownerLane];
+            if (ownerLane) ownerLane.gold += GATE_KILL_BOUNTY;
           }
         }
         continue;
@@ -653,15 +645,6 @@ function mlTick(game) {
         continue;
       }
 
-      if (p.targetKind === "gate") {
-        lane.gateHp -= p.dmg;
-        if (lane.gateHp <= 0) {
-          lane.gateHp = 0;
-          lane.eliminated = true;
-          const ownerLane = game.lanes[p.ownerLane];
-          if (ownerLane) ownerLane.gold += GATE_KILL_BOUNTY;
-        }
-      }
     }
     lane.projectiles = stillFlying;
 
@@ -723,7 +706,7 @@ function createMLSnapshot(game) {
         eliminated: lane.eliminated,
         gold: lane.gold,
         income: lane.income,
-        gateHp: lane.gateHp,
+        lives: lane.lives,
         barracksLevel: lane.barracks.level,
         wallCount: lane.wallCount,
         walls,
@@ -755,7 +738,7 @@ function createMLPublicConfig() {
     tickHz: TICK_HZ,
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
     startGold: START_GOLD,
-    gateHpStart: GATE_HP_START,
+    livesStart: LIVES_START,
     gridW: GRID_W,
     gridH: GRID_H,
     wallCost: WALL_COST,

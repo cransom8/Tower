@@ -14,7 +14,7 @@ const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 10 * TICK_HZ; // 10 seconds
 const START_GOLD = 70;
 const START_INCOME = 10;
-const GATE_HP_START = 100;
+const LIVES_START = 20;
 const ALLOWED_ACTION_TYPES = new Set(["spawn_unit", "build_tower", "upgrade_tower", "sell_tower"]);
 const TOWER_SLOTS = ["left_outer", "left_mid", "left_inner", "right_inner", "right_mid", "right_outer"];
 const TOWER_MAX_LEVEL = 10;
@@ -115,7 +115,7 @@ function createPublicConfig() {
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
     startGold: START_GOLD,
     startIncome: START_INCOME,
-    gateHpStart: GATE_HP_START,
+    livesStart: LIVES_START,
     unitDefs: UNIT_DEFS,
     towerDefs: TOWER_DEFS,
     towerMaxLevel: TOWER_MAX_LEVEL,
@@ -140,8 +140,8 @@ function createGame() {
     winner: null,
     incomeTickCounter: 0,
     players: {
-      bottom: { gold: START_GOLD, income: START_INCOME, gateHp: GATE_HP_START, towers: makeTowerSlots() },
-      top: { gold: START_GOLD, income: START_INCOME, gateHp: GATE_HP_START, towers: makeTowerSlots() },
+      bottom: { gold: START_GOLD, income: START_INCOME, lives: LIVES_START, towers: makeTowerSlots() },
+      top: { gold: START_GOLD, income: START_INCOME, lives: LIVES_START, towers: makeTowerSlots() },
     },
     units: [],
     nextUnitId: 1,
@@ -328,29 +328,25 @@ function tick(game) {
     const enemyGateY = u.side === "bottom" ? GATE_Y_TOP : GATE_Y_BOTTOM;
 
     if (u.side === "bottom" && u.y <= GATE_Y_TOP) {
-      if (u.atkCd <= 0) {
-        game.players.top.gateHp -= def.dmg;
-        u.atkCd = def.atkCdTicks;
-        if (game.players.top.gateHp <= 0) {
-          game.players.top.gateHp = 0;
-          game.phase = "ended";
-          game.winner = "bottom";
-          break;
-        }
+      game.players.top.lives -= 1;
+      deadIds.add(u.id);
+      if (game.players.top.lives <= 0) {
+        game.players.top.lives = 0;
+        game.phase = "ended";
+        game.winner = "bottom";
+        break;
       }
       continue;
     }
 
     if (u.side === "top" && u.y >= GATE_Y_BOTTOM) {
-      if (u.atkCd <= 0) {
-        game.players.bottom.gateHp -= def.dmg;
-        u.atkCd = def.atkCdTicks;
-        if (game.players.bottom.gateHp <= 0) {
-          game.players.bottom.gateHp = 0;
-          game.phase = "ended";
-          game.winner = "top";
-          break;
-        }
+      game.players.bottom.lives -= 1;
+      deadIds.add(u.id);
+      if (game.players.bottom.lives <= 0) {
+        game.players.bottom.lives = 0;
+        game.phase = "ended";
+        game.winner = "top";
+        break;
       }
       continue;
     }
@@ -382,29 +378,6 @@ function tick(game) {
             goldGains[u.side] += UNIT_DEFS[target.type].bounty;
           }
         }
-        u.atkCd = def.atkCdTicks;
-      }
-      continue;
-    }
-
-    const gateDistance = Math.abs(u.y - enemyGateY);
-    if (def.ranged && gateDistance <= def.range) {
-      if (u.atkCd <= 0) {
-        game.projectiles.push({
-          id: `p${game.nextProjectileId++}`,
-          side: u.side,
-          sourceKind: "unit",
-          projectileType: u.type,
-          damageType: def.damageType,
-          targetKind: "gate",
-          targetSide: otherSide(u.side),
-          dmg: def.dmg,
-          startX: 0.5,
-          startY: u.y,
-          targetY: enemyGateY,
-          ticksRemaining: def.projectileTicks || 7,
-          ticksTotal: def.projectileTicks || 7,
-        });
         u.atkCd = def.atkCdTicks;
       }
       continue;
@@ -444,16 +417,6 @@ function tick(game) {
       continue;
     }
 
-    if (p.targetKind === "gate") {
-      const targetSide = p.targetSide;
-      if (targetSide !== "top" && targetSide !== "bottom") continue;
-      game.players[targetSide].gateHp -= p.dmg;
-      if (game.players[targetSide].gateHp <= 0) {
-        game.players[targetSide].gateHp = 0;
-        game.phase = "ended";
-        game.winner = otherSide(targetSide);
-      }
-    }
   }
   game.projectiles = stillFlying;
 
@@ -476,7 +439,7 @@ function createSnapshot(game) {
       bottom: {
         gold: game.players.bottom.gold,
         income: game.players.bottom.income,
-        gateHp: game.players.bottom.gateHp,
+        lives: game.players.bottom.lives,
         towers: {
           left_outer: packTower(game.players.bottom.towers.left_outer),
           left_mid: packTower(game.players.bottom.towers.left_mid),
@@ -489,7 +452,7 @@ function createSnapshot(game) {
       top: {
         gold: game.players.top.gold,
         income: game.players.top.income,
-        gateHp: game.players.top.gateHp,
+        lives: game.players.top.lives,
         towers: {
           left_outer: packTower(game.players.top.towers.left_outer),
           left_mid: packTower(game.players.top.towers.left_mid),
