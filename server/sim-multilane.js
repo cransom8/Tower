@@ -58,10 +58,10 @@ const TOWER_DEFS = {
 // Index 0 unused; index 1 = current level 1 stats, index 2 = level 2 upgrade target, etc.
 const BARRACKS_LEVELS = [
   null,
-  { hpMult: 1.00, dmgMult: 1.00, speedMult: 1.00, structMult: 1.00, cost: 0,   reqIncome: 0  },
-  { hpMult: 1.15, dmgMult: 1.10, speedMult: 1.00, structMult: 1.00, cost: 60,  reqIncome: 5  },
-  { hpMult: 1.30, dmgMult: 1.20, speedMult: 1.05, structMult: 1.00, cost: 120, reqIncome: 12 },
-  { hpMult: 1.45, dmgMult: 1.30, speedMult: 1.08, structMult: 1.10, cost: 200, reqIncome: 20 },
+  { hpMult: 1.00, dmgMult: 1.00, speedMult: 1.00, structMult: 1.00, incomeBonus: 0,   cost: 0,   reqIncome: 0  },
+  { hpMult: 1.15, dmgMult: 1.10, speedMult: 1.00, structMult: 1.00, incomeBonus: 0.5, cost: 100, reqIncome: 8  },
+  { hpMult: 1.30, dmgMult: 1.20, speedMult: 1.05, structMult: 1.00, incomeBonus: 1.0, cost: 220, reqIncome: 18 },
+  { hpMult: 1.45, dmgMult: 1.30, speedMult: 1.08, structMult: 1.10, incomeBonus: 2.0, cost: 400, reqIncome: 35 },
 ];
 
 const DAMAGE_MULTIPLIERS = {
@@ -216,7 +216,7 @@ function createMLGame(playerCount) {
       grid,
       path,
       wallCount: 0,
-      barracks: { level: 1, hpMult: 1, dmgMult: 1, speedMult: 1, structMult: 1 },
+      barracks: { level: 1, hpMult: 1, dmgMult: 1, speedMult: 1, structMult: 1, incomeBonus: 0 },
       units: [],
       spawnQueue: [],
       projectiles: [],
@@ -258,7 +258,7 @@ function applyMLAction(game, laneIndex, action) {
     if (lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return { ok: false, reason: "Spawn queue full" };
 
     lane.gold -= def.cost;
-    lane.income += def.income;
+    lane.income += def.income + (lane.barracks.incomeBonus || 0);
 
     // Round-robin: send units to lane on the right
     const targetLaneIndex = (laneIndex + 1) % game.playerCount;
@@ -342,6 +342,21 @@ function applyMLAction(game, laneIndex, action) {
     return { ok: true };
   }
 
+  if (type === "remove_wall") {
+    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
+    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
+    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
+      return { ok: false, reason: "Invalid grid position" };
+    }
+    const tile = lane.grid[gx][gy];
+    if (tile.type !== "wall") return { ok: false, reason: "Tile is not a wall" };
+    tile.type = "empty";
+    lane.gold += WALL_COST;
+    lane.wallCount -= 1;
+    lane.path = bfsPath(lane.grid) || lane.path;
+    return { ok: true };
+  }
+
   if (type === "upgrade_tower") {
     const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
     const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
@@ -377,6 +392,7 @@ function applyMLAction(game, laneIndex, action) {
       dmgMult: nextDef.dmgMult,
       speedMult: nextDef.speedMult,
       structMult: nextDef.structMult,
+      incomeBonus: nextDef.incomeBonus || 0,
     };
     return { ok: true };
   }
@@ -454,7 +470,7 @@ function mlTick(game) {
     if (!def || lane.gold < def.cost || lane.spawnQueue.length >= MAX_UNITS_PER_LANE) continue;
 
     lane.gold -= def.cost;
-    lane.income += def.income;
+    lane.income += def.income + (lane.barracks.incomeBonus || 0);
 
     const targetLaneIndex = (lane.laneIndex + 1) % game.playerCount;
     const targetLane = game.lanes[targetLaneIndex];

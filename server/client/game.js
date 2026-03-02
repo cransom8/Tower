@@ -81,6 +81,7 @@ const ML_CASTLE_YG = 27;
 
 let viewingLaneIndex = null;    // which lane is shown full-screen in ML mode
 let mlBarracksDefs = [];        // from ml_match_config.barracksLevels
+let mlMyBarracksIncomeBonus = 0; // income bonus from current barracks level
 let mlTileMenuJustOpened = false;
 let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
 let mlWallCost = 5;
@@ -286,7 +287,7 @@ function updateActionLabels() {
       + 'Atk ' + aps.toFixed(2) + '/s\n'
       + 'Move ' + laneSpeed.toFixed(2) + '%/s\n'
       + (gameMode !== 'multilane' ? 'Range ' + Math.round((m.range || 0) * 100) + '%\n' : '')
-      + 'Income +' + m.income + 'g\n'
+      + 'Income +' + (function(){ const v = m.income + mlMyBarracksIncomeBonus; return Number.isInteger(v) ? v : v.toFixed(1); })() + 'g\n'
       + 'Bounty +' + (m.bounty || m.income || 0) + 'g'
       + (m.special ? '\n' + m.special : '');
   });
@@ -1571,6 +1572,9 @@ function resetToLobby(msg) {
   if (autosendBar) autosendBar.style.display = 'none';
   viewingLaneIndex = null;
 
+  // Reset barracks income bonus
+  mlMyBarracksIncomeBonus = 0;
+
   // Reset auto-send state
   UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
   autosendRate = 'normal';
@@ -2519,6 +2523,19 @@ socket.on('ml_state_snapshot', state => {
   mlPreviousState = mlCurrentState || state;
   mlCurrentState = state;
   mlCurrentStateReceivedAt = performance.now();
+
+  // Refresh an open tower upgrade menu with authoritative data from the snapshot
+  if (mlActiveTile && mlTileMenu && mlTileMenu.style.display !== 'none') {
+    const lane = state.lanes && state.lanes[myLaneIndex];
+    if (lane) {
+      const tc = lane.towerCells && lane.towerCells.find(t => t.x === mlActiveTile.gx && t.y === mlActiveTile.gy);
+      if (tc) {
+        showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level);
+      } else {
+        closeMLTileMenu();
+      }
+    }
+  }
 });
 
 socket.on('ml_player_eliminated', data => {
@@ -2630,6 +2647,7 @@ function showMLWallConvertMenu(gx, gy) {
     const disabled = (!m || gold < m.cost) ? ' disabled' : '';
     html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-tower="${t}"${disabled}>${cap(t)} (${cost}g)</button>`;
   }
+  html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-remove-wall>Remove Wall (+${mlWallCost}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Cancel</button>';
   mlTileMenu.innerHTML = html;
 
@@ -2647,12 +2665,22 @@ function showMLWallConvertMenu(gx, gy) {
       closeMLTileMenu();
     });
   });
+  const removeWallBtn = mlTileMenu.querySelector('[data-remove-wall]');
+  if (removeWallBtn) {
+    removeWallBtn.addEventListener('click', () => {
+      const bx = Number(removeWallBtn.getAttribute('data-gx'));
+      const by = Number(removeWallBtn.getAttribute('data-gy'));
+      sendAction('remove_wall', { gridX: bx, gridY: by });
+      closeMLTileMenu();
+    });
+  }
   const closeBtn = mlTileMenu.querySelector('[data-close]');
   if (closeBtn) closeBtn.addEventListener('click', closeMLTileMenu);
 }
 
 function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
   if (!mlTileMenu) return;
+  mlActiveTile = { gx, gy };
   const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
   const gold = lane ? lane.gold : 0;
 
@@ -2683,11 +2711,13 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
 
   const upgradeBtn = mlTileMenu.querySelector('[data-upgrade]');
   if (upgradeBtn) {
-    upgradeBtn.addEventListener('click', () => {
+    upgradeBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // prevent window click-outside handler from closing the menu
       const bx = Number(upgradeBtn.getAttribute('data-gx'));
       const by = Number(upgradeBtn.getAttribute('data-gy'));
       sendAction('upgrade_tower', { gridX: bx, gridY: by });
-      closeMLTileMenu();
+      // Keep menu open and optimistically show next level so player can upgrade again
+      showMLTowerUpgradeMenu(bx, by, towerType, lvl + 1);
     });
   }
   const sellBtn = mlTileMenu.querySelector('[data-sell]');
@@ -2705,12 +2735,21 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
 
 function closeMLTileMenu() {
   if (mlTileMenu) mlTileMenu.style.display = 'none';
+  mlActiveTile = null;
 }
 
 function updateBarracksHud(lane) {
   if (!mlBarracksHud || !lane) return;
   const level = lane.barracksLevel || 1;
   if (mlBarracksLevel) mlBarracksLevel.textContent = String(level);
+
+  // Refresh send-button income labels if barracks bonus changed
+  const curDef = mlBarracksDefs[level - 1];
+  const bonus = curDef ? (curDef.incomeBonus || 0) : 0;
+  if (bonus !== mlMyBarracksIncomeBonus) {
+    mlMyBarracksIncomeBonus = bonus;
+    updateActionLabels();
+  }
 
   if (btnBarracksUpgrade) {
     const maxLevel = 4;
