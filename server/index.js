@@ -9,6 +9,7 @@ const { Server } = require("socket.io");
 
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
+const aiModule = require("./ai");
 
 const app = express();
 app.use(cors());
@@ -147,18 +148,32 @@ function createMLRoom(hostSocketId, displayName) {
     createdAt: Date.now(),
     mode: "multilane",
     hostSocketId,
+    aiPlayers: [], // [{ laneIndex, difficulty }]
   };
   mlRoomsByCode.set(code, room);
   return { code, roomId };
 }
 
 function mlLobbyUpdatePayload(code, room) {
-  const players = room.players.map(sid => ({
+  const humanPlayers = room.players.map(sid => ({
     laneIndex: room.laneBySocketId.get(sid),
     displayName: room.playerNames.get(sid) || "Player",
     ready: room.readySet.has(sid),
+    isAI: false,
   }));
+  const aiPlayers = (room.aiPlayers || []).map(ai => ({
+    laneIndex: ai.laneIndex,
+    displayName: "CPU (" + capFirst(ai.difficulty) + ")",
+    ready: true,
+    isAI: true,
+    difficulty: ai.difficulty,
+  }));
+  const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
   return { code, players, hostLaneIndex: 0 };
+}
+
+function capFirst(s) {
+  return String(s || "").charAt(0).toUpperCase() + String(s || "").slice(1);
 }
 
 function startMLGame(roomId, code, io) {
@@ -166,16 +181,29 @@ function startMLGame(roomId, code, io) {
   const room = mlRoomsByCode.get(code);
   if (!room) return;
 
-  const playerCount = room.players.length;
+  const humanCount = room.players.length;
+  const aiList = room.aiPlayers || [];
+  const playerCount = humanCount + aiList.length;
   const game = simMl.createMLGame(playerCount);
 
-  const laneAssignments = room.players.map(sid => ({
-    laneIndex: room.laneBySocketId.get(sid),
-    displayName: room.playerNames.get(sid) || "Player",
-  }));
+  const laneAssignments = [
+    ...room.players.map(sid => ({
+      laneIndex: room.laneBySocketId.get(sid),
+      displayName: room.playerNames.get(sid) || "Player",
+      isAI: false,
+    })),
+    ...aiList.map(ai => ({
+      laneIndex: ai.laneIndex,
+      displayName: "CPU (" + capFirst(ai.difficulty) + ")",
+      isAI: true,
+    })),
+  ];
 
   io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments });
   io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig());
+
+  // Start AI loops
+  const aiHandles = aiList.map(ai => aiModule.startAI(game, ai.laneIndex, ai.difficulty));
 
   const eliminatedNotified = new Set();
   let localTick = 0;
@@ -192,9 +220,12 @@ function startMLGame(roomId, code, io) {
     for (const lane of entry.game.lanes) {
       if (lane.eliminated && !entry.eliminatedNotified.has(lane.laneIndex)) {
         entry.eliminatedNotified.add(lane.laneIndex);
-        // Find which socket owns this lane
+        // Find which socket or AI owns this lane
         const eliminatedSid = room.players.find(sid => room.laneBySocketId.get(sid) === lane.laneIndex);
-        const displayName = room.playerNames.get(eliminatedSid) || "Player";
+        const aiEntry = (room.aiPlayers || []).find(ai => ai.laneIndex === lane.laneIndex);
+        const displayName = eliminatedSid
+          ? (room.playerNames.get(eliminatedSid) || "Player")
+          : (aiEntry ? "CPU (" + capFirst(aiEntry.difficulty) + ")" : "Player");
         io.to(roomId).emit("ml_player_eliminated", { laneIndex: lane.laneIndex, displayName });
         if (eliminatedSid) {
           io.to(eliminatedSid).emit("ml_spectator_join", { laneIndex: lane.laneIndex });
@@ -211,14 +242,19 @@ function startMLGame(roomId, code, io) {
       let winnerName = "Unknown";
       if (winnerLane !== null && winnerLane !== undefined) {
         const winnerSid = room.players.find(sid => room.laneBySocketId.get(sid) === winnerLane);
-        winnerName = room.playerNames.get(winnerSid) || "Player";
+        if (winnerSid) {
+          winnerName = room.playerNames.get(winnerSid) || "Player";
+        } else {
+          const winnerAi = (room.aiPlayers || []).find(ai => ai.laneIndex === winnerLane);
+          if (winnerAi) winnerName = "CPU (" + capFirst(winnerAi.difficulty) + ")";
+        }
       }
       io.to(roomId).emit("ml_game_over", { winnerLaneIndex: winnerLane, winnerName });
       stopMLGame(roomId, code);
     }
   }, simMl.TICK_MS);
 
-  gamesByRoomId.set(roomId, { game, tickHandle, mode: "multilane", snapshotEveryNTicks, eliminatedNotified });
+  gamesByRoomId.set(roomId, { game, tickHandle, mode: "multilane", snapshotEveryNTicks, eliminatedNotified, aiHandles });
   console.log(`[ml-game] started ${roomId}`);
 }
 
@@ -226,6 +262,7 @@ function stopMLGame(roomId, code) {
   const entry = gamesByRoomId.get(roomId);
   if (!entry) return;
   clearInterval(entry.tickHandle);
+  for (const h of (entry.aiHandles || [])) aiModule.stopAI(h);
   gamesByRoomId.delete(roomId);
   console.log(`[ml-game] stopped ${roomId}`);
   setTimeout(() => {
@@ -303,13 +340,19 @@ io.on("connection", (socket) => {
     if (normalized.length !== 6) return socket.emit("error_message", { message: "Invalid room code." });
     const room = mlRoomsByCode.get(normalized);
     if (!room) return socket.emit("error_message", { message: "Room not found." });
-    if (room.players.length >= 4) return socket.emit("error_message", { message: "Room is full (max 4)." });
+    const totalInRoom = room.players.length + (room.aiPlayers || []).length;
+    if (totalInRoom >= 4) return socket.emit("error_message", { message: "Room is full (max 4)." });
     if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
 
+    // Humans always fill the lowest indices; AI slots are bumped above humans.
     const laneIndex = room.players.length;
     room.players.push(socket.id);
     room.laneBySocketId.set(socket.id, laneIndex);
     room.playerNames.set(socket.id, String(displayName || "Player").slice(0, 20));
+    // Shift any existing AI players above the new human count
+    if (room.aiPlayers) {
+      room.aiPlayers.forEach((ai, i) => { ai.laneIndex = room.players.length + i; });
+    }
 
     sessionBySocketId.set(socket.id, { code: normalized, roomId: room.roomId, laneIndex, mode: "multilane" });
     socket.join(room.roomId);
@@ -328,8 +371,9 @@ io.on("connection", (socket) => {
     room.readySet.add(socket.id);
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(normalized, room));
 
-    // Auto-start when all players are ready (minimum 2)
-    if (room.players.length >= 2 && room.readySet.size === room.players.length) {
+    // Auto-start when all human players are ready and total (human + AI) >= 2
+    const totalPlayers = room.players.length + (room.aiPlayers || []).length;
+    if (totalPlayers >= 2 && room.readySet.size === room.players.length) {
       startMLGame(room.roomId, normalized, io);
     }
   });
@@ -343,12 +387,53 @@ io.on("connection", (socket) => {
     if (room.hostSocketId !== socket.id) {
       return socket.emit("error_message", { message: "Only the host can force start." });
     }
-    if (room.players.length < 2) {
-      return socket.emit("error_message", { message: "Need at least 2 players." });
+    const totalPlayers = room.players.length + (room.aiPlayers || []).length;
+    if (totalPlayers < 2) {
+      return socket.emit("error_message", { message: "Need at least 2 players (add AI or invite another)." });
     }
     if (!gamesByRoomId.has(room.roomId)) {
       startMLGame(room.roomId, normalized, io);
     }
+  });
+
+  socket.on("add_ai_to_ml_room", ({ difficulty } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
+    }
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "multilane") return;
+    const room = mlRoomsByCode.get(session.code);
+    if (!room) return;
+    if (room.hostSocketId !== socket.id) {
+      return socket.emit("error_message", { message: "Only the host can add AI players." });
+    }
+    if (gamesByRoomId.has(room.roomId)) {
+      return socket.emit("error_message", { message: "Game already started." });
+    }
+    const totalPlayers = room.players.length + (room.aiPlayers || []).length;
+    if (totalPlayers >= 4) {
+      return socket.emit("error_message", { message: "Room is full (max 4 players)." });
+    }
+    const validDifficulties = ["easy", "medium", "hard"];
+    const diff = validDifficulties.includes(String(difficulty)) ? String(difficulty) : "easy";
+    if (!room.aiPlayers) room.aiPlayers = [];
+    room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff });
+    io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
+  });
+
+  socket.on("remove_ai_from_ml_room", ({ laneIndex } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "multilane") return;
+    const room = mlRoomsByCode.get(session.code);
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (gamesByRoomId.has(room.roomId)) return;
+    if (!room.aiPlayers) return;
+    const idx = room.aiPlayers.findIndex(ai => ai.laneIndex === Number(laneIndex));
+    if (idx === -1) return;
+    room.aiPlayers.splice(idx, 1);
+    // Reassign lane indices so they remain contiguous after humans
+    room.aiPlayers.forEach((ai, i) => { ai.laneIndex = room.players.length + i; });
+    io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
   // ── Player actions (classic path below; ML path branches here) ─────────────

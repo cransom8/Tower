@@ -11,7 +11,7 @@
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240; // 12 s
-const START_GOLD = 50;
+const START_GOLD = 70;
 const GATE_HP_START = 100;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 80;
@@ -24,7 +24,7 @@ const SPAWN_X = 4;
 const SPAWN_YG = 0;
 const CASTLE_X = 4;
 const CASTLE_YG = 27;
-const MAX_PATH_LEN = 48;
+const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 10×28 grid
 const MAX_WALLS = 100;
 const WALL_COST = 5;
 const ENGAGEMENT_SLOTS = 6;
@@ -184,7 +184,7 @@ function createMLGame(playerCount) {
       laneIndex: i,
       eliminated: false,
       gold: START_GOLD,
-      income: 0,
+      income: 10,
       gateHp: GATE_HP_START,
       grid,
       path,
@@ -636,6 +636,7 @@ module.exports = {
   TICK_MS,
   UNIT_DEFS,
   TOWER_DEFS,
+  BARRACKS_LEVELS,
   GRID_W,
   GRID_H,
   createMLGame,

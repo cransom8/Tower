@@ -1096,3 +1096,110 @@ html, body {
   background: rgba(68, 88, 104, 0.35);
   color: var(--text);
 }
+
+/* ── Stats Reference Panel ────────────────────────────────────────────────── */
+
+#stats-panel {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  padding: 8px 10px;
+  background: rgba(8, 11, 18, 0.82);
+  border: 1px solid var(--muted2);
+  border-right: 2px solid var(--purple);
+  border-radius: 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.54rem;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.stats-section-hdr {
+  color: var(--gold2);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  font-size: 0.46rem;
+  margin-bottom: 4px;
+  margin-top: 6px;
+}
+
+.stats-section-hdr:first-child {
+  margin-top: 0;
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: 52px 26px 52px 30px 26px;
+  column-gap: 4px;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+
+.stats-wall-row {
+  display: grid;
+  grid-template-columns: 52px 26px auto;
+  column-gap: 4px;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+
+.stats-name  { color: var(--text); }
+.stats-cost  { color: var(--gold); }
+.stats-type  { color: var(--muted); font-size: 0.44rem; }
+.stats-dmg   { color: #9db8c8; text-align: right; }
+.stats-range { color: var(--teal); text-align: right; }
+.stats-max   { color: var(--muted); font-size: 0.44rem; }
+
+.stats-divider {
+  height: 1px;
+  background: var(--muted2);
+  margin: 5px 0;
+}
+
+/* ── AI Lobby Controls ──────────────────────────────────────────────────────── */
+.ml-ai-label {
+  font-size: 0.6rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 5px;
+}
+
+.ml-ai-btns {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* AI badge next to CPU player name in lobby list */
+.ai-badge {
+  display: inline-block;
+  font-size: 0.45rem;
+  font-family: 'Share Tech Mono', monospace;
+  background: rgba(0, 200, 160, 0.15);
+  color: var(--teal);
+  border: 1px solid rgba(0, 200, 160, 0.35);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Remove-AI button inside the lobby player list */
+.ml-remove-ai-btn {
+  background: none;
+  border: none;
+  color: #c84040;
+  cursor: pointer;
+  font-size: 0.55rem;
+  padding: 1px 4px;
+  margin-left: 4px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.ml-remove-ai-btn:hover {
+  background: rgba(200, 64, 64, 0.15);
+}

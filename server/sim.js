@@ -12,8 +12,8 @@ const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 
 const INCOME_INTERVAL_TICKS = 10 * TICK_HZ; // 10 seconds
-const START_GOLD = 50;
-const START_INCOME = 0;
+const START_GOLD = 70;
+const START_INCOME = 10;
 const GATE_HP_START = 100;
 const ALLOWED_ACTION_TYPES = new Set(["spawn_unit", "build_tower", "upgrade_tower", "sell_tower"]);
 const TOWER_SLOTS = ["left_outer", "left_mid", "left_inner", "right_inner", "right_mid", "right_outer"];
