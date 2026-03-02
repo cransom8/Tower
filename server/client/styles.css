@@ -673,6 +673,83 @@ html, body {
   100% { transform: translateX(0); border-color: var(--gold2); }
 }
 
+/* ── Auto-send bar ──────────────────────────────────────────────────────────── */
+
+#autosend-bar {
+  position: absolute;
+  left: 265px; /* right of send-bar (250px wide + 10px left + 5px gap) */
+  top: 50%;
+  transform: translateY(-50%);
+  display: none; /* shown only in ML mode */
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.autosend-toggle {
+  width: 250px;
+  padding: 4px 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid var(--stone3);
+  border-left: 3px solid var(--muted);
+  background: rgba(40, 50, 60, 0.55);
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  text-align: left;
+}
+.autosend-toggle:hover:not(:disabled) {
+  background: rgba(40, 192, 176, 0.1);
+  border-left-color: var(--teal);
+  color: var(--teal);
+}
+.autosend-toggle.autosend-active {
+  background: rgba(40, 192, 176, 0.18);
+  border-left-color: var(--teal);
+  border-color: rgba(40, 192, 176, 0.45);
+  color: var(--teal);
+  box-shadow: 0 0 6px rgba(40, 192, 176, 0.22) inset;
+}
+.autosend-toggle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#autosend-rate {
+  width: 250px;
+  padding: 4px 8px;
+  background: rgba(20, 25, 35, 0.9);
+  border: 1px solid var(--stone3);
+  border-left: 3px solid var(--gold2);
+  border-radius: 4px;
+  color: var(--gold);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.55rem;
+  cursor: pointer;
+}
+#autosend-rate:focus { outline: none; border-color: var(--gold); }
+
+@media (max-width: 600px) {
+  #autosend-bar {
+    left: 8px;
+    top: auto;
+    bottom: calc(8px + 45vw); /* above send-bar on mobile */
+    transform: none;
+    width: calc(50% - 12px);
+    gap: 2px;
+  }
+  .autosend-toggle,
+  #autosend-rate {
+    width: 100%;
+    font-size: 0.5rem;
+    padding: 3px 6px;
+  }
+}
+
 #action-feedback {
   position: absolute;
   left: 50%;
@@ -746,6 +823,45 @@ html, body {
   --banner-glow-color: rgba(255, 58, 58, 0.75);
   color: var(--red);
   animation: bannerGlow 1.6s ease-in-out infinite;
+}
+
+.banner-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.banner-btn {
+  font-family: 'Cinzel', serif;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 8px 16px;
+  border-radius: 5px;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.55);
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.banner-btn:hover:not(:disabled) {
+  opacity: 0.85;
+  transform: scale(1.05);
+}
+
+.banner-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.banner-btn.rematch-btn {
+  color: var(--teal);
+  border: 1px solid var(--teal);
+}
+
+.banner-btn.lobby-btn {
+  color: var(--muted);
+  border: 1px solid var(--muted);
 }
 
 /* ── Multi-Lane additions ───────────────────────────────────────────────────── */
@@ -1097,6 +1213,17 @@ html, body {
   color: var(--text);
 }
 
+.ml-tile-btn.danger {
+  background: rgba(192, 48, 48, 0.15);
+  border-color: #c03030;
+  color: #e07070;
+}
+
+.ml-tile-btn.danger:hover:not(:disabled) {
+  background: rgba(192, 48, 48, 0.30);
+  color: #f09090;
+}
+
 /* ── Stats Reference Panel ────────────────────────────────────────────────── */
 
 #stats-panel {
@@ -1185,6 +1312,27 @@ html, body {
   vertical-align: middle;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Slot swap buttons inside the lobby player list (host-only) */
+.ml-swap-btn {
+  background: none;
+  border: 1px solid rgba(0, 200, 160, 0.35);
+  color: var(--teal);
+  cursor: pointer;
+  font-size: 0.5rem;
+  padding: 1px 4px;
+  margin-left: 2px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 0.15s, opacity 0.15s;
+}
+.ml-swap-btn:hover:not(:disabled) {
+  background: rgba(0, 200, 160, 0.15);
+}
+.ml-swap-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
 }
 
 /* Remove-AI button inside the lobby player list */

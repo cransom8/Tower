@@ -33,12 +33,18 @@ const SPLASH_RADIUS_TILES = 1.5;
 // pathSpeed = oldSpeedPerTick × GRID_H
 // Standard: 0.00129375 × 28 ≈ 0.036225
 // Runner:   0.00215625 × 28 ≈ 0.060375
+// Warlock debuff constants (3-second window at 20 hz)
+const WARLOCK_DEBUFF_CD    = 60;  // ticks between debuff attempts
+const WARLOCK_DEBUFF_TICKS = 60;  // debuff duration in ticks
+const WARLOCK_DEBUFF_MULT  = 0.75; // -25% tower damage
+const WARLOCK_DEBUFF_RANGE = 3.5;  // tile radius
+
 const UNIT_DEFS = {
-  footman:  { cost: 10, income: 1, hp: 90,  dmg: 7,  atkCdTicks: 8,  pathSpeed: 0.036225, bounty: 3, range: 1.0, ranged: false, armorType: "MEDIUM",    damageType: "NORMAL" },
-  bowman:   { cost: 12, income: 1, hp: 50,  dmg: 8,  atkCdTicks: 9,  pathSpeed: 0.036225, bounty: 3, range: 4.0, ranged: true,  projectileTicks: 7, armorType: "LIGHT",     damageType: "PIERCE" },
-  ironclad: { cost: 15, income: 2, hp: 140, dmg: 9,  atkCdTicks: 10, pathSpeed: 0.036225, bounty: 4, range: 1.0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL" },
-  runner:   { cost: 8,  income: 0, hp: 55,  dmg: 6,  atkCdTicks: 7,  pathSpeed: 0.060375, bounty: 2, range: 1.0, ranged: false, armorType: "UNARMORED", damageType: "NORMAL" },
-  warlock:  { cost: 15, income: 2, hp: 80,  dmg: 11, atkCdTicks: 11, pathSpeed: 0.036225, bounty: 4, range: 3.0, ranged: true,  projectileTicks: 8, armorType: "MAGIC",     damageType: "MAGIC"  },
+  runner:   { cost: 8,  income: 0.5, hp: 60,  dmg: 7,  atkCdTicks: 7,  pathSpeed: 0.060375, bounty: 2, range: 1.0, ranged: false, armorType: "UNARMORED", damageType: "NORMAL", splashReduction: 0.25 },
+  footman:  { cost: 10, income: 1,   hp: 90,  dmg: 8,  atkCdTicks: 8,  pathSpeed: 0.036225, bounty: 3, range: 1.0, ranged: false, armorType: "MEDIUM",    damageType: "NORMAL" },
+  ironclad: { cost: 16, income: 2,   hp: 160, dmg: 9,  atkCdTicks: 10, pathSpeed: 0.036225, bounty: 4, range: 1.0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL", pierceReduction: 0.30 },
+  warlock:  { cost: 18, income: 2,   hp: 80,  dmg: 12, atkCdTicks: 11, pathSpeed: 0.036225, bounty: 5, range: 1.0, ranged: false, armorType: "MAGIC",     damageType: "MAGIC",  warlockDebuff: true },
+  golem:    { cost: 25, income: 3,   hp: 240, dmg: 14, atkCdTicks: 13, pathSpeed: 0.024150, bounty: 6, range: 1.0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL", structBonus: 0.25 },
 };
 
 const TOWER_DEFS = {
@@ -72,14 +78,35 @@ function getDamageMultiplier(damageType, armorType) {
   return Number.isFinite(m) ? m : 1;
 }
 
-function computeDamage(baseDmg, damageType, armorType) {
-  return baseDmg * getDamageMultiplier(damageType, armorType);
+// unitType is optional; if provided, applies unit-specific damage reductions.
+function computeDamage(baseDmg, damageType, armorType, unitType) {
+  let dmg = baseDmg * getDamageMultiplier(damageType, armorType);
+  const def = unitType ? UNIT_DEFS[unitType] : null;
+  if (def) {
+    if (damageType === "SPLASH" && def.splashReduction) dmg *= (1 - def.splashReduction);
+    if (damageType === "PIERCE" && def.pierceReduction) dmg *= (1 - def.pierceReduction);
+  }
+  return dmg;
 }
 
 function getTowerUpgradeCost(type, nextLevel) {
   const base = TOWER_DEFS[type];
   if (!base) return Infinity;
   return Math.ceil(base.cost * (0.75 + 0.25 * nextLevel));
+}
+
+function getTowerTotalCost(type, level) {
+  const base = TOWER_DEFS[type];
+  if (!base) return 0;
+  let total = WALL_COST + base.cost; // wall placement + level-1 conversion
+  for (let lvl = 2; lvl <= level; lvl++) {
+    total += getTowerUpgradeCost(type, lvl);
+  }
+  return total;
+}
+
+function getTowerSellValue(type, level) {
+  return Math.floor(getTowerTotalCost(type, level) * 0.7);
 }
 
 function getTowerStats(type, level) {
@@ -193,6 +220,13 @@ function createMLGame(playerCount) {
       units: [],
       spawnQueue: [],
       projectiles: [],
+      autosend: {
+        enabled: false,
+        enabledUnits: Object.fromEntries(Object.keys(UNIT_DEFS).map(k => [k, false])),
+        rate: "normal",
+        tickCounter: 0,
+        cycleIdx: 0,
+      },
     });
   }
   return {
@@ -230,7 +264,7 @@ function applyMLAction(game, laneIndex, action) {
     const targetLaneIndex = (laneIndex + 1) % game.playerCount;
     const targetLane = game.lanes[targetLaneIndex];
     const br = lane.barracks;
-    targetLane.spawnQueue.push({
+    const newUnit = {
       id: `u${game.nextUnitId++}`,
       ownerLane: laneIndex,
       type: unitType,
@@ -240,7 +274,9 @@ function applyMLAction(game, laneIndex, action) {
       baseDmg: def.dmg * br.dmgMult,
       baseSpeed: def.pathSpeed * br.speedMult,
       atkCd: 0,
-    });
+    };
+    if (def.warlockDebuff) newUnit.warlockCd = WARLOCK_DEBUFF_CD;
+    targetLane.spawnQueue.push(newUnit);
     return { ok: true };
   }
 
@@ -287,6 +323,8 @@ function applyMLAction(game, laneIndex, action) {
     tile.towerType = towerType;
     tile.towerLevel = 1;
     tile.atkCd = 0;
+    tile.debuffEndTick = 0;
+    tile.debuffMult = 1.0;
     lane.wallCount -= 1; // wall→tower: no longer counts toward wall limit
 
     // Tower blocks same as wall so path is unchanged — re-verify to be safe
@@ -343,6 +381,41 @@ function applyMLAction(game, laneIndex, action) {
     return { ok: true };
   }
 
+  if (type === "sell_tower") {
+    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
+    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
+    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
+      return { ok: false, reason: "Invalid grid position" };
+    }
+    const tile = lane.grid[gx][gy];
+    if (tile.type !== "tower") return { ok: false, reason: "No tower at that position" };
+
+    const sellValue = getTowerSellValue(tile.towerType, tile.towerLevel);
+    tile.type = "empty";
+    tile.towerType = null;
+    tile.towerLevel = 0;
+    tile.atkCd = 0;
+
+    const newPath = bfsPath(lane.grid);
+    lane.path = newPath; // removing an obstacle can only open paths, never block
+    lane.gold += sellValue;
+    return { ok: true };
+  }
+
+  if (type === "set_autosend") {
+    const as = lane.autosend;
+    const { enabled, enabledUnits, rate } = data || {};
+    if (typeof enabled === "boolean") as.enabled = enabled;
+    if (enabledUnits && typeof enabledUnits === "object") {
+      for (const ut of Object.keys(UNIT_DEFS)) {
+        if (ut in enabledUnits) as.enabledUnits[ut] = !!enabledUnits[ut];
+      }
+    }
+    const VALID_RATES = new Set(["slow", "normal", "fast"]);
+    if (VALID_RATES.has(rate)) as.rate = rate;
+    return { ok: true };
+  }
+
   return { ok: false, reason: "Unknown action type" };
 }
 
@@ -359,6 +432,48 @@ function mlTick(game) {
     }
   }
 
+  // Auto-send pre-pass: queue units for eligible lanes before draining queues
+  const AUTOSEND_RATE_TICKS = { slow: 240, normal: 120, fast: 60 };
+  for (const lane of game.lanes) {
+    if (lane.eliminated) continue;
+    const as = lane.autosend;
+    if (!as || !as.enabled) continue;
+    as.tickCounter = (as.tickCounter || 0) + 1;
+    const threshold = AUTOSEND_RATE_TICKS[as.rate] || 120;
+    if (as.tickCounter < threshold) continue;
+    as.tickCounter = 0;
+
+    const enabledList = Object.keys(UNIT_DEFS).filter(ut => as.enabledUnits[ut]);
+    if (enabledList.length === 0) continue;
+
+    as.cycleIdx = (as.cycleIdx || 0) % enabledList.length;
+    const unitType = enabledList[as.cycleIdx];
+    as.cycleIdx = (as.cycleIdx + 1) % enabledList.length;
+
+    const def = UNIT_DEFS[unitType];
+    if (!def || lane.gold < def.cost || lane.spawnQueue.length >= MAX_UNITS_PER_LANE) continue;
+
+    lane.gold -= def.cost;
+    lane.income += def.income;
+
+    const targetLaneIndex = (lane.laneIndex + 1) % game.playerCount;
+    const targetLane = game.lanes[targetLaneIndex];
+    const br = lane.barracks;
+    const autoUnit = {
+      id: `u${game.nextUnitId++}`,
+      ownerLane: lane.laneIndex,
+      type: unitType,
+      pathIdx: 0,
+      hp: Math.ceil(def.hp * br.hpMult),
+      maxHp: Math.ceil(def.hp * br.hpMult),
+      baseDmg: def.dmg * br.dmgMult,
+      baseSpeed: def.pathSpeed * br.speedMult,
+      atkCd: 0,
+    };
+    if (def.warlockDebuff) autoUnit.warlockCd = WARLOCK_DEBUFF_CD;
+    targetLane.spawnQueue.push(autoUnit);
+  }
+
   for (const lane of game.lanes) {
     if (lane.eliminated) continue;
 
@@ -372,6 +487,7 @@ function mlTick(game) {
     // Decrement unit cooldowns
     for (const u of lane.units) {
       if (u.atkCd > 0) u.atkCd -= 1;
+      if (u.warlockCd !== undefined && u.warlockCd > 0) u.warlockCd -= 1;
     }
 
     // Decrement tower cooldowns
@@ -402,6 +518,8 @@ function mlTick(game) {
         if (!target) continue;
 
         const targetPos = getUnitTilePos(target, lane.path);
+        const debuffMult = (tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick)
+          ? (tile.debuffMult || 1.0) : 1.0;
         lane.projectiles.push({
           id: `p${game.nextProjectileId++}`,
           ownerLane: lane.laneIndex,
@@ -411,7 +529,7 @@ function mlTick(game) {
           isSplash: stats.isSplash,
           targetKind: "unit",
           targetId: target.id,
-          dmg: stats.dmg,
+          dmg: stats.dmg * debuffMult,
           fromX: tx, fromY: ty,
           toX: targetPos ? targetPos.x : CASTLE_X,
           toY: targetPos ? targetPos.y : CASTLE_YG,
@@ -436,7 +554,8 @@ function mlTick(game) {
       // At gate
       if (u.pathIdx >= pathLen - 1) {
         if (engagedCount <= ENGAGEMENT_SLOTS && u.atkCd <= 0) {
-          lane.gateHp -= u.baseDmg;
+          const structMult = def.structBonus ? (1 + def.structBonus) : 1;
+          lane.gateHp -= u.baseDmg * structMult;
           u.atkCd = def.atkCdTicks;
           if (lane.gateHp <= 0) {
             lane.gateHp = 0;
@@ -450,29 +569,29 @@ function mlTick(game) {
         continue;
       }
 
-      // Ranged: fire at castle when in range
-      if (def.ranged) {
+      // Warlock: attempt to debuff nearby tower every WARLOCK_DEBUFF_CD ticks
+      if (def.warlockDebuff && (u.warlockCd === undefined || u.warlockCd <= 0)) {
+        u.warlockCd = WARLOCK_DEBUFF_CD;
         const pos = getUnitTilePos(u, lane.path);
-        if (pos && tileDist(pos.x, pos.y, CASTLE_X, CASTLE_YG) <= def.range) {
-          if (u.atkCd <= 0) {
-            lane.projectiles.push({
-              id: `p${game.nextProjectileId++}`,
-              ownerLane: u.ownerLane,
-              sourceKind: "unit",
-              projectileType: u.type,
-              damageType: def.damageType,
-              isSplash: false,
-              targetKind: "gate",
-              targetLaneIndex: lane.laneIndex,
-              dmg: u.baseDmg,
-              fromX: pos.x, fromY: pos.y,
-              toX: CASTLE_X, toY: CASTLE_YG,
-              ticksRemaining: def.projectileTicks || 7,
-              ticksTotal: def.projectileTicks || 7,
-            });
-            u.atkCd = def.atkCdTicks;
+        if (pos) {
+          let bestTile = null;
+          let bestDist = Infinity;
+          for (let dtx = 0; dtx < GRID_W; dtx++) {
+            for (let dty = 0; dty < GRID_H; dty++) {
+              const dtile = lane.grid[dtx][dty];
+              if (dtile.type !== "tower") continue;
+              const d = tileDist(pos.x, pos.y, dtx, dty);
+              if (d <= WARLOCK_DEBUFF_RANGE && d < bestDist) {
+                bestDist = d;
+                bestTile = dtile;
+              }
+            }
           }
-          continue;
+          if (bestTile) {
+            // Non-stacking: refresh timer only
+            bestTile.debuffEndTick = game.tick + WARLOCK_DEBUFF_TICKS;
+            bestTile.debuffMult = WARLOCK_DEBUFF_MULT;
+          }
         }
       }
 
@@ -497,7 +616,7 @@ function mlTick(game) {
             if (!pos) continue;
             if (tileDist(landX, landY, pos.x, pos.y) <= SPLASH_RADIUS_TILES) {
               const armorType = (UNIT_DEFS[u.type] && UNIT_DEFS[u.type].armorType) || "MEDIUM";
-              u.hp -= computeDamage(p.dmg, p.damageType || "SPLASH", armorType);
+              u.hp -= computeDamage(p.dmg, p.damageType || "SPLASH", armorType, u.type);
               if (u.hp <= 0) {
                 const oi = lane.laneIndex;
                 goldGain[oi] = (goldGain[oi] || 0) + (UNIT_DEFS[u.type] ? UNIT_DEFS[u.type].bounty : 1);
@@ -508,7 +627,7 @@ function mlTick(game) {
           const target = lane.units.find(u => u.id === p.targetId && u.hp > 0);
           if (target) {
             const armorType = (UNIT_DEFS[target.type] && UNIT_DEFS[target.type].armorType) || "MEDIUM";
-            target.hp -= computeDamage(p.dmg, p.damageType || "NORMAL", armorType);
+            target.hp -= computeDamage(p.dmg, p.damageType || "NORMAL", armorType, target.type);
             if (target.hp <= 0) {
               const oi = lane.laneIndex;
               goldGain[oi] = (goldGain[oi] || 0) + (UNIT_DEFS[target.type] ? UNIT_DEFS[target.type].bounty : 1);
@@ -564,7 +683,10 @@ function createMLSnapshot(game) {
         for (let y = 0; y < GRID_H; y++) {
           const tile = lane.grid[x][y];
           if (tile.type === "wall") walls.push({ x, y });
-          else if (tile.type === "tower") towerCells.push({ x, y, type: tile.towerType, level: tile.towerLevel });
+          else if (tile.type === "tower") towerCells.push({
+            x, y, type: tile.towerType, level: tile.towerLevel,
+            debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
+          });
         }
       }
 

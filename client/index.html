@@ -117,11 +117,24 @@
       <div id="matchup-panel"></div>
       <div id="send-bar">
         <div class="bar-label">Units</div>
-        <button class="action-btn send-btn" data-unit-type="footman">1 Footman</button>
-        <button class="action-btn send-btn" data-unit-type="bowman">2 Bowman</button>
+        <button class="action-btn send-btn" data-unit-type="runner">1 Runner</button>
+        <button class="action-btn send-btn" data-unit-type="footman">2 Footman</button>
         <button class="action-btn send-btn" data-unit-type="ironclad">3 Ironclad</button>
-        <button class="action-btn send-btn" data-unit-type="runner">4 Runner</button>
-        <button class="action-btn send-btn" data-unit-type="warlock">5 Warlock</button>
+        <button class="action-btn send-btn" data-unit-type="warlock">4 Warlock</button>
+        <button class="action-btn send-btn" data-unit-type="golem">5 Golem</button>
+      </div>
+      <div id="autosend-bar">
+        <div class="bar-label">Auto Send</div>
+        <button class="autosend-toggle" data-unit-type="runner">AUTO</button>
+        <button class="autosend-toggle" data-unit-type="footman">AUTO</button>
+        <button class="autosend-toggle" data-unit-type="ironclad">AUTO</button>
+        <button class="autosend-toggle" data-unit-type="warlock">AUTO</button>
+        <button class="autosend-toggle" data-unit-type="golem">AUTO</button>
+        <select id="autosend-rate" title="Auto-send rate">
+          <option value="slow">Slow</option>
+          <option value="normal" selected>Normal</option>
+          <option value="fast">Fast</option>
+        </select>
       </div>
       <div id="defense-bar">
         <div class="bar-label">Towers</div>

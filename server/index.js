@@ -121,7 +121,7 @@ function stopGame(roomId) {
   console.log(`[game] stopped ${roomId}`);
 
   // fix #5: schedule room cleanup 60 s after game ends to prevent indefinite memory leak
-  setTimeout(() => {
+  const handle = setTimeout(() => {
     for (const [code, room] of roomsByCode.entries()) {
       if (room.roomId === roomId) {
         roomsByCode.delete(code);
@@ -130,6 +130,9 @@ function stopGame(roomId) {
       }
     }
   }, 60_000);
+  for (const [, room] of roomsByCode.entries()) {
+    if (room.roomId === roomId) { room._cleanupHandle = handle; break; }
+  }
 }
 
 // ── Multi-Lane helpers ───────────────────────────────────────────────────────
@@ -265,10 +268,12 @@ function stopMLGame(roomId, code) {
   for (const h of (entry.aiHandles || [])) aiModule.stopAI(h);
   gamesByRoomId.delete(roomId);
   console.log(`[ml-game] stopped ${roomId}`);
-  setTimeout(() => {
+  const handle = setTimeout(() => {
     mlRoomsByCode.delete(code);
     console.log(`[ml-room] cleaned up ${code}`);
   }, 60_000);
+  const room = mlRoomsByCode.get(code);
+  if (room) room._cleanupHandle = handle;
 }
 
 // ── Socket.IO connection ─────────────────────────────────────────────────────
@@ -436,6 +441,51 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
+  socket.on("swap_ml_lanes", ({ laneA, laneB } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "multilane") return;
+    const room = mlRoomsByCode.get(session.code);
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (gamesByRoomId.has(room.roomId)) return;
+
+    const a = Number(laneA);
+    const b = Number(laneB);
+    const total = room.players.length + (room.aiPlayers || []).length;
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a === b) return;
+    if (a < 0 || a >= total || b < 0 || b >= total) return;
+
+    const getOwner = (laneIdx) => {
+      const humanSid = room.players.find(sid => room.laneBySocketId.get(sid) === laneIdx);
+      if (humanSid) return { type: "human", sid: humanSid };
+      const aiEntry = (room.aiPlayers || []).find(ai => ai.laneIndex === laneIdx);
+      if (aiEntry) return { type: "ai", entry: aiEntry };
+      return null;
+    };
+
+    const ownerA = getOwner(a);
+    const ownerB = getOwner(b);
+    if (!ownerA || !ownerB) return;
+
+    if (ownerA.type === "human") {
+      room.laneBySocketId.set(ownerA.sid, b);
+      const sess = sessionBySocketId.get(ownerA.sid);
+      if (sess) sess.laneIndex = b;
+      io.to(ownerA.sid).emit("ml_lane_reassigned", { laneIndex: b });
+    } else {
+      ownerA.entry.laneIndex = b;
+    }
+    if (ownerB.type === "human") {
+      room.laneBySocketId.set(ownerB.sid, a);
+      const sess = sessionBySocketId.get(ownerB.sid);
+      if (sess) sess.laneIndex = a;
+      io.to(ownerB.sid).emit("ml_lane_reassigned", { laneIndex: a });
+    } else {
+      ownerB.entry.laneIndex = a;
+    }
+
+    io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
+  });
+
   // ── Player actions (classic path below; ML path branches here) ─────────────
 
   socket.on("player_action", ({ code, side, type, data }) => {
@@ -518,6 +568,45 @@ io.on("connection", (socket) => {
       gold: entry.game.players[expectedSide].gold,
       income: entry.game.players[expectedSide].income,
     });
+  });
+
+  socket.on("request_rematch", () => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session) return;
+
+    if (session.mode === "multilane") {
+      const room = mlRoomsByCode.get(session.code);
+      if (!room) return;
+      if (gamesByRoomId.has(room.roomId)) return; // game still running
+      if (!room.rematchVotes) room.rematchVotes = new Set();
+      if (room.rematchVotes.has(socket.id)) return; // already voted
+      room.rematchVotes.add(socket.id);
+      const needed = room.players.length;
+      io.to(room.roomId).emit("rematch_vote", { count: room.rematchVotes.size, needed });
+      if (room.rematchVotes.size >= needed) {
+        room.rematchVotes = null;
+        room.readySet = new Set();
+        if (room._cleanupHandle) { clearTimeout(room._cleanupHandle); room._cleanupHandle = null; }
+        startMLGame(room.roomId, session.code, io);
+      }
+    } else {
+      const room = roomsByCode.get(session.code);
+      if (!room) return;
+      if (room.players.length < 2) return;
+      if (gamesByRoomId.has(room.roomId)) return;
+      if (!room.rematchVotes) room.rematchVotes = new Set();
+      if (room.rematchVotes.has(socket.id)) return;
+      room.rematchVotes.add(socket.id);
+      const needed = room.players.length;
+      io.to(room.roomId).emit("rematch_vote", { count: room.rematchVotes.size, needed });
+      if (room.rematchVotes.size >= needed) {
+        room.rematchVotes = null;
+        if (room._cleanupHandle) { clearTimeout(room._cleanupHandle); room._cleanupHandle = null; }
+        startGame(room.roomId);
+        io.to(room.roomId).emit("match_ready", { code: session.code });
+        io.to(room.roomId).emit("match_config", sim.createPublicConfig());
+      }
+    }
   });
 
   socket.on("disconnect", () => {

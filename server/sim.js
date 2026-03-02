@@ -32,11 +32,11 @@ const SPAWN_Y_BOTTOM = 0.88;
 const MARCH_SPEED = 0.00129375; // shared march speed — only runner differs
 
 const UNIT_DEFS = {
-  footman: { cost: 10, income: 2, hp: 90,  dmg: 9,  atkCdTicks: 8,  speedPerTick: MARCH_SPEED,   bounty: 2, range: COMBAT_RANGE, ranged: false, armorType: "MEDIUM",    damageType: "NORMAL" },
-  bowman:  { cost: 12, income: 2, hp: 50,  dmg: 9,  atkCdTicks: 9,  speedPerTick: MARCH_SPEED,   bounty: 2, range: 0.22,         ranged: true,  projectileTicks: 7, armorType: "LIGHT",     damageType: "PIERCE" },
-  ironclad:{ cost: 15, income: 3, hp: 140, dmg: 11, atkCdTicks: 10, speedPerTick: MARCH_SPEED,   bounty: 3, range: COMBAT_RANGE, ranged: false, armorType: "HEAVY",     damageType: "NORMAL" },
-  runner:  { cost: 8,  income: 1, hp: 55,  dmg: 7,  atkCdTicks: 7,  speedPerTick: 0.00215625,    bounty: 1, range: COMBAT_RANGE, ranged: false, armorType: "UNARMORED", damageType: "NORMAL" },
-  warlock: { cost: 15, income: 3, hp: 80,  dmg: 14, atkCdTicks: 11, speedPerTick: MARCH_SPEED,   bounty: 3, range: 0.18,         ranged: true,  projectileTicks: 8, armorType: "MAGIC",     damageType: "MAGIC"  },
+  runner:   { cost: 8,  income: 0.5, hp: 60,  dmg: 7,  atkCdTicks: 7,  speedPerTick: 0.00215625,  bounty: 2, range: COMBAT_RANGE, ranged: false, armorType: "UNARMORED", damageType: "NORMAL" },
+  footman:  { cost: 10, income: 1,   hp: 90,  dmg: 8,  atkCdTicks: 8,  speedPerTick: MARCH_SPEED,  bounty: 3, range: COMBAT_RANGE, ranged: false, armorType: "MEDIUM",    damageType: "NORMAL" },
+  ironclad: { cost: 16, income: 2,   hp: 160, dmg: 9,  atkCdTicks: 10, speedPerTick: MARCH_SPEED,  bounty: 4, range: COMBAT_RANGE, ranged: false, armorType: "HEAVY",     damageType: "NORMAL" },
+  warlock:  { cost: 18, income: 2,   hp: 80,  dmg: 12, atkCdTicks: 11, speedPerTick: MARCH_SPEED,  bounty: 5, range: 0.18,         ranged: true,  projectileTicks: 8, armorType: "MAGIC",     damageType: "MAGIC"  },
+  golem:    { cost: 25, income: 3,   hp: 240, dmg: 14, atkCdTicks: 13, speedPerTick: 0.00090563,   bounty: 6, range: COMBAT_RANGE, ranged: false, armorType: "HEAVY",     damageType: "NORMAL" },
 };
 
 const TOWER_DEFS = {

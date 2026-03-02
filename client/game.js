@@ -6,7 +6,7 @@ const SERVER_URL = window.location.hostname === 'localhost'
 
 const socket = io(SERVER_URL, { autoConnect: true, reconnectionAttempts: 5 });
 
-const UNIT_TYPES = ['footman', 'bowman', 'ironclad', 'runner', 'warlock'];
+const UNIT_TYPES = ['runner', 'footman', 'ironclad', 'warlock', 'golem'];
 const TOWER_TYPES = ['archer', 'fighter', 'ballista', 'cannon', 'mage'];
 const SLOT_NAMES = ['left_outer', 'left_mid', 'left_inner', 'right_inner', 'right_mid', 'right_outer'];
 const DAMAGE_TYPES = ['PIERCE', 'NORMAL', 'SPLASH', 'SIEGE', 'MAGIC'];
@@ -19,14 +19,14 @@ const DAMAGE_MULTIPLIERS = {
   MAGIC: { UNARMORED: 1.00, LIGHT: 1.05, MEDIUM: 1.00, HEAVY: 0.95, MAGIC: 1.40 },
 };
 
-const MARCH_SPEED = 0.00129375; // shared march speed — only runner differs
+const MARCH_SPEED = 0.00129375; // shared march speed
 
 const DEFAULT_UNIT_META = {
-  footman:  { label: 'Footman',  cost: 10, income: 2, dmg: 9,  hp: 90,  bounty: 2, armorType: 'MEDIUM',    damageType: 'NORMAL', speedPerTick: MARCH_SPEED,  atkCdTicks: 8,  range: 0.045 },
-  bowman:   { label: 'Bowman',   cost: 12, income: 2, dmg: 9,  hp: 50,  bounty: 2, armorType: 'LIGHT',     damageType: 'PIERCE', speedPerTick: MARCH_SPEED,  atkCdTicks: 9,  range: 0.22  },
-  ironclad: { label: 'Ironclad', cost: 15, income: 3, dmg: 11, hp: 140, bounty: 3, armorType: 'HEAVY',     damageType: 'NORMAL', speedPerTick: MARCH_SPEED,  atkCdTicks: 10, range: 0.045 },
-  runner:   { label: 'Runner',   cost: 8,  income: 1, dmg: 7,  hp: 55,  bounty: 1, armorType: 'UNARMORED', damageType: 'NORMAL', speedPerTick: 0.00215625,   atkCdTicks: 7,  range: 0.045 },
-  warlock:  { label: 'Warlock',  cost: 15, income: 3, dmg: 14, hp: 80,  bounty: 3, armorType: 'MAGIC',     damageType: 'MAGIC',  speedPerTick: MARCH_SPEED,  atkCdTicks: 11, range: 0.18  },
+  runner:   { label: 'Runner',   cost: 8,  income: 0.5, dmg: 7,  hp: 60,  bounty: 2, armorType: 'UNARMORED', damageType: 'NORMAL', speedPerTick: 0.00215625,  atkCdTicks: 7,  range: 0.045, special: '-25% splash dmg' },
+  footman:  { label: 'Footman',  cost: 10, income: 1,   dmg: 8,  hp: 90,  bounty: 3, armorType: 'MEDIUM',    damageType: 'NORMAL', speedPerTick: MARCH_SPEED,  atkCdTicks: 8,  range: 0.045 },
+  ironclad: { label: 'Ironclad', cost: 16, income: 2,   dmg: 9,  hp: 160, bounty: 4, armorType: 'HEAVY',     damageType: 'NORMAL', speedPerTick: MARCH_SPEED,  atkCdTicks: 10, range: 0.045, special: '-30% pierce dmg' },
+  warlock:  { label: 'Warlock',  cost: 18, income: 2,   dmg: 12, hp: 80,  bounty: 5, armorType: 'MAGIC',     damageType: 'MAGIC',  speedPerTick: MARCH_SPEED,  atkCdTicks: 11, range: 0.045, special: 'Tower -25% dmg 3s' },
+  golem:    { label: 'Golem',    cost: 25, income: 3,   dmg: 14, hp: 240, bounty: 6, armorType: 'HEAVY',     damageType: 'NORMAL', speedPerTick: 0.00090563,   atkCdTicks: 13, range: 0.045, special: '+25% gate dmg' },
 };
 const DEFAULT_TOWER_META = {
   archer: { label: 'Archer', cost: 10, range: 0.25, dmg: 6.6, atkCdTicks: 12, damageType: 'PIERCE' },
@@ -82,8 +82,14 @@ const ML_CASTLE_YG = 27;
 let viewingLaneIndex = null;    // which lane is shown full-screen in ML mode
 let mlBarracksDefs = [];        // from ml_match_config.barracksLevels
 let mlTileMenuJustOpened = false;
+let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
 let mlWallCost = 5;
 let mlMaxWalls = 100;
+
+// ── Auto-send state ───────────────────────────────────────────────────────────
+let autosendEnabled = {};       // { runner: bool, footman: bool, ... }
+let autosendRate = 'normal';
+UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
 
 const lobbyEl = document.getElementById('lobby');
 const btnCreate = document.getElementById('btn-create');
@@ -145,6 +151,11 @@ const mlViewingLabel = document.getElementById('ml-viewing-label');
 const btnPrevLane = document.getElementById('btn-ml-prev-lane');
 const btnNextLane = document.getElementById('btn-ml-next-lane');
 const mlTileMenu = document.getElementById('ml-tile-menu');
+
+// ── Auto-send DOM refs ────────────────────────────────────────────────────────
+const autosendBar = document.getElementById('autosend-bar');
+const autosendToggles = Array.from(document.querySelectorAll('.autosend-toggle'));
+const autosendRateSelect = document.getElementById('autosend-rate');
 
 function setStatus(msg, type) {
   lobbyStatus.textContent = msg;
@@ -276,7 +287,8 @@ function updateActionLabels() {
       + 'Move ' + laneSpeed.toFixed(2) + '%/s\n'
       + (gameMode !== 'multilane' ? 'Range ' + Math.round((m.range || 0) * 100) + '%\n' : '')
       + 'Income +' + m.income + 'g\n'
-      + 'Bounty +' + (m.bounty || m.income || 0) + 'g';
+      + 'Bounty +' + (m.bounty || m.income || 0) + 'g'
+      + (m.special ? '\n' + m.special : '');
   });
   defenseButtons.forEach(btn => {
     const type = btn.getAttribute('data-tower-type');
@@ -1061,31 +1073,30 @@ function drawUnitShape(u, x, y) {
     ctx.moveTo(-dir * 8, dir * 6); ctx.lineTo(-dir * 10, dir * 8); ctx.lineTo(-dir * 8, dir * 10);
     ctx.stroke();
 
-  } else if (u.type === 'bowman') {
-    // Slim body
+  } else if (u.type === 'golem') {
+    // Massive stone body
     ctx.fillStyle = col;
-    roundRect(-4, -3, 8, 9, 2); ctx.fill();
-    // Head with hood
-    ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(0, -5, 3.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(0, -5, 3.5, Math.PI * 0.1, Math.PI * 0.9); ctx.closePath(); ctx.fill();
-    // Quiver on back
-    ctx.fillStyle = shd;
-    ctx.fillRect(-dir * 5, -2, 2, 5);
-    // Bow arc
-    ctx.strokeStyle = hi; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(dir * 7, 1, 5, -Math.PI * 0.55, Math.PI * 0.55); ctx.stroke();
-    // Bowstring
-    ctx.strokeStyle = col; ctx.lineWidth = 1;
-    const bsY1 = 1 - 5 * Math.sin(Math.PI * 0.55);
-    const bsY2 = 1 + 5 * Math.sin(Math.PI * 0.55);
+    roundRect(-9, -2, 18, 17, 3); ctx.fill();
+    // Stone plate cracks/lines
+    ctx.strokeStyle = shd; ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(dir * 7, bsY1); ctx.lineTo(dir * 5, 1); ctx.lineTo(dir * 7, bsY2);
+    ctx.moveTo(-9, 6); ctx.lineTo(9, 6);
+    ctx.moveTo(-3, -2); ctx.lineTo(-3, 15);
+    ctx.moveTo(3, -2); ctx.lineTo(3, 15);
     ctx.stroke();
-    // Arrow nocked
-    ctx.strokeStyle = hi; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-dir, 0); ctx.lineTo(dir * 8, 0); ctx.stroke();
+    // Massive boulder head
+    ctx.fillStyle = hi;
+    roundRect(-7, -13, 14, 12, 3); ctx.fill();
+    // Dark visor slit
+    ctx.fillStyle = shd; ctx.fillRect(-5, -8, 10, 3);
+    // Glowing orange eyes
+    ctx.fillStyle = '#f07030';
+    ctx.beginPath(); ctx.arc(-3, -7, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(3, -7, 1.5, 0, Math.PI * 2); ctx.fill();
+    // Massive fist on leading side
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(dir * 12, 5, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = shd; ctx.lineWidth = 1; ctx.stroke();
 
   } else if (u.type === 'ironclad') {
     // Pauldrons (shoulder plates)
@@ -1183,7 +1194,7 @@ function drawProjectileAt(projectileType, damageType, px, py, travelAngle) {
   ctx.save();
   ctx.translate(px, py);
 
-  if (projectileType === 'archer' || projectileType === 'bowman' || damageType === 'PIERCE') {
+  if (projectileType === 'archer' || damageType === 'PIERCE') {
     // Arrow — shape drawn pointing up, rotated to travel direction
     ctx.rotate(travelAngle + Math.PI / 2);
     ctx.strokeStyle = c; ctx.lineWidth = 1.5;
@@ -1249,7 +1260,6 @@ function drawProjectileAt(projectileType, damageType, px, py, travelAngle) {
 }
 
 function projectileColor(type) {
-  if (type === 'bowman') return '#8fd8b4';
   if (type === 'warlock') return '#c9a8ff';
   return towerColor(type);
 }
@@ -1259,6 +1269,16 @@ function getTowerUpgradeCost(type, nextLevel) {
   const base = Number(m.cost) || 0;
   const scale = 0.75 + (0.25 * nextLevel);
   return Math.ceil(base * scale);
+}
+
+function getTowerSellValue(type, level) {
+  const m = towerMeta[type] || DEFAULT_TOWER_META[type];
+  const base = Number(m.cost) || 0;
+  let total = mlWallCost + base;
+  for (let lvl = 2; lvl <= level; lvl++) {
+    total += getTowerUpgradeCost(type, lvl);
+  }
+  return Math.floor(total * 0.7);
 }
 
 function getTowerStatsAtLevel(type, level) {
@@ -1480,10 +1500,24 @@ function showGameOverBanner(message) {
   const isVictory = message === 'VICTORY';
   gameOverBanner.innerHTML =
     '<span class="banner-main">' + message + '</span>'
-    + '<span class="banner-sub">Click anywhere to return to lobby</span>';
+    + '<div class="banner-actions">'
+    + '<button class="banner-btn rematch-btn" id="banner-rematch-btn">&#9876; Rematch</button>'
+    + '<button class="banner-btn lobby-btn" id="banner-lobby-btn">Lobby</button>'
+    + '</div>';
   gameOverBanner.classList.remove('banner-victory', 'banner-defeat');
   gameOverBanner.classList.add(isVictory ? 'banner-victory' : 'banner-defeat');
   gameOverBanner.style.display = 'block';
+  document.getElementById('banner-rematch-btn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    socket.emit('request_rematch');
+    this.textContent = 'Waiting...';
+    this.disabled = true;
+  });
+  document.getElementById('banner-lobby-btn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    _lastHudGold = -1;
+    resetToLobby('Game over. Start a new match!');
+  });
 }
 
 function hideGameOverBanner() {
@@ -1534,7 +1568,14 @@ function resetToLobby(msg) {
   if (mlBarracksHud) mlBarracksHud.style.display = 'none';
   if (mlLaneNav) mlLaneNav.style.display = 'none';
   if (mlTileMenu) mlTileMenu.style.display = 'none';
+  if (autosendBar) autosendBar.style.display = 'none';
   viewingLaneIndex = null;
+
+  // Reset auto-send state
+  UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
+  autosendRate = 'normal';
+  if (autosendRateSelect) autosendRateSelect.value = 'normal';
+  autosendToggles.forEach(btn => btn.classList.remove('autosend-active'));
 
   hideGameUi();
   hideGameOverBanner();
@@ -1556,6 +1597,36 @@ function sendAction(type, data) {
 
 function cap(s) {
   return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
+}
+
+// ── Auto-send helpers ─────────────────────────────────────────────────────────
+
+function syncAutosend() {
+  const anyEnabled = Object.values(autosendEnabled).some(v => v);
+  sendAction('set_autosend', {
+    enabled: anyEnabled,
+    enabledUnits: Object.assign({}, autosendEnabled),
+    rate: autosendRate,
+  });
+}
+
+autosendToggles.forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
+    const type = btn.getAttribute('data-unit-type');
+    autosendEnabled[type] = !autosendEnabled[type];
+    btn.classList.toggle('autosend-active', autosendEnabled[type]);
+    const label = autosendEnabled[type] ? 'AUTO ON' : 'AUTO';
+    btn.textContent = label;
+    syncAutosend();
+  });
+});
+
+if (autosendRateSelect) {
+  autosendRateSelect.addEventListener('change', () => {
+    autosendRate = autosendRateSelect.value;
+    if (lobbyState === 'playing' && gameMode === 'multilane' && !isSpectator) syncAutosend();
+  });
 }
 
 updateActionLabels();
@@ -1800,6 +1871,10 @@ socket.on('room_joined', data => {
 });
 
 socket.on('match_ready', () => {
+  hasFirstSnapshot = false;
+  previousState = null;
+  currentState = null;
+  _lastHudGold = -1;
   setLobbyState('playing');
   hideLobby();
   showGameUi();
@@ -1848,13 +1923,14 @@ socket.on('game_over', payload => {
   showGameOverBanner(payload.winner === mySide ? 'VICTORY' : 'DEFEAT');
 });
 
-// Click anywhere on canvas/UI after game over to return to lobby
-gameUi.addEventListener('click', function () {
-  if (gameOverBanner.style.display !== 'none' && gameOverBanner.style.display !== '') {
-    resetToLobby('Game over. Start a new match!');
-    _lastHudGold = -1;
+socket.on('rematch_vote', data => {
+  const btn = document.getElementById('banner-rematch-btn');
+  if (btn) {
+    btn.textContent = 'Waiting... (' + data.count + '/' + data.needed + ')';
+    btn.disabled = true;
   }
 });
+
 
 // ── Share-link auto-join ──────────────────────────────────────────────────────
 (function handleShareLink() {
@@ -2078,13 +2154,18 @@ function drawMLGridLane(lane) {
 
   // Tower tiles
   if (lane.towerCells && lane.towerCells.length > 0) {
-    for (const { x, y, type, level } of lane.towerCells) {
-      const col = towerColor(type);
+    for (const { x, y, type, level, debuffed } of lane.towerCells) {
+      const col = debuffed ? '#c060ff' : towerColor(type);
       // Dark tile background + colored border
-      ctx.fillStyle = '#1a2230';
+      ctx.fillStyle = debuffed ? '#1a1430' : '#1a2230';
       ctx.fillRect(x * tileSize + 1, y * tileSize + 1, tileSize - 2, tileSize - 2);
-      ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = col; ctx.lineWidth = debuffed ? 2 : 1.5;
       ctx.strokeRect(x * tileSize + 1, y * tileSize + 1, tileSize - 2, tileSize - 2);
+      // Debuff overlay pulsing
+      if (debuffed) {
+        ctx.fillStyle = 'rgba(176,96,255,0.14)';
+        ctx.fillRect(x * tileSize + 1, y * tileSize + 1, tileSize - 2, tileSize - 2);
+      }
       // Scaled tower art centered in tile
       const tcx = (x + 0.5) * tileSize;
       const tcy = (y + 0.5) * tileSize;
@@ -2093,7 +2174,7 @@ function drawMLGridLane(lane) {
       const fs = Math.max(5, Math.floor(tileSize * 0.22));
       ctx.fillStyle = 'rgba(6,13,24,0.7)';
       ctx.fillRect(tcx - fs, (y + 1) * tileSize - fs - 2, fs * 2, fs + 2);
-      ctx.fillStyle = '#e8a828';
+      ctx.fillStyle = debuffed ? '#c060ff' : '#e8a828';
       ctx.font = `bold ${fs}px "Share Tech Mono", monospace`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.fillText(String(level || 1), tcx, (y + 1) * tileSize - 1);
@@ -2298,16 +2379,41 @@ function renderMLLobbyPanel(data) {
     li.appendChild(nameSpan);
     li.appendChild(badge);
 
-    // Host can remove AI players
-    if (p.isAI && mlIsHost) {
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'ml-remove-ai-btn';
-      removeBtn.title = 'Remove AI';
-      removeBtn.textContent = '\u2715';
-      removeBtn.addEventListener('click', () => {
-        socket.emit('remove_ai_from_ml_room', { laneIndex: p.laneIndex });
+    // Host: reorder buttons (all slots) + remove button (AI only)
+    if (mlIsHost) {
+      const totalSlots = mlLobbyPlayers.length;
+
+      const upBtn = document.createElement('button');
+      upBtn.className = 'ml-swap-btn';
+      upBtn.title = 'Move up';
+      upBtn.textContent = '\u25B2';
+      upBtn.disabled = p.laneIndex === 0;
+      upBtn.addEventListener('click', () => {
+        socket.emit('swap_ml_lanes', { laneA: p.laneIndex, laneB: p.laneIndex - 1 });
       });
-      li.appendChild(removeBtn);
+
+      const downBtn = document.createElement('button');
+      downBtn.className = 'ml-swap-btn';
+      downBtn.title = 'Move down';
+      downBtn.textContent = '\u25BC';
+      downBtn.disabled = p.laneIndex === totalSlots - 1;
+      downBtn.addEventListener('click', () => {
+        socket.emit('swap_ml_lanes', { laneA: p.laneIndex, laneB: p.laneIndex + 1 });
+      });
+
+      li.appendChild(upBtn);
+      li.appendChild(downBtn);
+
+      if (p.isAI) {
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'ml-remove-ai-btn';
+        removeBtn.title = 'Remove AI';
+        removeBtn.textContent = '\u2715';
+        removeBtn.addEventListener('click', () => {
+          socket.emit('remove_ai_from_ml_room', { laneIndex: p.laneIndex });
+        });
+        li.appendChild(removeBtn);
+      }
     }
 
     mlPlayerList.appendChild(li);
@@ -2368,9 +2474,19 @@ socket.on('ml_lobby_update', data => {
   renderMLLobbyPanel(data);
 });
 
+socket.on('ml_lane_reassigned', data => {
+  myLaneIndex = data.laneIndex;
+});
+
 socket.on('ml_match_ready', data => {
   mlPlayerCount = data.playerCount || 2;
   mlLaneAssignments = data.laneAssignments || [];
+  mlCurrentState = null;
+  mlPreviousState = null;
+  mlHasFirstSnapshot = false;
+  isSpectator = false;
+  _lastHudGold = -1;
+  if (spectatorBadge) spectatorBadge.style.display = 'none';
   setLobbyState('playing');
   hideLobby();
   showGameUi();
@@ -2391,6 +2507,7 @@ socket.on('ml_match_ready', data => {
   // Show ML elements
   if (mlBarracksHud) mlBarracksHud.style.display = 'flex';
   if (mlLaneNav) mlLaneNav.style.display = (mlPlayerCount > 1) ? 'flex' : 'none';
+  if (autosendBar) autosendBar.style.display = 'flex';
   updateLaneNavLabel();
 });
 
@@ -2402,6 +2519,19 @@ socket.on('ml_state_snapshot', state => {
   mlPreviousState = mlCurrentState || state;
   mlCurrentState = state;
   mlCurrentStateReceivedAt = performance.now();
+
+  // Refresh an open tower upgrade menu with authoritative data from the snapshot
+  if (mlActiveTile && mlTileMenu && mlTileMenu.style.display !== 'none') {
+    const lane = state.lanes && state.lanes[myLaneIndex];
+    if (lane) {
+      const tc = lane.towerCells && lane.towerCells.find(t => t.x === mlActiveTile.gx && t.y === mlActiveTile.gy);
+      if (tc) {
+        showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level);
+      } else {
+        closeMLTileMenu();
+      }
+    }
+  }
 });
 
 socket.on('ml_player_eliminated', data => {
@@ -2414,6 +2544,8 @@ socket.on('ml_spectator_join', () => {
   if (spectatorBadge) spectatorBadge.style.display = 'block';
   sendButtons.forEach(btn => { btn.disabled = true; });
   defenseButtons.forEach(btn => { btn.disabled = true; });
+  autosendToggles.forEach(btn => { btn.disabled = true; });
+  if (autosendRateSelect) autosendRateSelect.disabled = true;
   showActionFeedback('You have been eliminated. Spectating...', false);
 });
 
@@ -2534,6 +2666,7 @@ function showMLWallConvertMenu(gx, gy) {
 
 function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
   if (!mlTileMenu) return;
+  mlActiveTile = { gx, gy };
   const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
   const gold = lane ? lane.gold : 0;
 
@@ -2547,11 +2680,13 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
   let html = `<div class="ml-menu-title">${cap(towerType)} Lv${lvl}</div>`;
   html += `<div class="ml-menu-stat">DMG ${stats.dmg.toFixed(1)} | RNG ${stats.range.toFixed(1)} tiles</div>`;
   html += `<div class="ml-menu-stat">${stats.damageType}</div>`;
+  const sellValue = getTowerSellValue(towerType, lvl);
   if (canUpgrade) {
     html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-upgrade${canAfford ? '' : ' disabled'}>Upgrade → Lv${nextLevel} (${cost}g)</button>`;
   } else {
     html += `<div class="ml-menu-stat" style="color:var(--gold);margin-top:4px">MAX LEVEL</div>`;
   }
+  html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-sell>Sell (${sellValue}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Close</button>';
   mlTileMenu.innerHTML = html;
 
@@ -2566,6 +2701,16 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
       const bx = Number(upgradeBtn.getAttribute('data-gx'));
       const by = Number(upgradeBtn.getAttribute('data-gy'));
       sendAction('upgrade_tower', { gridX: bx, gridY: by });
+      // Keep menu open and optimistically show next level so player can upgrade again
+      showMLTowerUpgradeMenu(bx, by, towerType, lvl + 1);
+    });
+  }
+  const sellBtn = mlTileMenu.querySelector('[data-sell]');
+  if (sellBtn) {
+    sellBtn.addEventListener('click', () => {
+      const bx = Number(sellBtn.getAttribute('data-gx'));
+      const by = Number(sellBtn.getAttribute('data-gy'));
+      sendAction('sell_tower', { gridX: bx, gridY: by });
       closeMLTileMenu();
     });
   }
@@ -2575,6 +2720,7 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
 
 function closeMLTileMenu() {
   if (mlTileMenu) mlTileMenu.style.display = 'none';
+  mlActiveTile = null;
 }
 
 function updateBarracksHud(lane) {

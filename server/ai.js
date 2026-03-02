@@ -40,9 +40,9 @@ const TOWER_PLANS = {
 // Unit send priorities per difficulty.
 // Hard AI sends heavier/ranged units; Easy AI keeps it simple.
 const UNIT_PRIORITIES = {
-  easy:   ["footman", "bowman"],
-  medium: ["footman", "ironclad", "bowman"],
-  hard:   ["ironclad", "warlock", "bowman", "footman"],
+  easy:   ["footman", "runner"],
+  medium: ["footman", "ironclad", "runner"],
+  hard:   ["ironclad", "warlock", "golem", "footman"],
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
