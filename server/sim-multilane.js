@@ -18,13 +18,13 @@ const MAX_UNITS_PER_LANE = 80;
 const GATE_KILL_BOUNTY = 10;
 
 // Grid constants
-const GRID_W = 10;
+const GRID_W = 11;
 const GRID_H = 28;
-const SPAWN_X = 4;
+const SPAWN_X = 5;
 const SPAWN_YG = 0;
-const CASTLE_X = 4;
+const CASTLE_X = 5;
 const CASTLE_YG = 27;
-const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 10×28 grid
+const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 11×28 grid
 const MAX_WALLS = 100;
 const WALL_COST = 5;
 const SPLASH_RADIUS_TILES = 1.5;

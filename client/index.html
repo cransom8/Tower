@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Castle Defender — Multiplayer</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260302g">
 </head>
 <body>
 
@@ -173,12 +173,99 @@
 
       <!-- ML tile interaction popout (wall convert / tower upgrade) -->
       <div id="ml-tile-menu" style="display:none"></div>
+
+      <!-- ML Info Bar (top bar, shown only in ML mode) -->
+      <div id="ml-info-bar" style="display:none">
+        <div class="mib-group mib-lives-group">
+          <span class="mib-icon">&#x2764;</span>
+          <span id="mib-lives">20</span>
+        </div>
+        <div class="mib-group mib-gold-group">
+          <span class="mib-icon">&#x2B21;</span>
+          <span id="mib-gold" class="mib-gold-val">0</span>
+        </div>
+        <div class="mib-group mib-income-group">
+          <span class="mib-icon">&#x2191;</span>
+          <span id="mib-income">+0g</span>
+          <svg class="mib-timer-svg" width="26" height="26" viewBox="0 0 26 26">
+            <circle class="mtr-track" cx="13" cy="13" r="10"/>
+            <circle class="mtr-fill" id="mtr-fill" cx="13" cy="13" r="10"/>
+          </svg>
+          <span id="mib-timer">12s</span>
+        </div>
+        <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
+      </div>
+
+      <!-- ML Lane Tabs (shown only in ML mode) -->
+      <div id="ml-lane-tabs" style="display:none"></div>
+
+      <!-- ML Command Bar (bottom bar, shown only in ML mode) -->
+      <div id="ml-cmd-bar" style="display:none">
+        <div class="cmd-build-zone">
+          <button class="cmd-wall-btn" id="cmd-wall-btn">
+            <span class="cwb-icon">&#x25A6;</span>
+            <span class="cwb-label">Wall</span>
+            <span class="cwb-cost" id="cmd-wall-cost">5g</span>
+          </button>
+        </div>
+        <div class="cmd-units-zone" id="cmd-units-zone">
+          <button class="cmd-unit-btn" data-unit-type="runner" id="cmd-unit-runner">
+            <span class="cub-auto" data-unit-type="runner" id="cub-auto-runner">A</span>
+            <span class="cub-num">1</span>
+            <span class="cub-name">Runner</span>
+            <span class="cub-cost" id="cub-cost-runner">8g</span>
+            <span class="cub-income" id="cub-income-runner">+0.5</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="footman" id="cmd-unit-footman">
+            <span class="cub-auto" data-unit-type="footman" id="cub-auto-footman">A</span>
+            <span class="cub-num">2</span>
+            <span class="cub-name">Footman</span>
+            <span class="cub-cost" id="cub-cost-footman">10g</span>
+            <span class="cub-income" id="cub-income-footman">+1</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="ironclad" id="cmd-unit-ironclad">
+            <span class="cub-auto" data-unit-type="ironclad" id="cub-auto-ironclad">A</span>
+            <span class="cub-num">3</span>
+            <span class="cub-name">Ironclad</span>
+            <span class="cub-cost" id="cub-cost-ironclad">16g</span>
+            <span class="cub-income" id="cub-income-ironclad">+2</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="warlock" id="cmd-unit-warlock">
+            <span class="cub-auto" data-unit-type="warlock" id="cub-auto-warlock">A</span>
+            <span class="cub-num">4</span>
+            <span class="cub-name">Warlock</span>
+            <span class="cub-cost" id="cub-cost-warlock">18g</span>
+            <span class="cub-income" id="cub-income-warlock">+2</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="golem" id="cmd-unit-golem">
+            <span class="cub-auto" data-unit-type="golem" id="cub-auto-golem">A</span>
+            <span class="cub-num">5</span>
+            <span class="cub-name">Golem</span>
+            <span class="cub-cost" id="cub-cost-golem">25g</span>
+            <span class="cub-income" id="cub-income-golem">+3</span>
+          </button>
+        </div>
+        <div class="cmd-ctrl-zone">
+          <button class="cmd-auto-btn" id="cmd-global-auto">AUTO<br>OFF</button>
+          <div class="cmd-rate-row">
+            <button class="cmd-rate-btn" data-rate="slow">S</button>
+            <button class="cmd-rate-btn cmd-rate-on" data-rate="normal">N</button>
+            <button class="cmd-rate-btn" data-rate="fast">F</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Enemy lane tint overlay (shown when viewing enemy lane) -->
+      <div id="enemy-lane-tint" style="display:none"></div>
+
+      <!-- ML spectate notice (shown when viewing enemy lane) -->
+      <div id="ml-spectate-notice" style="display:none">Viewing: <span id="ml-spectate-name">Player</span></div>
     </div>
   </div>
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="game.js?v=20260302d"></script>
+  <script src="game.js?v=20260302g"></script>
 
 </body>
 </html>
