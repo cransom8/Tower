@@ -80,6 +80,15 @@
         <div class="lobby-section" style="margin-top:6px">
           <button class="lobby-btn secondary" id="btn-force-start-ml" style="display:none">&#x25BA; Force Start</button>
         </div>
+        <!-- AI opponent controls (host-only, hidden for guests) -->
+        <div id="ml-ai-controls" style="display:none; margin-top:10px">
+          <div class="ml-ai-label">Add AI Opponent:</div>
+          <div class="ml-ai-btns">
+            <button class="lobby-btn secondary small" id="btn-add-ai-easy">+ Easy CPU</button>
+            <button class="lobby-btn secondary small" id="btn-add-ai-medium">+ Medium CPU</button>
+            <button class="lobby-btn secondary small" id="btn-add-ai-hard">+ Hard CPU</button>
+          </div>
+        </div>
         <!-- ML room code display -->
         <div id="ml-room-code-row" style="display:none; margin-top:8px">
           <div id="ml-room-code-display"></div>
@@ -156,7 +165,7 @@
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="game.js?v=20260302c"></script>
+  <script src="game.js?v=20260302d"></script>
 
 </body>
 </html>

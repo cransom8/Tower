@@ -131,6 +131,10 @@ const mlRoomCodeRow = document.getElementById('ml-room-code-row');
 const mlRoomCodeDisplay = document.getElementById('ml-room-code-display');
 const btnCopyMlCode = document.getElementById('btn-copy-ml-code');
 const btnCopyMlLink = document.getElementById('btn-copy-ml-link');
+const mlAiControls = document.getElementById('ml-ai-controls');
+const btnAddAiEasy = document.getElementById('btn-add-ai-easy');
+const btnAddAiMedium = document.getElementById('btn-add-ai-medium');
+const btnAddAiHard = document.getElementById('btn-add-ai-hard');
 
 // ── ML grid UI DOM refs ───────────────────────────────────────────────────────
 const mlBarracksHud = document.getElementById('ml-barracks-hud');
@@ -1610,6 +1614,17 @@ btnForceStart.addEventListener('click', () => {
   socket.emit('ml_force_start', { code: mlMyCode });
 });
 
+// ── AI add/remove buttons (host only) ─────────────────────────────────────────
+['easy', 'medium', 'hard'].forEach(diff => {
+  const btn = document.getElementById('btn-add-ai-' + diff);
+  if (btn) {
+    btn.addEventListener('click', () => {
+      if (!mlMyCode) return;
+      socket.emit('add_ai_to_ml_room', { difficulty: diff });
+    });
+  }
+});
+
 if (btnCopyMlCode) {
   btnCopyMlCode.addEventListener('click', async () => {
     if (!mlMyCode) return;
@@ -2259,19 +2274,42 @@ function renderMLLobbyPanel(data) {
   mlPlayerList.innerHTML = '';
   mlLobbyPlayers.forEach(p => {
     const li = document.createElement('li');
+
     const laneSpan = document.createElement('span');
     laneSpan.className = 'player-lane-num';
     laneSpan.textContent = 'L' + p.laneIndex;
+
     const nameSpan = document.createElement('span');
-    nameSpan.textContent = p.displayName;
     nameSpan.style.flex = '1';
     nameSpan.style.marginLeft = '4px';
+    nameSpan.textContent = p.displayName;
+    if (p.isAI) {
+      const aiBadge = document.createElement('span');
+      aiBadge.className = 'ai-badge';
+      aiBadge.textContent = 'AI';
+      nameSpan.appendChild(aiBadge);
+    }
+
     const badge = document.createElement('span');
     badge.className = p.ready ? 'player-ready-badge' : 'player-waiting-badge';
     badge.textContent = p.ready ? 'READY' : 'WAITING';
+
     li.appendChild(laneSpan);
     li.appendChild(nameSpan);
     li.appendChild(badge);
+
+    // Host can remove AI players
+    if (p.isAI && mlIsHost) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'ml-remove-ai-btn';
+      removeBtn.title = 'Remove AI';
+      removeBtn.textContent = '\u2715';
+      removeBtn.addEventListener('click', () => {
+        socket.emit('remove_ai_from_ml_room', { laneIndex: p.laneIndex });
+      });
+      li.appendChild(removeBtn);
+    }
+
     mlPlayerList.appendChild(li);
   });
 }
@@ -2308,6 +2346,7 @@ socket.on('ml_room_created', data => {
   if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'block';
   if (mlRoomCodeDisplay) mlRoomCodeDisplay.textContent = data.code;
   if (btnForceStart) btnForceStart.style.display = '';
+  if (mlAiControls) mlAiControls.style.display = '';
 });
 
 socket.on('ml_room_joined', data => {
@@ -2322,6 +2361,7 @@ socket.on('ml_room_joined', data => {
   if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'block';
   if (mlRoomCodeDisplay) mlRoomCodeDisplay.textContent = data.code;
   if (btnForceStart) btnForceStart.style.display = 'none';
+  if (mlAiControls) mlAiControls.style.display = 'none';
 });
 
 socket.on('ml_lobby_update', data => {
@@ -2338,6 +2378,7 @@ socket.on('ml_match_ready', data => {
   hideGameOverBanner();
   startRenderLoop();
   hideMLLobbyPanel();
+  if (mlAiControls) mlAiControls.style.display = 'none';
 
   // Initialize ML grid UI
   viewingLaneIndex = myLaneIndex;

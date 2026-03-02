@@ -1155,3 +1155,51 @@ html, body {
   background: var(--muted2);
   margin: 5px 0;
 }
+
+/* ── AI Lobby Controls ──────────────────────────────────────────────────────── */
+.ml-ai-label {
+  font-size: 0.6rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 5px;
+}
+
+.ml-ai-btns {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* AI badge next to CPU player name in lobby list */
+.ai-badge {
+  display: inline-block;
+  font-size: 0.45rem;
+  font-family: 'Share Tech Mono', monospace;
+  background: rgba(0, 200, 160, 0.15);
+  color: var(--teal);
+  border: 1px solid rgba(0, 200, 160, 0.35);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Remove-AI button inside the lobby player list */
+.ml-remove-ai-btn {
+  background: none;
+  border: none;
+  color: #c84040;
+  cursor: pointer;
+  font-size: 0.55rem;
+  padding: 1px 4px;
+  margin-left: 4px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.ml-remove-ai-btn:hover {
+  background: rgba(200, 64, 64, 0.15);
+}
