@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Castle Defender — Multiplayer</title>
+  <link rel="stylesheet" href="styles.css?v=20260303f">
+</head>
+<body>
+
+  <!-- LOBBY OVERLAY — visible until match starts -->
+  <div id="lobby">
+    <div class="lobby-card">
+      <h1>Castle Defender</h1>
+      <p class="subtitle">PvP Tower Defense</p>
+
+      <!-- Mode selector tabs -->
+      <div id="mode-selector">
+        <button class="mode-tab active" id="btn-tab-classic">Classic 2P</button>
+        <button class="mode-tab" id="btn-tab-multilane">Multi-Lane</button>
+      </div>
+
+      <!-- Decorative separator -->
+      <div class="lobby-separator">&#x2694;</div>
+
+      <!-- CLASSIC section -->
+      <div id="lobby-classic-section">
+        <!-- CREATE section -->
+        <div class="lobby-section">
+          <button class="lobby-btn primary" id="btn-create">&#x2694; Create Room</button>
+        </div>
+
+        <div class="lobby-divider">OR</div>
+
+        <!-- JOIN section -->
+        <div class="lobby-section">
+          <label for="join-name-input">Your Name</label>
+          <input id="join-name-input" type="text" maxlength="20"
+                 placeholder="Player" autocomplete="off" spellcheck="false">
+          <label for="join-code-input">Room Code</label>
+          <input id="join-code-input" type="text" maxlength="6"
+                 placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+          <button class="lobby-btn secondary" id="btn-join">&#x1F6E1; Join Room</button>
+        </div>
+
+        <!-- Room code display (shown after Create Room) -->
+        <div id="room-code-row" style="display:none">
+          <div id="room-code-display"></div>
+          <button class="lobby-btn secondary small" id="btn-copy-code" type="button">Copy Code</button>
+          <button class="lobby-btn secondary small" id="btn-copy-link" type="button">Copy Link</button>
+        </div>
+      </div>
+
+      <!-- MULTI-LANE section -->
+      <div id="lobby-ml-section" style="display:none">
+        <div class="lobby-section">
+          <label for="ml-name-input">Your Name</label>
+          <input id="ml-name-input" type="text" maxlength="20"
+                 placeholder="Player" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="lobby-section">
+          <button class="lobby-btn primary" id="btn-create-ml">&#x2694; Create ML Room</button>
+        </div>
+        <div class="lobby-divider">OR</div>
+        <div class="lobby-section">
+          <label for="ml-join-code-input">Room Code</label>
+          <input id="ml-join-code-input" type="text" maxlength="6"
+                 placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+          <button class="lobby-btn secondary" id="btn-join-ml">&#x1F6E1; Join ML Room</button>
+        </div>
+      </div>
+
+      <!-- ML lobby waiting panel (shown after create/join) -->
+      <div id="ml-lobby-panel" style="display:none">
+        <div class="ml-lobby-title">Waiting for players&hellip;</div>
+        <ul id="ml-player-list"></ul>
+        <div class="lobby-section" style="margin-top:10px">
+          <button class="lobby-btn primary" id="btn-ready-ml">&#x2714; Ready</button>
+        </div>
+        <div class="lobby-section" style="margin-top:6px">
+          <button class="lobby-btn secondary" id="btn-force-start-ml" style="display:none">&#x25BA; Force Start</button>
+        </div>
+        <!-- AI opponent controls (host-only, hidden for guests) -->
+        <div id="ml-ai-controls" style="display:none; margin-top:10px">
+          <div class="ml-ai-label">Add AI Opponent:</div>
+          <div class="ml-ai-btns">
+            <button class="lobby-btn secondary small" id="btn-add-ai-easy">+ Easy CPU</button>
+            <button class="lobby-btn secondary small" id="btn-add-ai-medium">+ Medium CPU</button>
+            <button class="lobby-btn secondary small" id="btn-add-ai-hard">+ Hard CPU</button>
+          </div>
+        </div>
+        <!-- ML room code display -->
+        <div id="ml-room-code-row" style="display:none; margin-top:8px">
+          <div id="ml-room-code-display"></div>
+          <button class="lobby-btn secondary small" id="btn-copy-ml-code" type="button">Copy Code</button>
+          <button class="lobby-btn secondary small" id="btn-copy-ml-link" type="button">Copy Link</button>
+        </div>
+      </div>
+
+      <!-- Status / error line -->
+      <div id="lobby-status"></div>
+
+      <!-- Version tag -->
+      <div class="lobby-version">v1.0</div>
+    </div>
+  </div>
+
+  <!-- GAME CANVAS — hidden until match_ready -->
+  <div id="game-canvas-wrap">
+    <canvas id="game-canvas"></canvas>
+    <div id="game-ui">
+      <div id="left-rail">
+        <div id="send-bar">
+          <div class="bar-label">Units</div>
+          <button class="action-btn send-btn" data-unit-type="runner">1 Runner</button>
+          <button class="action-btn send-btn" data-unit-type="footman">2 Footman</button>
+          <button class="action-btn send-btn" data-unit-type="ironclad">3 Ironclad</button>
+          <button class="action-btn send-btn" data-unit-type="warlock">4 Warlock</button>
+          <button class="action-btn send-btn" data-unit-type="golem">5 Golem</button>
+        </div>
+        <div id="autosend-bar">
+          <div class="bar-label">Auto Send</div>
+          <button class="autosend-toggle" data-unit-type="runner">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="footman">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="ironclad">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="warlock">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="golem">AUTO</button>
+          <select id="autosend-rate" title="Auto-send rate">
+            <option value="slow">Slow</option>
+            <option value="normal" selected>Normal</option>
+            <option value="fast">Fast</option>
+          </select>
+        </div>
+
+        <!-- ML Barracks HUD (shown only in ML mode) -->
+        <div id="ml-barracks-hud" style="display:none">
+          <span id="ml-barracks-label">Barracks Lv<strong id="ml-barracks-level">1</strong></span>
+          <button id="btn-ml-barracks-upgrade" class="lobby-btn secondary small">Upgrade</button>
+        </div>
+      </div>
+
+      <div id="right-rail">
+        <div id="hud-bar">
+          <span>&#x1FA99; <strong id="hud-gold">0</strong></span>
+          <span>&#x2191; <strong id="hud-income">0</strong></span>
+          <span>&#x23F1; <strong id="hud-income-timer">0s</strong></span>
+        </div>
+
+        <!-- ML Info Bar (shown only in ML mode) -->
+        <div id="ml-info-bar" style="display:none">
+          <div class="mib-group mib-lives-group">
+            <span class="mib-icon">&#x2764;</span>
+            <span id="mib-lives">20</span>
+          </div>
+          <div class="mib-group mib-gold-group">
+            <span class="mib-icon">&#x2B21;</span>
+            <span id="mib-gold" class="mib-gold-val">0</span>
+          </div>
+          <div class="mib-group mib-income-group">
+            <span class="mib-icon">&#x2191;</span>
+            <span id="mib-income">+0g</span>
+            <svg class="mib-timer-svg" width="26" height="26" viewBox="0 0 26 26">
+              <circle class="mtr-track" cx="13" cy="13" r="10"/>
+              <circle class="mtr-fill" id="mtr-fill" cx="13" cy="13" r="10"/>
+            </svg>
+            <span id="mib-timer">12s</span>
+          </div>
+          <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
+        </div>
+
+        <div id="defense-bar">
+          <div class="bar-label">Walls &amp; Towers</div>
+          <button class="action-btn defense-btn" id="side-wall-btn" type="button">Wall
+Cost 5g
+Place on grid
+Remove for refund</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="archer">Archer</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="fighter">Fighter</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="ballista">Ballista</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="cannon">Cannon</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="mage">Mage</button>
+        </div>
+
+        <div id="matchup-panel"></div>
+        <div id="stats-panel"></div>
+      </div>
+      <div id="tower-slots">
+        <div class="tower-slot" data-slot="left_outer"></div>
+        <div class="tower-slot" data-slot="left_mid"></div>
+        <div class="tower-slot" data-slot="left_inner"></div>
+        <div class="tower-slot" data-slot="right_inner"></div>
+        <div class="tower-slot" data-slot="right_mid"></div>
+        <div class="tower-slot" data-slot="right_outer"></div>
+      </div>
+      <div id="tower-popout" style="display:none"></div>
+      <div id="action-feedback"></div>
+      <div id="game-over-banner" style="display:none"></div>
+      <div id="spectator-badge" style="display:none">SPECTATING</div>
+
+      <button id="btn-ml-prev-lane" class="ml-side-nav-btn" style="display:none">&#x25C4;</button>
+      <button id="btn-ml-next-lane" class="ml-side-nav-btn" style="display:none">&#x25BA;</button>
+      <span id="ml-viewing-label" style="display:none">My Lane</span>
+      <button id="ml-mid-next" style="display:none" type="button">&#x25BA;</button>
+
+      <!-- ML tile interaction popout (wall convert / tower upgrade) -->
+      <div id="ml-tile-menu" style="display:none"></div>
+
+      <!-- ML Lane Tabs (shown only in ML mode) -->
+      <div id="ml-lane-tabs" style="display:none"></div>
+
+      <!-- ML Command Bar (bottom bar, shown only in ML mode) -->
+      <div id="ml-cmd-bar" style="display:none">
+        <div class="cmd-build-zone">
+          <button class="cmd-wall-btn" id="cmd-wall-btn">
+            <span class="cwb-icon">&#x25A6;</span>
+            <span class="cwb-label">Wall</span>
+            <span class="cwb-cost" id="cmd-wall-cost">5g</span>
+          </button>
+        </div>
+        <div class="cmd-units-zone" id="cmd-units-zone">
+          <button class="cmd-unit-btn" data-unit-type="runner" id="cmd-unit-runner">
+            <span class="cub-auto" data-unit-type="runner" id="cub-auto-runner">A</span>
+            <span class="cub-num">1</span>
+            <span class="cub-name">Runner</span>
+            <span class="cub-cost" id="cub-cost-runner">8g</span>
+            <span class="cub-income" id="cub-income-runner">+0.5</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="footman" id="cmd-unit-footman">
+            <span class="cub-auto" data-unit-type="footman" id="cub-auto-footman">A</span>
+            <span class="cub-num">2</span>
+            <span class="cub-name">Footman</span>
+            <span class="cub-cost" id="cub-cost-footman">10g</span>
+            <span class="cub-income" id="cub-income-footman">+1</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="ironclad" id="cmd-unit-ironclad">
+            <span class="cub-auto" data-unit-type="ironclad" id="cub-auto-ironclad">A</span>
+            <span class="cub-num">3</span>
+            <span class="cub-name">Ironclad</span>
+            <span class="cub-cost" id="cub-cost-ironclad">16g</span>
+            <span class="cub-income" id="cub-income-ironclad">+2</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="warlock" id="cmd-unit-warlock">
+            <span class="cub-auto" data-unit-type="warlock" id="cub-auto-warlock">A</span>
+            <span class="cub-num">4</span>
+            <span class="cub-name">Warlock</span>
+            <span class="cub-cost" id="cub-cost-warlock">18g</span>
+            <span class="cub-income" id="cub-income-warlock">+2</span>
+          </button>
+          <button class="cmd-unit-btn" data-unit-type="golem" id="cmd-unit-golem">
+            <span class="cub-auto" data-unit-type="golem" id="cub-auto-golem">A</span>
+            <span class="cub-num">5</span>
+            <span class="cub-name">Golem</span>
+            <span class="cub-cost" id="cub-cost-golem">25g</span>
+            <span class="cub-income" id="cub-income-golem">+3</span>
+          </button>
+        </div>
+        <div class="cmd-ctrl-zone">
+          <button class="cmd-auto-btn" id="cmd-global-auto">AUTO<br>OFF</button>
+          <div class="cmd-rate-row">
+            <button class="cmd-rate-btn" data-rate="slow">S</button>
+            <button class="cmd-rate-btn cmd-rate-on" data-rate="normal">N</button>
+            <button class="cmd-rate-btn" data-rate="fast">F</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Enemy lane tint overlay (shown when viewing enemy lane) -->
+      <div id="enemy-lane-tint" style="display:none"></div>
+
+      <!-- ML spectate notice (shown when viewing enemy lane) -->
+      <div id="ml-spectate-notice" style="display:none">Viewing: <span id="ml-spectate-name">Player</span></div>
+    </div>
+  </div>
+
+  <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
+  <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
+  <script src="game.js?v=20260303f"></script>
+
+</body>
+</html>

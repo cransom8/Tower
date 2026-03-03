@@ -4,6 +4,7 @@
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
+const fs = require("fs");
 const path = require("path");
 const { Server } = require("socket.io");
 
@@ -15,7 +16,13 @@ const app = express();
 app.use(cors());
 
 // Serve web app client at both / and /client for production compatibility.
-const clientDir = path.join(__dirname, "..", "client");
+// Support both monorepo root deploys and server-subdir deploys.
+const clientDirCandidates = [
+  path.join(__dirname, "..", "client"),
+  path.join(__dirname, "client"),
+];
+const clientDir = clientDirCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) || clientDirCandidates[0];
+console.log(`[static] clientDir=${clientDir}`);
 app.use(express.static(clientDir));
 app.use("/client", express.static(clientDir));
 
