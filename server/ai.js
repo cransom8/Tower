@@ -8,10 +8,10 @@
 
 const simMl = require("./sim-multilane");
 
-const TICK_INTERVALS = { easy: 800, medium: 450, hard: 250 };
+const TICK_INTERVALS = { easy: 800, medium: 380, hard: 180 };
 
 // Probability of skipping an AI decision tick (suboptimal play simulation)
-const SKIP_CHANCE = { easy: 0.25, medium: 0.10, hard: 0.02 };
+const SKIP_CHANCE = { easy: 0.25, medium: 0.08, hard: 0.0 };
 const MAX_TOWER_LEVEL = 10;
 const TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 const SPAWN_X = 5;
@@ -60,6 +60,8 @@ const DIFFICULTY_PROFILE = {
     mazeEnabled: false,
     mazeMinGain: 99,
     mazeIntervalTicks: 40,
+    actionsPerTick: 1,
+    useAutosend: false,
   },
   medium: {
     reserveGold: 10,
@@ -71,6 +73,8 @@ const DIFFICULTY_PROFILE = {
     mazeEnabled: true,
     mazeMinGain: 2,
     mazeIntervalTicks: 18,
+    actionsPerTick: 2,
+    useAutosend: false,
   },
   hard: {
     reserveGold: 6,
@@ -82,6 +86,8 @@ const DIFFICULTY_PROFILE = {
     mazeEnabled: true,
     mazeMinGain: 1,
     mazeIntervalTicks: 10,
+    actionsPerTick: 3,
+    useAutosend: true,
   },
 };
 
@@ -246,11 +252,12 @@ function getAdjacentObstacleCount(grid, x, y) {
   return count;
 }
 
-function tryBuildMazeWall(game, laneIndex, profile, danger) {
+function tryBuildMazeWall(game, laneIndex, profile, danger, plan) {
   const lane = game.lanes[laneIndex];
   if (!lane || !profile.mazeEnabled) return false;
   if (danger && lane.gold < 40) return false;
-  if (lane.gold < WALL_COST + (profile.reserveGold || 0)) return false;
+  const towerReserve = getTowerBuildReserve(lane, plan);
+  if (lane.gold < WALL_COST + (profile.reserveGold || 0) + towerReserve) return false;
   if (lane.wallCount >= 95) return false;
   if (!lane.path || lane.path.length < 2) return false;
 
@@ -291,6 +298,53 @@ function tryBuildMazeWall(game, laneIndex, profile, danger) {
     data: { gridX: best.x, gridY: best.y },
   });
   return res.ok;
+}
+
+function ensureAutosend(game, laneIndex, difficulty, profile, shouldEnable) {
+  if (!profile.useAutosend && shouldEnable) return false;
+  const lane = game.lanes[laneIndex];
+  if (!lane || lane.eliminated) return false;
+  const as = lane.autosend || {};
+  const enabledUnits = Object.assign({}, as.enabledUnits || {});
+  let changed = false;
+
+  // Hard AI keeps pressure by autosending sturdy units.
+  const desired = difficulty === "hard"
+    ? ["ironclad", "warlock", "footman", "runner"]
+    : ["footman", "runner"];
+
+  for (const ut of Object.keys(simMl.UNIT_DEFS)) {
+    const shouldEnable = desired.includes(ut);
+    if (!!enabledUnits[ut] !== shouldEnable) {
+      enabledUnits[ut] = shouldEnable;
+      changed = true;
+    }
+  }
+
+  const wantEnabled = !!shouldEnable;
+  const wantRate = difficulty === "hard" ? "fast" : "normal";
+  const needAction = changed || as.enabled !== wantEnabled || as.rate !== wantRate;
+  if (!needAction) return false;
+
+  const res = simMl.applyMLAction(game, laneIndex, {
+    type: "set_autosend",
+    data: { enabled: wantEnabled, enabledUnits, rate: wantRate },
+  });
+  return res.ok;
+}
+
+function getTowerBuildReserve(lane, plan) {
+  if (!lane || !Array.isArray(plan) || plan.length === 0) return 0;
+  for (const target of plan) {
+    const tile = lane.grid[target.x] && lane.grid[target.x][target.y];
+    if (!tile) continue;
+    if (tile.type === "tower") continue;
+    const tdef = simMl.TOWER_DEFS[target.type];
+    if (!tdef) continue;
+    if (tile.type === "wall") return tdef.cost;
+    if (tile.type === "empty") return WALL_COST + tdef.cost;
+  }
+  return 0;
 }
 
 // Try each tower in the plan: place wall -> convert wall.
@@ -412,7 +466,9 @@ function pickBestAffordableUnit(game, laneIndex, difficulty) {
 function trySpawnBurst(game, laneIndex, difficulty, profile) {
   const lane = game.lanes[laneIndex];
   let spawned = 0;
-  const reserve = profile.reserveGold || 0;
+  const plan = TOWER_PLANS[difficulty] || TOWER_PLANS.easy;
+  const towerReserve = getTowerBuildReserve(lane, plan);
+  const reserve = (profile.reserveGold || 0) + towerReserve;
   const attempts = Math.max(1, profile.spawnBurst || 1);
 
   for (let i = 0; i < attempts; i++) {
@@ -437,55 +493,102 @@ function aiDecide(game, laneIndex, difficulty) {
 
   const profile = DIFFICULTY_PROFILE[difficulty] || DIFFICULTY_PROFILE.easy;
   const plan = TOWER_PLANS[difficulty] || TOWER_PLANS.easy;
-  const dangerScore = computeThreatScore(lane);
-  const danger = isDangerous(lane);
+  const maxActions = Math.max(1, profile.actionsPerTick || 1);
+  let actions = 0;
 
-  const desiredTargetMode = chooseTowerTargetMode(lane);
-  if (retargetTowers(game, laneIndex, desiredTargetMode)) return;
+  while (actions < maxActions) {
+    const dangerScore = computeThreatScore(lane);
+    const danger = isDangerous(lane);
+    const towerReserve = getTowerBuildReserve(lane, plan);
+    const pendingTowerPlan = towerReserve > 0;
 
-  // 1. Defense first
-  if (danger) {
-    if (tryUpgradeBestTower(game, laneIndex, true)) return;
+    // 0. Keep hard AI autosend configured, but pause it while tower plan is pending.
+    if (ensureAutosend(game, laneIndex, difficulty, profile, !pendingTowerPlan)) {
+      actions += 1;
+      continue;
+    }
 
-    const targetLane = getOutgoingTargetLane(game, laneIndex);
-    for (const target of plan) {
-      const tile = lane.grid[target.x] && lane.grid[target.x][target.y];
-      if (tile && tile.type === "wall") {
-        const adaptiveType = chooseAdaptiveTowerType(targetLane, target.type, difficulty);
-        const res = simMl.applyMLAction(game, laneIndex, {
-          type: "convert_wall",
-          data: { gridX: target.x, gridY: target.y, towerType: adaptiveType },
-        });
-        if (res.ok) return;
+    const desiredTargetMode = chooseTowerTargetMode(lane);
+    if (retargetTowers(game, laneIndex, desiredTargetMode)) {
+      actions += 1;
+      continue;
+    }
+
+    // 1. Defense first
+    if (danger) {
+      if (tryUpgradeBestTower(game, laneIndex, true)) {
+        actions += 1;
+        continue;
+      }
+
+      const targetLane = getOutgoingTargetLane(game, laneIndex);
+      let converted = false;
+      for (const target of plan) {
+        const tile = lane.grid[target.x] && lane.grid[target.x][target.y];
+        if (tile && tile.type === "wall") {
+          const adaptiveType = chooseAdaptiveTowerType(targetLane, target.type, difficulty);
+          const res = simMl.applyMLAction(game, laneIndex, {
+            type: "convert_wall",
+            data: { gridX: target.x, gridY: target.y, towerType: adaptiveType },
+          });
+          if (res.ok) {
+            converted = true;
+            break;
+          }
+        }
+      }
+      if (converted) {
+        actions += 1;
+        continue;
       }
     }
-  }
 
-  // 2. Maze building (medium/hard): place walls that maximize path detours.
-  if (tryBuildMazeWall(game, laneIndex, profile, danger)) return;
+    // 2. Build tower plan early so AI does not starve tower construction.
+    if (tryBuildFromPlan(game, laneIndex, plan, difficulty)) {
+      actions += 1;
+      continue;
+    }
 
-  // 3. Economy / pressure
-  const sendChance = danger ? profile.dangerSpawnChance : profile.baseSpawnChance;
-  if (Math.random() < sendChance) {
-    if (trySpawnBurst(game, laneIndex, difficulty, profile)) return;
-  }
+    // 3. Maze building (medium/hard): place walls that maximize path detours.
+    if (tryBuildMazeWall(game, laneIndex, profile, danger, plan)) {
+      actions += 1;
+      continue;
+    }
 
-  // 4. Build tower plan
-  if (tryBuildFromPlan(game, laneIndex, plan, difficulty)) return;
+    // 4. Economy / pressure
+    const sendChance = danger ? profile.dangerSpawnChance : profile.baseSpawnChance;
+    if (Math.random() < sendChance) {
+      if (trySpawnBurst(game, laneIndex, difficulty, profile)) {
+        actions += 1;
+        continue;
+      }
+    }
 
-  // 5. Upgrade barracks when requirements met
-  const barracksPriority = lane.gold >= profile.saveForBarracks && (difficulty === "hard" || !danger);
-  if (barracksPriority) {
-    const upgraded = simMl.applyMLAction(game, laneIndex, { type: "upgrade_barracks", data: {} });
-    if (upgraded.ok) return;
-  }
+    // 5. Upgrade barracks when requirements met
+    const barracksPriority = lane.gold >= profile.saveForBarracks && (difficulty === "hard" || !danger);
+    if (barracksPriority) {
+      const upgraded = simMl.applyMLAction(game, laneIndex, { type: "upgrade_barracks", data: {} });
+      if (upgraded.ok) {
+        actions += 1;
+        continue;
+      }
+    }
 
-  // 6. Upgrade existing towers (non-emergency)
-  if (tryUpgradeBestTower(game, laneIndex, danger)) return;
+    // 6. Upgrade existing towers (non-emergency)
+    if (tryUpgradeBestTower(game, laneIndex, danger)) {
+      actions += 1;
+      continue;
+    }
 
-  // 7. Fallback gold dump when very threatened
-  if (dangerScore >= 4.5) {
-    trySpawnBurst(game, laneIndex, difficulty, Object.assign({}, profile, { reserveGold: 0, spawnBurst: 1 }));
+    // 7. Fallback gold dump when very threatened
+    if (dangerScore >= 4.5) {
+      if (trySpawnBurst(game, laneIndex, difficulty, Object.assign({}, profile, { reserveGold: 0, spawnBurst: 1 }))) {
+        actions += 1;
+        continue;
+      }
+    }
+
+    break;
   }
 }
 
