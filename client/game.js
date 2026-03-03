@@ -4,7 +4,11 @@ const SERVER_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:3000'
   : window.location.origin;
 
-const socket = io(SERVER_URL, { autoConnect: true, reconnectionAttempts: 5 });
+const socket = io(SERVER_URL, {
+  autoConnect: true,
+  reconnectionAttempts: 5,
+  auth: { token: localStorage.getItem('cd_access') || '' },
+});
 
 const UNIT_TYPES = ['runner', 'footman', 'ironclad', 'warlock', 'golem'];
 const TOWER_TYPES = ['archer', 'fighter', 'ballista', 'cannon', 'mage'];
@@ -32,7 +36,7 @@ const DEFAULT_TOWER_META = {
   archer: { label: 'Archer', cost: 10, range: 0.30, dmg: 6.6, atkCdTicks: 12, damageType: 'PIERCE' },
   fighter: { label: 'Fighter', cost: 12, range: 0.18, dmg: 8.8, atkCdTicks: 11, damageType: 'NORMAL' },
   ballista: { label: 'Ballista', cost: 20, range: 0.35, dmg: 12.1, atkCdTicks: 14, damageType: 'SIEGE' },
-  cannon: { label: 'Cannon', cost: 30, range: 0.288, dmg: 13.44, atkCdTicks: 16, damageType: 'SPLASH' },
+  cannon: { label: 'Cannon', cost: 30, range: 0.288, dmg: 8, atkCdTicks: 16, damageType: 'SPLASH' },
   mage: { label: 'Mage', cost: 24, range: 0.30, dmg: 13.2, atkCdTicks: 13, damageType: 'MAGIC' },
 };
 
@@ -85,13 +89,21 @@ const ML_CASTLE_YG = 27;
 let viewingLaneIndex = null;    // which lane is shown full-screen in ML mode
 let mlBarracksDefs = [];        // from ml_match_config.barracksLevels
 let mlMyBarracksIncomeBonus = 0; // income bonus from current barracks level
+let mlMyBarracksHpMult = 1;
+let mlMyBarracksDmgMult = 1;
+let mlMyBarracksSpeedMult = 1;
+let mlMyBarracksUnitCostMult = 1;
+let mlMyBarracksUnitIncomeMult = 1;
 let mlBarracksInfinite = false;
 let mlBarracksCostBase = 100;
 let mlBarracksReqIncomeBase = 8;
 let mlTileMenuJustOpened = false;
 let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
+let mlSelectedTiles = []; // [{ gx, gy }]
+let mlSelectionKind = null; // "wall" | "tower" | null
+let mlSelectionTowerType = null;
 let mlWallCost = 2;
-let mlMaxWalls = 100;
+let mlMaxWalls = null;
 
 // ── Auto-send state ───────────────────────────────────────────────────────────
 let autosendEnabled = {};       // { runner: bool, footman: bool, ... }
@@ -107,8 +119,13 @@ let floatingTexts = [];         // [{x,y,text,color,alpha,age}]
 let mlLastIncomeTicksRemaining = -1;
 let mlDragPlacing = false;
 let mlDragPlacedSet = new Set();
+let mlDragSelecting = false;
+let mlDragSelectAnchor = null; // { gx, gy, kind, towerType }
+let mlDragSelectCurrent = null; // { gx, gy }
 let mlWasDrag = false;
 let mlHoverTile = null;         // {gx,gy} or null
+let mlDragAnchorTile = null;    // first tile in current wall drag
+let mlDragAxis = null;          // 'x' (horizontal) or 'y' (vertical)
 let mlPrevLives = -1;
 let mlPrevBarracksLevel = 1;
 let _lastMibGold = -1;
@@ -118,6 +135,35 @@ function canPreviewWallAt(lane, gx, gy) {
   const isWall  = lane.walls      && lane.walls.some(w => w.x === gx && w.y === gy);
   const isTower = lane.towerCells && lane.towerCells.some(t => t.x === gx && t.y === gy);
   return !isWall && !isTower;
+}
+
+function getMLGridTileFromClient(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (clientX - rect.left) * (canvas.width / rect.width);
+  const cy = (clientY - rect.top) * (canvas.height / rect.height);
+  const { tileSize, offsetX, offsetY } = getMLGridLayout();
+  const gx = Math.floor((cx - offsetX) / tileSize);
+  const gy = Math.floor((cy - offsetY) / tileSize);
+  if (gx < 0 || gx >= ML_GRID_W || gy < 0 || gy >= ML_GRID_H) return null;
+  return { gx, gy };
+}
+
+function getAffordableTowerUpgrades(selectedTowers, towerType, gold) {
+  const out = [];
+  let remainingGold = Number(gold) || 0;
+  let totalUpgradeable = 0;
+  for (const t of selectedTowers) {
+    const level = Number(t.level) || 1;
+    if (level >= 10) continue;
+    totalUpgradeable += 1;
+    const cost = getTowerUpgradeCost(towerType, level + 1);
+    if (remainingGold >= cost) {
+      out.push({ x: t.x, y: t.y, level, cost });
+      remainingGold -= cost;
+    }
+  }
+  const totalCost = out.reduce((sum, it) => sum + it.cost, 0);
+  return { affordable: out, totalUpgradeable, totalCost };
 }
 
 function commitDragPreviewWalls() {
@@ -135,6 +181,54 @@ function commitDragPreviewWalls() {
   }
   mlDragPlacedSet.clear();
   return true;
+}
+
+function updateStraightWallDragPreview(gx, gy) {
+  if (!mlDragPlacing || viewingLaneIndex !== myLaneIndex || isSpectator) return;
+  if (!mlCurrentState) return;
+  const lane = mlCurrentState.lanes[myLaneIndex];
+  if (!lane) return;
+
+  if (!mlDragAnchorTile) {
+    if (!canPreviewWallAt(lane, gx, gy)) return;
+    mlDragAnchorTile = { gx, gy };
+    mlDragAxis = null;
+    mlDragPlacedSet = new Set([gx + ',' + gy]);
+    return;
+  }
+
+  const anchorX = mlDragAnchorTile.gx;
+  const anchorY = mlDragAnchorTile.gy;
+  const dx = gx - anchorX;
+  const dy = gy - anchorY;
+
+  if (!mlDragAxis) {
+    if (dx === 0 && dy === 0) {
+      mlDragPlacedSet = new Set([anchorX + ',' + anchorY]);
+      return;
+    }
+    mlDragAxis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+  }
+
+  const nextSet = new Set();
+  if (mlDragAxis === 'x') {
+    const endX = gx;
+    const step = endX >= anchorX ? 1 : -1;
+    for (let x = anchorX; ; x += step) {
+      if (!canPreviewWallAt(lane, x, anchorY)) break;
+      nextSet.add(x + ',' + anchorY);
+      if (x === endX) break;
+    }
+  } else {
+    const endY = gy;
+    const step = endY >= anchorY ? 1 : -1;
+    for (let y = anchorY; ; y += step) {
+      if (!canPreviewWallAt(lane, anchorX, y)) break;
+      nextSet.add(anchorX + ',' + y);
+      if (y === endY) break;
+    }
+  }
+  mlDragPlacedSet = nextSet;
 }
 
 const lobbyEl = document.getElementById('lobby');
@@ -157,6 +251,7 @@ const hudIncome = document.getElementById('hud-income');
 const hudIncomeTimer = document.getElementById('hud-income-timer');
 const gameOverBanner = document.getElementById('game-over-banner');
 const actionFeedback = document.getElementById('action-feedback');
+const disconnectNotice = document.getElementById('disconnect-notice');
 const towerPopout = document.getElementById('tower-popout');
 const matchupPanel = document.getElementById('matchup-panel');
 const incomeLeaderboardPanel = document.getElementById('income-leaderboard');
@@ -420,7 +515,7 @@ function applyMatchConfig(config) {
   if (Number.isFinite(config.barracksCostBase)) mlBarracksCostBase = config.barracksCostBase;
   if (Number.isFinite(config.barracksReqIncomeBase)) mlBarracksReqIncomeBase = config.barracksReqIncomeBase;
   if (Number.isFinite(config.wallCost)) mlWallCost = config.wallCost;
-  if (Number.isFinite(config.maxWalls)) mlMaxWalls = config.maxWalls;
+  mlMaxWalls = Number.isFinite(config.maxWalls) ? config.maxWalls : null;
   updateActionLabels();
 }
 
@@ -432,16 +527,20 @@ function updateActionLabels() {
     const hot = UNIT_TYPES.indexOf(type) + 1;
     const aps = m.atkCdTicks ? (tickHz / m.atkCdTicks) : 0;
     const laneSpeed = m.speedPerTick ? (m.speedPerTick * tickHz * 100) : 0;
+    const hpMult = Number.isFinite(mlMyBarracksHpMult) ? mlMyBarracksHpMult : 1;
+    const dmgMult = Number.isFinite(mlMyBarracksDmgMult) ? mlMyBarracksDmgMult : 1;
+    const speedMult = Number.isFinite(mlMyBarracksSpeedMult) ? mlMyBarracksSpeedMult : 1;
+    const unitCost = getScaledUnitCost(m.cost);
     const totalIncome = (function () {
-      const v = m.income + mlMyBarracksIncomeBonus;
+      const v = getScaledUnitIncome(m.income);
       return Number.isInteger(v) ? String(v) : v.toFixed(1);
     }());
     const rows = [
-      ['HP', String(Math.round(m.hp || 0))],
-      ['DMG', String(Math.round(m.dmg || 0)) + ' ' + (m.damageType || 'NORMAL')],
+      ['HP', formatScaledStat(m.hp || 0, hpMult, 0)],
+      ['DMG', formatScaledStat(m.dmg || 0, dmgMult, 0) + ' ' + (m.damageType || 'NORMAL')],
       ['ARM', String(m.armorType || '-')],
       ['ATK', aps.toFixed(2) + '/s'],
-      ['MOVE', laneSpeed.toFixed(2) + '%/s'],
+      ['MOVE', formatScaledStat(laneSpeed, speedMult, 2) + '%/s'],
       ['INC', '+' + totalIncome + 'g'],
       ['BNTY', '+' + String(m.bounty || m.income || 0) + 'g'],
     ];
@@ -455,15 +554,15 @@ function updateActionLabels() {
         '<div class="send-card-head">'
         + '<span class="send-card-hot">' + escHtml(String(hot)) + '</span>'
         + '<span class="send-card-name">' + escHtml(m.label) + '</span>'
-        + '<span class="send-card-cost">' + escHtml(String(m.cost)) + 'g</span>'
+        + '<span class="send-card-cost">' + escHtml(formatScaledStat(m.cost, mlMyBarracksUnitCostMult, 0)) + 'g</span>'
         + '</div>'
         + '<div class="send-card-table">' + rowsHtml + '</div>'
         + (m.special ? '<div class="send-card-note">' + escHtml(m.special) + '</div>' : '');
     } else {
       btn.textContent =
-        hot + ' ' + m.label + ' | ' + m.cost + 'g'
-        + ' | HP ' + Math.round(m.hp || 0)
-        + ' | DMG ' + Math.round(m.dmg || 0);
+        hot + ' ' + m.label + ' | ' + unitCost + 'g'
+        + ' | HP ' + formatScaledStat(m.hp || 0, hpMult, 0)
+        + ' | DMG ' + formatScaledStat(m.dmg || 0, dmgMult, 0);
     }
   });
   defenseButtons.forEach(btn => {
@@ -496,7 +595,7 @@ function getMLBarracksLevelDef(level) {
     return {
       hpMult: statMult,
       dmgMult: statMult,
-      speedMult: statMult,
+      speedMult: 1,
       structMult: statMult,
       incomeBonus: 0,
       cost: Math.ceil(mlBarracksCostBase * gateMult),
@@ -513,6 +612,56 @@ function getMLBarracksLevelDef(level) {
   return mlBarracksDefs[idx] || mlBarracksDefs[0];
 }
 
+function formatScaledStat(baseValue, mult, decimals) {
+  const base = Number(baseValue) || 0;
+  const safeMult = Number.isFinite(mult) ? mult : 1;
+  const scaled = base * safeMult;
+  const baseText = decimals > 0 ? base.toFixed(decimals) : String(Math.round(base));
+  if (Math.abs(safeMult - 1) < 1e-9) return baseText;
+  const scaledText = decimals > 0 ? scaled.toFixed(decimals) : String(Math.round(scaled));
+  const multText = Number.isInteger(safeMult)
+    ? String(safeMult)
+    : Number(safeMult.toFixed(2)).toString();
+  return baseText + ' -> ' + scaledText + ' (x' + multText + ')';
+}
+
+function getScaledUnitCost(baseCost) {
+  const base = Math.max(0, Number(baseCost) || 0);
+  const mult = Number.isFinite(mlMyBarracksUnitCostMult) ? mlMyBarracksUnitCostMult : 1;
+  return Math.ceil(base * Math.max(0, mult));
+}
+
+function getScaledUnitIncome(baseIncome) {
+  const base = Number(baseIncome) || 0;
+  const mult = Number.isFinite(mlMyBarracksUnitIncomeMult) ? mlMyBarracksUnitIncomeMult : 1;
+  return (base * Math.max(0, mult)) + mlMyBarracksIncomeBonus;
+}
+
+function syncBarracksStatMultipliers(level) {
+  const def = getMLBarracksLevelDef(level) || {};
+  const nextHp = Number.isFinite(def.hpMult) ? Number(def.hpMult) : 1;
+  const nextDmg = Number.isFinite(def.dmgMult) ? Number(def.dmgMult) : 1;
+  const nextSpeed = 1;
+  const nextUnitCost = Number.isFinite(def.unitCostMult)
+    ? Number(def.unitCostMult)
+    : (Number.isFinite(def.hpMult) ? Number(def.hpMult) : 1);
+  const nextUnitIncome = Number.isFinite(def.unitIncomeMult)
+    ? Number(def.unitIncomeMult)
+    : (Number.isFinite(def.hpMult) ? Number(def.hpMult) : 1);
+  const changed =
+    nextHp !== mlMyBarracksHpMult
+    || nextDmg !== mlMyBarracksDmgMult
+    || nextSpeed !== mlMyBarracksSpeedMult
+    || nextUnitCost !== mlMyBarracksUnitCostMult
+    || nextUnitIncome !== mlMyBarracksUnitIncomeMult;
+  mlMyBarracksHpMult = nextHp;
+  mlMyBarracksDmgMult = nextDmg;
+  mlMyBarracksSpeedMult = nextSpeed;
+  mlMyBarracksUnitCostMult = nextUnitCost;
+  mlMyBarracksUnitIncomeMult = nextUnitIncome;
+  return changed;
+}
+
 function updateStatsPanel() {
   const panel = document.getElementById('stats-panel');
   if (!panel) return;
@@ -526,7 +675,7 @@ function updateStatsPanel() {
     bodyHtml += '<div class="stats-wall-row">'
       + '<span class="stats-name">Wall</span>'
       + '<span class="stats-cost">' + mlWallCost + 'g</span>'
-      + '<span class="stats-max">max ' + mlMaxWalls + '</span>'
+      + '<span class="stats-max">max ' + (Number.isFinite(mlMaxWalls) ? mlMaxWalls : 'Unlimited') + '</span>'
       + '</div>';
     bodyHtml += '<div class="stats-divider"></div>';
   }
@@ -1289,140 +1438,139 @@ function drawUnitHp(u, x, y) {
 
 function drawUnitShape(u, x, y) {
   const friendly = u.side === 'bottom';
-  const col = friendly ? '#28c0b0' : '#ff3a3a';
+  const teamCol = friendly ? '#28c0b0' : '#ff3a3a';
   const hi = '#f4f7fb';
   const shd = friendly ? '#0d5548' : '#6b1010';
-  const dir = friendly ? -1 : 1; // direction of travel: -1=up, +1=down
+  const front = friendly ? -1 : 1; // -1=upward advance, +1=downward advance
   ctx.save();
   ctx.translate(x, y);
 
   if (u.type === 'footman') {
-    // Shield on leading side (toward enemy)
-    ctx.fillStyle = shd;
-    ctx.fillRect(dir * 2, dir * -8, 5, 9);
-    ctx.fillStyle = col;
-    ctx.fillRect(dir * 3, dir * -7, 4, 8);
+    // Broad shield silhouette + spear: defensive profile.
+    ctx.fillStyle = '#2f6fcb';
+    roundRect(-6, -3, 12, 11, 2); ctx.fill();
+    ctx.fillStyle = teamCol;
+    roundRect(-4, -2, 8, 9, 2); ctx.fill();
     ctx.strokeStyle = hi; ctx.lineWidth = 1;
-    ctx.strokeRect(dir * 3, dir * -7, 4, 8);
-    ctx.beginPath(); // shield cross
-    ctx.moveTo(dir * 5, dir * -7); ctx.lineTo(dir * 5, dir * 1);
-    ctx.moveTo(dir * 3, dir * -3); ctx.lineTo(dir * 7, dir * -3);
-    ctx.stroke();
-    // Armored body
-    ctx.fillStyle = col;
-    roundRect(-5, -4, 10, 10, 2); ctx.fill();
-    ctx.strokeStyle = shd; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-5, 1); ctx.lineTo(5, 1); ctx.stroke();
-    // Helmet
-    ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(0, -6, 4, Math.PI, 0); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = shd; ctx.fillRect(-2, -7, 4, 2); // visor slit
-    // Spear on trailing side
-    ctx.strokeStyle = hi; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-dir * 5, 2); ctx.lineTo(-dir * 9, dir * 8); ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(-dir * 8, dir * 6); ctx.lineTo(-dir * 10, dir * 8); ctx.lineTo(-dir * 8, dir * 10);
+    ctx.moveTo(0, -1); ctx.lineTo(0, 6);
+    ctx.moveTo(-3, 2); ctx.lineTo(3, 2);
     ctx.stroke();
+    ctx.fillStyle = teamCol;
+    roundRect(-5, -11, 10, 7, 2); ctx.fill();
+    ctx.fillStyle = hi;
+    ctx.fillRect(-3, -9, 6, 2);
+    ctx.strokeStyle = '#d9c38b'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-7, 8); ctx.lineTo(-10, front * 9); ctx.stroke();
+    ctx.fillStyle = '#d9c38b';
+    ctx.beginPath();
+    ctx.moveTo(-10, front * 9);
+    ctx.lineTo(-12, front * 11);
+    ctx.lineTo(-8, front * 11);
+    ctx.closePath();
+    ctx.fill();
 
   } else if (u.type === 'golem') {
-    // Massive stone body
-    ctx.fillStyle = col;
-    roundRect(-9, -2, 18, 17, 3); ctx.fill();
-    // Stone plate cracks/lines
+    // Huge frame + crystal core: instantly reads as siege bruiser.
+    ctx.fillStyle = '#7d858d';
+    roundRect(-10, -4, 20, 17, 4); ctx.fill();
+    ctx.fillStyle = teamCol;
+    roundRect(-7, -2, 14, 13, 3); ctx.fill();
     ctx.strokeStyle = shd; ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(-9, 6); ctx.lineTo(9, 6);
-    ctx.moveTo(-3, -2); ctx.lineTo(-3, 15);
-    ctx.moveTo(3, -2); ctx.lineTo(3, 15);
+    ctx.moveTo(-8, 3); ctx.lineTo(8, 3);
+    ctx.moveTo(-3, -3); ctx.lineTo(-3, 12);
+    ctx.moveTo(3, -3); ctx.lineTo(3, 12);
     ctx.stroke();
-    // Massive boulder head
+    ctx.fillStyle = '#9fa7af';
+    roundRect(-8, -14, 16, 10, 3); ctx.fill();
+    // Crystal core
+    ctx.fillStyle = '#ff9a3a';
+    ctx.beginPath();
+    ctx.moveTo(0, -1); ctx.lineTo(4, 4); ctx.lineTo(0, 9); ctx.lineTo(-4, 4);
+    ctx.closePath();
+    ctx.fill();
+    // Horns
+    ctx.fillStyle = '#cfd6dc';
+    ctx.beginPath(); ctx.moveTo(-6, -12); ctx.lineTo(-10, -16); ctx.lineTo(-6, -9); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(6, -12); ctx.lineTo(10, -16); ctx.lineTo(6, -9); ctx.closePath(); ctx.fill();
+    // Fist
+    ctx.fillStyle = '#6d757d';
+    ctx.beginPath(); ctx.arc(12, 4, 4.5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = hi;
-    roundRect(-7, -13, 14, 12, 3); ctx.fill();
-    // Dark visor slit
-    ctx.fillStyle = shd; ctx.fillRect(-5, -8, 10, 3);
-    // Glowing orange eyes
-    ctx.fillStyle = '#f07030';
-    ctx.beginPath(); ctx.arc(-3, -7, 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(3, -7, 1.5, 0, Math.PI * 2); ctx.fill();
-    // Massive fist on leading side
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(dir * 12, 5, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = shd; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.arc(-2.5, -9, 1.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(2.5, -9, 1.2, 0, Math.PI * 2); ctx.fill();
 
   } else if (u.type === 'ironclad') {
-    // Pauldrons (shoulder plates)
-    ctx.fillStyle = col;
-    ctx.fillRect(-9, -5, 4, 5);
-    ctx.fillRect(5, -5, 4, 5);
-    ctx.strokeStyle = shd; ctx.lineWidth = 1;
-    ctx.strokeRect(-9, -5, 4, 5);
-    ctx.strokeRect(5, -5, 4, 5);
-    // Heavy body plate
-    ctx.fillStyle = col;
-    roundRect(-6, -3, 12, 13, 2); ctx.fill();
+    // Thick armor silhouette + hammer crest.
+    ctx.fillStyle = '#5f6672';
+    roundRect(-9, -2, 18, 13, 3); ctx.fill();
+    ctx.fillStyle = teamCol;
+    roundRect(-7, -1, 14, 11, 2); ctx.fill();
+    ctx.fillStyle = '#8c94a3';
+    ctx.fillRect(-11, -3, 5, 6);
+    ctx.fillRect(6, -3, 5, 6);
+    ctx.fillStyle = teamCol;
+    roundRect(-6, -12, 12, 8, 2); ctx.fill();
+    ctx.fillStyle = shd;
+    ctx.fillRect(-4, -10, 8, 2);
+    ctx.fillStyle = '#c8ad55';
+    ctx.fillRect(-1, -16, 2, 4);
+    ctx.fillRect(-4, -14, 8, 2);
     ctx.strokeStyle = shd; ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(-6, 2); ctx.lineTo(6, 2);
     ctx.moveTo(-6, 6); ctx.lineTo(6, 6);
     ctx.stroke();
-    // Bucket helmet
-    ctx.fillStyle = hi;
-    roundRect(-6, -10, 12, 8, 2); ctx.fill();
-    ctx.fillStyle = col;
-    ctx.fillRect(-6, -7, 12, 3); // neck cover
-    ctx.fillStyle = shd;
-    ctx.fillRect(-4, -9, 8, 2); // visor slit
-    // Glowing eye slits
-    ctx.fillStyle = col; ctx.globalAlpha = 0.5;
-    ctx.fillRect(-3, -9, 2, 2);
-    ctx.fillRect(1, -9, 2, 2);
-    ctx.globalAlpha = 1;
 
   } else if (u.type === 'runner') {
-    // Speed lines trailing behind
-    ctx.strokeStyle = col; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+    // Lean silhouette + scarf trail.
+    ctx.strokeStyle = teamCol; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
     for (let i = 1; i <= 3; i++) {
       ctx.beginPath();
-      ctx.moveTo(dir * (4 + i * 3), -i);
-      ctx.lineTo(dir * (6 + i * 5), -i);
+      ctx.moveTo(-4, i * 2 - 5);
+      ctx.lineTo(-7 - i * 3, i * 2 - 6);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    // Lean body (slight forward tilt)
-    ctx.save(); ctx.rotate(dir * 0.2);
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.ellipse(0, 2, 4, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.rotate(-0.3 * front);
+    ctx.fillStyle = teamCol;
+    ctx.beginPath(); ctx.ellipse(0, 2, 3.8, 7, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(0, -5, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(0, -5, 3, Math.PI * 0.1, Math.PI * 0.9); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -5, 2.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd74f';
+    ctx.fillRect(-1, -7, 2, 2);
     ctx.restore();
+    ctx.fillStyle = '#ffd74f';
+    ctx.beginPath();
+    ctx.moveTo(2, -3); ctx.lineTo(8, -1); ctx.lineTo(2, 1);
+    ctx.closePath(); ctx.fill();
 
   } else if (u.type === 'warlock') {
-    // Staff on one side
-    ctx.strokeStyle = hi; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(dir * 6, 8); ctx.lineTo(dir * 6, -7); ctx.stroke();
-    // Magic orb atop staff
-    const og = ctx.createRadialGradient(dir * 6, -8, 0, dir * 6, -8, 3);
-    og.addColorStop(0, hi); og.addColorStop(0.5, col); og.addColorStop(1, 'rgba(0,0,0,0)');
+    // Hood + runic staff + orbiting motes.
+    ctx.strokeStyle = '#d9d2ff'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(7, 8); ctx.lineTo(7, -8); ctx.stroke();
+    const og = ctx.createRadialGradient(7, -9, 0, 7, -9, 3.5);
+    og.addColorStop(0, '#ffffff'); og.addColorStop(0.55, '#b98bff'); og.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = og;
-    ctx.beginPath(); ctx.arc(dir * 6, -8, 3, 0, Math.PI * 2); ctx.fill();
-    // Pointed robe
-    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(7, -9, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#6b49b8';
     ctx.beginPath();
-    ctx.moveTo(-1, -8); ctx.lineTo(-3, -3);
-    ctx.lineTo(-6, 8); ctx.lineTo(6, 8);
-    ctx.lineTo(3, -3); ctx.closePath(); ctx.fill();
-    // Robe hem detail
+    ctx.moveTo(-2, -10); ctx.lineTo(-8, 8); ctx.lineTo(8, 8); ctx.lineTo(2, -10);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = teamCol;
+    ctx.beginPath();
+    ctx.moveTo(-1, -8); ctx.lineTo(-5, 8); ctx.lineTo(5, 8); ctx.lineTo(1, -8);
+    ctx.closePath(); ctx.fill();
     ctx.strokeStyle = shd; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(-6, 4); ctx.lineTo(6, 4); ctx.stroke();
-    // Face
-    ctx.fillStyle = hi; ctx.globalAlpha = 0.8;
-    ctx.beginPath(); ctx.arc(0, -1, 2.5, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(-1, -1, 0.7, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(1, -1, 0.7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = hi;
+    ctx.beginPath(); ctx.arc(0, -1, 2.3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b98bff';
+    ctx.beginPath(); ctx.arc(-6, -2, 1.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(-3, -6, 0.9, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -8, 0.8, 0, Math.PI * 2); ctx.fill();
   }
 
   ctx.restore();
@@ -1577,8 +1725,9 @@ function updateSendButtons(gold) {
   sendButtons.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
+    const unitCost = getScaledUnitCost(m.cost);
     btn.disabled = !canAct;
-    btn.classList.toggle('locked', canAct && gold < m.cost);
+    btn.classList.toggle('locked', canAct && gold < unitCost);
   });
 }
 
@@ -1611,6 +1760,10 @@ function renderBarracksUpgradeLabel(level, nextDef) {
 function updateClassicBarracksHud(local) {
   if (!local || !mlBarracksHud) return;
   const level = Math.max(1, Number(local.me.barracksLevel) || 1);
+  if (syncBarracksStatMultipliers(level)) {
+    updateActionLabels();
+    updateSendButtons(local.me.gold);
+  }
   if (mlBarracksLevel) mlBarracksLevel.textContent = String(level);
   const nextDef = getMLBarracksLevelDef(level + 1);
   if (btnBarracksUpgrade) {
@@ -1946,6 +2099,11 @@ function resetToLobby(msg) {
 
   // Reset barracks income bonus
   mlMyBarracksIncomeBonus = 0;
+  mlMyBarracksHpMult = 1;
+  mlMyBarracksDmgMult = 1;
+  mlMyBarracksSpeedMult = 1;
+  mlMyBarracksUnitCostMult = 1;
+  mlMyBarracksUnitIncomeMult = 1;
 
   // Reset auto-send state
   UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
@@ -2616,11 +2774,124 @@ socket.on('rematch_vote', data => {
   }
 }());
 
-socket.on('connect', () => console.log('[socket] connected:', socket.id));
+// ── Disconnect / reconnect helpers ───────────────────────────────────────────
+let _disconnectCountdownHandle = null;
+
+function showDisconnectNotice(html) {
+  if (!disconnectNotice) return;
+  disconnectNotice.innerHTML = html;
+  disconnectNotice.style.display = '';
+}
+
+function hideDisconnectNotice() {
+  if (!disconnectNotice) return;
+  disconnectNotice.style.display = 'none';
+  disconnectNotice.innerHTML = '';
+  if (_disconnectCountdownHandle) { clearInterval(_disconnectCountdownHandle); _disconnectCountdownHandle = null; }
+}
+
+function startGraceCountdown(gracePeriodMs) {
+  if (!disconnectNotice) return;
+  let remaining = Math.ceil(gracePeriodMs / 1000);
+  const update = () => {
+    showDisconnectNotice(`Opponent disconnected — forfeiting in <b>${remaining}s</b> if not back`);
+    remaining--;
+    if (remaining < 0) { hideDisconnectNotice(); }
+  };
+  update();
+  _disconnectCountdownHandle = setInterval(update, 1000);
+}
+
+socket.on('reconnect_token', ({ token } = {}) => {
+  if (token) localStorage.setItem('cd_reconnect', token);
+});
+
+socket.on('connect', () => {
+  console.log('[socket] connected:', socket.id);
+  const token = localStorage.getItem('cd_reconnect');
+  if (token) {
+    console.log('[reconnect] attempting rejoin…');
+    socket.emit('rejoin_game', { token });
+  }
+});
+
+socket.on('rejoin_ack', ({ success, mode, side, laneIndex, code } = {}) => {
+  if (!success) return;
+  console.log('[reconnect] rejoin ack', mode, side ?? laneIndex);
+  localStorage.removeItem('cd_reconnect');
+  hideDisconnectNotice();
+
+  if (mode === 'classic') {
+    myCode = code;
+    mySide = side;
+    gameMode = 'classic';
+    hasFirstSnapshot = false;
+    previousState = null;
+    currentState = null;
+    _lastHudGold = -1;
+    setLobbyState('playing');
+    hideLobby();
+    showGameUi();
+    initCanvas();
+    hideGameOverBanner();
+    startRenderLoop();
+    if (autosendBar) autosendBar.style.display = 'none';
+    if (mlBarracksHud) mlBarracksHud.style.display = 'grid';
+    if (mlInfoBar) mlInfoBar.style.display = 'none';
+    if (mlLaneTabs) mlLaneTabs.style.display = 'none';
+    if (mlCmdBar) mlCmdBar.style.display = 'none';
+    if (hudBar) hudBar.style.display = '';
+    refreshAutosendControls();
+    showActionFeedback('Reconnected!', true);
+  } else {
+    // ML: set vars now; ml_match_ready (sent just before this) has already fired and set up UI
+    mlMyCode = code;
+    myLaneIndex = laneIndex;
+    gameMode = 'multilane';
+    showActionFeedback('Reconnected!', true);
+  }
+});
+
+socket.on('rejoin_fail', ({ reason } = {}) => {
+  console.log('[reconnect] rejoin fail:', reason);
+  localStorage.removeItem('cd_reconnect');
+  hideDisconnectNotice();
+  if (lobbyState === 'playing') resetToLobby('Could not reconnect. Game may be over.');
+});
+
+socket.on('opponent_disconnected', ({ side, gracePeriodMs } = {}) => {
+  if (lobbyState !== 'playing') return;
+  startGraceCountdown(gracePeriodMs || 120000);
+});
+
+socket.on('player_disconnected', ({ laneIndex, displayName, gracePeriodMs } = {}) => {
+  if (lobbyState !== 'playing') return;
+  showDisconnectNotice(`${displayName || 'A player'} disconnected — ${Math.ceil((gracePeriodMs || 120000) / 1000)}s to reconnect`);
+  if (_disconnectCountdownHandle) clearInterval(_disconnectCountdownHandle);
+  let remaining = Math.ceil((gracePeriodMs || 120000) / 1000);
+  _disconnectCountdownHandle = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) { hideDisconnectNotice(); return; }
+    showDisconnectNotice(`${displayName || 'A player'} disconnected — ${remaining}s to reconnect`);
+  }, 1000);
+});
+
+socket.on('player_reconnected', ({ displayName, mode: _m } = {}) => {
+  hideDisconnectNotice();
+  if (lobbyState === 'playing') showActionFeedback((displayName || 'Player') + ' reconnected', true);
+});
+
 socket.on('disconnect', reason => {
   console.log('[socket] disconnected:', reason);
-  if (lobbyState === 'playing') resetToLobby('Connection lost. Game ended.');
-  else setStatus('Connection lost. Reload to retry.', 'error');
+  if (lobbyState === 'playing') {
+    if (localStorage.getItem('cd_reconnect')) {
+      showDisconnectNotice('Reconnecting…');
+    } else {
+      resetToLobby('Connection lost. Game ended.');
+    }
+  } else {
+    setStatus('Connection lost. Reload to retry.', 'error');
+  }
 });
 socket.on('connect_error', err => {
   console.error('[socket] connect_error:', err.message);
@@ -2723,6 +2994,7 @@ function drawMLGridLane(lane) {
   const w = canvas.width;
   const h = canvas.height;
   const { tileSize, offsetX, offsetY, gridW, gridH } = getMLGridLayout();
+  normalizeMLSelectionForLane(lane);
 
   // Full-canvas background — gutters get stone tile pattern, grid gets dark fill
   ctx.clearRect(0, 0, w, h);
@@ -2854,7 +3126,46 @@ function drawMLGridLane(lane) {
     }
   }
 
-  // Spawn tile — downward arrow icon (units enter here)
+
+  // Selected tiles highlight (walls or same-type towers).
+  if (viewingLaneIndex === myLaneIndex && mlSelectedTiles.length > 0) {
+    const selColor = mlSelectionKind === 'wall' ? 'rgba(64, 220, 168, 0.92)' : 'rgba(90, 170, 255, 0.95)';
+    const selFill = mlSelectionKind === 'wall' ? 'rgba(64, 220, 168, 0.20)' : 'rgba(90, 170, 255, 0.18)';
+    ctx.save();
+    for (const t of mlSelectedTiles) {
+      const px = t.gx * tileSize + 1;
+      const py = t.gy * tileSize + 1;
+      const ps = tileSize - 2;
+      ctx.fillStyle = selFill;
+      ctx.fillRect(px, py, ps, ps);
+      ctx.strokeStyle = selColor;
+      ctx.lineWidth = (mlActiveTile && mlActiveTile.gx === t.gx && mlActiveTile.gy === t.gy) ? 2 : 1.2;
+      ctx.strokeRect(px + 0.5, py + 0.5, ps - 1, ps - 1);
+    }
+    ctx.restore();
+  }
+
+  if (viewingLaneIndex === myLaneIndex && mlDragSelecting && mlDragSelectAnchor && mlDragSelectCurrent) {
+    const minX = Math.min(mlDragSelectAnchor.gx, mlDragSelectCurrent.gx);
+    const maxX = Math.max(mlDragSelectAnchor.gx, mlDragSelectCurrent.gx);
+    const minY = Math.min(mlDragSelectAnchor.gy, mlDragSelectCurrent.gy);
+    const maxY = Math.max(mlDragSelectAnchor.gy, mlDragSelectCurrent.gy);
+    const rx = minX * tileSize + 1;
+    const ry = minY * tileSize + 1;
+    const rw = (maxX - minX + 1) * tileSize - 2;
+    const rh = (maxY - minY + 1) * tileSize - 2;
+    const col = mlDragSelectAnchor.kind === 'wall' ? 'rgba(64, 220, 168, 0.95)' : 'rgba(90, 170, 255, 0.95)';
+    ctx.save();
+    ctx.fillStyle = mlDragSelectAnchor.kind === 'wall' ? 'rgba(64, 220, 168, 0.10)' : 'rgba(90, 170, 255, 0.10)';
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([4, 3]);
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+    ctx.restore();
+  }
+
+  // Spawn tile - downward arrow icon (units enter here)
   {
     const spx = ML_SPAWN_X * tileSize, spy = ML_SPAWN_YG * tileSize;
     const spcx = spx + tileSize / 2, spcy = spy + tileSize / 2;
@@ -3173,13 +3484,14 @@ function updateCmdBar(myLane) {
   cmdUnitBtns.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
+    const unitCost = getScaledUnitCost(m.cost);
     btn.disabled = !canAct;
-    btn.classList.toggle('cmd-unit-nogold', canAct && gold < m.cost);
+    btn.classList.toggle('cmd-unit-nogold', canAct && gold < unitCost);
     const costEl = btn.querySelector('.cub-cost');
     const incomeEl = btn.querySelector('.cub-income');
-    if (costEl) costEl.textContent = m.cost + 'g';
+    if (costEl) costEl.textContent = unitCost + 'g';
     if (incomeEl) {
-      const totalInc = m.income + mlMyBarracksIncomeBonus;
+      const totalInc = getScaledUnitIncome(m.income);
       incomeEl.textContent = '+' + (Number.isInteger(totalInc) ? totalInc : totalInc.toFixed(1));
     }
     const badge = btn.querySelector('.cub-auto');
@@ -3231,7 +3543,7 @@ function updateSendButtonsML(myLane) {
       btn.classList.add('locked');
       return;
     }
-    btn.classList.toggle('locked', canAct && gold < m.cost);
+    btn.classList.toggle('locked', canAct && gold < getScaledUnitCost(m.cost));
   });
 }
 
@@ -3412,6 +3724,9 @@ socket.on('ml_match_ready', data => {
   _lastMibGold = -1;
   mlDragPlacedSet.clear();
   mlDragPlacing = false;
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
 
   // Initialize ML grid UI
   viewingLaneIndex = myLaneIndex;
@@ -3453,32 +3768,69 @@ socket.on('ml_state_snapshot', state => {
   mlCurrentState = state;
   mlCurrentStateReceivedAt = performance.now();
 
-  // Refresh an open tower upgrade menu with authoritative data from the snapshot
-  if (mlActiveTile && mlTileMenu && mlTileMenu.style.display !== 'none') {
-    const lane = state.lanes && state.lanes[myLaneIndex];
-    if (lane) {
-      const tc = lane.towerCells && lane.towerCells.find(t => t.x === mlActiveTile.gx && t.y === mlActiveTile.gy);
-      if (tc) {
-        if (tc.level !== mlActiveTile.level || (tc.targetMode || 'first') !== (mlActiveTile.targetMode || 'first')) {
-          // Level changed (server confirmed upgrade) — rebuild fully
-          showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level, tc.targetMode);
+  const lane = state.lanes && state.lanes[myLaneIndex];
+  normalizeMLSelectionForLane(lane);
+  if (mlActiveTile && mlTileMenu && mlTileMenu.style.display !== 'none' && lane) {
+    if (mlSelectionKind === 'wall') {
+      const isWall = lane.walls && lane.walls.some(w => w.x === mlActiveTile.gx && w.y === mlActiveTile.gy);
+      if (!isWall) {
+        closeMLTileMenu();
+      } else {
+        const selectedWalls = getSelectionWallTiles(lane, mlActiveTile.gx, mlActiveTile.gy);
+        const selectedCount = selectedWalls.length;
+        const selectedWallsEl = mlTileMenu.querySelector('[data-selected-walls]');
+        if (selectedWallsEl) selectedWallsEl.textContent = `Selected walls: ${selectedCount}`;
+        mlTileMenu.querySelectorAll('[data-tower]').forEach(btn => {
+          const towerType = String(btn.getAttribute('data-tower') || '');
+          const m = towerMeta[towerType] || DEFAULT_TOWER_META[towerType];
+          const unitCost = m ? m.cost : 0;
+          const totalCost = unitCost * selectedCount;
+          btn.disabled = !m || lane.gold < totalCost;
+          btn.textContent = selectedCount > 1
+            ? `${cap(towerType)} x${selectedCount} (${totalCost}g)`
+            : `${cap(towerType)} (${unitCost}g)`;
+        });
+      }
+    } else {
+      const tc = lane.towerCells && lane.towerCells.find(t =>
+        t.x === mlActiveTile.gx
+        && t.y === mlActiveTile.gy
+        && (!mlSelectionTowerType || t.type === mlSelectionTowerType)
+      );
+      if (!tc) {
+        closeMLTileMenu();
+      } else {
+        const mode = tc.targetMode || 'first';
+        if (tc.level !== mlActiveTile.level || mode !== (mlActiveTile.targetMode || 'first')) {
+          showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level, mode);
         } else {
-          // Same level — only update affordability to avoid flickering on every snapshot
+          const nextLevel = tc.level + 1;
           const upgradeBtn = mlTileMenu.querySelector('[data-upgrade]');
           if (upgradeBtn) {
-            const nextLevel = tc.level + 1;
             if (nextLevel > 10) {
               upgradeBtn.textContent = 'MAXED';
               upgradeBtn.disabled = true;
             } else {
               const cost = getTowerUpgradeCost(tc.type, nextLevel);
-              upgradeBtn.textContent = `Upgrade → Lv${nextLevel} (${cost}g)`;
+              upgradeBtn.textContent = `Upgrade -> Lv${nextLevel} (${cost}g)`;
               upgradeBtn.disabled = lane.gold < cost;
             }
           }
+
+          const bulkBtn = mlTileMenu.querySelector('[data-bulk-upgrade]');
+          if (bulkBtn) {
+            const selection = getSelectionTowerContext(lane, tc.type, tc.level, mode);
+            const selected = (selection && selection.selected) ? selection.selected : [tc];
+            const affordableBulk = getAffordableTowerUpgrades(selected, tc.type, lane.gold);
+            const label = affordableBulk.totalUpgradeable === 0
+              ? 'All selected maxed'
+              : (affordableBulk.affordable.length > 0
+                ? `Upgrade selected (${affordableBulk.affordable.length}/${affordableBulk.totalUpgradeable}) (${affordableBulk.totalCost}g)`
+                : 'Need more gold');
+            bulkBtn.textContent = label;
+            bulkBtn.disabled = affordableBulk.affordable.length === 0;
+          }
         }
-      } else {
-        closeMLTileMenu();
       }
     }
   }
@@ -3520,8 +3872,154 @@ function shortTower(type) {
   return '';
 }
 
+function mlTileKey(gx, gy) {
+  return gx + ',' + gy;
+}
+
+function clearMLSelection() {
+  mlSelectedTiles = [];
+  mlSelectionKind = null;
+  mlSelectionTowerType = null;
+}
+
+function hasMLSelectionTile(gx, gy) {
+  const key = mlTileKey(gx, gy);
+  return mlSelectedTiles.some(t => mlTileKey(t.gx, t.gy) === key);
+}
+
+function setMLSingleSelection(kind, gx, gy, towerType) {
+  mlSelectionKind = kind;
+  mlSelectionTowerType = kind === 'tower' ? towerType : null;
+  mlSelectedTiles = [{ gx, gy }];
+}
+
+function toggleMLSelectionTile(gx, gy) {
+  const key = mlTileKey(gx, gy);
+  const idx = mlSelectedTiles.findIndex(t => mlTileKey(t.gx, t.gy) === key);
+  if (idx >= 0) {
+    if (mlSelectedTiles.length > 1) mlSelectedTiles.splice(idx, 1);
+    return;
+  }
+  mlSelectedTiles.push({ gx, gy });
+}
+
+function getSelectionTowerContext(lane, fallbackType, fallbackLevel, fallbackMode) {
+  if (!lane) return null;
+  const sameType = (mlSelectionKind === 'tower' && mlSelectionTowerType === fallbackType);
+  const selected = [];
+  if (sameType) {
+    for (const t of mlSelectedTiles) {
+      const cell = lane.towerCells && lane.towerCells.find(tc => tc.x === t.gx && tc.y === t.gy && tc.type === fallbackType);
+      if (cell) selected.push(cell);
+    }
+  }
+  if (selected.length === 0) {
+    setMLSingleSelection('tower', mlActiveTile?.gx ?? 0, mlActiveTile?.gy ?? 0, fallbackType);
+    return {
+      selected: [{ x: mlActiveTile?.gx ?? 0, y: mlActiveTile?.gy ?? 0, type: fallbackType, level: fallbackLevel || 1, targetMode: fallbackMode || 'first' }],
+      active: { x: mlActiveTile?.gx ?? 0, y: mlActiveTile?.gy ?? 0, type: fallbackType, level: fallbackLevel || 1, targetMode: fallbackMode || 'first' },
+      isMixedLevels: false,
+    };
+  }
+  const active = selected.find(tc => tc.x === mlActiveTile?.gx && tc.y === mlActiveTile?.gy) || selected[0];
+  const firstLevel = Number(selected[0].level) || 1;
+  const isMixedLevels = selected.some(tc => (Number(tc.level) || 1) !== firstLevel);
+  return { selected, active, isMixedLevels };
+}
+
+function getSelectionWallTiles(lane, fallbackGx, fallbackGy) {
+  if (!lane) return [];
+  const sameKind = mlSelectionKind === 'wall';
+  const out = [];
+  if (sameKind) {
+    for (const t of mlSelectedTiles) {
+      const isWall = lane.walls && lane.walls.some(w => w.x === t.gx && w.y === t.gy);
+      if (isWall) out.push({ x: t.gx, y: t.gy });
+    }
+  }
+  if (out.length === 0) {
+    setMLSingleSelection('wall', fallbackGx, fallbackGy, null);
+    return [{ x: fallbackGx, y: fallbackGy }];
+  }
+  return out;
+}
+
+function normalizeMLSelectionForLane(lane) {
+  if (!lane || mlSelectedTiles.length === 0 || !mlSelectionKind) {
+    if (!lane) clearMLSelection();
+    return;
+  }
+  const valid = [];
+  if (mlSelectionKind === 'wall') {
+    for (const t of mlSelectedTiles) {
+      const ok = lane.walls && lane.walls.some(w => w.x === t.gx && w.y === t.gy);
+      if (ok) valid.push(t);
+    }
+  } else if (mlSelectionKind === 'tower') {
+    for (const t of mlSelectedTiles) {
+      const ok = lane.towerCells && lane.towerCells.some(tc => tc.x === t.gx && tc.y === t.gy && tc.type === mlSelectionTowerType);
+      if (ok) valid.push(t);
+    }
+  }
+  mlSelectedTiles = valid;
+  if (mlSelectedTiles.length === 0) {
+    clearMLSelection();
+    return;
+  }
+  if (mlActiveTile && !hasMLSelectionTile(mlActiveTile.gx, mlActiveTile.gy)) {
+    mlActiveTile.gx = mlSelectedTiles[0].gx;
+    mlActiveTile.gy = mlSelectedTiles[0].gy;
+  }
+}
+
 // ── ML grid interaction ───────────────────────────────────────────────────────
 
+function applyMLDragSelection() {
+  if (!mlCurrentState || !mlDragSelectAnchor || !mlDragSelectCurrent) return false;
+  const lane = mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex];
+  if (!lane) return false;
+
+  const minX = Math.min(mlDragSelectAnchor.gx, mlDragSelectCurrent.gx);
+  const maxX = Math.max(mlDragSelectAnchor.gx, mlDragSelectCurrent.gx);
+  const minY = Math.min(mlDragSelectAnchor.gy, mlDragSelectCurrent.gy);
+  const maxY = Math.max(mlDragSelectAnchor.gy, mlDragSelectCurrent.gy);
+  const selected = [];
+
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      if (mlDragSelectAnchor.kind === 'wall') {
+        const isWall = lane.walls && lane.walls.some(w => w.x === x && w.y === y);
+        if (isWall) selected.push({ gx: x, gy: y });
+      } else if (mlDragSelectAnchor.kind === 'tower') {
+        const tower = lane.towerCells && lane.towerCells.find(t =>
+          t.x === x && t.y === y && t.type === mlDragSelectAnchor.towerType
+        );
+        if (tower) selected.push({ gx: x, gy: y });
+      }
+    }
+  }
+
+  if (selected.length === 0) return false;
+  mlSelectedTiles = selected;
+  mlSelectionKind = mlDragSelectAnchor.kind;
+  mlSelectionTowerType = mlDragSelectAnchor.kind === 'tower' ? mlDragSelectAnchor.towerType : null;
+
+  const anchorInSelection = selected.find(s => s.gx === mlDragSelectAnchor.gx && s.gy === mlDragSelectAnchor.gy);
+  const active = anchorInSelection || selected[0];
+  mlActiveTile = { gx: active.gx, gy: active.gy };
+
+  if (mlSelectionKind === 'tower') {
+    const tower = lane.towerCells && lane.towerCells.find(t => t.x === active.gx && t.y === active.gy);
+    if (tower) {
+      showMLTowerUpgradeMenu(active.gx, active.gy, tower.type, tower.level, tower.targetMode);
+      return true;
+    }
+  } else if (mlSelectionKind === 'wall') {
+    showMLWallConvertMenu(active.gx, active.gy);
+    return true;
+  }
+  return false;
+}
 function handleMLCanvasClick(clientX, clientY) {
   if (gameMode !== 'multilane') return;
   if (viewingLaneIndex !== myLaneIndex || isSpectator) return;
@@ -3543,17 +4041,34 @@ function handleMLCanvasClick(clientX, clientY) {
   const isWall = lane.walls && lane.walls.some(w => w.x === gx && w.y === gy);
   const towerCell = lane.towerCells && lane.towerCells.find(t => t.x === gx && t.y === gy);
 
-  if (towerCell) {
-    showMLTowerUpgradeMenu(gx, gy, towerCell.type, towerCell.level, towerCell.targetMode);
-  } else if (isWall) {
-    showMLWallConvertMenu(gx, gy);
-  } else {
-    // Empty tile — try to place wall
+  if (!towerCell && !isWall) {
+    clearMLSelection();
     closeMLTileMenu();
     sendAction('place_wall', { gridX: gx, gridY: gy });
+    return;
   }
-}
 
+  if (towerCell) {
+    const sameSelection = mlSelectionKind === 'tower' && mlSelectionTowerType === towerCell.type;
+    if (!sameSelection) {
+      setMLSingleSelection('tower', gx, gy, towerCell.type);
+    } else {
+      toggleMLSelectionTile(gx, gy);
+    }
+    mlActiveTile = { gx, gy, level: Number(towerCell.level) || 1, targetMode: towerCell.targetMode || 'first' };
+    showMLTowerUpgradeMenu(gx, gy, towerCell.type, towerCell.level, towerCell.targetMode);
+    return;
+  }
+
+  const sameSelection = mlSelectionKind === 'wall';
+  if (!sameSelection) {
+    setMLSingleSelection('wall', gx, gy, null);
+  } else {
+    toggleMLSelectionTile(gx, gy);
+  }
+  mlActiveTile = { gx, gy };
+  showMLWallConvertMenu(gx, gy);
+}
 function positionMLTileMenu(gx, gy) {
   if (!mlTileMenu) return;
   const { tileSize, offsetX, offsetY } = getMLGridLayout();
@@ -3566,13 +4081,20 @@ function positionMLTileMenu(gx, gy) {
   const tileCenterX = canvasRect.left - uiRect.left + (offsetX + (gx + 0.5) * tileSize) * scaleX;
   const tileCenterY = canvasRect.top - uiRect.top + (offsetY + (gy + 0.5) * tileSize) * scaleY;
 
-  const menuW = 155;
-  const menuH = 200;
-  let mx = tileCenterX - menuW / 2;
-  let my = tileCenterY - menuH - 8; // above tile by default
+  const menuW = 170;
+  const menuH = 225;
+  const tileHalf = (tileSize * scaleX) * 0.5;
+  let mx = tileCenterX + tileHalf + 8; // prefer right of tile so we do not cover selection
+  let my = tileCenterY - menuH / 2;
 
-  // If too close to top, show below instead
-  if (my < 4) my = tileCenterY + tileSize * scaleY + 4;
+  if (mx + menuW > uiRect.width - 4) {
+    mx = tileCenterX - tileHalf - menuW - 8; // fallback to left of tile
+  }
+  if (mx < 4) {
+    mx = tileCenterX - menuW / 2; // fallback above/below
+    my = tileCenterY - menuH - 8;
+    if (my < 4) my = tileCenterY + tileSize * scaleY + 4;
+  }
 
   // Clamp to UI bounds
   mx = Math.max(4, Math.min(uiRect.width - menuW - 4, mx));
@@ -3585,15 +4107,26 @@ function positionMLTileMenu(gx, gy) {
 function showMLWallConvertMenu(gx, gy) {
   if (!mlTileMenu) return;
   const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
-  const gold = lane ? lane.gold : 0;
+  if (!lane) return;
+  normalizeMLSelectionForLane(lane);
+  mlActiveTile = { gx, gy };
 
-  let html = '<div class="ml-menu-title">Wall → Tower</div>';
+  const gold = lane.gold;
+  const selectedWalls = getSelectionWallTiles(lane, gx, gy);
+  const selectedCount = selectedWalls.length;
+
+  let html = '<div class="ml-menu-title">Wall -> Tower</div>';
+  if (selectedCount > 1) {
+    html += `<div class="ml-menu-stat" data-selected-walls>Selected walls: ${selectedCount}</div>`;
+  }
   const towerTypes = ['archer', 'fighter', 'mage', 'ballista', 'cannon'];
   for (const t of towerTypes) {
     const m = towerMeta[t] || DEFAULT_TOWER_META[t];
-    const cost = m ? m.cost : '?';
-    const disabled = (!m || gold < m.cost) ? ' disabled' : '';
-    html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-tower="${t}"${disabled}>${cap(t)} (${cost}g)</button>`;
+    const unitCost = m ? m.cost : 0;
+    const totalCost = unitCost * selectedCount;
+    const disabled = (!m || gold < totalCost) ? ' disabled' : '';
+    const label = selectedCount > 1 ? `${cap(t)} x${selectedCount} (${totalCost}g)` : `${cap(t)} (${unitCost}g)`;
+    html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-tower="${t}"${disabled}>${label}</button>`;
   }
   html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-remove-wall>Remove Wall (+${mlWallCost}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Cancel</button>';
@@ -3607,9 +4140,17 @@ function showMLWallConvertMenu(gx, gy) {
   mlTileMenu.querySelectorAll('[data-tower]').forEach(btn => {
     btn.addEventListener('click', () => {
       const towerType = btn.getAttribute('data-tower');
-      const bx = Number(btn.getAttribute('data-gx'));
-      const by = Number(btn.getAttribute('data-gy'));
-      sendAction('convert_wall', { gridX: bx, gridY: by, towerType });
+      if (!towerType) return;
+      btn.disabled = true;
+      btn.textContent = 'Applying...';
+      if (selectedCount > 1) {
+        sendAction('bulk_convert_walls', {
+          towerType,
+          tiles: selectedWalls.map(t => ({ gridX: t.x, gridY: t.y })),
+        });
+      } else {
+        sendAction('convert_wall', { gridX: gx, gridY: gy, towerType });
+      }
       closeMLTileMenu();
     });
   });
@@ -3628,35 +4169,64 @@ function showMLWallConvertMenu(gx, gy) {
 
 function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
   if (!mlTileMenu) return;
+  const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
+  if (!lane) return;
+  normalizeMLSelectionForLane(lane);
+
   const lvl = level || 1;
   const mode = (targetMode === 'last' || targetMode === 'weakest' || targetMode === 'strongest' || targetMode === 'first') ? targetMode : 'first';
   mlActiveTile = { gx, gy, level: lvl, targetMode: mode };
-  const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
-  const gold = lane ? lane.gold : 0;
 
-  const nextLevel = lvl + 1;
+  const selection = getSelectionTowerContext(lane, towerType, lvl, mode);
+  if (!selection) return;
+  const selectedTowers = selection.selected;
+  const activeTower = selection.active;
+  const selectedCount = selectedTowers.length;
+
+  const activeLevel = Number(activeTower.level) || lvl;
+  const activeMode = activeTower.targetMode || mode;
+  const gold = lane.gold;
+
+  const nextLevel = activeLevel + 1;
   const canUpgrade = nextLevel <= 10;
   const cost = canUpgrade ? getTowerUpgradeCost(towerType, nextLevel) : 0;
   const canAfford = canUpgrade && gold >= cost;
-  const stats = getTowerStatsAtLevel(towerType, lvl);
+  const stats = getTowerStatsAtLevel(towerType, activeLevel);
 
-  let html = `<div class="ml-menu-title">${cap(towerType)} Lv${lvl}</div>`;
+  const affordableBulk = getAffordableTowerUpgrades(selectedTowers, towerType, gold);
+  const canBulkUpgrade = affordableBulk.affordable.length > 0;
+
+  let html = `<div class="ml-menu-title">${cap(towerType)} Lv${activeLevel}</div>`;
+  if (selectedCount > 1) {
+    html += `<div class="ml-menu-stat">Selected: ${selectedCount}</div>`;
+    if (selection.isMixedLevels) html += '<div class="ml-menu-stat">Mixed levels</div>';
+  }
   html += `<div class="ml-menu-stat">DMG ${stats.dmg.toFixed(1)} | RNG ${stats.range.toFixed(1)} tiles</div>`;
   html += `<div class="ml-menu-stat">${stats.damageType}</div>`;
-  html += `<div class="ml-menu-stat">Target: ${cap(mode)}</div>`;
+  html += `<div class="ml-menu-stat">Target: ${cap(activeMode)}</div>`;
   html += `<div class="ml-target-row">`
-    + `<button class="ml-tile-btn secondary${mode === 'first' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="first">First</button>`
-    + `<button class="ml-tile-btn secondary${mode === 'last' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="last">Last</button>`
-    + `<button class="ml-tile-btn secondary${mode === 'weakest' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="weakest">Weakest</button>`
-    + `<button class="ml-tile-btn secondary${mode === 'strongest' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="strongest">Strongest</button>`
+    + `<button class="ml-tile-btn secondary${activeMode === 'first' ? ' active' : ''}" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-target-mode="first">First</button>`
+    + `<button class="ml-tile-btn secondary${activeMode === 'last' ? ' active' : ''}" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-target-mode="last">Last</button>`
+    + `<button class="ml-tile-btn secondary${activeMode === 'weakest' ? ' active' : ''}" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-target-mode="weakest">Weakest</button>`
+    + `<button class="ml-tile-btn secondary${activeMode === 'strongest' ? ' active' : ''}" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-target-mode="strongest">Strongest</button>`
     + `</div>`;
-  const sellValue = getTowerSellValue(towerType, lvl);
-  html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-upgrade${canAfford ? '' : ' disabled'}>${canUpgrade ? `Upgrade → Lv${nextLevel} (${cost}g)` : 'MAXED'}</button>`;
-  html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-sell>Sell (${sellValue}g)</button>`;
+
+  html += `<button class="ml-tile-btn" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-upgrade${canAfford ? '' : ' disabled'}>${canUpgrade ? `Upgrade -> Lv${nextLevel} (${cost}g)` : 'MAXED'}</button>`;
+  if (selectedCount > 1) {
+    const label = affordableBulk.totalUpgradeable === 0
+      ? 'All selected maxed'
+      : (affordableBulk.affordable.length > 0
+        ? `Upgrade selected (${affordableBulk.affordable.length}/${affordableBulk.totalUpgradeable}) (${affordableBulk.totalCost}g)`
+        : 'Need more gold');
+    html += `<button class="ml-tile-btn" data-bulk-upgrade${canBulkUpgrade ? '' : ' disabled'}>${label}</button>`;
+  }
+
+  const sellValue = getTowerSellValue(towerType, activeLevel);
+  html += `<button class="ml-tile-btn danger" data-gx="${activeTower.x}" data-gy="${activeTower.y}" data-sell>Sell (${sellValue}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Close</button>';
   mlTileMenu.innerHTML = html;
 
-  positionMLTileMenu(gx, gy);
+  positionMLTileMenu(activeTower.x, activeTower.y);
   mlTileMenu.style.display = 'block';
   mlTileMenuJustOpened = true;
   requestAnimationFrame(() => { mlTileMenuJustOpened = false; });
@@ -3664,14 +4234,28 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
   const upgradeBtn = mlTileMenu.querySelector('[data-upgrade]');
   if (upgradeBtn) {
     upgradeBtn.addEventListener('click', (e) => {
-      e.stopPropagation(); // prevent window click-outside handler from closing the menu
+      e.stopPropagation();
       const bx = Number(upgradeBtn.getAttribute('data-gx'));
       const by = Number(upgradeBtn.getAttribute('data-gy'));
       sendAction('upgrade_tower', { gridX: bx, gridY: by });
-      // Keep menu open and optimistically show next level so player can upgrade again
-      showMLTowerUpgradeMenu(bx, by, towerType, lvl + 1, mode);
+      upgradeBtn.disabled = true;
+      upgradeBtn.textContent = 'Upgrading...';
+      showMLTowerUpgradeMenu(bx, by, towerType, activeLevel + 1, activeMode);
     });
   }
+
+  const bulkBtn = mlTileMenu.querySelector('[data-bulk-upgrade]');
+  if (bulkBtn) {
+    bulkBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      bulkBtn.disabled = true;
+      bulkBtn.textContent = 'Upgrading...';
+      sendAction('bulk_upgrade_towers', {
+        tiles: selectedTowers.map(t => ({ gridX: t.x, gridY: t.y })),
+      });
+    });
+  }
+
   mlTileMenu.querySelectorAll('[data-target-mode]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3679,9 +4263,10 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
       const by = Number(btn.getAttribute('data-gy'));
       const nextMode = String(btn.getAttribute('data-target-mode') || 'first');
       sendAction('set_tower_target', { gridX: bx, gridY: by, targetMode: nextMode });
-      showMLTowerUpgradeMenu(bx, by, towerType, lvl, nextMode);
+      showMLTowerUpgradeMenu(bx, by, towerType, activeLevel, nextMode);
     });
   });
+
   const sellBtn = mlTileMenu.querySelector('[data-sell]');
   if (sellBtn) {
     sellBtn.addEventListener('click', (e) => {
@@ -3692,15 +4277,16 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
       closeMLTileMenu();
     });
   }
+
   const closeBtn = mlTileMenu.querySelector('[data-close]');
   if (closeBtn) closeBtn.addEventListener('click', closeMLTileMenu);
 }
 
-function closeMLTileMenu() {
+function closeMLTileMenu(clearSelection = true) {
   if (mlTileMenu) mlTileMenu.style.display = 'none';
   mlActiveTile = null;
+  if (clearSelection) clearMLSelection();
 }
-
 function updateBarracksHud(lane) {
   if (!lane) return;
   const level = lane.barracksLevel || 1;
@@ -3725,9 +4311,14 @@ function updateBarracksHud(lane) {
   // Refresh send-button income labels if barracks bonus changed
   const curDef = getMLBarracksLevelDef(level);
   const bonus = curDef ? (curDef.incomeBonus || 0) : 0;
-  if (bonus !== mlMyBarracksIncomeBonus) {
+  const bonusChanged = bonus !== mlMyBarracksIncomeBonus;
+  if (bonusChanged) {
     mlMyBarracksIncomeBonus = bonus;
+  }
+  const statsChanged = syncBarracksStatMultipliers(level);
+  if (bonusChanged || statsChanged) {
     updateActionLabels();
+    updateSendButtonsML(lane);
   }
 
   const nextDef = getMLBarracksLevelDef(level + 1);
@@ -3794,6 +4385,9 @@ canvas.addEventListener('touchend', function (e) {
   e.preventDefault();
   const didCommit = commitDragPreviewWalls();
   mlDragPlacing = false;
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
   if (didCommit) {
     mlWasDrag = true;
     return;
@@ -3914,50 +4508,83 @@ if (sideWallBtn) {
 
 // ── Drag-to-place walls ───────────────────────────────────────────────────────
 
-canvas.addEventListener('mousedown', () => {
+canvas.addEventListener('mousedown', (e) => {
   if (gameMode !== 'multilane') return;
+  if (viewingLaneIndex !== myLaneIndex || isSpectator) return;
+  const tile = getMLGridTileFromClient(e.clientX, e.clientY);
+  if (!tile || !mlCurrentState) return;
+  const lane = mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex];
+  if (!lane) return;
+
+  const towerCell = lane.towerCells && lane.towerCells.find(t => t.x === tile.gx && t.y === tile.gy);
+  const isWall = lane.walls && lane.walls.some(w => w.x === tile.gx && w.y === tile.gy);
+  if (towerCell || isWall) {
+    mlDragSelecting = true;
+    mlDragSelectAnchor = {
+      gx: tile.gx,
+      gy: tile.gy,
+      kind: towerCell ? 'tower' : 'wall',
+      towerType: towerCell ? towerCell.type : null,
+    };
+    mlDragSelectCurrent = { gx: tile.gx, gy: tile.gy };
+    mlDragPlacing = false;
+    mlDragPlacedSet.clear();
+    mlDragAnchorTile = null;
+    mlDragAxis = null;
+    mlWasDrag = false;
+    return;
+  }
+
   mlDragPlacing = true;
   mlDragPlacedSet = new Set();
+  mlDragAnchorTile = null;
+  mlDragAxis = null;
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
   mlWasDrag = false;
 });
 
 canvas.addEventListener('mousemove', (e) => {
   if (gameMode !== 'multilane') return;
-  const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const cy = (e.clientY - rect.top) * (canvas.height / rect.height);
-  const { tileSize, offsetX, offsetY } = getMLGridLayout();
-  const gx = Math.floor((cx - offsetX) / tileSize);
-  const gy = Math.floor((cy - offsetY) / tileSize);
-  if (gx >= 0 && gx < ML_GRID_W && gy >= 0 && gy < ML_GRID_H) {
-    mlHoverTile = { gx, gy };
-  } else {
-    mlHoverTile = null;
-  }
+  const tile = getMLGridTileFromClient(e.clientX, e.clientY);
+  mlHoverTile = tile ? { gx: tile.gx, gy: tile.gy } : null;
 
-  if (!mlDragPlacing || viewingLaneIndex !== myLaneIndex || isSpectator) return;
-  if (!mlHoverTile || !mlCurrentState) return;
-  const key = gx + ',' + gy;
-  if (mlDragPlacedSet.has(key)) return;
-  const lane = mlCurrentState.lanes[myLaneIndex];
-  if (!lane) return;
-  if (canPreviewWallAt(lane, gx, gy)) {
-    mlDragPlacedSet.add(key);
+  if (mlDragSelecting) {
+    if (tile) mlDragSelectCurrent = { gx: tile.gx, gy: tile.gy };
+    return;
   }
+  if (!mlDragPlacing || !tile) return;
+  updateStraightWallDragPreview(tile.gx, tile.gy);
 });
 
 canvas.addEventListener('mouseup', () => {
   if (gameMode === 'multilane') {
-    const didCommit = commitDragPreviewWalls();
-    if (didCommit) mlWasDrag = true;
+    if (mlDragSelecting) {
+      const didSelect = applyMLDragSelection();
+      if (didSelect) mlWasDrag = true;
+    } else {
+      const didCommit = commitDragPreviewWalls();
+      if (didCommit) mlWasDrag = true;
+    }
   }
   mlDragPlacing = false;
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
+  mlDragAnchorTile = null;
+  mlDragAxis = null;
 });
 
 canvas.addEventListener('mouseleave', () => {
   mlHoverTile = null;
   mlDragPlacing = false;
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
   mlDragPlacedSet.clear();
+  mlDragAnchorTile = null;
+  mlDragAxis = null;
 });
 
 // Touch drag-to-place
@@ -3965,6 +4592,11 @@ canvas.addEventListener('touchstart', () => {
   if (gameMode !== 'multilane') return;
   mlDragPlacing = true;
   mlDragPlacedSet = new Set();
+  mlDragSelecting = false;
+  mlDragSelectAnchor = null;
+  mlDragSelectCurrent = null;
+  mlDragAnchorTile = null;
+  mlDragAxis = null;
   mlWasDrag = false;
 }, { passive: true });
 
@@ -3980,12 +4612,731 @@ canvas.addEventListener('touchmove', (e) => {
   const gx = Math.floor((cx - offsetX) / tileSize);
   const gy = Math.floor((cy - offsetY) / tileSize);
   if (gx < 0 || gx >= ML_GRID_W || gy < 0 || gy >= ML_GRID_H) return;
-  if (viewingLaneIndex !== myLaneIndex || isSpectator || !mlCurrentState) return;
-  const key = gx + ',' + gy;
-  if (mlDragPlacedSet.has(key)) return;
-  const lane = mlCurrentState.lanes[myLaneIndex];
-  if (!lane) return;
-  if (canPreviewWallAt(lane, gx, gy)) {
-    mlDragPlacedSet.add(key);
-  }
+  updateStraightWallDragPreview(gx, gy);
 }, { passive: false });
+
+// ── Auth bar ──────────────────────────────────────────────────────────────────
+
+const authSigninArea  = document.getElementById('auth-signin-area');
+const authProfileArea = document.getElementById('auth-profile-area');
+const authDisplayName = document.getElementById('auth-display-name');
+const btnAuthSignout  = document.getElementById('btn-auth-signout');
+const btnAuth2fa      = document.getElementById('btn-auth-2fa');
+
+function onAuthStateChange(player) {
+  if (player) {
+    authSigninArea.style.display  = 'none';
+    authProfileArea.style.display = 'flex';
+    authDisplayName.textContent   = player.displayName;
+    // Re-send token to existing socket so server knows who this is
+    socket.emit('authenticate', { token: Auth.getAccessToken() });
+    // Show party panel when signed in
+    document.getElementById('party-panel').style.display = '';
+    renderPartyPanel(null);
+  } else {
+    authSigninArea.style.display  = 'flex';
+    authProfileArea.style.display = 'none';
+    document.getElementById('party-panel').style.display = 'none';
+    _resetPwForm();
+  }
+}
+
+btnAuthSignout.addEventListener('click', () => Auth.logout());
+
+// ── Password auth form logic ──────────────────────────────────────────────────
+
+const tabLogin      = document.getElementById('tab-login');
+const tabRegister   = document.getElementById('tab-register');
+const authEmail     = document.getElementById('auth-email');
+const authDname     = document.getElementById('auth-displayname');
+const authPassword  = document.getElementById('auth-password');
+const authMfaCode   = document.getElementById('auth-mfa-code');
+const authPwError   = document.getElementById('auth-pw-error');
+const btnPwSubmit   = document.getElementById('btn-auth-pw-submit');
+
+let _pwMode    = 'login'; // 'login' | 'register'
+let _mfaToken  = null;    // set when server returns requiresMfa
+
+function _resetPwForm() {
+  _pwMode = 'login';
+  _mfaToken = null;
+  tabLogin.classList.add('active');
+  tabRegister.classList.remove('active');
+  authDname.style.display    = 'none';
+  authMfaCode.style.display  = 'none';
+  authEmail.style.display    = '';
+  authPassword.style.display = '';
+  btnPwSubmit.textContent    = 'Sign In';
+  authPwError.style.display  = 'none';
+  authPwError.textContent    = '';
+  authEmail.value = authDname.value = authPassword.value = authMfaCode.value = '';
+}
+
+function _showPwError(msg) {
+  authPwError.textContent   = msg;
+  authPwError.style.display = '';
+}
+
+tabLogin.addEventListener('click', () => {
+  if (_pwMode === 'login') return;
+  _pwMode = 'login';
+  tabLogin.classList.add('active');
+  tabRegister.classList.remove('active');
+  authDname.style.display = 'none';
+  btnPwSubmit.textContent = 'Sign In';
+  authPwError.style.display = 'none';
+});
+
+tabRegister.addEventListener('click', () => {
+  if (_pwMode === 'register') return;
+  _pwMode = 'register';
+  tabRegister.classList.add('active');
+  tabLogin.classList.remove('active');
+  authDname.style.display = '';
+  btnPwSubmit.textContent = 'Register';
+  authPwError.style.display = 'none';
+});
+
+btnPwSubmit.addEventListener('click', async () => {
+  authPwError.style.display = 'none';
+  btnPwSubmit.disabled = true;
+  try {
+    // MFA step
+    if (_mfaToken) {
+      const code = authMfaCode.value.trim();
+      if (!code) { _showPwError('Enter the 6-digit code'); return; }
+      await Auth.loginWithMfa(_mfaToken, code);
+      return;
+    }
+    if (_pwMode === 'login') {
+      const result = await Auth.loginWithPassword(authEmail.value.trim(), authPassword.value);
+      if (result && result.requiresMfa) {
+        // Switch form to MFA code entry
+        _mfaToken = result.mfaToken;
+        authEmail.style.display    = 'none';
+        authPassword.style.display = 'none';
+        authMfaCode.style.display  = '';
+        btnPwSubmit.textContent    = 'Verify';
+        authMfaCode.focus();
+      }
+    } else {
+      const result = await Auth.register(authEmail.value.trim(), authDname.value.trim(), authPassword.value);
+      if (result && result.requiresVerification) {
+        // Close auth panel and show verify modal
+        document.getElementById('auth-pw-panel').style.display = 'none';
+        authEmail.value    = '';
+        authDname.value    = '';
+        authPassword.value = '';
+        _showVerifyModal(result.email);
+      }
+    }
+  } catch (err) {
+    if (err.message === 'email_not_verified') {
+      _showVerifyModal(authEmail.value.trim());
+    } else {
+      _showPwError(err.message);
+    }
+  } finally {
+    btnPwSubmit.disabled = false;
+  }
+});
+
+// Allow Enter key to submit
+[authEmail, authDname, authPassword, authMfaCode].forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') btnPwSubmit.click(); });
+});
+
+// ── 2FA settings modal ────────────────────────────────────────────────────────
+
+const tfaModal          = document.getElementById('tfa-modal');
+const tfaStateDisabled  = document.getElementById('tfa-state-disabled');
+const tfaStateSetup     = document.getElementById('tfa-state-setup');
+const tfaStateEnabled   = document.getElementById('tfa-state-enabled');
+const tfaQrImg          = document.getElementById('tfa-qr-img');
+const tfaSetupCode      = document.getElementById('tfa-setup-code');
+const tfaSetupError     = document.getElementById('tfa-setup-error');
+const tfaDisableCode    = document.getElementById('tfa-disable-code');
+const tfaDisableError   = document.getElementById('tfa-disable-error');
+
+function _showTfaState(state) {
+  tfaStateDisabled.style.display = state === 'disabled' ? '' : 'none';
+  tfaStateSetup.style.display    = state === 'setup'    ? '' : 'none';
+  tfaStateEnabled.style.display  = state === 'enabled'  ? '' : 'none';
+}
+
+btnAuth2fa.addEventListener('click', async () => {
+  tfaModal.style.display = '';
+  tfaSetupError.style.display   = 'none';
+  tfaDisableError.style.display = 'none';
+  tfaSetupCode.value = '';
+  tfaDisableCode.value = '';
+  // Determine current 2FA state via a quick /players/me check could be added,
+  // but for simplicity show disabled state by default; user can see enabled state after enabling.
+  // A real implementation would fetch /players/me to check totp_enabled.
+  _showTfaState('disabled');
+});
+
+document.getElementById('tfa-close-btn').addEventListener('click', () => {
+  tfaModal.style.display = 'none';
+});
+
+document.getElementById('btn-tfa-start-setup').addEventListener('click', async () => {
+  try {
+    const data = await Auth.setup2fa();
+    tfaQrImg.src = data.qrCodeDataUrl;
+    tfaSetupCode.value = '';
+    tfaSetupError.style.display = 'none';
+    _showTfaState('setup');
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+});
+
+document.getElementById('btn-tfa-cancel-setup').addEventListener('click', () => {
+  _showTfaState('disabled');
+});
+
+document.getElementById('btn-tfa-confirm-enable').addEventListener('click', async () => {
+  tfaSetupError.style.display = 'none';
+  const btn = document.getElementById('btn-tfa-confirm-enable');
+  btn.disabled = true;
+  try {
+    await Auth.enable2fa(tfaSetupCode.value.trim());
+    _showTfaState('enabled');
+  } catch (err) {
+    tfaSetupError.textContent   = err.message;
+    tfaSetupError.style.display = '';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-tfa-confirm-disable').addEventListener('click', async () => {
+  tfaDisableError.style.display = 'none';
+  const btn = document.getElementById('btn-tfa-confirm-disable');
+  btn.disabled = true;
+  try {
+    await Auth.disable2fa(tfaDisableCode.value.trim());
+    _showTfaState('disabled');
+  } catch (err) {
+    tfaDisableError.textContent   = err.message;
+    tfaDisableError.style.display = '';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ── Forgot password ───────────────────────────────────────────────────────────
+
+const forgotForm      = document.getElementById('auth-forgot-form');
+const authPwForm      = document.getElementById('auth-pw-form');
+const btnForgotPw     = document.getElementById('btn-forgot-pw');
+const btnForgotBack   = document.getElementById('btn-forgot-back');
+const forgotEmail     = document.getElementById('auth-forgot-email');
+const forgotError     = document.getElementById('auth-forgot-error');
+const forgotSuccess   = document.getElementById('auth-forgot-success');
+const btnForgotSubmit = document.getElementById('btn-forgot-submit');
+
+btnForgotPw.addEventListener('click', () => {
+  authPwForm.style.display  = 'none';
+  forgotForm.style.display  = '';
+  forgotError.style.display   = 'none';
+  forgotSuccess.style.display = 'none';
+  forgotEmail.value = '';
+});
+
+btnForgotBack.addEventListener('click', () => {
+  forgotForm.style.display = 'none';
+  authPwForm.style.display = '';
+});
+
+btnForgotSubmit.addEventListener('click', async () => {
+  forgotError.style.display   = 'none';
+  forgotSuccess.style.display = 'none';
+  const email = forgotEmail.value.trim();
+  if (!email) { forgotError.textContent = 'Enter your email'; forgotError.style.display = ''; return; }
+  btnForgotSubmit.disabled = true;
+  try {
+    const res  = await fetch('/auth/forgot-password', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      forgotError.textContent   = d.error || 'Request failed';
+      forgotError.style.display = '';
+    } else {
+      forgotSuccess.style.display = '';
+      btnForgotSubmit.disabled    = true; // prevent re-send
+    }
+  } catch {
+    forgotError.textContent   = 'Network error — please try again';
+    forgotError.style.display = '';
+    btnForgotSubmit.disabled  = false;
+  }
+});
+
+forgotEmail.addEventListener('keydown', e => { if (e.key === 'Enter') btnForgotSubmit.click(); });
+
+// ── Email verification modal ──────────────────────────────────────────────────
+
+let _pendingVerifyEmail = '';
+
+const verifyModal        = document.getElementById('verify-modal');
+const verifyEmailDisplay = document.getElementById('verify-email-display');
+const verifyError        = document.getElementById('verify-error');
+const verifySuccess      = document.getElementById('verify-success');
+
+function _showVerifyModal(email) {
+  _pendingVerifyEmail = email || '';
+  verifyEmailDisplay.textContent = _pendingVerifyEmail;
+  verifyError.style.display   = 'none';
+  verifySuccess.style.display = 'none';
+  verifyModal.style.display   = 'flex';
+}
+
+document.getElementById('btn-verify-resend').addEventListener('click', async () => {
+  verifyError.style.display   = 'none';
+  verifySuccess.style.display = 'none';
+  try {
+    await Auth.resendVerification(_pendingVerifyEmail);
+    verifySuccess.style.display = '';
+  } catch {
+    verifyError.textContent   = 'Failed to resend — please try again';
+    verifyError.style.display = '';
+  }
+});
+
+document.getElementById('btn-verify-close').addEventListener('click', () => {
+  verifyModal.style.display = 'none';
+});
+
+// Handle ?verify=<token> in URL (user clicked email link)
+(function checkVerifyToken() {
+  const params = new URLSearchParams(window.location.search);
+  const token  = params.get('verify');
+  if (!token) return;
+  history.replaceState(null, '', window.location.pathname);
+  Auth.verifyEmail(token).catch(err => {
+    // Show error in verify modal with a message
+    verifyEmailDisplay.textContent = '';
+    document.getElementById('verify-msg').textContent = 'Verification failed: ' + (err.message || 'Invalid or expired link');
+    verifyError.style.display = 'none';
+    verifyModal.style.display = 'flex';
+  });
+})();
+
+// ── Reset password modal (handles ?reset=<token> in URL) ─────────────────────
+
+const resetModal    = document.getElementById('reset-modal');
+const resetPassword = document.getElementById('reset-password');
+const resetPassword2= document.getElementById('reset-password2');
+const resetError    = document.getElementById('reset-error');
+const resetSuccess  = document.getElementById('reset-success');
+const btnResetSubmit= document.getElementById('btn-reset-submit');
+
+(function checkResetToken() {
+  const params = new URLSearchParams(window.location.search);
+  const token  = params.get('reset');
+  if (!token) return;
+  // Remove token from URL bar without reloading
+  history.replaceState(null, '', window.location.pathname);
+  resetModal.style.display = '';
+  resetModal._token = token;
+})();
+
+btnResetSubmit.addEventListener('click', async () => {
+  resetError.style.display   = 'none';
+  resetSuccess.style.display = 'none';
+  const pw  = resetPassword.value;
+  const pw2 = resetPassword2.value;
+  if (pw.length < 8) {
+    resetError.textContent   = 'Password must be at least 8 characters';
+    resetError.style.display = '';
+    return;
+  }
+  if (pw !== pw2) {
+    resetError.textContent   = 'Passwords do not match';
+    resetError.style.display = '';
+    return;
+  }
+  btnResetSubmit.disabled = true;
+  try {
+    const res = await fetch('/auth/reset-password', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token: resetModal._token, password: pw }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      resetError.textContent   = data.error || 'Reset failed';
+      resetError.style.display = '';
+      btnResetSubmit.disabled  = false;
+    } else {
+      resetSuccess.style.display = '';
+      resetPassword.style.display  = 'none';
+      resetPassword2.style.display = 'none';
+      btnResetSubmit.style.display = 'none';
+      // Close modal after a short delay
+      setTimeout(() => { resetModal.style.display = 'none'; }, 2500);
+    }
+  } catch {
+    resetError.textContent   = 'Network error — please try again';
+    resetError.style.display = '';
+    btnResetSubmit.disabled  = false;
+  }
+});
+
+// Global callback invoked by Google GSI after credential selection
+window.onGoogleSignIn = async (response) => {
+  try {
+    await Auth.handleGoogleCredential(response);
+  } catch (err) {
+    console.error('[auth]', err.message);
+  }
+};
+
+// Boot auth: fetch public config, then init
+(async () => {
+  try {
+    const cfgRes = await fetch('/config');
+    const cfg    = await cfgRes.json();
+    if (cfg.googleClientId) {
+      document.getElementById('g_id_onload')
+        .setAttribute('data-client_id', cfg.googleClientId);
+      // Prompt GSI to render the button now that client_id is set
+      if (window.google?.accounts?.id) {
+        google.accounts.id.initialize({
+          client_id: cfg.googleClientId,
+          callback:  window.onGoogleSignIn,
+        });
+        google.accounts.id.renderButton(
+          document.querySelector('.g_id_signin'),
+          { theme: 'filled_black', size: 'small', shape: 'pill' }
+        );
+      }
+      document.getElementById('auth-google-wrap').style.display = '';
+    }
+    // Show auth bar when DB is present (password auth) or Google is configured
+    if (cfg.passwordAuthEnabled || cfg.googleClientId) {
+      document.getElementById('auth-bar').style.display = '';
+    }
+  } catch { /* no DB / no Google config — auth bar stays hidden */ }
+
+  await Auth.init(onAuthStateChange);
+})();
+
+// ── Party panel ───────────────────────────────────────────────────────────────
+
+let _currentParty   = null; // local party state
+let _queueStatus    = 'idle'; // 'idle' | 'queued' | 'matched'
+let _queueMode      = null;
+let _queueElapsed   = 0;
+let _queueInterval  = null; // local elapsed timer
+
+const partyPanel        = document.getElementById('party-panel');
+const partyCodeDisplay  = document.getElementById('party-code-display');
+const partyMemberList   = document.getElementById('party-member-list');
+const partyActions      = document.getElementById('party-actions');
+const btnPartyCreate    = document.getElementById('btn-party-create');
+const btnPartyShowJoin  = document.getElementById('btn-party-show-join');
+const partyJoinRow      = document.getElementById('party-join-row');
+const partyJoinInput    = document.getElementById('party-join-input');
+const btnPartyJoin      = document.getElementById('btn-party-join');
+const btnPartyLeave     = document.getElementById('btn-party-leave');
+const queueArea         = document.getElementById('queue-area');
+const queueStatusText   = document.getElementById('queue-status-text');
+const btnQueueRanked    = document.getElementById('btn-queue-enter-ranked');
+const btnQueueCasual    = document.getElementById('btn-queue-enter-casual');
+const btnQueueLeave     = document.getElementById('btn-queue-leave');
+
+function renderPartyPanel(party) {
+  _currentParty = party || null;
+  const inParty = !!_currentParty;
+  const myPlayerId = Auth.getPlayer()?.id;
+
+  // Member list
+  partyMemberList.innerHTML = '';
+  if (inParty) {
+    for (const m of _currentParty.members) {
+      const li = document.createElement('li');
+      if (m.playerId === _currentParty.leaderId) li.classList.add('leader');
+      li.textContent = m.displayName || 'Player';
+      partyMemberList.appendChild(li);
+    }
+    partyCodeDisplay.textContent = 'Code: ' + _currentParty.code;
+  } else {
+    partyCodeDisplay.textContent = '';
+  }
+
+  // Buttons
+  btnPartyCreate.style.display   = inParty ? 'none' : '';
+  btnPartyShowJoin.style.display = inParty ? 'none' : '';
+  partyJoinRow.style.display     = 'none'; // always reset; show-join toggles it
+  btnPartyLeave.style.display    = inParty ? '' : 'none';
+
+  // Queue area: only show when in a party
+  queueArea.style.display = inParty ? '' : 'none';
+  if (inParty) {
+    const isLeader  = _currentParty.leaderId === myPlayerId;
+    const isQueued  = _queueStatus === 'queued';
+    btnQueueRanked.style.display = (!isQueued && isLeader) ? '' : 'none';
+    btnQueueCasual.style.display = (!isQueued && isLeader) ? '' : 'none';
+    btnQueueLeave.style.display  = (isQueued && isLeader) ? '' : 'none';
+
+    if (_queueStatus === 'idle') {
+      queueStatusText.textContent = isLeader ? 'Ready to queue' : 'Waiting for leader';
+      queueStatusText.className   = '';
+    } else if (_queueStatus === 'queued') {
+      const modeLabel = _queueMode === 'ranked_2v2' ? 'Ranked 2v2' : 'Casual 2v2';
+      queueStatusText.textContent = `Searching ${modeLabel}… ${_queueElapsed}s`;
+      queueStatusText.className   = 'queued';
+    } else if (_queueStatus === 'matched') {
+      queueStatusText.textContent = 'Match found!';
+      queueStatusText.className   = 'matched';
+    }
+  }
+}
+
+function _startElapsedTimer() {
+  if (_queueInterval) return;
+  _queueInterval = setInterval(() => {
+    if (_queueStatus !== 'queued') { _stopElapsedTimer(); return; }
+    _queueElapsed++;
+    renderPartyPanel(_currentParty);
+  }, 1000);
+}
+
+function _stopElapsedTimer() {
+  clearInterval(_queueInterval);
+  _queueInterval = null;
+}
+
+btnPartyCreate.addEventListener('click', () => {
+  socket.emit('party:create');
+});
+
+btnPartyShowJoin.addEventListener('click', () => {
+  btnPartyShowJoin.style.display = 'none';
+  partyJoinRow.style.display = '';
+  partyJoinInput.focus();
+});
+
+btnPartyJoin.addEventListener('click', () => {
+  const code = partyJoinInput.value.trim().toUpperCase();
+  if (code.length !== 6) return;
+  socket.emit('party:join', { code });
+  partyJoinInput.value = '';
+  partyJoinRow.style.display = 'none';
+});
+
+partyJoinInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') btnPartyJoin.click();
+});
+
+btnPartyLeave.addEventListener('click', () => {
+  socket.emit('party:leave');
+});
+
+btnQueueRanked.addEventListener('click', () => {
+  socket.emit('queue:enter', { mode: 'ranked_2v2' });
+});
+
+btnQueueCasual.addEventListener('click', () => {
+  socket.emit('queue:enter', { mode: 'casual_2v2' });
+});
+
+btnQueueLeave.addEventListener('click', () => {
+  socket.emit('queue:leave');
+});
+
+// ── Party / queue socket listeners ────────────────────────────────────────────
+
+socket.on('party_update', ({ party }) => {
+  _currentParty = party;
+  if (_queueStatus === 'queued' && party.status !== 'queued') {
+    _queueStatus = 'idle';
+    _stopElapsedTimer();
+  }
+  renderPartyPanel(party);
+});
+
+socket.on('queue_status', ({ status, mode, elapsed }) => {
+  if (status === 'queued') {
+    if (_queueStatus !== 'queued') {
+      _queueStatus = 'queued';
+      _queueMode   = mode || _queueMode;
+      _queueElapsed = typeof elapsed === 'number' ? elapsed : 0;
+      _startElapsedTimer();
+    } else {
+      // Sync elapsed from server heartbeat
+      if (typeof elapsed === 'number') _queueElapsed = elapsed;
+    }
+  } else {
+    _queueStatus = 'idle';
+    _stopElapsedTimer();
+  }
+  renderPartyPanel(_currentParty);
+});
+
+socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents }) => {
+  _queueStatus = 'matched';
+  _stopElapsedTimer();
+  renderPartyPanel(_currentParty);
+
+  // Auto-join the ML room
+  const displayName = Auth.getPlayer()?.displayName || 'Player';
+  console.log(`[party] match found! roomCode=${roomCode} laneIndex=${laneIndex}`);
+
+  // Simulate clicking into the ML room as if we called join_ml_room
+  gameMode   = 'multilane';
+  mlMyCode   = roomCode;
+  myLaneIndex = laneIndex;
+  mlIsHost   = (laneIndex === 0);
+
+  setMlSettingsEditable(false);
+  setLobbyState('waiting');
+  setStatus('Match found! Joining…', 'ok');
+
+  // Switch UI to ML tab so the lobby panel shows correctly
+  lobbyMlSection.style.display = '';
+  lobbyClassicSection.style.display = 'none';
+  btnTabMl.classList.add('active');
+  btnTabClassic.classList.remove('active');
+  lobbyMlSection.style.display = 'none';
+  showMLLobbyPanel();
+
+  if (mlRoomCodeRow) { mlRoomCodeRow.style.display = 'block'; }
+  if (mlRoomCodeDisplay) { mlRoomCodeDisplay.textContent = roomCode; }
+  if (btnForceStart) btnForceStart.style.display = mlIsHost ? '' : 'none';
+  if (mlAiControls)  mlAiControls.style.display  = mlIsHost ? '' : 'none';
+
+  // Notify teammates/opponents in status
+  const tmStr  = teammates.join(', ');
+  const oppStr = opponents.join(', ');
+  setStatus(`Match found! Team: ${tmStr} | vs: ${oppStr}`, 'ok');
+});
+
+// ── Leaderboard ───────────────────────────────────────────────────────────────
+
+(function () {
+  const overlay   = document.getElementById('lb-overlay');
+  const openBtn   = document.getElementById('btn-open-leaderboard');
+  const closeBtn  = document.getElementById('lb-close-btn');
+  const modeEl    = document.getElementById('lb-mode-select');
+  const regionEl  = document.getElementById('lb-region-select');
+  const seasonBar = document.getElementById('lb-season-bar');
+  const tbody     = document.getElementById('lb-tbody');
+  const emptyEl   = document.getElementById('lb-empty');
+  const loadingEl = document.getElementById('lb-loading');
+  const prevBtn   = document.getElementById('lb-prev-btn');
+  const nextBtn   = document.getElementById('lb-next-btn');
+  const pageInfo  = document.getElementById('lb-page-info');
+
+  if (!overlay || !openBtn) return;
+
+  let currentPage = 1;
+  let totalEntries = 0;
+  const PAGE_SIZE = 50;
+  const MEDALS = ['🥇', '🥈', '🥉'];
+
+  function myPlayerId() {
+    if (typeof Auth !== 'undefined' && Auth.isSignedIn()) {
+      const p = Auth.getPlayer();
+      return p ? p.id : null;
+    }
+    return null;
+  }
+
+  async function fetchLeaderboard(page) {
+    loadingEl.style.display = 'block';
+    emptyEl.style.display   = 'none';
+    tbody.innerHTML = '';
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+
+    const mode   = modeEl.value;
+    const region = regionEl.value;
+    const url    = `/leaderboard?mode=${encodeURIComponent(mode)}&region=${encodeURIComponent(region)}&page=${page}`;
+
+    try {
+      const res  = await fetch(url);
+      const data = await res.json();
+
+      loadingEl.style.display = 'none';
+
+      // Season banner
+      if (data.season) {
+        const sd = new Date(data.season.start_date).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+        seasonBar.textContent = `Season: ${data.season.name}  ·  Started ${sd}`;
+      } else {
+        seasonBar.textContent = 'Off-season';
+      }
+
+      totalEntries = data.total || 0;
+      currentPage  = data.page  || 1;
+      const myId   = myPlayerId();
+
+      if (!data.entries || data.entries.length === 0) {
+        emptyEl.style.display = 'block';
+      } else {
+        const frag = document.createDocumentFragment();
+        for (const entry of data.entries) {
+          const tr = document.createElement('tr');
+          if (myId && entry.id === myId) tr.classList.add('lb-me');
+
+          const rankNum = (currentPage - 1) * PAGE_SIZE + entry.rank;
+          const rankDisp = rankNum <= 3
+            ? `<span class="lb-rank-medal">${MEDALS[rankNum - 1]}</span>`
+            : `${rankNum}`;
+
+          tr.innerHTML = `
+            <td class="lb-col-rank">${rankDisp}</td>
+            <td class="lb-col-name">${escapeHtml(entry.display_name)}</td>
+            <td class="lb-col-region">${escapeHtml(entry.region || '')}</td>
+            <td class="lb-col-rating">${Math.round(entry.rating)}</td>
+            <td class="lb-col-record">${entry.wins}W / ${entry.losses}L</td>
+          `;
+          frag.appendChild(tr);
+        }
+        tbody.appendChild(frag);
+      }
+
+      // Pagination
+      const totalPages = Math.ceil(totalEntries / PAGE_SIZE) || 1;
+      pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    } catch (err) {
+      loadingEl.style.display = 'none';
+      emptyEl.style.display   = 'block';
+      emptyEl.textContent     = 'Failed to load leaderboard.';
+      console.error('[leaderboard]', err);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function open() {
+    overlay.style.display = 'flex';
+    fetchLeaderboard(1);
+  }
+
+  function close() {
+    overlay.style.display = 'none';
+  }
+
+  openBtn.addEventListener('click', open);
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  modeEl.addEventListener('change',   () => fetchLeaderboard(1));
+  regionEl.addEventListener('change', () => fetchLeaderboard(1));
+  prevBtn.addEventListener('click', () => { if (currentPage > 1) fetchLeaderboard(currentPage - 1); });
+  nextBtn.addEventListener('click', () => {
+    const totalPages = Math.ceil(totalEntries / PAGE_SIZE) || 1;
+    if (currentPage < totalPages) fetchLeaderboard(currentPage + 1);
+  });
+})();

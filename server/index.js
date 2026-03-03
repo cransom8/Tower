@@ -1,6 +1,8 @@
 // server/index.js
 "use strict";
 
+require('dotenv').config(); // loads .env in development (no-op if file absent)
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
@@ -8,12 +10,65 @@ const fs = require("fs");
 const path = require("path");
 const { Server } = require("socket.io");
 
+const crypto = require("crypto");
+
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
 const aiModule = require("./ai");
+const authService = require("./auth");
+const matchmaker = require("./services/matchmaker");
+const log = require("./logger");
+const db = process.env.DATABASE_URL ? require("./db") : null;
+const ratingService = process.env.DATABASE_URL ? require("./services/rating") : null;
+const seasonService = process.env.DATABASE_URL ? require("./services/season") : null;
 
 const app = express();
-app.use(cors());
+// H-4: restrict CORS to known origin; wildcard is unsafe for auth endpoints
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PATCH'],
+}));
+app.use(express.json());
+
+// ── Security headers ──────────────────────────────────────────────────────────
+app.use((_req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // M-5: HSTS (production only) + CSP to limit script execution to known sources
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' https://accounts.google.com https://cdn.socket.io; " +
+    "connect-src 'self' wss: ws: https://accounts.google.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data: https:; " +
+    "frame-src https://accounts.google.com;"
+  );
+  next();
+});
+
+// ── Auth + player routes ──────────────────────────────────────────────────────
+app.use("/auth",    require("./routes/auth"));
+app.use("/players", require("./routes/players"));
+app.use("/parties", require("./routes/parties"));
+app.use("/queue",   require("./routes/queue"));
+app.use("/matches",     require("./routes/matches"));
+app.use("/leaderboard", require("./routes/leaderboard"));
+app.use("/admin",       require("./routes/admin"));
+
+// Public config for client (Google Client ID etc.)
+app.get("/config", (_req, res) => {
+  res.json({
+    googleClientId:      process.env.GOOGLE_CLIENT_ID || "",
+    passwordAuthEnabled: !!db,  // true whenever DB is connected
+  });
+});
 
 // Serve web app client at both / and /client for production compatibility.
 // Support both monorepo root deploys and server-subdir deploys.
@@ -22,7 +77,7 @@ const clientDirCandidates = [
   path.join(__dirname, "client"),
 ];
 const clientDir = clientDirCandidates.find((p) => fs.existsSync(path.join(p, "index.html"))) || clientDirCandidates[0];
-console.log(`[static] clientDir=${clientDir}`);
+log.info('static dir resolved', { clientDir });
 app.use(express.static(clientDir));
 app.use("/client", express.static(clientDir));
 
@@ -30,6 +85,29 @@ const server = http.createServer(app);
 const io = new Server(server, {
   maxHttpBufferSize: 1e4, // fix #8: cap incoming message size at 10 KB
   cors: { origin: process.env.ALLOWED_ORIGIN || "*", methods: ["GET", "POST"] }, // fix #2: use env var in production
+});
+
+// ── Socket.IO auth middleware ─────────────────────────────────────────────────
+// Auth is optional — guests without a token continue as before.
+// Authenticated players get socket.playerId / socket.playerDisplayName attached.
+// Banned players get socket.playerBanned = true; requireAuthSocket checks this.
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (token) {
+    try {
+      const payload = authService.verifyAccessToken(token);
+      socket.playerId          = payload.sub;
+      socket.playerDisplayName = payload.displayName;
+      // Check ban status (non-blocking; treat DB errors as not-banned)
+      if (db) {
+        try {
+          const r = await db.query(`SELECT status FROM players WHERE id = $1`, [payload.sub]);
+          if (r.rows[0]?.status === 'suspended') socket.playerBanned = true;
+        } catch { /* ignore */ }
+      }
+    } catch { /* invalid/expired — treat as guest */ }
+  }
+  next();
 });
 
 const ALLOWED_ACTION_TYPES = new Set([
@@ -55,6 +133,25 @@ const sessionBySocketId = new Map();
 
 // roomId -> { game, tickHandle, snapshotEveryNTicks }
 const gamesByRoomId = new Map();
+
+// ── Competitive in-memory state ───────────────────────────────────────────────
+// partyId -> PartyObject
+const partiesById = new Map();
+// playerId -> partyId
+const partyByPlayerId = new Map();
+// playerId -> socketId  (only authenticated players)
+const socketByPlayerId = new Map();
+// L-4: O(1) party code lookup — kept in sync with partiesById
+const partiesByCode = new Map();
+
+// ── Reconnect state ───────────────────────────────────────────────────────────
+const RECONNECT_GRACE_MS = 120_000; // 2 minutes grace before forfeit
+// `${roomId}:${seatKey}` -> { graceHandle, expiresAt, playerId, guestId, playerName, code, mode, seatKey, prevSocketId }
+const disconnectGrace = new Map();
+
+// Expose via app.locals so REST routes can read them
+app.locals.partiesById = partiesById;
+app.locals.partyByPlayerId = partyByPlayerId;
 
 // fix #4: per-socket rate-limit counters
 // socketId -> { lobbyCount, lobbyWindowStart, actionCount, actionWindowStart }
@@ -91,10 +188,33 @@ function checkActionRateLimit(socketId) {
 }
 
 function generateCode(len = 6) {
+  // H-5: use CSPRNG instead of Math.random() to prevent code enumeration
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
+  const bytes = crypto.randomBytes(len);
+  return Array.from(bytes, b => chars[b % chars.length]).join('');
+}
+
+// ── Reconnect token helpers ───────────────────────────────────────────────────
+const jwt = require("jsonwebtoken");
+const RECONNECT_JWT_SECRET = process.env.JWT_SECRET || "dev_reconnect_secret";
+
+function issueReconnectToken(roomId, code, mode, seatKey, socket) {
+  return jwt.sign(
+    { type: "reconnect", roomId, code, mode, seatKey,
+      playerId: socket.playerId || null,
+      guestId:  socket.guestId  || null },
+    RECONNECT_JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: "24h" }
+  );
+}
+
+function verifyReconnectToken(token) {
+  // C-1: pin algorithm to prevent confusion attacks
+  return jwt.verify(token, RECONNECT_JWT_SECRET, { algorithms: ['HS256'] });
+}
+
+function sanitizeDisplayName(raw) {
+  return (String(raw || '').replace(/[^a-zA-Z0-9_ ]/g, '').trim().slice(0, 20)) || 'Player';
 }
 
 function normalizeMatchSettings(settings) {
@@ -102,6 +222,43 @@ function normalizeMatchSettings(settings) {
   const rawIncome = Number(src.startIncome);
   const startIncome = Number.isFinite(rawIncome) ? Math.max(0, Math.min(1000, rawIncome)) : DEFAULT_MATCH_SETTINGS.startIncome;
   return { startIncome };
+}
+
+// ── Match logging helpers ────────────────────────────────────────────────────
+
+async function logMatchStart(roomId, mode) {
+  if (!db) return null;
+  try {
+    const r = await db.query(
+      `INSERT INTO matches (room_id, mode) VALUES ($1, $2) RETURNING id`,
+      [roomId, mode]
+    );
+    return r.rows[0].id;
+  } catch (err) {
+    console.error("[match] insert failed:", err.message);
+    return null;
+  }
+}
+
+// playerSnapshots: [{ playerId, laneIndex, result }]
+async function logMatchEnd(matchIdPromise, winnerLane, playerSnapshots) {
+  if (!db) return;
+  const matchId = await matchIdPromise;
+  if (!matchId) return;
+  try {
+    await db.query(
+      `UPDATE matches SET status='completed', ended_at=NOW(), winner_lane=$1 WHERE id=$2`,
+      [winnerLane ?? null, matchId]
+    );
+    for (const { playerId, laneIndex, result } of playerSnapshots) {
+      await db.query(
+        `INSERT INTO match_players (match_id, player_id, lane_index, result) VALUES ($1, $2, $3, $4)`,
+        [matchId, playerId, laneIndex, result]
+      );
+    }
+  } catch (err) {
+    console.error("[match] close failed:", err.message);
+  }
 }
 
 function createRoom(settings) {
@@ -125,6 +282,20 @@ function startGame(roomId, settings) {
   const game = sim.createGame(settings);
   const snapshotEveryNTicks = 2; // 20hz tick, 10hz snapshots
 
+  // Snapshot authenticated players for DB logging (captured at start, before room cleanup)
+  const playerSnapshot = [];
+  for (const [, room] of roomsByCode.entries()) {
+    if (room.roomId !== roomId) continue;
+    for (const [sid, side] of room.sidesBySocketId.entries()) {
+      const sock = io.sockets.sockets.get(sid);
+      if (sock?.playerId) {
+        playerSnapshot.push({ playerId: sock.playerId, laneIndex: side === "bottom" ? 0 : 1 });
+      }
+    }
+    break;
+  }
+  const matchIdPromise = logMatchStart(roomId, "classic");
+
   let localTick = 0;
   const tickHandle = setInterval(() => {
     const entry = gamesByRoomId.get(roomId);
@@ -138,13 +309,33 @@ function startGame(roomId, settings) {
     }
 
     if (entry.game.phase === "ended") {
-      io.to(roomId).emit("game_over", { winner: entry.game.winner });
+      const winner = entry.game.winner;
+      io.to(roomId).emit("game_over", { winner });
+      const winnerLane = winner === "bottom" ? 0 : winner === "top" ? 1 : null;
+      const snapshots = entry.playerSnapshot.map(p => ({
+        ...p,
+        result: winnerLane === null ? "draw" : p.laneIndex === winnerLane ? "win" : "loss",
+      }));
+      logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
       stopGame(roomId);
     }
   }, sim.TICK_MS);
 
-  gamesByRoomId.set(roomId, { game, tickHandle, snapshotEveryNTicks });
-  console.log(`[game] started ${roomId}`);
+  gamesByRoomId.set(roomId, { game, tickHandle, snapshotEveryNTicks, matchIdPromise, playerSnapshot });
+
+  // Issue reconnect tokens to human players
+  for (const [rCode, room] of roomsByCode.entries()) {
+    if (room.roomId !== roomId) continue;
+    for (const [sid, side] of room.sidesBySocketId.entries()) {
+      const sock = io.sockets.sockets.get(sid);
+      if (!sock) continue;
+      const rToken = issueReconnectToken(roomId, rCode, "classic", side, sock);
+      sock.emit("reconnect_token", { token: rToken, gracePeriodMs: RECONNECT_GRACE_MS });
+    }
+    break;
+  }
+
+  log.info('game started', { roomId });
 }
 
 function stopGame(roomId) {
@@ -152,14 +343,14 @@ function stopGame(roomId) {
   if (!entry) return;
   clearInterval(entry.tickHandle);
   gamesByRoomId.delete(roomId);
-  console.log(`[game] stopped ${roomId}`);
+  log.info('game stopped', { roomId });
 
   // fix #5: schedule room cleanup 60 s after game ends to prevent indefinite memory leak
   const handle = setTimeout(() => {
     for (const [code, room] of roomsByCode.entries()) {
       if (room.roomId === roomId) {
         roomsByCode.delete(code);
-        console.log(`[room] cleaned up ${code} (post-game timeout)`);
+        log.info('room cleaned up', { code, reason: 'post-game timeout' });
         break;
       }
     }
@@ -181,7 +372,7 @@ function createMLRoom(hostSocketId, displayName, settings) {
     players: [hostSocketId],
     laneBySocketId: new Map([[hostSocketId, 0]]),
     readySet: new Set(),
-    playerNames: new Map([[hostSocketId, String(displayName || "Player").slice(0, 20)]]),
+    playerNames: new Map([[hostSocketId, sanitizeDisplayName(displayName)]]),
     createdAt: Date.now(),
     mode: "multilane",
     hostSocketId,
@@ -243,6 +434,18 @@ function startMLGame(roomId, code, io) {
   // Start AI loops
   const aiHandles = aiList.map(ai => aiModule.startAI(game, ai.laneIndex, ai.difficulty));
 
+  // Snapshot authenticated players for DB logging
+  const playerSnapshot = room.players
+    .map(sid => {
+      const sock = io.sockets.sockets.get(sid);
+      return sock?.playerId
+        ? { playerId: sock.playerId, laneIndex: room.laneBySocketId.get(sid) }
+        : null;
+    })
+    .filter(Boolean);
+  const dbMode = room.queueMode === 'ranked_2v2' ? '2v2_ranked' : 'multilane';
+  const matchIdPromise = logMatchStart(roomId, dbMode);
+
   const eliminatedNotified = new Set();
   let localTick = 0;
   const snapshotEveryNTicks = 2;
@@ -288,11 +491,56 @@ function startMLGame(roomId, code, io) {
         }
       }
       io.to(roomId).emit("ml_game_over", { winnerLaneIndex: winnerLane, winnerName });
+      const snapshots = entry.playerSnapshot.map(p => ({
+        ...p,
+        result: winnerLane === null ? "draw" : p.laneIndex === winnerLane ? "win" : "loss",
+      }));
+      const endP = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
+      if (ratingService && db && entry.dbMode === '2v2_ranked') {
+        Promise.all([endP, entry.matchIdPromise])
+          .then(([, matchId]) => ratingService.updateRatings(db, matchId, entry.dbMode, snapshots, entry.partyASize))
+          .then(updates => {
+            for (const u of updates) {
+              const sid = socketByPlayerId.get(u.playerId);
+              if (sid) {
+                const totalMatches = (u.wins || 0) + (u.losses || 0);
+                const isPlacement  = totalMatches < 10;
+                io.to(sid).emit('rating_update', {
+                  mode: entry.dbMode,
+                  newRating: Math.round(u.newRating),
+                  delta: Math.round(u.delta),
+                  isPlacement,
+                  placementProgress: isPlacement ? `${totalMatches}/10` : null,
+                });
+              }
+            }
+            // Update season peak ratings (fire-and-forget)
+            if (seasonService && updates.length > 0) {
+              seasonService.getActiveSeason(db).then(season => {
+                if (!season) return;
+                for (const u of updates) {
+                  seasonService.updatePeakRating(db, season.id, u.playerId, entry.dbMode, u.newRating);
+                }
+              }).catch(() => {});
+            }
+          })
+          .catch(err => console.error('[rating] error:', err.message));
+      }
       stopMLGame(roomId, code);
     }
   }, simMl.TICK_MS);
 
-  gamesByRoomId.set(roomId, { game, tickHandle, mode: "multilane", snapshotEveryNTicks, eliminatedNotified, aiHandles });
+  gamesByRoomId.set(roomId, { game, tickHandle, mode: "multilane", snapshotEveryNTicks, eliminatedNotified, aiHandles, matchIdPromise, playerSnapshot, dbMode, partyASize: room.partyASize || 1 });
+
+  // Issue reconnect tokens to human players
+  for (const sid of room.players) {
+    const sock = io.sockets.sockets.get(sid);
+    if (!sock) continue;
+    const laneIdx = room.laneBySocketId.get(sid);
+    const rToken = issueReconnectToken(roomId, code, "multilane", String(laneIdx), sock);
+    sock.emit("reconnect_token", { token: rToken, gracePeriodMs: RECONNECT_GRACE_MS });
+  }
+
   console.log(`[ml-game] started ${roomId}`);
 }
 
@@ -311,10 +559,488 @@ function stopMLGame(roomId, code) {
   if (room) room._cleanupHandle = handle;
 }
 
+// ── Party / queue business logic ──────────────────────────────────────────────
+
+/**
+ * Remove a player from their party. Disbands the party if it becomes empty.
+ * Must be called with a valid partyId. Cleans up queue entry if needed.
+ */
+function _leaveParty(socket, partyId) {
+  const party = partiesById.get(partyId);
+  if (!party) return;
+
+  party.members = party.members.filter(m => m.playerId !== socket.playerId);
+  partyByPlayerId.delete(socket.playerId);
+  socket.leave("party:" + partyId);
+
+  if (party.members.length === 0) {
+    // Disband — remove from both indexes (L-4)
+    if (party.status === "queued") matchmaker.removeFromQueue(partyId);
+    partiesById.delete(partyId);
+    partiesByCode.delete(party.code);
+    console.log(`[party] disbanded ${partyId}`);
+    return;
+  }
+
+  // Promote a new leader if the leaver was leader (must be still connected)
+  if (party.leaderId === socket.playerId) {
+    const newLeader = party.members.find(m => socketByPlayerId.has(m.playerId));
+    if (newLeader) {
+      party.leaderId = newLeader.playerId;
+    } else {
+      // No connected member — disband
+      if (party.status === "queued") matchmaker.removeFromQueue(partyId);
+      partiesById.delete(partyId);
+      partiesByCode.delete(party.code);
+      console.log(`[party] disbanded ${partyId} (no connected leader candidate)`);
+      return;
+    }
+  }
+
+  // If queued and party is now empty enough, cancel queue
+  if (party.status === "queued" && party.members.length === 0) {
+    matchmaker.removeFromQueue(partyId);
+    party.status = "idle";
+    party.queueMode = null;
+    party.queueEnteredAt = null;
+  }
+
+  io.to("party:" + partyId).emit("party_update", { party });
+  if (party.status === "queued") {
+    const elapsed = Math.floor((Date.now() - party.queueEnteredAt) / 1000);
+    io.to("party:" + partyId).emit("queue_status", { status: "queued", mode: party.queueMode, elapsed });
+  }
+  console.log(`[party] ${socket.playerId} left ${partyId}`);
+}
+
+/**
+ * Called by the matchmaker loop when two parties are matched.
+ * Creates an ML room, auto-joins all members, and emits match_found.
+ */
+function onMatchFound(partyA, partyB, mode) {
+  console.log(`[match] found: party ${partyA.id} vs party ${partyB.id} mode=${mode}`);
+
+  // Create a 4-player ML room (2 per party)
+  const allMembers = [...partyA.members, ...partyB.members];
+  if (allMembers.length === 0) return;
+
+  const hostSocketId = socketByPlayerId.get(allMembers[0].playerId) || allMembers[0].socketId;
+  const hostDisplayName = sanitizeDisplayName(allMembers[0].displayName);
+
+  const { code, roomId } = createMLRoom(hostSocketId, hostDisplayName, {});
+  const room = mlRoomsByCode.get(code);
+  room.queueMode  = mode;                       // 'ranked_2v2' | 'casual_2v2'
+  room.partyASize = partyA.members.length;      // lane split point for rating team assignment
+
+  // Set host session (createMLRoom does not call sessionBySocketId.set)
+  sessionBySocketId.set(hostSocketId, { code, roomId, laneIndex: 0, mode: "multilane" });
+  const hostSocket = io.sockets.sockets.get(hostSocketId);
+  if (hostSocket) hostSocket.join(roomId);
+
+  // Auto-join remaining members
+  let laneIndex = 1;
+  for (let i = 1; i < allMembers.length; i++) {
+    const member = allMembers[i];
+    const sid = socketByPlayerId.get(member.playerId) || member.socketId;
+    if (!sid) { laneIndex++; continue; }
+
+    room.players.push(sid);
+    room.laneBySocketId.set(sid, laneIndex);
+    room.playerNames.set(sid, sanitizeDisplayName(member.displayName));
+    sessionBySocketId.set(sid, { code, roomId, laneIndex, mode: "multilane" });
+    const memberSocket = io.sockets.sockets.get(sid);
+    if (memberSocket) memberSocket.join(roomId);
+    laneIndex++;
+  }
+
+  // Update hostSocketId session (createMLRoom sets laneIndex 0 already)
+  // (already set by createMLRoom for hostSocketId)
+
+  io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
+
+  // Emit match_found to each member
+  const partyANames = partyA.members.map(m => m.displayName);
+  const partyBNames = partyB.members.map(m => m.displayName);
+
+  partyA.members.forEach((member, idx) => {
+    const sid = socketByPlayerId.get(member.playerId) || member.socketId;
+    if (!sid) return;
+    io.to(sid).emit("match_found", {
+      roomCode: code,
+      laneIndex: idx,
+      teammates: partyANames,
+      opponents: partyBNames,
+    });
+  });
+
+  partyB.members.forEach((member, idx) => {
+    const sid = socketByPlayerId.get(member.playerId) || member.socketId;
+    if (!sid) return;
+    io.to(sid).emit("match_found", {
+      roomCode: code,
+      laneIndex: partyA.members.length + idx,
+      teammates: partyBNames,
+      opponents: partyANames,
+    });
+  });
+
+  // Mark both parties as in_match
+  partyA.status = "in_match";
+  partyA.queueMode = null;
+  partyA.queueEnteredAt = null;
+  partyB.status = "in_match";
+  partyB.queueMode = null;
+  partyB.queueEnteredAt = null;
+
+  io.to("party:" + partyA.id).emit("party_update", { party: partyA });
+  io.to("party:" + partyB.id).emit("party_update", { party: partyB });
+}
+
+// ── Party helpers ─────────────────────────────────────────────────────────────
+
+function generatePartyCode() {
+  // H-5: reuses CSPRNG-based generateCode; L-4: uniqueness checked via partiesByCode
+  return generateCode(6);
+}
+
+function requireAuthSocket(socket, cb) {
+  if (!socket.playerId) {
+    socket.emit("error_message", { message: "Sign in required." });
+    return false;
+  }
+  if (socket.playerBanned) {
+    socket.emit("error_message", { message: "Your account has been suspended." });
+    return false;
+  }
+  return cb();
+}
+
 // ── Socket.IO connection ─────────────────────────────────────────────────────
 
 io.on("connection", (socket) => {
   console.log("connected:", socket.id);
+
+  // Assign a stable guest ID for reconnect token issuance (even auth players get one as fallback)
+  socket.guestId = crypto.randomUUID();
+
+  // Track authenticated sockets immediately on connect (token via handshake)
+  if (socket.playerId) {
+    socketByPlayerId.set(socket.playerId, socket.id);
+  }
+
+  // Allows clients to authenticate after the socket is already connected
+  // (e.g. user signs in while lobby is open without reloading the page).
+  socket.on("authenticate", ({ token } = {}) => {
+    // H-2: rate-limit JWT verify calls to prevent event-loop DoS
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!token) return;
+    try {
+      const payload = authService.verifyAccessToken(token);
+      socket.playerId          = payload.sub;
+      socket.playerDisplayName = payload.displayName;
+      socketByPlayerId.set(socket.playerId, socket.id);
+      socket.emit("authenticated", { playerId: socket.playerId, displayName: socket.playerDisplayName });
+    } catch {
+      socket.emit("auth_error", { message: "Invalid or expired token" });
+    }
+  });
+
+  // ── Reconnect ──────────────────────────────────────────────────────────────────
+
+  socket.on("rejoin_game", ({ token } = {}) => {
+    if (!token || typeof token !== "string") {
+      return socket.emit("rejoin_fail", { reason: "no_token" });
+    }
+
+    let payload;
+    try {
+      payload = verifyReconnectToken(token);
+    } catch {
+      return socket.emit("rejoin_fail", { reason: "invalid_token" });
+    }
+
+    if (payload.type !== "reconnect") {
+      return socket.emit("rejoin_fail", { reason: "wrong_type" });
+    }
+
+    const { roomId, code, mode, seatKey, playerId, guestId } = payload;
+
+    // Auth players must match
+    if (playerId && socket.playerId && socket.playerId !== playerId) {
+      return socket.emit("rejoin_fail", { reason: "identity_mismatch" });
+    }
+
+    // Game must still be running
+    const entry = gamesByRoomId.get(roomId);
+    if (!entry) {
+      return socket.emit("rejoin_fail", { reason: "game_over" });
+    }
+
+    const graceKey = `${roomId}:${seatKey}`;
+
+    if (mode === "multilane") {
+      const room = mlRoomsByCode.get(code);
+      if (!room) return socket.emit("rejoin_fail", { reason: "room_gone" });
+
+      const laneIndex = parseInt(seatKey, 10);
+
+      // Remove stale socket holding this lane (if any)
+      for (const [sid, li] of room.laneBySocketId.entries()) {
+        if (li === laneIndex && sid !== socket.id) {
+          if (io.sockets.sockets.has(sid)) {
+            return socket.emit("rejoin_fail", { reason: "seat_taken" });
+          }
+          room.players = room.players.filter(s => s !== sid);
+          room.laneBySocketId.delete(sid);
+          room.playerNames.delete(sid);
+          room.readySet.delete(sid);
+          sessionBySocketId.delete(sid);
+          break;
+        }
+      }
+
+      const grace = disconnectGrace.get(graceKey);
+      if (grace) { clearTimeout(grace.graceHandle); disconnectGrace.delete(graceKey); }
+
+      const playerName = grace?.playerName || socket.playerDisplayName || "Player";
+
+      if (!room.players.includes(socket.id)) room.players.push(socket.id);
+      room.laneBySocketId.set(socket.id, laneIndex);
+      room.playerNames.set(socket.id, playerName);
+      socket.join(roomId);
+      sessionBySocketId.set(socket.id, { code, roomId, laneIndex, mode: "multilane" });
+
+      const humanPlayers = room.players.map(sid => ({
+        laneIndex: room.laneBySocketId.get(sid),
+        displayName: room.playerNames.get(sid) || "Player",
+        ready: true, isAI: false,
+      }));
+      const aiPlayers = (room.aiPlayers || []).map(ai => ({
+        laneIndex: ai.laneIndex,
+        displayName: "CPU (" + capFirst(ai.difficulty) + ")",
+        ready: true, isAI: true,
+      }));
+      const laneAssignments = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
+
+      // Send ack first so client sets myLaneIndex before ml_match_ready fires
+      socket.emit("rejoin_ack", { success: true, mode: "multilane", laneIndex, code });
+      socket.emit("ml_match_ready", { code, playerCount: laneAssignments.length, laneAssignments });
+      socket.emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
+      socket.emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+      io.to(roomId).emit("player_reconnected", { laneIndex, displayName: playerName, mode: "multilane" });
+      console.log(`[reconnect] ml lane ${laneIndex} in ${roomId}`);
+
+    } else {
+      const room = roomsByCode.get(code);
+      if (!room) return socket.emit("rejoin_fail", { reason: "room_gone" });
+
+      const side = seatKey;
+
+      // Remove stale socket holding this side (if any)
+      for (const [sid, s] of room.sidesBySocketId.entries()) {
+        if (s === side && sid !== socket.id) {
+          if (io.sockets.sockets.has(sid)) {
+            return socket.emit("rejoin_fail", { reason: "seat_taken" });
+          }
+          room.players = room.players.filter(p => p !== sid);
+          room.sidesBySocketId.delete(sid);
+          sessionBySocketId.delete(sid);
+          break;
+        }
+      }
+
+      const grace = disconnectGrace.get(graceKey);
+      if (grace) { clearTimeout(grace.graceHandle); disconnectGrace.delete(graceKey); }
+
+      const playerName = grace?.playerName || socket.playerDisplayName || "Player";
+
+      if (!room.players.includes(socket.id)) room.players.push(socket.id);
+      room.sidesBySocketId.set(socket.id, side);
+      socket.join(roomId);
+      sessionBySocketId.set(socket.id, { code, roomId, side });
+
+      // Send ack first so client sets myCode/mySide before state_snapshot fires
+      socket.emit("rejoin_ack", { success: true, mode: "classic", side, code });
+      socket.emit("state_snapshot", sim.createSnapshot(entry.game));
+      socket.emit("match_config", sim.createPublicConfig(room.settings));
+      io.to(roomId).emit("player_reconnected", { side, displayName: playerName, mode: "classic" });
+      console.log(`[reconnect] classic side=${side} in ${roomId}`);
+    }
+  });
+
+  // ── Party events ─────────────────────────────────────────────────────────────
+
+  socket.on("party:create", () => {
+    if (!checkLobbyRateLimit(socket.id)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
+    }
+    requireAuthSocket(socket, () => {
+      // If already in a party, leave it first
+      const existingPartyId = partyByPlayerId.get(socket.playerId);
+      if (existingPartyId) {
+        _leaveParty(socket, existingPartyId);
+      }
+
+      // L-4: O(1) uniqueness check via partiesByCode index
+      let code;
+      do { code = generatePartyCode(); }
+      while (partiesByCode.has(code));
+
+      const partyId = crypto.randomUUID();
+      const party = {
+        id: partyId,
+        code,
+        leaderId: socket.playerId,
+        members: [{ playerId: socket.playerId, displayName: socket.playerDisplayName || "Player", socketId: socket.id }],
+        status: "idle",
+        queueMode: null,
+        queueEnteredAt: null,
+        region: "global",
+      };
+      partiesById.set(partyId, party);
+      partiesByCode.set(code, partyId);
+      partyByPlayerId.set(socket.playerId, partyId);
+      socket.join("party:" + partyId);
+      io.to("party:" + partyId).emit("party_update", { party });
+      console.log(`[party] created ${partyId} code=${code} by ${socket.playerId}`);
+    });
+  });
+
+  socket.on("party:join", ({ code } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
+    }
+    requireAuthSocket(socket, () => {
+      const normalized = String(code || "").trim().toUpperCase();
+      if (normalized.length !== 6) {
+        return socket.emit("error_message", { message: "Invalid party code." });
+      }
+      // L-4: O(1) party lookup by code
+      const party = partiesById.get(partiesByCode.get(normalized));
+      if (!party) return socket.emit("error_message", { message: "Party not found." });
+      if (party.members.length >= 4) return socket.emit("error_message", { message: "Party is full." });
+      if (party.status !== "idle") return socket.emit("error_message", { message: "Party is already in queue or match." });
+      if (party.members.some(m => m.playerId === socket.playerId)) {
+        return socket.emit("error_message", { message: "Already in this party." });
+      }
+
+      // Leave current party if any
+      const existingPartyId = partyByPlayerId.get(socket.playerId);
+      if (existingPartyId) _leaveParty(socket, existingPartyId);
+
+      party.members.push({ playerId: socket.playerId, displayName: socket.playerDisplayName || "Player", socketId: socket.id });
+      partyByPlayerId.set(socket.playerId, party.id);
+      socket.join("party:" + party.id);
+      io.to("party:" + party.id).emit("party_update", { party });
+      console.log(`[party] ${socket.playerId} joined ${party.id}`);
+    });
+  });
+
+  socket.on("party:leave", () => {
+    requireAuthSocket(socket, () => {
+      const partyId = partyByPlayerId.get(socket.playerId);
+      if (!partyId) return;
+      _leaveParty(socket, partyId);
+    });
+  });
+
+  // ── Queue events ──────────────────────────────────────────────────────────────
+
+  socket.on("queue:enter", ({ mode } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
+    }
+    requireAuthSocket(socket, () => {
+      const validModes = ["ranked_2v2", "casual_2v2"];
+      const queueMode = validModes.includes(mode) ? mode : "casual_2v2";
+      const dbMode = queueMode === "ranked_2v2" ? "2v2_ranked" : "2v2_casual";
+
+      const partyId = partyByPlayerId.get(socket.playerId);
+      if (!partyId) return socket.emit("error_message", { message: "You must be in a party to queue." });
+      const party = partiesById.get(partyId);
+      if (!party) return socket.emit("error_message", { message: "Party not found." });
+      if (party.leaderId !== socket.playerId) {
+        return socket.emit("error_message", { message: "Only the party leader can enter queue." });
+      }
+      if (party.status !== "idle") {
+        return socket.emit("error_message", { message: "Party is already queued or in a match." });
+      }
+
+      // Build a promise that resolves to { rating, casualMatches, rankedMatches }.
+      // For ranked: also fetches casual match count (smurf gate) + ranked match count (placement).
+      let dataPromise;
+      if (db && queueMode === "ranked_2v2") {
+        dataPromise = Promise.all([
+          db.query(
+            `SELECT COALESCE(wins + losses, 0) AS matches FROM ratings WHERE player_id = $1 AND mode = '2v2_casual'`,
+            [socket.playerId]
+          ).then(r => Number(r.rows[0]?.matches) || 0).catch(() => 0),
+          db.query(
+            `SELECT rating, wins + losses AS matches FROM ratings WHERE player_id = $1 AND mode = '2v2_ranked'`,
+            [socket.playerId]
+          ).then(r => r.rows[0]
+            ? { rating: Number(r.rows[0].rating), rankedMatches: Number(r.rows[0].matches) }
+            : { rating: 1200, rankedMatches: 0 }
+          ).catch(() => ({ rating: 1200, rankedMatches: 0 })),
+        ]).then(([casualMatches, ranked]) => ({ casualMatches, ...ranked }));
+      } else {
+        dataPromise = (db
+          ? db.query(`SELECT rating FROM ratings WHERE player_id = $1 AND mode = $2`, [socket.playerId, dbMode])
+              .then(r => Number(r.rows[0]?.rating) || 1200)
+              .catch(() => 1200)
+          : Promise.resolve(1200)
+        ).then(rating => ({ rating, casualMatches: 99, rankedMatches: 99 }));
+      }
+
+      dataPromise.then(({ rating, casualMatches, rankedMatches }) => {
+        // Smurf gate: ranked requires completing 5+ casual matches first
+        if (queueMode === "ranked_2v2" && casualMatches < 5) {
+          return socket.emit("error_message", {
+            message: `Complete ${5 - casualMatches} more casual match(es) to unlock ranked queue.`,
+          });
+        }
+
+        // Commit queue state (done here so a failed gate never leaves party stuck in "queued")
+        party.status = "queued";
+        party.queueMode = queueMode;
+        party.queueEnteredAt = Date.now();
+
+        const isPlacement = queueMode === "ranked_2v2" && rankedMatches < 10;
+        matchmaker.addToQueue(partyId, {
+          mode: queueMode,
+          rating,
+          queueEnteredAt: party.queueEnteredAt,
+          region: party.region,
+          isPlacement,
+        });
+
+        io.to("party:" + partyId).emit("queue_status", { status: "queued", mode: queueMode, elapsed: 0 });
+        log.info("queue entered", { partyId, mode: queueMode, isPlacement });
+      });
+    });
+  });
+
+  socket.on("queue:leave", () => {
+    requireAuthSocket(socket, () => {
+      const partyId = partyByPlayerId.get(socket.playerId);
+      if (!partyId) return;
+      const party = partiesById.get(partyId);
+      if (!party) return;
+      if (party.leaderId !== socket.playerId) {
+        return socket.emit("error_message", { message: "Only the party leader can leave queue." });
+      }
+      if (party.status !== "queued") return;
+
+      matchmaker.removeFromQueue(partyId);
+      party.status = "idle";
+      party.queueMode = null;
+      party.queueEnteredAt = null;
+
+      io.to("party:" + partyId).emit("queue_status", { status: "idle" });
+      io.to("party:" + partyId).emit("party_update", { party });
+      log.info('queue left', { partyId });
+    });
+  });
 
   socket.on("create_room", ({ settings } = {}) => {
     // fix #4: rate-limit lobby events
@@ -327,6 +1053,7 @@ io.on("connection", (socket) => {
 
     room.players.push(socket.id);
     room.sidesBySocketId.set(socket.id, "bottom");
+    room.hostSocketId = socket.id;
     sessionBySocketId.set(socket.id, { code, roomId, side: "bottom" });
     socket.join(roomId);
 
@@ -395,7 +1122,7 @@ io.on("connection", (socket) => {
     const laneIndex = room.players.length;
     room.players.push(socket.id);
     room.laneBySocketId.set(socket.id, laneIndex);
-    room.playerNames.set(socket.id, String(displayName || "Player").slice(0, 20));
+    room.playerNames.set(socket.id, sanitizeDisplayName(displayName));
     // Shift any existing AI players above the new human count
     if (room.aiPlayers) {
       room.aiPlayers.forEach((ai, i) => { ai.laneIndex = room.players.length + i; });
@@ -449,8 +1176,7 @@ io.on("connection", (socket) => {
     const room = roomsByCode.get(session.code);
     if (!room) return;
     if (gamesByRoomId.has(room.roomId)) return;
-    const hostSocketId = room.players[0];
-    if (hostSocketId !== socket.id) return;
+    if (room.hostSocketId !== socket.id) return;
     room.settings = normalizeMatchSettings(settings);
     io.to(room.roomId).emit("room_settings_update", { settings: room.settings });
   });
@@ -678,33 +1404,124 @@ io.on("connection", (socket) => {
     rateLimitBySocketId.delete(socket.id);
     sessionBySocketId.delete(socket.id);
 
-    // Classic room cleanup
+    // Authenticated player cleanup (party/queue always cleaned up on disconnect)
+    if (socket.playerId) {
+      socketByPlayerId.delete(socket.playerId);
+
+      // Party cleanup: remove from party, disband if empty, cancel queue if needed
+      const partyId = partyByPlayerId.get(socket.playerId);
+      if (partyId) {
+        _leaveParty(socket, partyId);
+      }
+    }
+
+    // Classic room cleanup — grace period if mid-game, immediate otherwise
     for (const [code, room] of roomsByCode.entries()) {
       const idx = room.players.indexOf(socket.id);
       if (idx !== -1) {
-        room.players.splice(idx, 1);
-        room.sidesBySocketId.delete(socket.id);
-        io.to(room.roomId).emit("player_left", { code });
-        if (room.players.length === 0) {
-          stopGame(room.roomId);
-          roomsByCode.delete(code);
+        const side = room.sidesBySocketId.get(socket.id);
+        const isActive = gamesByRoomId.has(room.roomId);
+
+        if (isActive && side) {
+          // Start grace period — don't remove from room or stop game yet
+          const graceKey = `${room.roomId}:${side}`;
+          const playerName = socket.playerDisplayName || "Player";
+          io.to(room.roomId).emit("opponent_disconnected", { side, gracePeriodMs: RECONNECT_GRACE_MS });
+
+          const graceHandle = setTimeout(() => {
+            disconnectGrace.delete(graceKey);
+            const gEntry = gamesByRoomId.get(room.roomId);
+            if (gEntry) {
+              // Forfeit: award win to remaining side
+              const winner = side === "bottom" ? "top" : "bottom";
+              const winnerLane = winner === "bottom" ? 0 : 1;
+              const snapshots = gEntry.playerSnapshot.map(p => ({
+                ...p,
+                result: p.laneIndex === winnerLane ? "win" : "loss",
+              }));
+              io.to(room.roomId).emit("game_over", { winner, reason: "forfeit" });
+              logMatchEnd(gEntry.matchIdPromise, winnerLane, snapshots);
+              stopGame(room.roomId);
+            }
+            // Clean up the now-stale slot
+            const r = roomsByCode.get(code);
+            if (r) {
+              const i = r.players.indexOf(socket.id);
+              if (i !== -1) r.players.splice(i, 1);
+              r.sidesBySocketId.delete(socket.id);
+              if (r.players.length === 0) roomsByCode.delete(code);
+            }
+          }, RECONNECT_GRACE_MS);
+
+          disconnectGrace.set(graceKey, {
+            graceHandle, expiresAt: Date.now() + RECONNECT_GRACE_MS,
+            playerId: socket.playerId || null, guestId: socket.guestId,
+            playerName, code, mode: "classic", seatKey: side, prevSocketId: socket.id,
+          });
+        } else {
+          room.players.splice(idx, 1);
+          room.sidesBySocketId.delete(socket.id);
+          io.to(room.roomId).emit("player_left", { code });
+          if (room.players.length === 0) {
+            stopGame(room.roomId);
+            roomsByCode.delete(code);
+          }
         }
         break;
       }
     }
 
-    // ML room cleanup
+    // ML room cleanup — grace period if mid-game, immediate otherwise
     for (const [code, room] of mlRoomsByCode.entries()) {
       const idx = room.players.indexOf(socket.id);
       if (idx !== -1) {
-        room.players.splice(idx, 1);
-        room.laneBySocketId.delete(socket.id);
-        room.playerNames.delete(socket.id);
-        room.readySet.delete(socket.id);
-        io.to(room.roomId).emit("player_left", { code });
-        if (room.players.length === 0) {
-          stopMLGame(room.roomId, code);
-          mlRoomsByCode.delete(code);
+        const laneIndex = room.laneBySocketId.get(socket.id);
+        const isActive = gamesByRoomId.has(room.roomId);
+
+        if (isActive && laneIndex !== undefined) {
+          const graceKey = `${room.roomId}:${laneIndex}`;
+          const playerName = room.playerNames.get(socket.id) || socket.playerDisplayName || "Player";
+          io.to(room.roomId).emit("player_disconnected", { laneIndex, displayName: playerName, gracePeriodMs: RECONNECT_GRACE_MS });
+
+          const graceHandle = setTimeout(() => {
+            disconnectGrace.delete(graceKey);
+            // ML forfeit: emit elimination; game continues for remaining players
+            const gEntry = gamesByRoomId.get(room.roomId);
+            if (gEntry && !gEntry.eliminatedNotified.has(laneIndex)) {
+              gEntry.eliminatedNotified.add(laneIndex);
+              io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "forfeit" });
+              io.to(socket.id).emit("ml_spectator_join", { laneIndex });
+            }
+            // Remove the stale slot
+            const r = mlRoomsByCode.get(code);
+            if (r) {
+              const i = r.players.indexOf(socket.id);
+              if (i !== -1) r.players.splice(i, 1);
+              r.laneBySocketId.delete(socket.id);
+              r.playerNames.delete(socket.id);
+              r.readySet.delete(socket.id);
+              if (r.players.length === 0) {
+                stopMLGame(room.roomId, code);
+                mlRoomsByCode.delete(code);
+              }
+            }
+          }, RECONNECT_GRACE_MS);
+
+          disconnectGrace.set(graceKey, {
+            graceHandle, expiresAt: Date.now() + RECONNECT_GRACE_MS,
+            playerId: socket.playerId || null, guestId: socket.guestId,
+            playerName, code, mode: "multilane", seatKey: String(laneIndex), prevSocketId: socket.id,
+          });
+        } else {
+          room.players.splice(idx, 1);
+          room.laneBySocketId.delete(socket.id);
+          room.playerNames.delete(socket.id);
+          room.readySet.delete(socket.id);
+          io.to(room.roomId).emit("player_left", { code });
+          if (room.players.length === 0) {
+            stopMLGame(room.roomId, code);
+            mlRoomsByCode.delete(code);
+          }
         }
         break;
       }
@@ -717,10 +1534,100 @@ app.get("/", (_req, res) => {
 });
 
 // Lightweight health endpoint for uptime checks.
-app.get("/health", (_req, res) => res.send("ok"));
+app.get("/health", async (_req, res) => {
+  if (process.env.DATABASE_URL) {
+    try {
+      const db = require("./db");
+      await db.query("SELECT 1");
+      return res.json({ ok: true, db: "connected" });
+    } catch {
+      return res.status(503).json({ ok: false, db: "error" });
+    }
+  }
+  res.json({ ok: true, db: "none" });
+});
 
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '0.0.0.0'; // fix #3: bind to all interfaces; override via HOST env var
-server.listen(PORT, HOST, () => {
-  console.log(`Server listening on http://${HOST}:${PORT}`);
-});
+const HOST = process.env.HOST || '0.0.0.0';
+
+async function startServer() {
+  // ── Startup security checks ──────────────────────────────────────────────
+  if (!process.env.JWT_SECRET) {
+    log.warn('JWT_SECRET is not set — authentication will not work securely');
+  }
+  if (process.env.NODE_ENV === 'production' && !process.env.ALLOWED_ORIGIN) {
+    log.warn('ALLOWED_ORIGIN not set in production — CORS allows all origins');
+  }
+
+  // Auto-run DB migrations when DATABASE_URL is present
+  if (process.env.DATABASE_URL) {
+    try {
+      const { execSync } = require("child_process");
+      execSync(`node "${path.join(__dirname, "migrate.js")}"`, {
+        stdio: "inherit",
+        env: process.env,
+      });
+    } catch (err) {
+      log.error('migration failed', { err: err.message });
+      // Don't abort — server can still serve the game without DB
+    }
+  }
+
+  // Start in-memory matchmaking loop
+  matchmaker.startMatchmakingLoop(io, partiesById, socketByPlayerId, onMatchFound);
+
+  server.listen(PORT, HOST, () => {
+    log.info('server started', { port: PORT, host: HOST, env: process.env.NODE_ENV || 'development' });
+  });
+}
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// On SIGTERM / SIGINT: stop game loops, disconnect sockets, close DB pool, exit.
+
+function gracefulShutdown(signal) {
+  log.info('graceful shutdown', { signal });
+
+  // Stop matchmaking loop
+  matchmaker.stopMatchmakingLoop();
+
+  // Stop all active game tick loops and AI loops
+  for (const [, entry] of gamesByRoomId.entries()) {
+    clearInterval(entry.tickHandle);
+    if (Array.isArray(entry.aiHandles)) {
+      entry.aiHandles.forEach(h => clearInterval(h));
+    }
+  }
+  gamesByRoomId.clear();
+
+  // Cancel all disconnect grace timers
+  for (const [, grace] of disconnectGrace.entries()) {
+    clearTimeout(grace.graceHandle);
+  }
+  disconnectGrace.clear();
+
+  // Notify all connected clients
+  io.emit('server_shutdown', { message: 'Server is restarting. Please refresh in a moment.' });
+
+  // Force exit fallback in case shutdown stalls
+  const forceExit = setTimeout(() => {
+    log.warn('forced exit after shutdown timeout');
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
+
+  // Close socket.io → HTTP server → DB pool → exit
+  io.close(() => {
+    server.close(async () => {
+      if (db) {
+        try { await db.pool.end(); } catch { /* ignore */ }
+      }
+      log.info('server stopped cleanly');
+      process.exit(0);
+    });
+  });
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+
+startServer();

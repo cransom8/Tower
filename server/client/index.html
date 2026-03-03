@@ -4,9 +4,158 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Castle Defender — Multiplayer</title>
-  <link rel="stylesheet" href="styles.css?v=20260303u">
+  <link rel="stylesheet" href="styles.css?v=20260303w">
+  <!-- Google Sign-In (GSI) — loaded async; only active when GOOGLE_CLIENT_ID is set -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
+
+  <!-- PARTY PANEL — shown when signed in -->
+  <div id="party-panel" style="display:none">
+    <div id="party-panel-inner">
+      <div id="party-header">
+        <span class="party-label">Party</span>
+        <span id="party-code-display"></span>
+      </div>
+      <ul id="party-member-list"></ul>
+      <div id="party-actions">
+        <button class="party-btn" id="btn-party-create">New Party</button>
+        <div id="party-join-row" style="display:none">
+          <input id="party-join-input" type="text" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false">
+          <button class="party-btn" id="btn-party-join">Join</button>
+        </div>
+        <button class="party-btn" id="btn-party-show-join" style="display:none">Join Party</button>
+        <button class="party-btn danger" id="btn-party-leave" style="display:none">Leave</button>
+      </div>
+      <div id="queue-area" style="display:none">
+        <div id="queue-status-row">
+          <span id="queue-status-text">Idle</span>
+        </div>
+        <div id="queue-btn-row">
+          <button class="party-btn primary" id="btn-queue-enter-ranked">Ranked 2v2</button>
+          <button class="party-btn" id="btn-queue-enter-casual">Casual 2v2</button>
+          <button class="party-btn danger" id="btn-queue-leave" style="display:none">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTH BAR — fixed top-right, always visible -->
+  <div id="auth-bar">
+    <!-- Shown when signed out -->
+    <div id="auth-signin-area" style="display:none">
+      <!-- Google button (shown only when Google is configured) -->
+      <div id="auth-google-wrap" style="display:none">
+        <div id="g_id_onload"
+             data-client_id=""
+             data-callback="onGoogleSignIn"
+             data-auto_prompt="false">
+        </div>
+        <div class="g_id_signin"
+             data-type="standard"
+             data-size="small"
+             data-theme="filled_black"
+             data-text="sign_in_with"
+             data-shape="pill"
+             data-logo_alignment="left">
+        </div>
+        <div id="auth-or-divider">or</div>
+      </div>
+
+      <!-- Password auth form (login / register) -->
+      <div id="auth-pw-form">
+        <div id="auth-pw-tabs">
+          <button class="auth-tab active" id="tab-login">Sign In</button>
+          <button class="auth-tab" id="tab-register">Register</button>
+        </div>
+        <input id="auth-email"       type="email"    placeholder="Email"        autocomplete="email">
+        <input id="auth-displayname" type="text"     placeholder="Display Name" maxlength="20" style="display:none" autocomplete="username">
+        <input id="auth-password"    type="password" placeholder="Password"     autocomplete="current-password">
+        <!-- MFA code entry (shown only during MFA step) -->
+        <input id="auth-mfa-code"    type="text"     placeholder="6-digit code" maxlength="6" inputmode="numeric" style="display:none" autocomplete="one-time-code">
+        <div id="auth-pw-error" class="auth-pw-error" style="display:none"></div>
+        <button id="btn-auth-pw-submit" class="auth-submit-btn">Sign In</button>
+        <button id="btn-forgot-pw" class="auth-forgot-btn" type="button">Forgot password?</button>
+      </div>
+
+      <!-- Forgot password inline form -->
+      <div id="auth-forgot-form" style="display:none">
+        <div class="auth-forgot-back-row">
+          <button id="btn-forgot-back" class="auth-back-btn" type="button">&#x2190; Back</button>
+        </div>
+        <p class="auth-forgot-label">Enter your email and we'll send a reset link.</p>
+        <input id="auth-forgot-email" type="email" placeholder="Email" autocomplete="email">
+        <div id="auth-forgot-error" class="auth-pw-error" style="display:none"></div>
+        <div id="auth-forgot-success" class="auth-forgot-success" style="display:none">Check your inbox for a reset link.</div>
+        <button id="btn-forgot-submit" class="auth-submit-btn">Send Reset Link</button>
+      </div>
+    </div>
+
+    <!-- Shown when signed in -->
+    <div id="auth-profile-area" style="display:none">
+      <span id="auth-display-name"></span>
+      <button id="btn-auth-2fa" class="auth-action-btn" title="Two-Factor Authentication">2FA</button>
+      <button id="btn-auth-signout" class="auth-signout-btn">Sign out</button>
+    </div>
+  </div>
+
+  <!-- 2FA SETTINGS MODAL -->
+  <div id="tfa-modal" style="display:none">
+    <div id="tfa-panel">
+      <div id="tfa-header">
+        <span>Two-Factor Authentication</span>
+        <button id="tfa-close-btn">&times;</button>
+      </div>
+      <div id="tfa-body">
+        <!-- State: disabled -->
+        <div id="tfa-state-disabled">
+          <p class="tfa-info">Add an extra layer of security. Use an authenticator app (Google Authenticator, Authy, etc.).</p>
+          <button class="tfa-btn primary" id="btn-tfa-start-setup">Enable 2FA</button>
+        </div>
+        <!-- State: setup (show QR) -->
+        <div id="tfa-state-setup" style="display:none">
+          <p class="tfa-info">Scan this QR code with your authenticator app, then enter the 6-digit code below to confirm.</p>
+          <img id="tfa-qr-img" src="" alt="QR code" style="width:180px;height:180px;display:block;margin:0 auto 10px">
+          <input id="tfa-setup-code" type="text" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" class="tfa-input">
+          <div id="tfa-setup-error" class="auth-pw-error" style="display:none"></div>
+          <button class="tfa-btn primary" id="btn-tfa-confirm-enable">Confirm &amp; Enable</button>
+          <button class="tfa-btn" id="btn-tfa-cancel-setup">Cancel</button>
+        </div>
+        <!-- State: enabled -->
+        <div id="tfa-state-enabled" style="display:none">
+          <p class="tfa-info tfa-on-label">2FA is <strong>enabled</strong>.</p>
+          <p class="tfa-info">Enter your current authenticator code to disable 2FA.</p>
+          <input id="tfa-disable-code" type="text" placeholder="6-digit code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" class="tfa-input">
+          <div id="tfa-disable-error" class="auth-pw-error" style="display:none"></div>
+          <button class="tfa-btn danger" id="btn-tfa-confirm-disable">Disable 2FA</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESET PASSWORD MODAL — shown when ?reset=token is in the URL -->
+  <div id="reset-modal" style="display:none">
+    <div id="reset-panel">
+      <div id="reset-header">Reset Password</div>
+      <input id="reset-password"  type="password" placeholder="New password (min 8 chars)" autocomplete="new-password" class="reset-input">
+      <input id="reset-password2" type="password" placeholder="Confirm new password"        autocomplete="new-password" class="reset-input">
+      <div id="reset-error"   class="auth-pw-error"    style="display:none"></div>
+      <div id="reset-success" class="auth-forgot-success" style="display:none">Password updated! You can now sign in.</div>
+      <button id="btn-reset-submit" class="auth-submit-btn">Set New Password</button>
+    </div>
+  </div>
+
+  <!-- EMAIL VERIFICATION MODAL — shown after registration or when email_not_verified -->
+  <div id="verify-modal" style="display:none">
+    <div id="verify-panel">
+      <div id="verify-header">Check Your Email</div>
+      <p id="verify-msg">We sent a verification link to <strong id="verify-email-display"></strong>.</p>
+      <div id="verify-error" class="auth-pw-error" style="display:none"></div>
+      <div id="verify-success" class="auth-forgot-success" style="display:none">Verification email resent!</div>
+      <button id="btn-verify-resend" class="auth-submit-btn">Resend Email</button>
+      <button id="btn-verify-close" class="auth-back-btn" style="margin-top:8px">Close</button>
+    </div>
+  </div>
 
   <!-- LOBBY OVERLAY — visible until match starts -->
   <div id="lobby">
@@ -115,8 +264,57 @@
       <!-- Status / error line -->
       <div id="lobby-status"></div>
 
+      <!-- Leaderboard link -->
+      <div class="lobby-leaderboard-row">
+        <button class="lobby-lb-link" id="btn-open-leaderboard">&#x1F3C6; Leaderboard</button>
+      </div>
+
       <!-- Version tag -->
       <div class="lobby-version">v1.0</div>
+    </div>
+  </div>
+
+  <!-- LEADERBOARD OVERLAY -->
+  <div id="lb-overlay" style="display:none">
+    <div id="lb-panel">
+      <div id="lb-header">
+        <div id="lb-title">&#x1F3C6; Leaderboard</div>
+        <button id="lb-close-btn">&times;</button>
+      </div>
+      <div id="lb-season-bar"></div>
+      <div id="lb-controls">
+        <select id="lb-mode-select">
+          <option value="2v2_ranked">Ranked 2v2</option>
+          <option value="2v2_casual">Casual 2v2</option>
+        </select>
+        <select id="lb-region-select">
+          <option value="global">All Regions</option>
+          <option value="na">NA</option>
+          <option value="eu">EU</option>
+          <option value="asia">Asia</option>
+        </select>
+      </div>
+      <div id="lb-table-wrap">
+        <table id="lb-table">
+          <thead>
+            <tr>
+              <th class="lb-col-rank">#</th>
+              <th class="lb-col-name">Player</th>
+              <th class="lb-col-region">Region</th>
+              <th class="lb-col-rating">Rating</th>
+              <th class="lb-col-record">W / L</th>
+            </tr>
+          </thead>
+          <tbody id="lb-tbody"></tbody>
+        </table>
+        <div id="lb-empty" style="display:none">No ranked players yet.</div>
+        <div id="lb-loading" style="display:none">Loading&hellip;</div>
+      </div>
+      <div id="lb-pagination">
+        <button class="lb-page-btn" id="lb-prev-btn" disabled>&#x25C4; Prev</button>
+        <span id="lb-page-info">Page 1</span>
+        <button class="lb-page-btn" id="lb-next-btn" disabled>Next &#x25BA;</button>
+      </div>
     </div>
   </div>
 
@@ -200,6 +398,7 @@
       <div id="tower-popout" style="display:none"></div>
       <div id="action-feedback"></div>
       <div id="game-over-banner" style="display:none"></div>
+      <div id="disconnect-notice" style="display:none"></div>
       <div id="spectator-badge" style="display:none">SPECTATING</div>
 
       <button id="btn-ml-prev-lane" class="ml-side-nav-btn" style="display:none">&#x25C4;</button>
@@ -279,7 +478,8 @@
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="game.js?v=20260303u"></script>
+  <script src="auth.js?v=20260303w"></script>
+  <script src="game.js?v=20260303w"></script>
 
 </body>
 </html>
