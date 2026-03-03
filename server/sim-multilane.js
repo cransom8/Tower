@@ -28,6 +28,7 @@ const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 11×28 grid
 const MAX_WALLS = 100;
 const WALL_COST = 5;
 const SPLASH_RADIUS_TILES = 1.5;
+const AUTOSEND_INTERVAL_TICKS = 5; // 0.25s at 20 Hz
 
 // pathSpeed = oldSpeedPerTick × GRID_H
 // Standard: 0.00129375 × 28 ≈ 0.036225
@@ -45,6 +46,7 @@ const UNIT_DEFS = {
   warlock:  { cost: 18, income: 2,   hp: 80,  dmg: 12, atkCdTicks: 11, pathSpeed: 0.036225, bounty: 5, range: 1.0, ranged: false, armorType: "MAGIC",     damageType: "MAGIC",  warlockDebuff: true },
   golem:    { cost: 25, income: 3,   hp: 240, dmg: 14, atkCdTicks: 13, pathSpeed: 0.024150, bounty: 6, range: 1.0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL", structBonus: 0.25 },
 };
+const AUTOSEND_PRIORITY = Object.keys(UNIT_DEFS).sort((a, b) => UNIT_DEFS[b].cost - UNIT_DEFS[a].cost);
 
 const TOWER_DEFS = {
   archer:   { cost: 10, range: 3.5, dmg: 8.5,  atkCdTicks: 11, projectileTicks: 7, damageType: "PIERCE", isSplash: false },
@@ -54,14 +56,34 @@ const TOWER_DEFS = {
   cannon:   { cost: 30, range: 6.0, dmg: 19.8, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
 };
 
-// Index 0 unused; index 1 = current level 1 stats, index 2 = level 2 upgrade target, etc.
-const BARRACKS_LEVELS = [
-  null,
-  { hpMult: 1.00, dmgMult: 1.00, speedMult: 1.00, structMult: 1.00, incomeBonus: 0,   cost: 0,   reqIncome: 0  },
-  { hpMult: 1.15, dmgMult: 1.10, speedMult: 1.00, structMult: 1.00, incomeBonus: 0.5, cost: 100, reqIncome: 8  },
-  { hpMult: 1.30, dmgMult: 1.20, speedMult: 1.05, structMult: 1.00, incomeBonus: 1.0, cost: 220, reqIncome: 18 },
-  { hpMult: 1.45, dmgMult: 1.30, speedMult: 1.08, structMult: 1.10, incomeBonus: 2.0, cost: 400, reqIncome: 35 },
-];
+const BARRACKS_COST_BASE = 100;
+const BARRACKS_REQ_INCOME_BASE = 8;
+
+function getBarracksLevelDef(level) {
+  const lvl = Math.max(1, Math.floor(Number(level) || 1));
+  if (lvl === 1) {
+    return {
+      hpMult: 1,
+      dmgMult: 1,
+      speedMult: 1,
+      structMult: 1,
+      incomeBonus: 0,
+      cost: 0,
+      reqIncome: 0,
+    };
+  }
+  const statMult = Math.pow(2, lvl - 1);       // x2 per barracks upgrade
+  const gateMult = Math.pow(2, lvl - 2);
+  return {
+    hpMult: statMult,
+    dmgMult: statMult,
+    speedMult: statMult,
+    structMult: statMult,
+    incomeBonus: 0,
+    cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
+    reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
+  };
+}
 
 const DAMAGE_MULTIPLIERS = {
   PIERCE: { UNARMORED: 1.35, LIGHT: 1.20, MEDIUM: 1.00, HEAVY: 0.75, MAGIC: 0.85 },
@@ -215,7 +237,7 @@ function createMLGame(playerCount) {
       grid,
       path,
       wallCount: 0,
-      barracks: { level: 1, hpMult: 1, dmgMult: 1, speedMult: 1, structMult: 1, incomeBonus: 0 },
+      barracks: Object.assign({ level: 1 }, getBarracksLevelDef(1)),
       units: [],
       spawnQueue: [],
       projectiles: [],
@@ -379,8 +401,7 @@ function applyMLAction(game, laneIndex, action) {
   if (type === "upgrade_barracks") {
     const currentLevel = lane.barracks.level;
     const nextLevel = currentLevel + 1;
-    if (nextLevel >= BARRACKS_LEVELS.length) return { ok: false, reason: "Barracks already maxed" };
-    const nextDef = BARRACKS_LEVELS[nextLevel];
+    const nextDef = getBarracksLevelDef(nextLevel);
     if (lane.income < nextDef.reqIncome) return { ok: false, reason: `Need ${nextDef.reqIncome}g income` };
     if (lane.gold < nextDef.cost) return { ok: false, reason: "Not enough gold" };
 
@@ -420,11 +441,15 @@ function applyMLAction(game, laneIndex, action) {
   if (type === "set_autosend") {
     const as = lane.autosend;
     const { enabled, enabledUnits, rate } = data || {};
-    if (typeof enabled === "boolean") as.enabled = enabled;
-    if (enabledUnits && typeof enabledUnits === "object") {
-      for (const ut of Object.keys(UNIT_DEFS)) {
-        if (ut in enabledUnits) as.enabledUnits[ut] = !!enabledUnits[ut];
+    if (typeof enabled === "boolean") {
+      as.enabled = enabled;
+      if (enabled) {
+        for (const ut of Object.keys(UNIT_DEFS)) as.enabledUnits[ut] = true;
       }
+    }
+    if (enabledUnits && typeof enabledUnits === "object") {
+      // Autosend now always uses all unit types; ignore per-unit toggles.
+      for (const ut of Object.keys(UNIT_DEFS)) as.enabledUnits[ut] = true;
     }
     const VALID_RATES = new Set(["slow", "normal", "fast"]);
     if (VALID_RATES.has(rate)) as.rate = rate;
@@ -448,25 +473,23 @@ function mlTick(game) {
   }
 
   // Auto-send pre-pass: queue units for eligible lanes before draining queues
-  const AUTOSEND_RATE_TICKS = { slow: 240, normal: 120, fast: 60 };
   for (const lane of game.lanes) {
     if (lane.eliminated) continue;
     const as = lane.autosend;
     if (!as || !as.enabled) continue;
     as.tickCounter = (as.tickCounter || 0) + 1;
-    const threshold = AUTOSEND_RATE_TICKS[as.rate] || 120;
+    const threshold = AUTOSEND_INTERVAL_TICKS;
     if (as.tickCounter < threshold) continue;
     as.tickCounter = 0;
 
-    const enabledList = Object.keys(UNIT_DEFS).filter(ut => as.enabledUnits[ut]);
-    if (enabledList.length === 0) continue;
-
-    as.cycleIdx = (as.cycleIdx || 0) % enabledList.length;
-    const unitType = enabledList[as.cycleIdx];
-    as.cycleIdx = (as.cycleIdx + 1) % enabledList.length;
-
+    if (lane.spawnQueue.length >= MAX_UNITS_PER_LANE) continue;
+    let unitType = null;
+    for (const ut of AUTOSEND_PRIORITY) {
+      const def = UNIT_DEFS[ut];
+      if (def && lane.gold >= def.cost) { unitType = ut; break; }
+    }
+    if (!unitType) continue;
     const def = UNIT_DEFS[unitType];
-    if (!def || lane.gold < def.cost || lane.spawnQueue.length >= MAX_UNITS_PER_LANE) continue;
 
     lane.gold -= def.cost;
     lane.income += def.income + (lane.barracks.incomeBonus || 0);
@@ -728,6 +751,17 @@ function createMLSnapshot(game) {
         }),
         spawnQueueLength: lane.spawnQueue.length,
         projectiles,
+        autosend: lane.autosend ? {
+          enabled: !!lane.autosend.enabled,
+          enabledUnits: Object.assign({}, lane.autosend.enabledUnits || {}),
+          rate: lane.autosend.rate || "normal",
+          tickCounter: Number(lane.autosend.tickCounter) || 0,
+        } : {
+          enabled: false,
+          enabledUnits: {},
+          rate: "normal",
+          tickCounter: 0,
+        },
       };
     }),
   };
@@ -747,8 +781,11 @@ function createMLPublicConfig() {
     unitDefs: UNIT_DEFS,
     towerDefs: TOWER_DEFS,
     towerMaxLevel: TOWER_MAX_LEVEL,
-    // barracksLevels[0]=level1, [1]=level2, [2]=level3, [3]=level4
-    barracksLevels: BARRACKS_LEVELS.slice(1),
+    barracksInfinite: true,
+    barracksCostBase: BARRACKS_COST_BASE,
+    barracksReqIncomeBase: BARRACKS_REQ_INCOME_BASE,
+    // retained for older clients; formula above is authoritative
+    barracksLevels: [],
   };
 }
 
@@ -757,7 +794,7 @@ module.exports = {
   TICK_MS,
   UNIT_DEFS,
   TOWER_DEFS,
-  BARRACKS_LEVELS,
+  getBarracksLevelDef,
   GRID_W,
   GRID_H,
   createMLGame,
@@ -766,3 +803,4 @@ module.exports = {
   createMLSnapshot,
   createMLPublicConfig,
 };
+

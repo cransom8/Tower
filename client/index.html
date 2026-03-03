@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Castle Defender — Multiplayer</title>
-  <link rel="stylesheet" href="styles.css?v=20260302g">
+  <link rel="stylesheet" href="styles.css?v=20260303f">
 </head>
 <body>
 
@@ -109,40 +109,80 @@
   <div id="game-canvas-wrap">
     <canvas id="game-canvas"></canvas>
     <div id="game-ui">
-      <div id="hud-bar">
-        <span>&#x1FA99; <strong id="hud-gold">0</strong></span>
-        <span>&#x2191; <strong id="hud-income">0</strong></span>
-        <span>&#x23F1; <strong id="hud-income-timer">0s</strong></span>
+      <div id="left-rail">
+        <div id="send-bar">
+          <div class="bar-label">Units</div>
+          <button class="action-btn send-btn" data-unit-type="runner">1 Runner</button>
+          <button class="action-btn send-btn" data-unit-type="footman">2 Footman</button>
+          <button class="action-btn send-btn" data-unit-type="ironclad">3 Ironclad</button>
+          <button class="action-btn send-btn" data-unit-type="warlock">4 Warlock</button>
+          <button class="action-btn send-btn" data-unit-type="golem">5 Golem</button>
+        </div>
+        <div id="autosend-bar">
+          <div class="bar-label">Auto Send</div>
+          <button class="autosend-toggle" data-unit-type="runner">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="footman">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="ironclad">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="warlock">AUTO</button>
+          <button class="autosend-toggle" data-unit-type="golem">AUTO</button>
+          <select id="autosend-rate" title="Auto-send rate">
+            <option value="slow">Slow</option>
+            <option value="normal" selected>Normal</option>
+            <option value="fast">Fast</option>
+          </select>
+        </div>
+
+        <!-- ML Barracks HUD (shown only in ML mode) -->
+        <div id="ml-barracks-hud" style="display:none">
+          <span id="ml-barracks-label">Barracks Lv<strong id="ml-barracks-level">1</strong></span>
+          <button id="btn-ml-barracks-upgrade" class="lobby-btn secondary small">Upgrade</button>
+        </div>
       </div>
-      <div id="matchup-panel"></div>
-      <div id="send-bar">
-        <div class="bar-label">Units</div>
-        <button class="action-btn send-btn" data-unit-type="runner">1 Runner</button>
-        <button class="action-btn send-btn" data-unit-type="footman">2 Footman</button>
-        <button class="action-btn send-btn" data-unit-type="ironclad">3 Ironclad</button>
-        <button class="action-btn send-btn" data-unit-type="warlock">4 Warlock</button>
-        <button class="action-btn send-btn" data-unit-type="golem">5 Golem</button>
-      </div>
-      <div id="autosend-bar">
-        <div class="bar-label">Auto Send</div>
-        <button class="autosend-toggle" data-unit-type="runner">AUTO</button>
-        <button class="autosend-toggle" data-unit-type="footman">AUTO</button>
-        <button class="autosend-toggle" data-unit-type="ironclad">AUTO</button>
-        <button class="autosend-toggle" data-unit-type="warlock">AUTO</button>
-        <button class="autosend-toggle" data-unit-type="golem">AUTO</button>
-        <select id="autosend-rate" title="Auto-send rate">
-          <option value="slow">Slow</option>
-          <option value="normal" selected>Normal</option>
-          <option value="fast">Fast</option>
-        </select>
-      </div>
-      <div id="defense-bar">
-        <div class="bar-label">Towers</div>
-        <button class="action-btn defense-btn" draggable="true" data-tower-type="archer">Archer</button>
-        <button class="action-btn defense-btn" draggable="true" data-tower-type="fighter">Fighter</button>
-        <button class="action-btn defense-btn" draggable="true" data-tower-type="ballista">Ballista</button>
-        <button class="action-btn defense-btn" draggable="true" data-tower-type="cannon">Cannon</button>
-        <button class="action-btn defense-btn" draggable="true" data-tower-type="mage">Mage</button>
+
+      <div id="right-rail">
+        <div id="hud-bar">
+          <span>&#x1FA99; <strong id="hud-gold">0</strong></span>
+          <span>&#x2191; <strong id="hud-income">0</strong></span>
+          <span>&#x23F1; <strong id="hud-income-timer">0s</strong></span>
+        </div>
+
+        <!-- ML Info Bar (shown only in ML mode) -->
+        <div id="ml-info-bar" style="display:none">
+          <div class="mib-group mib-lives-group">
+            <span class="mib-icon">&#x2764;</span>
+            <span id="mib-lives">20</span>
+          </div>
+          <div class="mib-group mib-gold-group">
+            <span class="mib-icon">&#x2B21;</span>
+            <span id="mib-gold" class="mib-gold-val">0</span>
+          </div>
+          <div class="mib-group mib-income-group">
+            <span class="mib-icon">&#x2191;</span>
+            <span id="mib-income">+0g</span>
+            <svg class="mib-timer-svg" width="26" height="26" viewBox="0 0 26 26">
+              <circle class="mtr-track" cx="13" cy="13" r="10"/>
+              <circle class="mtr-fill" id="mtr-fill" cx="13" cy="13" r="10"/>
+            </svg>
+            <span id="mib-timer">12s</span>
+          </div>
+          <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
+        </div>
+
+        <div id="defense-bar">
+          <div class="bar-label">Walls &amp; Towers</div>
+          <button class="action-btn defense-btn" id="side-wall-btn" type="button">Wall
+Cost 5g
+Place on grid
+Remove for refund</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="archer">Archer</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="fighter">Fighter</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="ballista">Ballista</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="cannon">Cannon</button>
+          <button class="action-btn defense-btn" draggable="true" data-tower-type="mage">Mage</button>
+        </div>
+
+        <div id="matchup-panel"></div>
+        <div id="stats-panel"></div>
       </div>
       <div id="tower-slots">
         <div class="tower-slot" data-slot="left_outer"></div>
@@ -156,45 +196,14 @@
       <div id="action-feedback"></div>
       <div id="game-over-banner" style="display:none"></div>
       <div id="spectator-badge" style="display:none">SPECTATING</div>
-      <div id="stats-panel"></div>
 
-      <!-- ML Barracks HUD (shown only in ML mode) -->
-      <div id="ml-barracks-hud" style="display:none">
-        <span id="ml-barracks-label">Barracks Lv<strong id="ml-barracks-level">1</strong></span>
-        <button id="btn-ml-barracks-upgrade" class="lobby-btn secondary small">Upgrade</button>
-      </div>
-
-      <!-- Lane navigation bar (shown only in ML mode) -->
-      <div id="ml-lane-nav" style="display:none">
-        <button id="btn-ml-prev-lane">&#x25C4;</button>
-        <span id="ml-viewing-label">My Lane</span>
-        <button id="btn-ml-next-lane">&#x25BA;</button>
-      </div>
+      <button id="btn-ml-prev-lane" class="ml-side-nav-btn" style="display:none">&#x25C4;</button>
+      <button id="btn-ml-next-lane" class="ml-side-nav-btn" style="display:none">&#x25BA;</button>
+      <span id="ml-viewing-label" style="display:none">My Lane</span>
+      <button id="ml-mid-next" style="display:none" type="button">&#x25BA;</button>
 
       <!-- ML tile interaction popout (wall convert / tower upgrade) -->
       <div id="ml-tile-menu" style="display:none"></div>
-
-      <!-- ML Info Bar (top bar, shown only in ML mode) -->
-      <div id="ml-info-bar" style="display:none">
-        <div class="mib-group mib-lives-group">
-          <span class="mib-icon">&#x2764;</span>
-          <span id="mib-lives">20</span>
-        </div>
-        <div class="mib-group mib-gold-group">
-          <span class="mib-icon">&#x2B21;</span>
-          <span id="mib-gold" class="mib-gold-val">0</span>
-        </div>
-        <div class="mib-group mib-income-group">
-          <span class="mib-icon">&#x2191;</span>
-          <span id="mib-income">+0g</span>
-          <svg class="mib-timer-svg" width="26" height="26" viewBox="0 0 26 26">
-            <circle class="mtr-track" cx="13" cy="13" r="10"/>
-            <circle class="mtr-fill" id="mtr-fill" cx="13" cy="13" r="10"/>
-          </svg>
-          <span id="mib-timer">12s</span>
-        </div>
-        <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
-      </div>
 
       <!-- ML Lane Tabs (shown only in ML mode) -->
       <div id="ml-lane-tabs" style="display:none"></div>
@@ -265,7 +274,7 @@
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="game.js?v=20260302g"></script>
+  <script src="game.js?v=20260303f"></script>
 
 </body>
 </html>

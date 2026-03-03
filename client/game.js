@@ -82,6 +82,9 @@ const ML_CASTLE_YG = 27;
 let viewingLaneIndex = null;    // which lane is shown full-screen in ML mode
 let mlBarracksDefs = [];        // from ml_match_config.barracksLevels
 let mlMyBarracksIncomeBonus = 0; // income bonus from current barracks level
+let mlBarracksInfinite = false;
+let mlBarracksCostBase = 100;
+let mlBarracksReqIncomeBase = 8;
 let mlTileMenuJustOpened = false;
 let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
 let mlWallCost = 5;
@@ -105,6 +108,30 @@ let mlPrevLives = -1;
 let mlPrevBarracksLevel = 1;
 let _lastMibGold = -1;
 
+function canPreviewWallAt(lane, gx, gy) {
+  if (!lane) return false;
+  const isWall  = lane.walls      && lane.walls.some(w => w.x === gx && w.y === gy);
+  const isTower = lane.towerCells && lane.towerCells.some(t => t.x === gx && t.y === gy);
+  return !isWall && !isTower;
+}
+
+function commitDragPreviewWalls() {
+  if (!mlDragPlacedSet || mlDragPlacedSet.size === 0) return false;
+  if (gameMode !== 'multilane' || viewingLaneIndex !== myLaneIndex || isSpectator) {
+    mlDragPlacedSet.clear();
+    return false;
+  }
+  for (const key of mlDragPlacedSet) {
+    const parts = key.split(',');
+    const gx = Number(parts[0]);
+    const gy = Number(parts[1]);
+    if (!Number.isInteger(gx) || !Number.isInteger(gy)) continue;
+    sendAction('place_wall', { gridX: gx, gridY: gy });
+  }
+  mlDragPlacedSet.clear();
+  return true;
+}
+
 const lobbyEl = document.getElementById('lobby');
 const btnCreate = document.getElementById('btn-create');
 const btnJoin = document.getElementById('btn-join');
@@ -127,11 +154,42 @@ const actionFeedback = document.getElementById('action-feedback');
 const towerPopout = document.getElementById('tower-popout');
 const matchupPanel = document.getElementById('matchup-panel');
 const sendButtons = Array.from(document.querySelectorAll('.send-btn'));
-const defenseButtons = Array.from(document.querySelectorAll('.defense-btn'));
+const defenseButtons = Array.from(document.querySelectorAll('.defense-btn[data-tower-type]'));
 const towerSlots = Array.from(document.querySelectorAll('.tower-slot'));
 
 const sendBtnByType = {};
-sendButtons.forEach(btn => { sendBtnByType[btn.getAttribute('data-unit-type')] = btn; });
+const sendAutoBtnByType = {};
+const sendAutoProgressByType = {};
+const sendAutoProgressFillByType = {};
+sendButtons.forEach(btn => {
+  const type = btn.getAttribute('data-unit-type');
+  sendBtnByType[type] = btn;
+
+  const label = document.createElement('span');
+  label.className = 'send-label';
+  label.textContent = btn.textContent || '';
+  btn.textContent = '';
+  btn.appendChild(label);
+
+  const autoBtn = document.createElement('button');
+  autoBtn.type = 'button';
+  autoBtn.className = 'send-auto-corner';
+  autoBtn.setAttribute('data-unit-type', type);
+  autoBtn.textContent = 'A';
+  autoBtn.style.display = 'none';
+  btn.appendChild(autoBtn);
+  sendAutoBtnByType[type] = autoBtn;
+
+  const prog = document.createElement('span');
+  prog.className = 'send-auto-progress';
+  prog.style.display = 'none';
+  const progFill = document.createElement('span');
+  progFill.className = 'send-auto-progress-fill';
+  prog.appendChild(progFill);
+  btn.appendChild(prog);
+  sendAutoProgressByType[type] = prog;
+  sendAutoProgressFillByType[type] = progFill;
+});
 
 // ── Multi-lane DOM refs ───────────────────────────────────────────────────────
 const mlLobbyPanel = document.getElementById('ml-lobby-panel');
@@ -193,6 +251,8 @@ const cmdRateBtns     = Array.from(document.querySelectorAll('.cmd-rate-btn'));
 const enemyLaneTint   = document.getElementById('enemy-lane-tint');
 const mlSpectateNotice = document.getElementById('ml-spectate-notice');
 const mlSpectateName  = document.getElementById('ml-spectate-name');
+const sideWallBtn     = document.getElementById('side-wall-btn');
+const mlMidNextBtn    = document.getElementById('ml-mid-next');
 
 function setStatus(msg, type) {
   lobbyStatus.textContent = msg;
@@ -302,6 +362,11 @@ function applyMatchConfig(config) {
   if (config.barracksLevels && Array.isArray(config.barracksLevels)) {
     mlBarracksDefs = config.barracksLevels;
   }
+  if (typeof config.barracksInfinite === 'boolean') {
+    mlBarracksInfinite = config.barracksInfinite;
+  }
+  if (Number.isFinite(config.barracksCostBase)) mlBarracksCostBase = config.barracksCostBase;
+  if (Number.isFinite(config.barracksReqIncomeBase)) mlBarracksReqIncomeBase = config.barracksReqIncomeBase;
   if (Number.isFinite(config.wallCost)) mlWallCost = config.wallCost;
   if (Number.isFinite(config.maxWalls)) mlMaxWalls = config.maxWalls;
   updateActionLabels();
@@ -314,7 +379,7 @@ function updateActionLabels() {
     const hot = UNIT_TYPES.indexOf(type) + 1;
     const aps = m.atkCdTicks ? (tickHz / m.atkCdTicks) : 0;
     const laneSpeed = m.speedPerTick ? (m.speedPerTick * tickHz * 100) : 0;
-    btn.textContent =
+    const text =
       hot + ' ' + m.label + '\n'
       + 'Cost ' + m.cost + 'g\n'
       + 'HP ' + Math.round(m.hp || 0) + '\n'
@@ -326,10 +391,14 @@ function updateActionLabels() {
       + 'Income +' + (function(){ const v = m.income + mlMyBarracksIncomeBonus; return Number.isInteger(v) ? v : v.toFixed(1); })() + 'g\n'
       + 'Bounty +' + (m.bounty || m.income || 0) + 'g'
       + (m.special ? '\n' + m.special : '');
+    const labelEl = btn.querySelector('.send-label');
+    if (labelEl) labelEl.textContent = text;
+    else btn.textContent = text;
   });
   defenseButtons.forEach(btn => {
     const type = btn.getAttribute('data-tower-type');
     const m = towerMeta[type] || DEFAULT_TOWER_META[type];
+    if (!m) return;
     const aps = m.atkCdTicks ? (tickHz / m.atkCdTicks) : 0;
     btn.textContent =
       m.label + '\n'
@@ -340,6 +409,37 @@ function updateActionLabels() {
   });
   renderMatchupPanel();
   updateStatsPanel();
+}
+
+function getMLBarracksLevelDef(level) {
+  const lvl = Math.max(1, Math.floor(Number(level) || 1));
+  if (mlBarracksInfinite) {
+    if (lvl === 1) {
+      return {
+        hpMult: 1, dmgMult: 1, speedMult: 1, structMult: 1,
+        incomeBonus: 0, cost: 0, reqIncome: 0,
+      };
+    }
+    const statMult = Math.pow(2, lvl - 1);
+    const gateMult = Math.pow(2, lvl - 2);
+    return {
+      hpMult: statMult,
+      dmgMult: statMult,
+      speedMult: statMult,
+      structMult: statMult,
+      incomeBonus: 0,
+      cost: Math.ceil(mlBarracksCostBase * gateMult),
+      reqIncome: Math.ceil(mlBarracksReqIncomeBase * gateMult),
+    };
+  }
+  if (!Array.isArray(mlBarracksDefs) || mlBarracksDefs.length === 0) {
+    return {
+      hpMult: 1, dmgMult: 1, speedMult: 1, structMult: 1,
+      incomeBonus: 0, cost: 0, reqIncome: 0,
+    };
+  }
+  const idx = Math.max(0, Math.min(mlBarracksDefs.length - 1, lvl - 1));
+  return mlBarracksDefs[idx] || mlBarracksDefs[0];
 }
 
 function updateStatsPanel() {
@@ -552,6 +652,7 @@ function renderFrame() {
   updateSendButtons(local.me.gold);
   updateDefenseButtons(local.me.gold, local.me.towers);
   updateTowerSlots(local.me.towers);
+  updateSendAutoProgressBars(null);
 }
 
 function drawBattlefield(local) {
@@ -1363,6 +1464,7 @@ function updateSendButtons(gold) {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
     btn.disabled = !(lobbyState === 'playing' && gold >= m.cost);
+    btn.classList.remove('locked');
   });
 }
 
@@ -1604,8 +1706,12 @@ function resetToLobby(msg) {
   // Hide ML-specific UI
   if (mlBarracksHud) mlBarracksHud.style.display = 'none';
   if (mlLaneNav) mlLaneNav.style.display = 'none';
+  if (btnPrevLane) btnPrevLane.style.display = 'none';
+  if (btnNextLane) btnNextLane.style.display = 'none';
   if (mlTileMenu) mlTileMenu.style.display = 'none';
   if (autosendBar) autosendBar.style.display = 'none';
+  if (sideWallBtn) sideWallBtn.style.display = 'none';
+  if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
   viewingLaneIndex = null;
 
   // Hide new ML UI
@@ -1627,6 +1733,7 @@ function resetToLobby(msg) {
   _lastMibGold = -1;
   mlHoverTile = null;
   mlDragPlacing = false;
+  mlDragPlacedSet.clear();
 
   // Reset barracks income bonus
   mlMyBarracksIncomeBonus = 0;
@@ -1635,7 +1742,10 @@ function resetToLobby(msg) {
   UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
   autosendRate = 'normal';
   if (autosendRateSelect) autosendRateSelect.value = 'normal';
+  if (autosendRateSelect) autosendRateSelect.disabled = false;
+  autosendToggles.forEach(btn => { btn.disabled = false; });
   autosendToggles.forEach(btn => btn.classList.remove('autosend-active'));
+  refreshAutosendControls();
 
   hideGameUi();
   hideGameOverBanner();
@@ -1670,14 +1780,67 @@ function syncAutosend() {
   });
 }
 
+function refreshAutosendControls() {
+  mlGlobalAutoEnabled = UNIT_TYPES.every(t => !!autosendEnabled[t]);
+  const canToggle = lobbyState === 'playing' && gameMode === 'multilane' && !isSpectator;
+  autosendToggles.forEach(btn => {
+    const type = btn.getAttribute('data-unit-type');
+    const on = !!autosendEnabled[type];
+    btn.classList.toggle('autosend-active', on);
+    btn.textContent = on ? 'AUTO ON' : 'AUTO';
+    btn.disabled = !canToggle;
+  });
+  Object.keys(sendAutoBtnByType).forEach(type => {
+    const btn = sendAutoBtnByType[type];
+    if (!btn) return;
+    const on = !!autosendEnabled[type];
+    btn.classList.toggle('send-auto-on', on);
+    btn.textContent = on ? 'ON' : 'A';
+    btn.disabled = !canToggle;
+    btn.style.display = (gameMode === 'multilane') ? 'flex' : 'none';
+  });
+  updateSendAutoProgressBars();
+}
+
+function updateSendAutoProgressBars(myLaneArg) {
+  const AUTOSEND_TICKS = 5; // 0.25s at 20 Hz
+  const myLane = myLaneArg || (mlCurrentState && mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex]);
+  const as = myLane && myLane.autosend ? myLane.autosend : null;
+  const threshold = AUTOSEND_TICKS;
+  const tickCounter = as ? (Number(as.tickCounter) || 0) : 0;
+  const ratio = Math.max(0, Math.min(1, tickCounter / threshold));
+
+  UNIT_TYPES.forEach(type => {
+    const wrap = sendAutoProgressByType[type];
+    const fill = sendAutoProgressFillByType[type];
+    if (!wrap || !fill) return;
+    const enabled = as
+      ? !!(as.enabled && as.enabledUnits && as.enabledUnits[type])
+      : !!autosendEnabled[type];
+    const show = (gameMode === 'multilane') && !isSpectator && enabled;
+    wrap.style.display = show ? 'block' : 'none';
+    fill.style.width = Math.round(ratio * 100) + '%';
+  });
+}
+
 autosendToggles.forEach(btn => {
   btn.addEventListener('click', () => {
     if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
     const type = btn.getAttribute('data-unit-type');
     autosendEnabled[type] = !autosendEnabled[type];
-    btn.classList.toggle('autosend-active', autosendEnabled[type]);
-    const label = autosendEnabled[type] ? 'AUTO ON' : 'AUTO';
-    btn.textContent = label;
+    refreshAutosendControls();
+    syncAutosend();
+  });
+});
+
+Object.keys(sendAutoBtnByType).forEach(type => {
+  const autoBtn = sendAutoBtnByType[type];
+  autoBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
+    autosendEnabled[type] = !autosendEnabled[type];
+    refreshAutosendControls();
     syncAutosend();
   });
 });
@@ -1690,22 +1853,29 @@ if (autosendRateSelect) {
 }
 
 updateActionLabels();
+refreshAutosendControls();
 
 // ── Tab event handlers ────────────────────────────────────────────────────────
 
 btnTabClassic.addEventListener('click', () => {
-  if (gameMode === 'multilane' && lobbyState !== 'idle') return;
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
   btnTabClassic.classList.add('active');
   btnTabMl.classList.remove('active');
+  gameMode = 'classic';
   lobbyClassicSection.style.display = '';
   lobbyMlSection.style.display = 'none';
   hideMLLobbyPanel();
 });
 
 btnTabMl.addEventListener('click', () => {
-  if (gameMode === 'classic' && lobbyState !== 'idle') return;
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
   btnTabMl.classList.add('active');
   btnTabClassic.classList.remove('active');
+  gameMode = 'multilane';
   lobbyMlSection.style.display = '';
   lobbyClassicSection.style.display = 'none';
   hideMLLobbyPanel();
@@ -1844,7 +2014,10 @@ btnCopyLink.addEventListener('click', async () => {
 });
 
 sendButtons.forEach(btn => {
-  btn.addEventListener('click', () => trySpawn(btn.getAttribute('data-unit-type')));
+  btn.addEventListener('click', (e) => {
+    if (e.target && e.target.closest('.send-auto-corner')) return;
+    trySpawn(btn.getAttribute('data-unit-type'));
+  });
 });
 
   defenseButtons.forEach(btn => {
@@ -1941,6 +2114,19 @@ socket.on('match_ready', () => {
   initCanvas();
   hideGameOverBanner();
   startRenderLoop();
+
+  if (autosendBar) autosendBar.style.display = 'none';
+  if (mlBarracksHud) mlBarracksHud.style.display = 'none';
+  if (mlInfoBar) mlInfoBar.style.display = 'none';
+  if (mlLaneTabs) mlLaneTabs.style.display = 'none';
+  if (mlCmdBar) mlCmdBar.style.display = 'none';
+  if (sideWallBtn) sideWallBtn.style.display = 'none';
+  if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
+  if (mlLaneNav) mlLaneNav.style.display = 'none';
+  if (btnPrevLane) btnPrevLane.style.display = 'none';
+  if (btnNextLane) btnNextLane.style.display = 'none';
+  if (hudBar) hudBar.style.display = '';
+  refreshAutosendControls();
 });
 
 socket.on('match_config', config => applyMatchConfig(config));
@@ -2076,22 +2262,29 @@ function buildMLInterpolatedState(nowMs) {
 
 // ── ML grid rendering ─────────────────────────────────────────────────────────
 
-// Returns square-tile layout so tiles are always the same width and height.
-// In ML mode, grid is inset below info bar (76px) and above cmd bar (72px).
+// Returns square-tile layout centered in the middle pane between side rails.
+// Prefer full-height lanes; if width is constrained, shrink to fit center pane.
 function getMLGridLayout() {
   const w = canvas.width;
   const h = canvas.height;
-  const topPad = 76;  // info bar (44px) + lane tabs (32px)
-  const botPad = 72;  // cmd bar height
-  const availH = h - topPad - botPad;
-  const tileSize = Math.max(4, Math.min(
-    Math.floor(w / ML_GRID_W),
-    Math.floor(availH / ML_GRID_H)
-  ));
+
+  const leftRailRect = document.getElementById('left-rail')?.getBoundingClientRect();
+  const rightRailRect = document.getElementById('right-rail')?.getBoundingClientRect();
+
+  const leftPaneX = leftRailRect ? Math.max(0, Math.ceil(leftRailRect.right + 8)) : 0;
+  const rightPaneX = rightRailRect ? Math.min(w, Math.floor(rightRailRect.left - 8)) : w;
+  const availW = Math.max(40, rightPaneX - leftPaneX);
+  const availH = h;
+
+  const tileByHeight = availH / ML_GRID_H;
+  const tileByWidth = availW / ML_GRID_W;
+  const tileSize = Math.max(4, Math.min(tileByHeight, tileByWidth));
+
   const gridW = tileSize * ML_GRID_W;
   const gridH = tileSize * ML_GRID_H;
-  const offsetX = Math.floor((w - gridW) / 2);
-  const offsetY = topPad + Math.floor((availH - gridH) / 2);
+  const paneCenterX = leftPaneX + (availW / 2);
+  const offsetX = Math.floor(paneCenterX - (gridW / 2));
+  const offsetY = Math.floor((h - gridH) / 2);
   return { tileSize, offsetX, offsetY, gridW, gridH };
 }
 
@@ -2336,6 +2529,27 @@ function drawMLGridLane(lane) {
     }
   }
 
+  // Wall drag preview (pending placements before release)
+  if (mlDragPlacedSet && mlDragPlacedSet.size > 0 && viewingLaneIndex === myLaneIndex) {
+    ctx.save();
+    ctx.globalAlpha = 0.42;
+    ctx.fillStyle = 'rgba(40, 192, 176, 0.55)';
+    ctx.strokeStyle = 'rgba(40, 192, 176, 0.9)';
+    ctx.lineWidth = 1;
+    for (const key of mlDragPlacedSet) {
+      const parts = key.split(',');
+      const gx = Number(parts[0]);
+      const gy = Number(parts[1]);
+      if (!Number.isInteger(gx) || !Number.isInteger(gy)) continue;
+      const px = gx * tileSize + 1;
+      const py = gy * tileSize + 1;
+      const ps = tileSize - 2;
+      ctx.fillRect(px, py, ps, ps);
+      ctx.strokeRect(px + 0.5, py + 0.5, ps - 1, ps - 1);
+    }
+    ctx.restore();
+  }
+
   ctx.restore(); // end translate(offsetX, offsetY)
 
   // Eliminated overlay
@@ -2527,6 +2741,13 @@ function updateCmdBar(myLane) {
     cmdWallBtn.disabled = !canAct;
     if (cmdWallCost) cmdWallCost.textContent = mlWallCost + 'g';
   }
+  if (sideWallBtn) {
+    sideWallBtn.disabled = !canAct || gold < mlWallCost;
+    sideWallBtn.textContent = 'Wall\n'
+      + 'Cost ' + mlWallCost + 'g\n'
+      + 'Place on grid\n'
+      + 'Remove for refund';
+  }
 
   // Unit buttons
   // NOTE: disabled is only set based on canAct (not gold) so the .cub-auto badge
@@ -2586,7 +2807,9 @@ function updateSendButtonsML(myLane) {
   sendButtons.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
-    btn.disabled = !(lobbyState === 'playing' && !isSpectator && gold >= m.cost);
+    const canAct = (lobbyState === 'playing' && !isSpectator);
+    btn.disabled = !canAct;
+    btn.classList.toggle('locked', canAct && gold < m.cost);
   });
 }
 
@@ -2686,6 +2909,8 @@ function renderFrameML() {
   const myLane = local.lanes && local.lanes[myLaneIndex];
   if (myLane) {
     updateMLInfoBar(myLane, local);
+    updateSendButtonsML(myLane);
+    updateSendAutoProgressBars(myLane);
     updateCmdBar(myLane);
     updateLaneTabs(local);
     updateBarracksHud(myLane);
@@ -2757,13 +2982,16 @@ socket.on('ml_match_ready', data => {
   mlPrevLives = -1;
   mlPrevBarracksLevel = 1;
   _lastMibGold = -1;
+  mlDragPlacedSet.clear();
+  mlDragPlacing = false;
 
   // Initialize ML grid UI
   viewingLaneIndex = myLaneIndex;
 
-  // Hide classic defense elements
+  // Keep right-side tower list visible in ML as a reference panel
   const defBar = document.getElementById('defense-bar');
-  if (defBar) defBar.style.display = 'none';
+  if (defBar) defBar.style.display = 'flex';
+  defenseButtons.forEach(btn => { btn.disabled = true; });
   towerSlots.forEach(slotEl => { slotEl.style.display = 'none'; });
 
   // Hide classic hud-bar — ml-info-bar replaces it
@@ -2771,16 +2999,19 @@ socket.on('ml_match_ready', data => {
 
   // Show new ML UI elements
   if (mlInfoBar) mlInfoBar.style.display = 'flex';
-  if (mlCmdBar) mlCmdBar.style.display = 'flex';
-  if (mlLaneTabs) { mlLaneTabs.style.display = 'flex'; initMLLaneTabs(); }
+  if (mlCmdBar) mlCmdBar.style.display = 'none';
+  if (mlLaneTabs) { mlLaneTabs.style.display = 'none'; initMLLaneTabs(); }
   if (enemyLaneTint) enemyLaneTint.style.display = 'none';
   if (mlSpectateNotice) mlSpectateNotice.style.display = 'none';
   if (cmdWallCost) cmdWallCost.textContent = mlWallCost + 'g';
 
-  // Hide old elements replaced by new UI
-  if (mlBarracksHud) mlBarracksHud.style.display = 'none';
-  if (mlLaneNav) mlLaneNav.style.display = 'none';
+  // Side-rail controls for ML mode
+  if (mlBarracksHud) mlBarracksHud.style.display = 'flex';
   if (autosendBar) autosendBar.style.display = 'none';
+  if (sideWallBtn) sideWallBtn.style.display = 'block';
+  if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
+  if (mlLaneNav) mlLaneNav.style.display = (mlPlayerCount > 1 ? 'flex' : 'none');
+  refreshAutosendControls();
 
   updateLaneNavLabel();
 });
@@ -2831,6 +3062,8 @@ socket.on('ml_spectator_join', () => {
   defenseButtons.forEach(btn => { btn.disabled = true; });
   autosendToggles.forEach(btn => { btn.disabled = true; });
   if (autosendRateSelect) autosendRateSelect.disabled = true;
+  if (sideWallBtn) sideWallBtn.disabled = true;
+  refreshAutosendControls();
   showActionFeedback('You have been eliminated. Spectating...', false);
 });
 
@@ -3042,43 +3275,35 @@ function updateBarracksHud(lane) {
   mlPrevBarracksLevel = level;
 
   // Refresh send-button income labels if barracks bonus changed
-  const curDef = mlBarracksDefs[level - 1];
+  const curDef = getMLBarracksLevelDef(level);
   const bonus = curDef ? (curDef.incomeBonus || 0) : 0;
   if (bonus !== mlMyBarracksIncomeBonus) {
     mlMyBarracksIncomeBonus = bonus;
     updateActionLabels();
   }
 
-  const maxLevel = 4;
+  const nextDef = getMLBarracksLevelDef(level + 1);
   if (btnBarracksUpgrade) {
-    if (level >= maxLevel) {
-      btnBarracksUpgrade.textContent = 'Barracks Max';
-      btnBarracksUpgrade.disabled = true;
-    } else {
-      const nextDef = mlBarracksDefs[level]; // next level's def
-      const cost = nextDef ? nextDef.cost : '?';
-      const reqIncome = nextDef ? nextDef.reqIncome : 0;
-      btnBarracksUpgrade.textContent = `Barracks Lv${level + 1} (${cost}g, ${reqIncome}g/inc)`;
-      btnBarracksUpgrade.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
-    }
+    const cost = nextDef ? nextDef.cost : '?';
+    const reqIncome = nextDef ? nextDef.reqIncome : 0;
+    btnBarracksUpgrade.textContent = `Barracks Lv${level + 1} (${cost}g, ${reqIncome}g/inc)`;
+    btnBarracksUpgrade.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
   }
 
   // Update mib barracks button
   if (mibBarracksBtn) {
-    if (level >= maxLevel) {
-      mibBarracksBtn.innerHTML = '&#x1F3F0; Max';
-      mibBarracksBtn.disabled = true;
-    } else {
-      const nextDef = mlBarracksDefs[level];
-      const cost = nextDef ? nextDef.cost : '?';
-      mibBarracksBtn.innerHTML = '&#x1F3F0; Lv' + level + '\u2192' + (level + 1) + ' (' + cost + 'g)';
-      mibBarracksBtn.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
-    }
+    const cost = nextDef ? nextDef.cost : '?';
+    mibBarracksBtn.innerHTML = '&#x1F3F0; Lv' + level + '\u2192' + (level + 1) + ' (' + cost + 'g)';
+    mibBarracksBtn.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
   }
 }
 
 function updateLaneNavLabel() {
+  const showNav = (gameMode === 'multilane' && mlPlayerCount > 1);
+  if (btnPrevLane) btnPrevLane.style.display = showNav ? 'flex' : 'none';
+  if (btnNextLane) btnNextLane.style.display = showNav ? 'flex' : 'none';
   if (!mlViewingLabel) return;
+  if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
   if (viewingLaneIndex === myLaneIndex) {
     mlViewingLabel.textContent = 'My Lane';
   } else {
@@ -3098,9 +3323,13 @@ canvas.addEventListener('click', function (e) {
 canvas.addEventListener('touchend', function (e) {
   if (gameMode !== 'multilane') return;
   e.preventDefault();
-  const wasDrag = mlDragPlacedSet && mlDragPlacedSet.size > 0;
+  const didCommit = commitDragPreviewWalls();
   mlDragPlacing = false;
-  if (!wasDrag) {
+  if (didCommit) {
+    mlWasDrag = true;
+    return;
+  }
+  if (!didCommit) {
     const t = e.changedTouches[0];
     if (t) handleMLCanvasClick(t.clientX, t.clientY);
   }
@@ -3130,6 +3359,15 @@ if (btnNextLane) {
   });
 }
 
+if (mlMidNextBtn) {
+  mlMidNextBtn.addEventListener('click', () => {
+    if (gameMode !== 'multilane' || mlPlayerCount <= 1) return;
+    viewingLaneIndex = ((viewingLaneIndex || 0) + 1) % mlPlayerCount;
+    updateLaneNavLabel();
+    closeMLTileMenu();
+  });
+}
+
 // ── ML Command Bar event listeners ────────────────────────────────────────────
 
 // Global AUTO toggle
@@ -3138,12 +3376,7 @@ if (cmdGlobalAuto) {
     if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
     mlGlobalAutoEnabled = !mlGlobalAutoEnabled;
     UNIT_TYPES.forEach(t => { autosendEnabled[t] = mlGlobalAutoEnabled; });
-    // Keep legacy autosend-bar toggles in sync
-    autosendToggles.forEach(btn => {
-      const t = btn.getAttribute('data-unit-type');
-      btn.classList.toggle('autosend-active', !!autosendEnabled[t]);
-      btn.textContent = autosendEnabled[t] ? 'AUTO ON' : 'AUTO';
-    });
+    refreshAutosendControls();
     syncAutosend();
   });
 }
@@ -3155,12 +3388,7 @@ cmdAutoIndicators.forEach(badge => {
     if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
     const type = badge.getAttribute('data-unit-type');
     autosendEnabled[type] = !autosendEnabled[type];
-    // Keep old toggle in sync
-    const oldToggle = autosendToggles.find(b => b.getAttribute('data-unit-type') === type);
-    if (oldToggle) {
-      oldToggle.classList.toggle('autosend-active', autosendEnabled[type]);
-      oldToggle.textContent = autosendEnabled[type] ? 'AUTO ON' : 'AUTO';
-    }
+    refreshAutosendControls();
     mlGlobalAutoEnabled = UNIT_TYPES.every(t => autosendEnabled[t]);
     syncAutosend();
   });
@@ -3199,6 +3427,13 @@ if (cmdWallBtn) {
   });
 }
 
+if (sideWallBtn) {
+  sideWallBtn.addEventListener('click', () => {
+    if (gameMode !== 'multilane' || viewingLaneIndex !== myLaneIndex || isSpectator) return;
+    showActionFeedback('Click an empty grid tile to place a wall (' + mlWallCost + 'g)', true);
+  });
+}
+
 // ── Drag-to-place walls ───────────────────────────────────────────────────────
 
 canvas.addEventListener('mousedown', () => {
@@ -3228,23 +3463,23 @@ canvas.addEventListener('mousemove', (e) => {
   if (mlDragPlacedSet.has(key)) return;
   const lane = mlCurrentState.lanes[myLaneIndex];
   if (!lane) return;
-  const isPath  = lane.path        && lane.path.some(p => p.x === gx && p.y === gy);
-  const isWall  = lane.walls       && lane.walls.some(w => w.x === gx && w.y === gy);
-  const isTower = lane.towerCells  && lane.towerCells.some(t => t.x === gx && t.y === gy);
-  if (!isPath && !isWall && !isTower) {
-    sendAction('place_wall', { gridX: gx, gridY: gy });
+  if (canPreviewWallAt(lane, gx, gy)) {
     mlDragPlacedSet.add(key);
-    mlWasDrag = true;
   }
 });
 
 canvas.addEventListener('mouseup', () => {
+  if (gameMode === 'multilane') {
+    const didCommit = commitDragPreviewWalls();
+    if (didCommit) mlWasDrag = true;
+  }
   mlDragPlacing = false;
 });
 
 canvas.addEventListener('mouseleave', () => {
   mlHoverTile = null;
   mlDragPlacing = false;
+  mlDragPlacedSet.clear();
 });
 
 // Touch drag-to-place
@@ -3252,6 +3487,7 @@ canvas.addEventListener('touchstart', () => {
   if (gameMode !== 'multilane') return;
   mlDragPlacing = true;
   mlDragPlacedSet = new Set();
+  mlWasDrag = false;
 }, { passive: true });
 
 canvas.addEventListener('touchmove', (e) => {
@@ -3271,11 +3507,7 @@ canvas.addEventListener('touchmove', (e) => {
   if (mlDragPlacedSet.has(key)) return;
   const lane = mlCurrentState.lanes[myLaneIndex];
   if (!lane) return;
-  const isPath  = lane.path        && lane.path.some(p => p.x === gx && p.y === gy);
-  const isWall  = lane.walls       && lane.walls.some(w => w.x === gx && w.y === gy);
-  const isTower = lane.towerCells  && lane.towerCells.some(t => t.x === gx && t.y === gy);
-  if (!isPath && !isWall && !isTower) {
-    sendAction('place_wall', { gridX: gx, gridY: gy });
+  if (canPreviewWallAt(lane, gx, gy)) {
     mlDragPlacedSet.add(key);
   }
 }, { passive: false });

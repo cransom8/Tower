@@ -14,8 +14,8 @@ const aiModule = require("./ai");
 const app = express();
 app.use(cors());
 
-// Serve client at /client (path relative to this file, works regardless of Railway root dir)
-app.use("/client", express.static(path.join(__dirname, "client")));
+// Serve web app client at /client (top-level /client directory)
+app.use("/client", express.static(path.join(__dirname, "..", "client")));
 
 const server = http.createServer(app);
 const io = new Server(server, {

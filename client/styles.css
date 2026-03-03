@@ -1755,3 +1755,332 @@ html, body {
   white-space: nowrap;
   display: none;
 }
+
+/* Layout update: side rails for controls to maximize center lane width */
+#left-rail,
+#right-rail {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: clamp(184px, 20vw, 248px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  z-index: 12;
+}
+
+#left-rail {
+  left: 8px;
+}
+
+#right-rail {
+  right: 8px;
+}
+
+#left-rail > *,
+#right-rail > * {
+  pointer-events: auto;
+}
+
+#left-rail #send-bar,
+#left-rail #autosend-bar,
+#left-rail #ml-barracks-hud,
+#right-rail #hud-bar,
+#right-rail #ml-info-bar,
+#right-rail #defense-bar,
+#right-rail #matchup-panel,
+#right-rail #stats-panel {
+  position: static;
+  transform: none;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  width: 100%;
+}
+
+#left-rail #send-bar,
+#right-rail #defense-bar {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+#left-rail #autosend-bar {
+  display: none !important;
+}
+
+#left-rail .send-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+#left-rail .send-label {
+  display: block;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+#left-rail .send-auto-progress {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  height: 4px;
+  border: 1px solid rgba(40, 192, 176, 0.45);
+  background: rgba(8, 14, 16, 0.75);
+  border-radius: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#left-rail .send-auto-progress-fill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(40,192,176,0.45), rgba(40,192,176,0.95));
+  transition: width 0.08s linear;
+}
+
+#left-rail .send-auto-corner {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 30px;
+  height: 18px;
+  border: 1px solid var(--teal);
+  border-radius: 4px;
+  background: rgba(10, 18, 20, 0.85);
+  color: var(--teal);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.5rem;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+#left-rail .send-auto-corner.send-auto-on {
+  background: rgba(40, 192, 176, 0.25);
+  box-shadow: 0 0 6px rgba(40, 192, 176, 0.35);
+}
+
+#left-rail .autosend-toggle,
+#left-rail #autosend-rate,
+#left-rail .action-btn,
+#right-rail .action-btn {
+  width: 100%;
+}
+
+#left-rail .action-btn,
+#right-rail .action-btn {
+  min-height: 106px;
+  padding: 7px 8px;
+}
+
+#right-rail #hud-bar {
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 0.62rem;
+}
+
+#right-rail #ml-info-bar {
+  display: none;
+  height: auto;
+  left: auto;
+  right: auto;
+  padding: 0;
+  border: 1px solid var(--muted2);
+  border-left: 2px solid var(--gold2);
+  border-bottom: 1px solid var(--muted2);
+  border-radius: 6px;
+  background: rgba(8, 11, 18, 0.88);
+}
+
+#right-rail #ml-info-bar .mib-group {
+  height: auto;
+  padding: 7px 8px;
+}
+
+#right-rail #ml-info-bar .mib-barracks-btn {
+  display: none;
+}
+
+#right-rail #matchup-panel.expanded {
+  width: 100%;
+  max-height: 30vh;
+}
+
+#right-rail #stats-panel {
+  pointer-events: none;
+}
+
+#side-wall-btn {
+  border-left-color: var(--blue);
+  display: none;
+}
+
+#ml-mid-next {
+  position: absolute;
+  top: 50%;
+  right: calc(clamp(184px, 20vw, 248px) + 14px);
+  transform: translateY(-50%);
+  width: 34px;
+  height: 58px;
+  border: 1px solid rgba(40, 192, 176, 0.55);
+  border-radius: 18px;
+  background: rgba(8, 11, 18, 0.8);
+  color: var(--teal);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 1rem;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 16;
+}
+
+#ml-mid-next:hover {
+  background: rgba(40, 192, 176, 0.2);
+}
+
+.ml-side-nav-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 56px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(40, 192, 176, 0.55);
+  border-radius: 14px;
+  background: rgba(8, 11, 18, 0.82);
+  color: var(--teal);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.92rem;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 16;
+}
+
+#btn-ml-prev-lane {
+  left: calc(clamp(184px, 20vw, 248px) + 14px);
+}
+
+#btn-ml-next-lane {
+  right: calc(clamp(184px, 20vw, 248px) + 14px);
+}
+
+.ml-side-nav-btn:hover {
+  background: rgba(40, 192, 176, 0.2);
+}
+
+/* We keep lane tabs/nav/cmd bar available in DOM, but hidden in this layout */
+#ml-cmd-bar {
+  display: none !important;
+}
+
+#ml-lane-tabs {
+  display: none !important;
+}
+
+@media (max-width: 960px) {
+  #left-rail,
+  #right-rail {
+    width: clamp(132px, 19vw, 172px);
+    gap: 6px;
+  }
+
+  #left-rail .action-btn,
+  #right-rail .action-btn {
+    min-height: 88px;
+    font-size: 0.5rem;
+    padding: 6px;
+  }
+
+  #left-rail .send-auto-corner {
+    width: 24px;
+    height: 16px;
+    font-size: 0.44rem;
+  }
+
+  #ml-mid-next {
+    right: calc(clamp(132px, 19vw, 172px) + 10px);
+    width: 30px;
+    height: 52px;
+  }
+
+  #btn-ml-prev-lane {
+    left: calc(clamp(132px, 19vw, 172px) + 10px);
+  }
+
+  #btn-ml-next-lane {
+    right: calc(clamp(132px, 19vw, 172px) + 10px);
+  }
+
+  .ml-side-nav-btn {
+    width: 26px;
+    height: 50px;
+    font-size: 0.78rem;
+  }
+}
+
+@media (max-width: 760px) {
+  #left-rail,
+  #right-rail {
+    width: 104px;
+    top: 6px;
+    bottom: 6px;
+    gap: 4px;
+  }
+
+  #left-rail .bar-label,
+  #right-rail .bar-label {
+    font-size: 0.42rem;
+    letter-spacing: 0.1em;
+    padding-left: 0;
+  }
+
+  #left-rail .action-btn,
+  #right-rail .action-btn {
+    min-height: 66px;
+    font-size: 0.4rem;
+    line-height: 1.1;
+    padding: 5px;
+  }
+
+  #right-rail #hud-bar {
+    font-size: 0.5rem;
+    gap: 4px;
+    padding: 6px;
+  }
+
+  #right-rail #ml-info-bar .mib-group {
+    padding: 5px 6px;
+  }
+
+  #ml-mid-next {
+    right: 112px;
+    width: 28px;
+    height: 46px;
+    font-size: 0.9rem;
+  }
+
+  #btn-ml-prev-lane {
+    left: 112px;
+  }
+
+  #btn-ml-next-lane {
+    right: 112px;
+  }
+
+  .ml-side-nav-btn {
+    width: 24px;
+    height: 46px;
+    font-size: 0.72rem;
+  }
+}
