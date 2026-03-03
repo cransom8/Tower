@@ -14,8 +14,10 @@ const aiModule = require("./ai");
 const app = express();
 app.use(cors());
 
-// Serve web app client at /client (top-level /client directory)
-app.use("/client", express.static(path.join(__dirname, "..", "client")));
+// Serve web app client at both / and /client for production compatibility.
+const clientDir = path.join(__dirname, "..", "client");
+app.use(express.static(clientDir));
+app.use("/client", express.static(clientDir));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -647,7 +649,12 @@ io.on("connection", (socket) => {
   });
 });
 
-app.get("/", (_req, res) => res.send("Castle Defender PvP server running"));
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(clientDir, "index.html"));
+});
+
+// Lightweight health endpoint for uptime checks.
+app.get("/health", (_req, res) => res.send("ok"));
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0'; // fix #3: bind to all interfaces; override via HOST env var
