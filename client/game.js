@@ -71,6 +71,8 @@ let isSpectator = false;
 let mlLobbyPlayers = [];
 let mlIsHost = false;
 let mlMyCode = null;
+let isClassicHost = false;
+const DEFAULT_MATCH_SETTINGS = Object.freeze({ startIncome: 10 });
 
 // ML grid constants (mirrors server/sim-multilane.js)
 const ML_GRID_W = 11;
@@ -142,6 +144,7 @@ const btnCopyCode = document.getElementById('btn-copy-code');
 const btnCopyLink = document.getElementById('btn-copy-link');
 const joinInput = document.getElementById('join-code-input');
 const joinNameInput = document.getElementById('join-name-input');
+const classicStartIncomeInput = document.getElementById('classic-start-income');
 const roomCodeRow = document.getElementById('room-code-row');
 const roomCodeDisplay = document.getElementById('room-code-display');
 const lobbyStatus = document.getElementById('lobby-status');
@@ -180,7 +183,7 @@ sendButtons.forEach(btn => {
   autoBtn.type = 'button';
   autoBtn.className = 'send-auto-corner';
   autoBtn.setAttribute('data-unit-type', type);
-  autoBtn.textContent = 'A';
+  autoBtn.textContent = 'AUTO';
   autoBtn.style.display = 'none';
   btn.appendChild(autoBtn);
   sendAutoBtnByType[type] = autoBtn;
@@ -215,6 +218,7 @@ const mlRoomCodeDisplay = document.getElementById('ml-room-code-display');
 const btnCopyMlCode = document.getElementById('btn-copy-ml-code');
 const btnCopyMlLink = document.getElementById('btn-copy-ml-link');
 const mlAiControls = document.getElementById('ml-ai-controls');
+const mlStartIncomeInput = document.getElementById('ml-start-income');
 const btnAddAiEasy = document.getElementById('btn-add-ai-easy');
 const btnAddAiMedium = document.getElementById('btn-add-ai-medium');
 const btnAddAiHard = document.getElementById('btn-add-ai-hard');
@@ -259,6 +263,43 @@ const mlSpectateNotice = document.getElementById('ml-spectate-notice');
 const mlSpectateName  = document.getElementById('ml-spectate-name');
 const sideWallBtn     = document.getElementById('side-wall-btn');
 const mlMidNextBtn    = document.getElementById('ml-mid-next');
+
+function normalizeMatchSettingsClient(settings) {
+  const src = settings && typeof settings === 'object' ? settings : {};
+  const rawIncome = Number(src.startIncome);
+  const startIncome = Number.isFinite(rawIncome) ? Math.max(0, Math.min(1000, rawIncome)) : DEFAULT_MATCH_SETTINGS.startIncome;
+  return { startIncome };
+}
+
+function readClassicSettingsFromUi() {
+  return normalizeMatchSettingsClient({
+    startIncome: classicStartIncomeInput ? classicStartIncomeInput.value : DEFAULT_MATCH_SETTINGS.startIncome,
+  });
+}
+
+function readMlSettingsFromUi() {
+  return normalizeMatchSettingsClient({
+    startIncome: mlStartIncomeInput ? mlStartIncomeInput.value : DEFAULT_MATCH_SETTINGS.startIncome,
+  });
+}
+
+function applyClassicSettingsToUi(settings) {
+  const s = normalizeMatchSettingsClient(settings);
+  if (classicStartIncomeInput) classicStartIncomeInput.value = String(s.startIncome);
+}
+
+function applyMlSettingsToUi(settings) {
+  const s = normalizeMatchSettingsClient(settings);
+  if (mlStartIncomeInput) mlStartIncomeInput.value = String(s.startIncome);
+}
+
+function setClassicSettingsEditable(editable) {
+  if (classicStartIncomeInput) classicStartIncomeInput.disabled = !editable;
+}
+
+function setMlSettingsEditable(editable) {
+  if (mlStartIncomeInput) mlStartIncomeInput.disabled = !editable;
+}
 
 function setStatus(msg, type) {
   lobbyStatus.textContent = msg;
@@ -1835,6 +1876,7 @@ function resetToLobby(msg) {
   rematchVoted = false;
   myCode = null;
   mySide = null;
+  isClassicHost = false;
   hasFirstSnapshot = false;
   previousState = null;
   currentState = null;
@@ -2098,7 +2140,7 @@ function refreshAutosendControls() {
     if (!btn) return;
     const on = !!autosendEnabled[type];
     btn.classList.toggle('send-auto-on', on);
-    btn.textContent = on ? 'ON' : 'A';
+    btn.textContent = on ? 'AUTO ON' : 'AUTO';
     btn.disabled = !canToggle;
     btn.style.display = (lobbyState === 'playing') ? 'flex' : 'none';
   });
@@ -2161,6 +2203,10 @@ if (autosendRateSelect) {
 updateActionLabels();
 refreshAutosendControls();
 refreshBarracksAutoControl();
+applyClassicSettingsToUi(DEFAULT_MATCH_SETTINGS);
+applyMlSettingsToUi(DEFAULT_MATCH_SETTINGS);
+setClassicSettingsEditable(true);
+setMlSettingsEditable(false);
 
 // ── Tab event handlers ────────────────────────────────────────────────────────
 
@@ -2174,6 +2220,9 @@ btnTabClassic.addEventListener('click', () => {
   lobbyClassicSection.style.display = '';
   lobbyMlSection.style.display = 'none';
   hideMLLobbyPanel();
+  setClassicSettingsEditable(true);
+  setMlSettingsEditable(false);
+  setClassicSettingsEditable(isClassicHost || myCode === null);
 });
 
 btnTabMl.addEventListener('click', () => {
@@ -2186,14 +2235,16 @@ btnTabMl.addEventListener('click', () => {
   lobbyMlSection.style.display = '';
   lobbyClassicSection.style.display = 'none';
   hideMLLobbyPanel();
+  setMlSettingsEditable(false);
 });
 
 btnCreateMl.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
   const name = mlNameInput.value.trim() || 'Player';
+  const settings = readMlSettingsFromUi();
   setLobbyState('creating');
   setStatus('Creating ML room...', 'wait');
-  socket.emit('create_ml_room', { displayName: name });
+  socket.emit('create_ml_room', { displayName: name, settings });
 });
 
 btnJoinMl.addEventListener('click', () => {
@@ -2259,9 +2310,10 @@ if (btnCopyMlLink) {
 
 btnCreate.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
+  const settings = readClassicSettingsFromUi();
   setLobbyState('creating');
   setStatus('Creating room...', 'wait');
-  socket.emit('create_room');
+  socket.emit('create_room', { settings });
 });
 
 btnJoin.addEventListener('click', () => {
@@ -2277,6 +2329,23 @@ btnJoin.addEventListener('click', () => {
 joinInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') btnJoin.click();
 });
+
+if (classicStartIncomeInput) {
+  classicStartIncomeInput.addEventListener('change', () => {
+    applyClassicSettingsToUi(readClassicSettingsFromUi());
+    if (isClassicHost && myCode) {
+      socket.emit('update_room_settings', { settings: readClassicSettingsFromUi() });
+    }
+  });
+}
+if (mlStartIncomeInput) {
+  mlStartIncomeInput.addEventListener('change', () => {
+    applyMlSettingsToUi(readMlSettingsFromUi());
+    if (mlIsHost && mlMyCode && lobbyState !== 'playing') {
+      socket.emit('update_ml_room_settings', { settings: readMlSettingsFromUi() });
+    }
+  });
+}
 
 function makeShareUrl(code, mode) {
   const base = window.location.origin + window.location.pathname;
@@ -2398,6 +2467,9 @@ window.addEventListener('keydown', e => {
 socket.on('room_created', data => {
   myCode = data.code;
   mySide = data.side;
+  isClassicHost = true;
+  applyClassicSettingsToUi(data.settings || readClassicSettingsFromUi());
+  setClassicSettingsEditable(true);
   setLobbyState('waiting');
   roomCodeDisplay.textContent = data.code;
   roomCodeRow.style.display = 'block';
@@ -2407,8 +2479,15 @@ socket.on('room_created', data => {
 socket.on('room_joined', data => {
   myCode = data.code;
   mySide = data.side;
+  isClassicHost = false;
+  setClassicSettingsEditable(false);
   setLobbyState('playing');
   setStatus('Match starting...', 'ok');
+});
+
+socket.on('room_settings_update', data => {
+  if (!data || !data.settings) return;
+  applyClassicSettingsToUi(data.settings);
 });
 
 socket.on('match_ready', () => {
@@ -3170,6 +3249,8 @@ function hideMLLobbyPanel() {
 
 function renderMLLobbyPanel(data) {
   if (!mlPlayerList) return;
+  if (data && data.settings) applyMlSettingsToUi(data.settings);
+  setMlSettingsEditable(mlIsHost && lobbyState !== 'playing');
   mlLobbyPlayers = data.players || [];
   mlPlayerList.innerHTML = '';
   mlLobbyPlayers.forEach(p => {
@@ -3268,6 +3349,8 @@ socket.on('ml_room_created', data => {
   mlMyCode = data.code;
   myLaneIndex = data.laneIndex;
   mlIsHost = true;
+  applyMlSettingsToUi(data.settings || readMlSettingsFromUi());
+  setMlSettingsEditable(true);
   setLobbyState('waiting');
   setStatus('Share code \u2014 waiting for players...', 'wait');
   lobbyMlSection.style.display = 'none';
@@ -3283,6 +3366,7 @@ socket.on('ml_room_joined', data => {
   mlMyCode = data.code;
   myLaneIndex = data.laneIndex;
   mlIsHost = false;
+  setMlSettingsEditable(false);
   setLobbyState('waiting');
   setStatus('Joined! Click Ready when set.', 'ok');
   lobbyMlSection.style.display = 'none';

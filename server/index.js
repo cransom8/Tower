@@ -42,6 +42,10 @@ const ALLOWED_ACTION_TYPES = new Set([
   "set_tower_target",
 ]);
 
+const DEFAULT_MATCH_SETTINGS = Object.freeze({
+  startIncome: 10,
+});
+
 // code -> { roomId, players: [socketId], sidesBySocketId: Map<socketId, side>, createdAt }
 const roomsByCode = new Map();
 // code -> { roomId, players:[socketId], laneBySocketId:Map, readySet:Set, playerNames:Map, createdAt, mode:"multilane", hostSocketId }
@@ -93,19 +97,32 @@ function generateCode(len = 6) {
   return out;
 }
 
-function createRoom() {
+function normalizeMatchSettings(settings) {
+  const src = settings && typeof settings === "object" ? settings : {};
+  const rawIncome = Number(src.startIncome);
+  const startIncome = Number.isFinite(rawIncome) ? Math.max(0, Math.min(1000, rawIncome)) : DEFAULT_MATCH_SETTINGS.startIncome;
+  return { startIncome };
+}
+
+function createRoom(settings) {
   let code;
   do code = generateCode(6);
   while (roomsByCode.has(code));
   const roomId = `room_${code}`;
-  roomsByCode.set(code, { roomId, players: [], sidesBySocketId: new Map(), createdAt: Date.now() });
+  roomsByCode.set(code, {
+    roomId,
+    players: [],
+    sidesBySocketId: new Map(),
+    createdAt: Date.now(),
+    settings: normalizeMatchSettings(settings),
+  });
   return { code, roomId };
 }
 
-function startGame(roomId) {
+function startGame(roomId, settings) {
   if (gamesByRoomId.has(roomId)) return;
 
-  const game = sim.createGame();
+  const game = sim.createGame(settings);
   const snapshotEveryNTicks = 2; // 20hz tick, 10hz snapshots
 
   let localTick = 0;
@@ -154,7 +171,7 @@ function stopGame(roomId) {
 
 // ── Multi-Lane helpers ───────────────────────────────────────────────────────
 
-function createMLRoom(hostSocketId, displayName) {
+function createMLRoom(hostSocketId, displayName, settings) {
   let code;
   do code = generateCode(6);
   while (roomsByCode.has(code) || mlRoomsByCode.has(code));
@@ -169,6 +186,7 @@ function createMLRoom(hostSocketId, displayName) {
     mode: "multilane",
     hostSocketId,
     aiPlayers: [], // [{ laneIndex, difficulty }]
+    settings: normalizeMatchSettings(settings),
   };
   mlRoomsByCode.set(code, room);
   return { code, roomId };
@@ -189,7 +207,7 @@ function mlLobbyUpdatePayload(code, room) {
     difficulty: ai.difficulty,
   }));
   const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
-  return { code, players, hostLaneIndex: 0 };
+  return { code, players, hostLaneIndex: 0, settings: normalizeMatchSettings(room.settings) };
 }
 
 function capFirst(s) {
@@ -204,7 +222,7 @@ function startMLGame(roomId, code, io) {
   const humanCount = room.players.length;
   const aiList = room.aiPlayers || [];
   const playerCount = humanCount + aiList.length;
-  const game = simMl.createMLGame(playerCount);
+  const game = simMl.createMLGame(playerCount, room.settings);
 
   const laneAssignments = [
     ...room.players.map(sid => ({
@@ -220,7 +238,7 @@ function startMLGame(roomId, code, io) {
   ];
 
   io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments });
-  io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig());
+  io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
 
   // Start AI loops
   const aiHandles = aiList.map(ai => aiModule.startAI(game, ai.laneIndex, ai.difficulty));
@@ -298,12 +316,13 @@ function stopMLGame(roomId, code) {
 io.on("connection", (socket) => {
   console.log("connected:", socket.id);
 
-  socket.on("create_room", () => {
+  socket.on("create_room", ({ settings } = {}) => {
     // fix #4: rate-limit lobby events
     if (!checkLobbyRateLimit(socket.id)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
-    const { code, roomId } = createRoom();
+    const normalizedSettings = normalizeMatchSettings(settings);
+    const { code, roomId } = createRoom(normalizedSettings);
     const room = roomsByCode.get(code);
 
     room.players.push(socket.id);
@@ -311,7 +330,7 @@ io.on("connection", (socket) => {
     sessionBySocketId.set(socket.id, { code, roomId, side: "bottom" });
     socket.join(roomId);
 
-    socket.emit("room_created", { code, side: "bottom" });
+    socket.emit("room_created", { code, side: "bottom", settings: room.settings });
   });
 
   socket.on("join_room", ({ code }) => {
@@ -336,21 +355,27 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("match_ready", { code: normalized });
 
     // Start match sim once both players are in
-    startGame(room.roomId);
-    io.to(room.roomId).emit("match_config", sim.createPublicConfig());
+    startGame(room.roomId, room.settings);
+    io.to(room.roomId).emit("match_config", sim.createPublicConfig(room.settings));
   });
 
   // ── Multi-Lane lobby events ────────────────────────────────────────────────
 
-  socket.on("create_ml_room", ({ displayName } = {}) => {
+  socket.on("create_ml_room", ({ displayName, settings } = {}) => {
     if (!checkLobbyRateLimit(socket.id)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
-    const { code, roomId } = createMLRoom(socket.id, displayName);
+    const normalizedSettings = normalizeMatchSettings(settings);
+    const { code, roomId } = createMLRoom(socket.id, displayName, normalizedSettings);
     sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
     socket.join(roomId);
-    socket.emit("ml_room_created", { code, laneIndex: 0, displayName: String(displayName || "Player").slice(0, 20) });
     const room = mlRoomsByCode.get(code);
+    socket.emit("ml_room_created", {
+      code,
+      laneIndex: 0,
+      displayName: String(displayName || "Player").slice(0, 20),
+      settings: room.settings,
+    });
     io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
   });
 
@@ -416,6 +441,29 @@ io.on("connection", (socket) => {
     if (!gamesByRoomId.has(room.roomId)) {
       startMLGame(room.roomId, normalized, io);
     }
+  });
+
+  socket.on("update_room_settings", ({ settings } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode === "multilane") return;
+    const room = roomsByCode.get(session.code);
+    if (!room) return;
+    if (gamesByRoomId.has(room.roomId)) return;
+    const hostSocketId = room.players[0];
+    if (hostSocketId !== socket.id) return;
+    room.settings = normalizeMatchSettings(settings);
+    io.to(room.roomId).emit("room_settings_update", { settings: room.settings });
+  });
+
+  socket.on("update_ml_room_settings", ({ settings } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "multilane") return;
+    const room = mlRoomsByCode.get(session.code);
+    if (!room) return;
+    if (room.hostSocketId !== socket.id) return;
+    if (gamesByRoomId.has(room.roomId)) return;
+    room.settings = normalizeMatchSettings(settings);
+    io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
   socket.on("add_ai_to_ml_room", ({ difficulty } = {}) => {
@@ -619,9 +667,9 @@ io.on("connection", (socket) => {
       if (room.rematchVotes.size >= needed) {
         room.rematchVotes = null;
         if (room._cleanupHandle) { clearTimeout(room._cleanupHandle); room._cleanupHandle = null; }
-        startGame(room.roomId);
+        startGame(room.roomId, room.settings);
         io.to(room.roomId).emit("match_ready", { code: session.code });
-        io.to(room.roomId).emit("match_config", sim.createPublicConfig());
+        io.to(room.roomId).emit("match_config", sim.createPublicConfig(room.settings));
       }
     }
   });

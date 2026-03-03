@@ -11,9 +11,8 @@
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240; // 12 s
-const PASSIVE_INCOME_ENABLED = false;
 const START_GOLD = 70;
-const START_INCOME = 0;
+const START_INCOME = 10;
 const LIVES_START = 20;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 80;
@@ -218,6 +217,20 @@ function tileDist(ax, ay, bx, by) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+function clampNum(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeGameOptions(options) {
+  const src = options && typeof options === "object" ? options : {};
+  return {
+    startGold: Math.floor(clampNum(src.startGold, 0, 10000, START_GOLD)),
+    startIncome: clampNum(src.startIncome, 0, 1000, START_INCOME),
+  };
+}
+
 // Get current tile position of a unit from its pathIdx
 function getUnitTilePos(unit, path) {
   if (!path || path.length === 0) return null;
@@ -227,7 +240,8 @@ function getUnitTilePos(unit, path) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-function createMLGame(playerCount) {
+function createMLGame(playerCount, options) {
+  const opt = normalizeGameOptions(options);
   const lanes = [];
   for (let i = 0; i < playerCount; i++) {
     const grid = makeGrid();
@@ -235,8 +249,8 @@ function createMLGame(playerCount) {
     lanes.push({
       laneIndex: i,
       eliminated: false,
-      gold: START_GOLD,
-      income: START_INCOME,
+      gold: opt.startGold,
+      income: opt.startIncome,
       incomeRemainder: 0,
       lives: LIVES_START,
       grid,
@@ -533,18 +547,9 @@ function mlTick(game) {
   game.incomeTickCounter += 1;
   if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
     game.incomeTickCounter = 0;
-  }
-
-  if (PASSIVE_INCOME_ENABLED) {
-    // Continuous income accrual (same average rate as interval payout).
     for (const lane of game.lanes) {
       if (lane.eliminated) continue;
-      lane.incomeRemainder = (Number(lane.incomeRemainder) || 0) + lane.income;
-      if (lane.incomeRemainder >= INCOME_INTERVAL_TICKS) {
-        const gain = Math.floor(lane.incomeRemainder / INCOME_INTERVAL_TICKS);
-        lane.gold += gain;
-        lane.incomeRemainder -= gain * INCOME_INTERVAL_TICKS;
-      }
+      lane.gold += lane.income;
     }
   }
 
@@ -840,11 +845,13 @@ function createMLSnapshot(game) {
   };
 }
 
-function createMLPublicConfig() {
+function createMLPublicConfig(options) {
+  const opt = normalizeGameOptions(options);
   return {
     tickHz: TICK_HZ,
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
-    startGold: START_GOLD,
+    startGold: opt.startGold,
+    startIncome: opt.startIncome,
     livesStart: LIVES_START,
     gridW: GRID_W,
     gridH: GRID_H,

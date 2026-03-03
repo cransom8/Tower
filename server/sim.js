@@ -13,7 +13,7 @@ const TICK_MS = Math.floor(1000 / TICK_HZ);
 
 const INCOME_INTERVAL_TICKS = 10 * TICK_HZ; // 10 seconds
 const START_GOLD = 70;
-const START_INCOME = 0;
+const START_INCOME = 10;
 const LIVES_START = 20;
 const ALLOWED_ACTION_TYPES = new Set([
   "spawn_unit",
@@ -146,12 +146,27 @@ function getBarracksLevelDef(level) {
   };
 }
 
-function createPublicConfig() {
+function clampNum(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeGameOptions(options) {
+  const src = options && typeof options === "object" ? options : {};
+  return {
+    startGold: Math.floor(clampNum(src.startGold, 0, 10000, START_GOLD)),
+    startIncome: clampNum(src.startIncome, 0, 1000, START_INCOME),
+  };
+}
+
+function createPublicConfig(options) {
+  const opt = normalizeGameOptions(options);
   return {
     tickHz: TICK_HZ,
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
-    startGold: START_GOLD,
-    startIncome: START_INCOME,
+    startGold: opt.startGold,
+    startIncome: opt.startIncome,
     livesStart: LIVES_START,
     unitDefs: UNIT_DEFS,
     towerDefs: TOWER_DEFS,
@@ -174,7 +189,8 @@ function otherSide(side) {
   return side === "bottom" ? "top" : "bottom";
 }
 
-function createGame() {
+function createGame(options) {
+  const opt = normalizeGameOptions(options);
   const baseBarracks = getBarracksLevelDef(1);
   const createAutosend = () => ({
     enabled: false,
@@ -189,8 +205,8 @@ function createGame() {
     incomeTickCounter: 0,
     players: {
       bottom: {
-        gold: START_GOLD,
-        income: START_INCOME,
+        gold: opt.startGold,
+        income: opt.startIncome,
         incomeRemainder: 0,
         lives: LIVES_START,
         towers: makeTowerSlots(),
@@ -198,8 +214,8 @@ function createGame() {
         autosend: createAutosend(),
       },
       top: {
-        gold: START_GOLD,
-        income: START_INCOME,
+        gold: opt.startGold,
+        income: opt.startIncome,
         incomeRemainder: 0,
         lives: LIVES_START,
         towers: makeTowerSlots(),
@@ -371,6 +387,15 @@ function applyAction(game, side, action) {
 function tick(game) {
   if (!game || game.phase !== "playing") return;
   game.tick += 1;
+
+  game.incomeTickCounter += 1;
+  if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
+    game.incomeTickCounter = 0;
+    for (const side of ["bottom", "top"]) {
+      const p = game.players[side];
+      p.gold += p.income;
+    }
+  }
 
   for (const side of ["bottom", "top"]) {
     const p = game.players[side];
@@ -584,7 +609,7 @@ function createSnapshot(game) {
     tick: game.tick,
     phase: game.phase,
     winner: game.winner,
-    incomeTicksRemaining: 0,
+    incomeTicksRemaining: INCOME_INTERVAL_TICKS - game.incomeTickCounter,
     players: {
       bottom: {
         gold: game.players.bottom.gold,
