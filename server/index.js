@@ -32,7 +32,15 @@ const io = new Server(server, {
   cors: { origin: process.env.ALLOWED_ORIGIN || "*", methods: ["GET", "POST"] }, // fix #2: use env var in production
 });
 
-const ALLOWED_ACTION_TYPES = new Set(["spawn_unit", "build_tower", "upgrade_tower", "sell_tower"]);
+const ALLOWED_ACTION_TYPES = new Set([
+  "spawn_unit",
+  "build_tower",
+  "upgrade_tower",
+  "sell_tower",
+  "upgrade_barracks",
+  "set_autosend",
+  "set_tower_target",
+]);
 
 // code -> { roomId, players: [socketId], sidesBySocketId: Map<socketId, side>, createdAt }
 const roomsByCode = new Map();

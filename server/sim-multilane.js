@@ -11,7 +11,9 @@
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240; // 12 s
+const PASSIVE_INCOME_ENABLED = false;
 const START_GOLD = 70;
+const START_INCOME = 0;
 const LIVES_START = 20;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 80;
@@ -26,9 +28,11 @@ const CASTLE_X = 5;
 const CASTLE_YG = 27;
 const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 11×28 grid
 const MAX_WALLS = 100;
-const WALL_COST = 5;
+const WALL_COST = 2;
 const SPLASH_RADIUS_TILES = 1.5;
-const AUTOSEND_INTERVAL_TICKS = 5; // 0.25s at 20 Hz
+const AUTOSEND_INTERVAL_TICKS = 1; // instant cadence (every tick)
+const AUTOSEND_BURST_MAX_PURCHASES = 20000;
+const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 
 // pathSpeed = oldSpeedPerTick × GRID_H
 // Standard: 0.00129375 × 28 ≈ 0.036225
@@ -49,11 +53,11 @@ const UNIT_DEFS = {
 const AUTOSEND_PRIORITY = Object.keys(UNIT_DEFS).sort((a, b) => UNIT_DEFS[b].cost - UNIT_DEFS[a].cost);
 
 const TOWER_DEFS = {
-  archer:   { cost: 10, range: 3.5, dmg: 8.5,  atkCdTicks: 11, projectileTicks: 7, damageType: "PIERCE", isSplash: false },
+  archer:   { cost: 10, range: 4.2, dmg: 8.5,  atkCdTicks: 11, projectileTicks: 7, damageType: "PIERCE", isSplash: false },
   fighter:  { cost: 12, range: 2.5, dmg: 10.0, atkCdTicks: 10, projectileTicks: 6, damageType: "NORMAL", isSplash: false },
   mage:     { cost: 24, range: 4.0, dmg: 15.0, atkCdTicks: 13, projectileTicks: 7, damageType: "MAGIC",  isSplash: false },
   ballista: { cost: 20, range: 5.0, dmg: 12.1, atkCdTicks: 14, projectileTicks: 8, damageType: "SIEGE",  isSplash: false },
-  cannon:   { cost: 30, range: 6.0, dmg: 19.8, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
+  cannon:   { cost: 30, range: 3.84, dmg: 13.44, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
 };
 
 const BARRACKS_COST_BASE = 100;
@@ -152,7 +156,7 @@ function makeGrid() {
   for (let x = 0; x < GRID_W; x++) {
     grid[x] = [];
     for (let y = 0; y < GRID_H; y++) {
-      grid[x][y] = { type: "empty", towerType: null, towerLevel: 0, atkCd: 0 };
+      grid[x][y] = { type: "empty", towerType: null, towerLevel: 0, atkCd: 0, targetMode: "first" };
     }
   }
   grid[SPAWN_X][SPAWN_YG].type = "spawn";
@@ -232,7 +236,8 @@ function createMLGame(playerCount) {
       laneIndex: i,
       eliminated: false,
       gold: START_GOLD,
-      income: 10,
+      income: START_INCOME,
+      incomeRemainder: 0,
       lives: LIVES_START,
       grid,
       path,
@@ -276,14 +281,14 @@ function applyMLAction(game, laneIndex, action) {
     const def = UNIT_DEFS[unitType];
     if (!def) return { ok: false, reason: "Unknown unitType" };
     if (lane.gold < def.cost) return { ok: false, reason: "Not enough gold" };
-    if (lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return { ok: false, reason: "Spawn queue full" };
+    // Round-robin: send units to lane on the right
+    const targetLaneIndex = (laneIndex + 1) % game.playerCount;
+    const targetLane = game.lanes[targetLaneIndex];
+    if (targetLane.spawnQueue.length >= MAX_UNITS_PER_LANE) return { ok: false, reason: "Spawn queue full" };
 
     lane.gold -= def.cost;
     lane.income += def.income + (lane.barracks.incomeBonus || 0);
 
-    // Round-robin: send units to lane on the right
-    const targetLaneIndex = (laneIndex + 1) % game.playerCount;
-    const targetLane = game.lanes[targetLaneIndex];
     const br = lane.barracks;
     const newUnit = {
       id: `u${game.nextUnitId++}`,
@@ -344,6 +349,7 @@ function applyMLAction(game, laneIndex, action) {
     tile.towerType = towerType;
     tile.towerLevel = 1;
     tile.atkCd = 0;
+    tile.targetMode = "first";
     tile.debuffEndTick = 0;
     tile.debuffMult = 1.0;
     lane.wallCount -= 1; // wall→tower: no longer counts toward wall limit
@@ -397,6 +403,20 @@ function applyMLAction(game, laneIndex, action) {
     if (tile.atkCd > stats.atkCdTicks) tile.atkCd = stats.atkCdTicks;
     return { ok: true };
   }
+  
+  if (type === "set_tower_target") {
+    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
+    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
+    const targetMode = String((data && data.targetMode) || "").toLowerCase();
+    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
+      return { ok: false, reason: "Invalid grid position" };
+    }
+    if (!TOWER_TARGET_MODES.has(targetMode)) return { ok: false, reason: "Bad target mode" };
+    const tile = lane.grid[gx][gy];
+    if (tile.type !== "tower") return { ok: false, reason: "No tower at that position" };
+    tile.targetMode = targetMode;
+    return { ok: true };
+  }
 
   if (type === "upgrade_barracks") {
     const currentLevel = lane.barracks.level;
@@ -443,20 +463,66 @@ function applyMLAction(game, laneIndex, action) {
     const { enabled, enabledUnits, rate } = data || {};
     if (typeof enabled === "boolean") {
       as.enabled = enabled;
-      if (enabled) {
-        for (const ut of Object.keys(UNIT_DEFS)) as.enabledUnits[ut] = true;
-      }
     }
     if (enabledUnits && typeof enabledUnits === "object") {
-      // Autosend now always uses all unit types; ignore per-unit toggles.
-      for (const ut of Object.keys(UNIT_DEFS)) as.enabledUnits[ut] = true;
+      for (const ut of Object.keys(UNIT_DEFS)) {
+        as.enabledUnits[ut] = !!enabledUnits[ut];
+      }
     }
     const VALID_RATES = new Set(["slow", "normal", "fast"]);
     if (VALID_RATES.has(rate)) as.rate = rate;
+    as.tickCounter = 0;
+    if (as.enabled) runLaneAutosendBurst(game, lane);
     return { ok: true };
   }
 
   return { ok: false, reason: "Unknown action type" };
+}
+
+function runLaneAutosendBurst(game, lane) {
+  if (!game || !lane || lane.eliminated) return 0;
+  const as = lane.autosend;
+  if (!as || !as.enabled) return 0;
+  const enabledUnits = as.enabledUnits || {};
+  const priority = AUTOSEND_PRIORITY.filter((ut) => !!enabledUnits[ut]);
+  if (priority.length === 0) return 0;
+  const targetLaneIndex = (lane.laneIndex + 1) % game.playerCount;
+  const targetLane = game.lanes[targetLaneIndex];
+  if (!targetLane) return 0;
+
+  let purchases = 0;
+  while (purchases < AUTOSEND_BURST_MAX_PURCHASES && targetLane.spawnQueue.length < MAX_UNITS_PER_LANE) {
+    let bought = false;
+    for (const ut of priority) {
+      const def = UNIT_DEFS[ut];
+      if (!def) continue;
+      if (lane.gold < def.cost) continue;
+
+      lane.gold -= def.cost;
+      lane.income += def.income + (lane.barracks.incomeBonus || 0);
+
+      const br = lane.barracks;
+      const autoUnit = {
+        id: `u${game.nextUnitId++}`,
+        ownerLane: lane.laneIndex,
+        type: ut,
+        pathIdx: 0,
+        hp: Math.ceil(def.hp * br.hpMult),
+        maxHp: Math.ceil(def.hp * br.hpMult),
+        baseDmg: def.dmg * br.dmgMult,
+        baseSpeed: def.pathSpeed * br.speedMult,
+        atkCd: 0,
+      };
+      if (def.warlockDebuff) autoUnit.warlockCd = WARLOCK_DEBUFF_CD;
+      targetLane.spawnQueue.push(autoUnit);
+
+      purchases += 1;
+      bought = true;
+      break; // restart from highest-cost option
+    }
+    if (!bought) break;
+  }
+  return purchases;
 }
 
 function mlTick(game) {
@@ -467,8 +533,18 @@ function mlTick(game) {
   game.incomeTickCounter += 1;
   if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
     game.incomeTickCounter = 0;
+  }
+
+  if (PASSIVE_INCOME_ENABLED) {
+    // Continuous income accrual (same average rate as interval payout).
     for (const lane of game.lanes) {
-      if (!lane.eliminated) lane.gold += lane.income;
+      if (lane.eliminated) continue;
+      lane.incomeRemainder = (Number(lane.incomeRemainder) || 0) + lane.income;
+      if (lane.incomeRemainder >= INCOME_INTERVAL_TICKS) {
+        const gain = Math.floor(lane.incomeRemainder / INCOME_INTERVAL_TICKS);
+        lane.gold += gain;
+        lane.incomeRemainder -= gain * INCOME_INTERVAL_TICKS;
+      }
     }
   }
 
@@ -477,39 +553,8 @@ function mlTick(game) {
     if (lane.eliminated) continue;
     const as = lane.autosend;
     if (!as || !as.enabled) continue;
-    as.tickCounter = (as.tickCounter || 0) + 1;
-    const threshold = AUTOSEND_INTERVAL_TICKS;
-    if (as.tickCounter < threshold) continue;
     as.tickCounter = 0;
-
-    if (lane.spawnQueue.length >= MAX_UNITS_PER_LANE) continue;
-    let unitType = null;
-    for (const ut of AUTOSEND_PRIORITY) {
-      const def = UNIT_DEFS[ut];
-      if (def && lane.gold >= def.cost) { unitType = ut; break; }
-    }
-    if (!unitType) continue;
-    const def = UNIT_DEFS[unitType];
-
-    lane.gold -= def.cost;
-    lane.income += def.income + (lane.barracks.incomeBonus || 0);
-
-    const targetLaneIndex = (lane.laneIndex + 1) % game.playerCount;
-    const targetLane = game.lanes[targetLaneIndex];
-    const br = lane.barracks;
-    const autoUnit = {
-      id: `u${game.nextUnitId++}`,
-      ownerLane: lane.laneIndex,
-      type: unitType,
-      pathIdx: 0,
-      hp: Math.ceil(def.hp * br.hpMult),
-      maxHp: Math.ceil(def.hp * br.hpMult),
-      baseDmg: def.dmg * br.dmgMult,
-      baseSpeed: def.pathSpeed * br.speedMult,
-      atkCd: 0,
-    };
-    if (def.warlockDebuff) autoUnit.warlockCd = WARLOCK_DEBUFF_CD;
-    targetLane.spawnQueue.push(autoUnit);
+    runLaneAutosendBurst(game, lane);
   }
 
   for (const lane of game.lanes) {
@@ -536,24 +581,51 @@ function mlTick(game) {
       }
     }
 
-    // Tower attacks — target unit with highest pathIdx within range
+    function pickTowerTarget(tile, unitsInRange) {
+      const mode = TOWER_TARGET_MODES.has(tile.targetMode) ? tile.targetMode : "first";
+      let target = unitsInRange[0];
+      if (mode === "strongest") {
+        for (const u of unitsInRange) {
+          if (u.hp > target.hp) target = u;
+        }
+        return target;
+      }
+      if (mode === "weakest") {
+        for (const u of unitsInRange) {
+          if (u.hp < target.hp) target = u;
+        }
+        return target;
+      }
+      if (mode === "last") {
+        for (const u of unitsInRange) {
+          if (u.pathIdx < target.pathIdx) target = u;
+        }
+        return target;
+      }
+      for (const u of unitsInRange) {
+        if (u.pathIdx > target.pathIdx) target = u;
+      }
+      return target;
+    }
+
+    // Tower attacks
     for (let tx = 0; tx < GRID_W; tx++) {
       for (let ty = 0; ty < GRID_H; ty++) {
         const tile = lane.grid[tx][ty];
         if (tile.type !== "tower" || !tile.towerType || tile.atkCd > 0) continue;
         const stats = getTowerStats(tile.towerType, tile.towerLevel || 1);
         if (!stats) continue;
-
-        let target = null;
+        const unitsInRange = [];
         for (const u of lane.units) {
           if (u.hp <= 0) continue;
           const pos = getUnitTilePos(u, lane.path);
           if (!pos) continue;
           if (tileDist(tx, ty, pos.x, pos.y) <= stats.range) {
-            if (!target || u.pathIdx > target.pathIdx) target = u;
+            unitsInRange.push(u);
           }
         }
-        if (!target) continue;
+        if (unitsInRange.length === 0) continue;
+        const target = pickTowerTarget(tile, unitsInRange);
 
         const targetPos = getUnitTilePos(target, lane.path);
         const debuffMult = (tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick)
@@ -707,6 +779,7 @@ function createMLSnapshot(game) {
           if (tile.type === "wall") walls.push({ x, y });
           else if (tile.type === "tower") towerCells.push({
             x, y, type: tile.towerType, level: tile.towerLevel,
+            targetMode: tile.targetMode || "first",
             debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
           });
         }

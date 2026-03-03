@@ -535,6 +535,7 @@ const AI={gold:60,income:10,spawnT:0};
 let BFW=0,BFH=0;
 let selectedDefId=null;
 let showingRangeSlot=-1;
+let currentUpgSlot=-1;
 
 // ═══════════════════════════════
 // INIT
@@ -953,6 +954,7 @@ function onSlotClick(si){
 
 function showUpg(si){
   const ms=pSlots[si];if(!ms)return;
+  currentUpgSlot=si;
   const def=DEF_DEFS.find(d=>d.id===ms.defId);
   const cur=def.lv[ms.level],nxt=def.lv[ms.level+1];
   const max=ms.level>=def.lv.length-1;
@@ -975,7 +977,7 @@ function showUpg(si){
     <button class="sell-btn" onclick="sellSlot(${si})">Sell — 💰${refund} (80%)</button>`;
   document.getElementById('upgDrawer').classList.add('open');
 }
-function closeUpg(){document.getElementById('upgDrawer').classList.remove('open');}
+function closeUpg(){currentUpgSlot=-1;document.getElementById('upgDrawer').classList.remove('open');}
 function sellSlot(si){
   const ms=pSlots[si];if(!ms)return;
   const refund=calcRefund(ms);
@@ -1429,6 +1431,10 @@ function renderHUD(){
   const egt=document.getElementById('egateTxt');if(egt)egt.textContent='GATE '+Math.max(0,Math.floor(GS.enemyHP));
   document.getElementById('player-wall-hp-fill').style.width=(GS.gateHP/GS.maxGateHP*100)+'%';
   document.getElementById('enemy-wall-hp-fill').style.width=(GS.enemyHP/GS.maxEnemyHP*100)+'%';
+  const upgDrawer=document.getElementById('upgDrawer');
+  if(currentUpgSlot>=0&&upgDrawer&&upgDrawer.classList.contains('open')&&pSlots[currentUpgSlot]){
+    showUpg(currentUpgSlot);
+  }
 }
 
 function setLog(msg,cls=''){

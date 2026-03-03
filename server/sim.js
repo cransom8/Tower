@@ -13,15 +13,27 @@ const TICK_MS = Math.floor(1000 / TICK_HZ);
 
 const INCOME_INTERVAL_TICKS = 10 * TICK_HZ; // 10 seconds
 const START_GOLD = 70;
-const START_INCOME = 10;
+const START_INCOME = 0;
 const LIVES_START = 20;
-const ALLOWED_ACTION_TYPES = new Set(["spawn_unit", "build_tower", "upgrade_tower", "sell_tower"]);
+const ALLOWED_ACTION_TYPES = new Set([
+  "spawn_unit",
+  "build_tower",
+  "upgrade_tower",
+  "sell_tower",
+  "upgrade_barracks",
+  "set_autosend",
+  "set_tower_target",
+]);
+const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 const TOWER_SLOTS = ["left_outer", "left_mid", "left_inner", "right_inner", "right_mid", "right_outer"];
 const TOWER_MAX_LEVEL = 10;
+const AUTOSEND_INTERVAL_TICKS = 1; // instant cadence (every tick)
+const AUTOSEND_BURST_MAX_PURCHASES = 20000;
+const BARRACKS_COST_BASE = 100;
+const BARRACKS_REQ_INCOME_BASE = 8;
 
 // Combat + spacing (normalized lane units)
 const COMBAT_RANGE = 0.045; // if enemy within this y-distance, you can attack
-const MIN_GAP = 0.012; // friendly units cannot move closer than this gap
 const GATE_Y_TOP = 0.05;
 const GATE_Y_BOTTOM = 0.95;
 
@@ -38,11 +50,12 @@ const UNIT_DEFS = {
   warlock:  { cost: 18, income: 2,   hp: 80,  dmg: 12, atkCdTicks: 11, speedPerTick: MARCH_SPEED,  bounty: 5, range: 0.18,         ranged: true,  projectileTicks: 8, armorType: "MAGIC",     damageType: "MAGIC"  },
   golem:    { cost: 25, income: 3,   hp: 240, dmg: 14, atkCdTicks: 13, speedPerTick: 0.00090563,   bounty: 6, range: COMBAT_RANGE, ranged: false, armorType: "HEAVY",     damageType: "NORMAL" },
 };
+const AUTOSEND_PRIORITY = Object.keys(UNIT_DEFS).sort((a, b) => UNIT_DEFS[b].cost - UNIT_DEFS[a].cost);
 
 const TOWER_DEFS = {
-  archer: { cost: 10, range: 0.30, dmg: 6.6, atkCdTicks: 12, projectileTicks: 7, damageType: "PIERCE" },
+  archer: { cost: 10, range: 0.36, dmg: 6.6, atkCdTicks: 12, projectileTicks: 7, damageType: "PIERCE" },
   fighter: { cost: 12, range: 0.22, dmg: 8.8, atkCdTicks: 11, projectileTicks: 6, damageType: "NORMAL" },
-  cannon: { cost: 30, range: 0.50, dmg: 19.8, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH" },
+  cannon: { cost: 30, range: 0.32, dmg: 13.44, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH" },
   ballista: { cost: 20, range: 0.40, dmg: 12.1, atkCdTicks: 14, projectileTicks: 8, damageType: "SIEGE" },
   mage: { cost: 24, range: 0.35, dmg: 13.2, atkCdTicks: 13, projectileTicks: 7, damageType: "MAGIC" },
 };
@@ -57,12 +70,12 @@ const DAMAGE_MULTIPLIERS = {
 
 function makeTowerSlots() {
   return {
-    left_outer: { type: null, level: 0, atkCd: 0 },
-    left_mid: { type: null, level: 0, atkCd: 0 },
-    left_inner: { type: null, level: 0, atkCd: 0 },
-    right_inner: { type: null, level: 0, atkCd: 0 },
-    right_mid: { type: null, level: 0, atkCd: 0 },
-    right_outer: { type: null, level: 0, atkCd: 0 },
+    left_outer: { type: null, level: 0, atkCd: 0, targetMode: "first" },
+    left_mid: { type: null, level: 0, atkCd: 0, targetMode: "first" },
+    left_inner: { type: null, level: 0, atkCd: 0, targetMode: "first" },
+    right_inner: { type: null, level: 0, atkCd: 0, targetMode: "first" },
+    right_mid: { type: null, level: 0, atkCd: 0, targetMode: "first" },
+    right_outer: { type: null, level: 0, atkCd: 0, targetMode: "first" },
   };
 }
 
@@ -109,6 +122,30 @@ function getTowerStats(type, level) {
   };
 }
 
+function getBarracksLevelDef(level) {
+  const lvl = Math.max(1, Math.floor(Number(level) || 1));
+  if (lvl === 1) {
+    return {
+      hpMult: 1,
+      dmgMult: 1,
+      speedMult: 1,
+      incomeBonus: 0,
+      cost: 0,
+      reqIncome: 0,
+    };
+  }
+  const statMult = Math.pow(2, lvl - 1);
+  const gateMult = Math.pow(2, lvl - 2);
+  return {
+    hpMult: statMult,
+    dmgMult: statMult,
+    speedMult: statMult,
+    incomeBonus: 0,
+    cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
+    reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
+  };
+}
+
 function createPublicConfig() {
   return {
     tickHz: TICK_HZ,
@@ -120,6 +157,10 @@ function createPublicConfig() {
     towerDefs: TOWER_DEFS,
     towerMaxLevel: TOWER_MAX_LEVEL,
     towerSlots: TOWER_SLOTS.slice(),
+    barracksInfinite: true,
+    barracksCostBase: BARRACKS_COST_BASE,
+    barracksReqIncomeBase: BARRACKS_REQ_INCOME_BASE,
+    barracksLevels: [],
   };
 }
 
@@ -134,20 +175,91 @@ function otherSide(side) {
 }
 
 function createGame() {
+  const baseBarracks = getBarracksLevelDef(1);
+  const createAutosend = () => ({
+    enabled: false,
+    enabledUnits: Object.fromEntries(Object.keys(UNIT_DEFS).map((k) => [k, false])),
+    rate: "normal",
+    tickCounter: 0,
+  });
   return {
     tick: 0,
     phase: "playing",
     winner: null,
     incomeTickCounter: 0,
     players: {
-      bottom: { gold: START_GOLD, income: START_INCOME, lives: LIVES_START, towers: makeTowerSlots() },
-      top: { gold: START_GOLD, income: START_INCOME, lives: LIVES_START, towers: makeTowerSlots() },
+      bottom: {
+        gold: START_GOLD,
+        income: START_INCOME,
+        incomeRemainder: 0,
+        lives: LIVES_START,
+        towers: makeTowerSlots(),
+        barracks: { level: 1, hpMult: baseBarracks.hpMult, dmgMult: baseBarracks.dmgMult, speedMult: baseBarracks.speedMult, incomeBonus: baseBarracks.incomeBonus },
+        autosend: createAutosend(),
+      },
+      top: {
+        gold: START_GOLD,
+        income: START_INCOME,
+        incomeRemainder: 0,
+        lives: LIVES_START,
+        towers: makeTowerSlots(),
+        barracks: { level: 1, hpMult: baseBarracks.hpMult, dmgMult: baseBarracks.dmgMult, speedMult: baseBarracks.speedMult, incomeBonus: baseBarracks.incomeBonus },
+        autosend: createAutosend(),
+      },
     },
     units: [],
     nextUnitId: 1,
     projectiles: [],
     nextProjectileId: 1,
   };
+}
+
+function spawnUnitForSide(game, side, unitType) {
+  const p = game.players[side];
+  const def = UNIT_DEFS[unitType];
+  if (!p || !def) return { ok: false, reason: "Unknown unitType" };
+  if (p.gold < def.cost) return { ok: false, reason: "Not enough gold" };
+
+  const br = p.barracks || getBarracksLevelDef(1);
+  p.gold -= def.cost;
+  p.income += def.income + (br.incomeBonus || 0);
+
+  game.units.push({
+    id: `u${game.nextUnitId++}`,
+    side,
+    type: unitType,
+    y: side === "top" ? SPAWN_Y_TOP : SPAWN_Y_BOTTOM,
+    hp: Math.ceil(def.hp * (br.hpMult || 1)),
+    maxHp: Math.ceil(def.hp * (br.hpMult || 1)),
+    baseDmg: def.dmg * (br.dmgMult || 1),
+    baseSpeed: def.speedPerTick * (br.speedMult || 1),
+    atkCd: 0,
+  });
+  return { ok: true };
+}
+
+function runAutosendBurst(game, side) {
+  const p = game.players[side];
+  if (!p || !p.autosend || !p.autosend.enabled) return 0;
+  const enabledUnits = p.autosend.enabledUnits || {};
+  const priority = AUTOSEND_PRIORITY.filter((ut) => !!enabledUnits[ut]);
+  if (priority.length === 0) return 0;
+  let purchases = 0;
+  while (purchases < AUTOSEND_BURST_MAX_PURCHASES) {
+    let bought = false;
+    for (const ut of priority) {
+      const def = UNIT_DEFS[ut];
+      if (!def) continue;
+      if (p.gold < def.cost) continue;
+      const res = spawnUnitForSide(game, side, ut);
+      if (!res.ok) continue;
+      purchases += 1;
+      bought = true;
+      break; // restart from highest-cost option
+    }
+    if (!bought) break;
+  }
+  return purchases;
 }
 
 function applyAction(game, side, action) {
@@ -160,23 +272,7 @@ function applyAction(game, side, action) {
     const unitType = String((action.data && action.data.unitType) || "").toLowerCase();
     const def = UNIT_DEFS[unitType];
     if (!def) return { ok: false, reason: "Unknown unitType" };
-
-    const p = game.players[side];
-    if (p.gold < def.cost) return { ok: false, reason: "Not enough gold" };
-
-    p.gold -= def.cost;
-    p.income += def.income;
-
-    game.units.push({
-      id: `u${game.nextUnitId++}`,
-      side,
-      type: unitType,
-      y: side === "top" ? SPAWN_Y_TOP : SPAWN_Y_BOTTOM,
-      hp: def.hp,
-      maxHp: def.hp,
-      atkCd: 0,
-    });
-    return { ok: true };
+    return spawnUnitForSide(game, side, unitType);
   }
 
   if (action.type === "build_tower") {
@@ -192,6 +288,7 @@ function applyAction(game, side, action) {
     p.towers[slot].type = towerType;
     p.towers[slot].level = 1;
     p.towers[slot].atkCd = 0;
+    p.towers[slot].targetMode = "first";
     return { ok: true };
   }
 
@@ -220,6 +317,54 @@ function applyAction(game, side, action) {
     return { ok: true, stub: true };
   }
 
+  if (action.type === "upgrade_barracks") {
+    const p = game.players[side];
+    const currentLevel = (p.barracks && p.barracks.level) || 1;
+    const nextLevel = currentLevel + 1;
+    const nextDef = getBarracksLevelDef(nextLevel);
+    if (p.income < nextDef.reqIncome) return { ok: false, reason: `Need ${nextDef.reqIncome}g income` };
+    if (p.gold < nextDef.cost) return { ok: false, reason: "Not enough gold" };
+
+    p.gold -= nextDef.cost;
+    p.barracks = {
+      level: nextLevel,
+      hpMult: nextDef.hpMult,
+      dmgMult: nextDef.dmgMult,
+      speedMult: nextDef.speedMult,
+      incomeBonus: nextDef.incomeBonus || 0,
+    };
+    return { ok: true };
+  }
+
+  if (action.type === "set_autosend") {
+    const as = game.players[side].autosend;
+    const { enabled, enabledUnits, rate } = action.data || {};
+    if (typeof enabled === "boolean") {
+      as.enabled = enabled;
+    }
+    if (enabledUnits && typeof enabledUnits === "object") {
+      for (const ut of Object.keys(UNIT_DEFS)) {
+        as.enabledUnits[ut] = !!enabledUnits[ut];
+      }
+    }
+    if (rate === "slow" || rate === "normal" || rate === "fast") as.rate = rate;
+    as.tickCounter = 0;
+    if (as.enabled) runAutosendBurst(game, side); // instant on-toggle spend
+    return { ok: true };
+  }
+  
+  if (action.type === "set_tower_target") {
+    const p = game.players[side];
+    const slot = String((action.data && action.data.slot) || "").toLowerCase();
+    const targetMode = String((action.data && action.data.targetMode) || "").toLowerCase();
+    if (!TOWER_SLOTS.includes(slot)) return { ok: false, reason: "Bad tower slot" };
+    const tower = p.towers[slot];
+    if (!tower || !tower.type) return { ok: false, reason: "No tower in slot" };
+    if (!TOWER_TARGET_MODES.has(targetMode)) return { ok: false, reason: "Bad target mode" };
+    tower.targetMode = targetMode;
+    return { ok: true };
+  }
+
   return { ok: false, reason: "Unknown action type" };
 }
 
@@ -227,11 +372,12 @@ function tick(game) {
   if (!game || game.phase !== "playing") return;
   game.tick += 1;
 
-  game.incomeTickCounter += 1;
-  if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
-    game.incomeTickCounter = 0;
-    game.players.bottom.gold += game.players.bottom.income;
-    game.players.top.gold += game.players.top.income;
+  for (const side of ["bottom", "top"]) {
+    const p = game.players[side];
+    const as = p.autosend;
+    if (!as || !as.enabled) continue;
+    as.tickCounter = 0;
+    runAutosendBurst(game, side);
   }
 
   for (const u of game.units) {
@@ -245,11 +391,39 @@ function tick(game) {
   }
 
   const alive = game.units.filter((u) => u.hp > 0);
-  const bottomFriends = alive.filter((u) => u.side === "bottom").sort((a, b) => a.y - b.y);
-  const topFriends = alive.filter((u) => u.side === "top").sort((a, b) => b.y - a.y);
-
   const deadIds = new Set();
   const goldGains = { bottom: 0, top: 0 };
+  
+  function pickTowerTarget(defenderSide, inRange, targetMode) {
+    const mode = TOWER_TARGET_MODES.has(targetMode) ? targetMode : "first";
+    let target = inRange[0];
+    if (mode === "strongest") {
+      for (const e of inRange) {
+        if (e.hp > target.hp) target = e;
+      }
+      return target;
+    }
+    if (mode === "weakest") {
+      for (const e of inRange) {
+        if (e.hp < target.hp) target = e;
+      }
+      return target;
+    }
+    if (mode === "last") {
+      if (defenderSide === "bottom") {
+        for (const e of inRange) if (e.y < target.y) target = e;
+      } else {
+        for (const e of inRange) if (e.y > target.y) target = e;
+      }
+      return target;
+    }
+    if (defenderSide === "bottom") {
+      for (const e of inRange) if (e.y > target.y) target = e;
+    } else {
+      for (const e of inRange) if (e.y < target.y) target = e;
+    }
+    return target;
+  }
 
   function applyTowerAttack(defenderSide, slot) {
     const tower = game.players[defenderSide].towers[slot];
@@ -264,13 +438,7 @@ function tick(game) {
       ? enemies.filter((u) => u.y >= 1 - stats.range)
       : enemies.filter((u) => u.y <= stats.range);
     if (inRange.length === 0) return;
-
-    let target = inRange[0];
-    if (defenderSide === "bottom") {
-      for (const e of inRange) if (e.y > target.y) target = e;
-    } else {
-      for (const e of inRange) if (e.y < target.y) target = e;
-    }
+    const target = pickTowerTarget(defenderSide, inRange, tower.targetMode);
 
     game.projectiles.push({
       id: `p${game.nextProjectileId++}`,
@@ -312,16 +480,6 @@ function tick(game) {
     return best;
   }
 
-  function isBlockedByFriend(me) {
-    const friends = me.side === "bottom" ? bottomFriends : topFriends;
-    const idx = friends.findIndex((u) => u.id === me.id);
-    if (idx < 0) return false;
-    const ahead = idx > 0 ? friends[idx - 1] : null;
-    if (!ahead) return false;
-    if (deadIds.has(ahead.id) || ahead.hp <= 0) return false;
-    return Math.abs(ahead.y - me.y) < MIN_GAP;
-  }
-
   for (const u of alive) {
     if (deadIds.has(u.id) || u.hp <= 0) continue;
     const def = UNIT_DEFS[u.type];
@@ -354,6 +512,7 @@ function tick(game) {
     const target = findNearestEnemyWithinRange(u);
     if (target) {
       if (u.atkCd <= 0) {
+        const unitDmg = Number.isFinite(u.baseDmg) ? u.baseDmg : def.dmg;
         if (def.ranged) {
           game.projectiles.push({
             id: `p${game.nextProjectileId++}`,
@@ -363,7 +522,7 @@ function tick(game) {
             damageType: def.damageType,
             targetKind: "unit",
             targetId: target.id,
-            dmg: def.dmg,
+            dmg: unitDmg,
             startX: 0.5,
             startY: u.y,
             targetY: target.y,
@@ -372,7 +531,7 @@ function tick(game) {
           });
         } else {
           const targetArmor = UNIT_DEFS[target.type].armorType;
-          target.hp -= computeDamage(def.dmg, def.damageType, targetArmor);
+          target.hp -= computeDamage(unitDmg, def.damageType, targetArmor);
           if (target.hp <= 0) {
             deadIds.add(target.id);
             goldGains[u.side] += UNIT_DEFS[target.type].bounty;
@@ -383,18 +542,9 @@ function tick(game) {
       continue;
     }
 
-    if (isBlockedByFriend(u)) {
-      // If the unit ahead is already in combat, push through to join the melee
-      const friends = u.side === "bottom" ? bottomFriends : topFriends;
-      const myIdx = friends.findIndex((f) => f.id === u.id);
-      const aheadUnit = myIdx > 0 ? friends[myIdx - 1] : null;
-      const aheadFighting = aheadUnit && !deadIds.has(aheadUnit.id) && aheadUnit.hp > 0
-        && !!findNearestEnemyWithinRange(aheadUnit);
-      if (!aheadFighting) continue; // normal march — hold formation
-      // fall through: advance into the combat cluster
-    }
-    if (u.side === "bottom") u.y -= def.speedPerTick;
-    else u.y += def.speedPerTick;
+    const unitSpeed = Number.isFinite(u.baseSpeed) ? u.baseSpeed : def.speedPerTick;
+    if (u.side === "bottom") u.y -= unitSpeed;
+    else u.y += unitSpeed;
     u.y = clamp01(u.y);
   }
 
@@ -426,7 +576,7 @@ function tick(game) {
 }
 
 function packTower(t) {
-  return { type: t.type, level: t.level || 0 };
+  return { type: t.type, level: t.level || 0, targetMode: t.targetMode || "first" };
 }
 
 function createSnapshot(game) {
@@ -434,12 +584,24 @@ function createSnapshot(game) {
     tick: game.tick,
     phase: game.phase,
     winner: game.winner,
-    incomeTicksRemaining: INCOME_INTERVAL_TICKS - game.incomeTickCounter,
+    incomeTicksRemaining: 0,
     players: {
       bottom: {
         gold: game.players.bottom.gold,
         income: game.players.bottom.income,
         lives: game.players.bottom.lives,
+        barracksLevel: (game.players.bottom.barracks && game.players.bottom.barracks.level) || 1,
+        autosend: game.players.bottom.autosend ? {
+          enabled: !!game.players.bottom.autosend.enabled,
+          enabledUnits: Object.assign({}, game.players.bottom.autosend.enabledUnits || {}),
+          rate: game.players.bottom.autosend.rate || "normal",
+          tickCounter: Number(game.players.bottom.autosend.tickCounter) || 0,
+        } : {
+          enabled: false,
+          enabledUnits: {},
+          rate: "normal",
+          tickCounter: 0,
+        },
         towers: {
           left_outer: packTower(game.players.bottom.towers.left_outer),
           left_mid: packTower(game.players.bottom.towers.left_mid),
@@ -453,6 +615,18 @@ function createSnapshot(game) {
         gold: game.players.top.gold,
         income: game.players.top.income,
         lives: game.players.top.lives,
+        barracksLevel: (game.players.top.barracks && game.players.top.barracks.level) || 1,
+        autosend: game.players.top.autosend ? {
+          enabled: !!game.players.top.autosend.enabled,
+          enabledUnits: Object.assign({}, game.players.top.autosend.enabledUnits || {}),
+          rate: game.players.top.autosend.rate || "normal",
+          tickCounter: Number(game.players.top.autosend.tickCounter) || 0,
+        } : {
+          enabled: false,
+          enabledUnits: {},
+          rate: "normal",
+          tickCounter: 0,
+        },
         towers: {
           left_outer: packTower(game.players.top.towers.left_outer),
           left_mid: packTower(game.players.top.towers.left_mid),

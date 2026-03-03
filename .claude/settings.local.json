@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(cmd:*)",
+      "WebFetch(domain:tower-production-e9c6.up.railway.app)",
+      "Bash(xargs grep -l \"render-pipelines\")",
+      "Bash(xargs grep:*)",
+      "Bash(curl:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}
