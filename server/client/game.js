@@ -29,10 +29,10 @@ const DEFAULT_UNIT_META = {
   golem:    { label: 'Golem',    cost: 25, income: 3,   dmg: 14, hp: 240, bounty: 6, armorType: 'HEAVY',     damageType: 'NORMAL', speedPerTick: 0.00090563,   atkCdTicks: 13, range: 0.045, special: '+25% gate dmg' },
 };
 const DEFAULT_TOWER_META = {
-  archer: { label: 'Archer', cost: 10, range: 0.25, dmg: 6.6, atkCdTicks: 12, damageType: 'PIERCE' },
+  archer: { label: 'Archer', cost: 10, range: 0.30, dmg: 6.6, atkCdTicks: 12, damageType: 'PIERCE' },
   fighter: { label: 'Fighter', cost: 12, range: 0.18, dmg: 8.8, atkCdTicks: 11, damageType: 'NORMAL' },
   ballista: { label: 'Ballista', cost: 20, range: 0.35, dmg: 12.1, atkCdTicks: 14, damageType: 'SIEGE' },
-  cannon: { label: 'Cannon', cost: 30, range: 0.45, dmg: 19.8, atkCdTicks: 16, damageType: 'SPLASH' },
+  cannon: { label: 'Cannon', cost: 30, range: 0.288, dmg: 13.44, atkCdTicks: 16, damageType: 'SPLASH' },
   mage: { label: 'Mage', cost: 24, range: 0.30, dmg: 13.2, atkCdTicks: 13, damageType: 'MAGIC' },
 };
 
@@ -54,6 +54,7 @@ let currentStateReceivedAt = 0;
 let renderLoopStarted = false;
 let lastActionAck = '';
 let feedbackTimeout = null;
+let rematchVoted = false;
 let draggingTowerType = null;
 let activePopSlot = null;
 
@@ -87,13 +88,15 @@ let mlBarracksCostBase = 100;
 let mlBarracksReqIncomeBase = 8;
 let mlTileMenuJustOpened = false;
 let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
-let mlWallCost = 5;
+let mlWallCost = 2;
 let mlMaxWalls = 100;
 
 // ── Auto-send state ───────────────────────────────────────────────────────────
 let autosendEnabled = {};       // { runner: bool, footman: bool, ... }
 let autosendRate = 'normal';
 UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
+let autoBarracksEnabled = false;
+let autoBarracksLastAttemptMs = 0;
 
 // ── ML mobile UI state ────────────────────────────────────────────────────────
 const ML_INCOME_PERIOD = 240;   // ticks between income payouts
@@ -153,6 +156,8 @@ const gameOverBanner = document.getElementById('game-over-banner');
 const actionFeedback = document.getElementById('action-feedback');
 const towerPopout = document.getElementById('tower-popout');
 const matchupPanel = document.getElementById('matchup-panel');
+const incomeLeaderboardPanel = document.getElementById('income-leaderboard');
+const statLeaderboardPanel = document.getElementById('stat-leaderboard');
 const sendButtons = Array.from(document.querySelectorAll('.send-btn'));
 const defenseButtons = Array.from(document.querySelectorAll('.defense-btn[data-tower-type]'));
 const towerSlots = Array.from(document.querySelectorAll('.tower-slot'));
@@ -218,6 +223,7 @@ const btnAddAiHard = document.getElementById('btn-add-ai-hard');
 const mlBarracksHud = document.getElementById('ml-barracks-hud');
 const mlBarracksLevel = document.getElementById('ml-barracks-level');
 const btnBarracksUpgrade = document.getElementById('btn-ml-barracks-upgrade');
+const btnBarracksAuto = document.getElementById('btn-ml-barracks-auto');
 const mlLaneNav = document.getElementById('ml-lane-nav');
 const mlViewingLabel = document.getElementById('ml-viewing-label');
 const btnPrevLane = document.getElementById('btn-ml-prev-lane');
@@ -290,11 +296,16 @@ function hideGameUi() {
 
 function initCanvas() {
   function resize() {
-    canvas.width = canvasWrap.clientWidth || window.innerWidth;
-    canvas.height = canvasWrap.clientHeight || window.innerHeight;
+    const vw = Math.max(1, Math.floor((window.visualViewport && window.visualViewport.width) || window.innerWidth));
+    const vh = Math.max(1, Math.floor((window.visualViewport && window.visualViewport.height) || window.innerHeight));
+    canvasWrap.style.width = vw + 'px';
+    canvasWrap.style.height = vh + 'px';
+    canvas.width = canvasWrap.clientWidth || vw;
+    canvas.height = canvasWrap.clientHeight || vh;
     if (!hasFirstSnapshot) drawWaiting();
   }
   window.addEventListener('resize', resize);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
   resize();
 }
 
@@ -376,24 +387,43 @@ function updateActionLabels() {
   sendButtons.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
+    if (!m) return;
     const hot = UNIT_TYPES.indexOf(type) + 1;
     const aps = m.atkCdTicks ? (tickHz / m.atkCdTicks) : 0;
     const laneSpeed = m.speedPerTick ? (m.speedPerTick * tickHz * 100) : 0;
-    const text =
-      hot + ' ' + m.label + '\n'
-      + 'Cost ' + m.cost + 'g\n'
-      + 'HP ' + Math.round(m.hp || 0) + '\n'
-      + 'DMG ' + Math.round(m.dmg || 0) + ' (' + (m.damageType || 'NORMAL') + ')\n'
-      + 'Armor ' + (m.armorType || '-') + '\n'
-      + 'Atk ' + aps.toFixed(2) + '/s\n'
-      + 'Move ' + laneSpeed.toFixed(2) + '%/s\n'
-      + (gameMode !== 'multilane' ? 'Range ' + Math.round((m.range || 0) * 100) + '%\n' : '')
-      + 'Income +' + (function(){ const v = m.income + mlMyBarracksIncomeBonus; return Number.isInteger(v) ? v : v.toFixed(1); })() + 'g\n'
-      + 'Bounty +' + (m.bounty || m.income || 0) + 'g'
-      + (m.special ? '\n' + m.special : '');
+    const totalIncome = (function () {
+      const v = m.income + mlMyBarracksIncomeBonus;
+      return Number.isInteger(v) ? String(v) : v.toFixed(1);
+    }());
+    const rows = [
+      ['HP', String(Math.round(m.hp || 0))],
+      ['DMG', String(Math.round(m.dmg || 0)) + ' ' + (m.damageType || 'NORMAL')],
+      ['ARM', String(m.armorType || '-')],
+      ['ATK', aps.toFixed(2) + '/s'],
+      ['MOVE', laneSpeed.toFixed(2) + '%/s'],
+      ['INC', '+' + totalIncome + 'g'],
+      ['BNTY', '+' + String(m.bounty || m.income || 0) + 'g'],
+    ];
+    if (gameMode !== 'multilane') rows.splice(5, 0, ['RNG', String(Math.round((m.range || 0) * 100)) + '%']);
     const labelEl = btn.querySelector('.send-label');
-    if (labelEl) labelEl.textContent = text;
-    else btn.textContent = text;
+    if (labelEl) {
+      const rowsHtml = rows.map(([k, v]) =>
+        '<div class="send-card-row"><span class="send-card-key">' + escHtml(k) + '</span><span class="send-card-val">' + escHtml(v) + '</span></div>'
+      ).join('');
+      labelEl.innerHTML =
+        '<div class="send-card-head">'
+        + '<span class="send-card-hot">' + escHtml(String(hot)) + '</span>'
+        + '<span class="send-card-name">' + escHtml(m.label) + '</span>'
+        + '<span class="send-card-cost">' + escHtml(String(m.cost)) + 'g</span>'
+        + '</div>'
+        + '<div class="send-card-table">' + rowsHtml + '</div>'
+        + (m.special ? '<div class="send-card-note">' + escHtml(m.special) + '</div>' : '');
+    } else {
+      btn.textContent =
+        hot + ' ' + m.label + ' | ' + m.cost + 'g'
+        + ' | HP ' + Math.round(m.hp || 0)
+        + ' | DMG ' + Math.round(m.dmg || 0);
+    }
   });
   defenseButtons.forEach(btn => {
     const type = btn.getAttribute('data-tower-type');
@@ -446,26 +476,28 @@ function updateStatsPanel() {
   const panel = document.getElementById('stats-panel');
   if (!panel) return;
   const isML = (gameMode === 'multilane');
-  let html = '';
+  const wasExpanded = panel.classList.contains('expanded');
+  const hadInit = panel.dataset.init === '1';
+  let bodyHtml = '';
 
   if (isML) {
-    html += '<div class="stats-section-hdr">Wall</div>';
-    html += '<div class="stats-wall-row">'
+    bodyHtml += '<div class="stats-section-hdr">Wall</div>';
+    bodyHtml += '<div class="stats-wall-row">'
       + '<span class="stats-name">Wall</span>'
       + '<span class="stats-cost">' + mlWallCost + 'g</span>'
       + '<span class="stats-max">max ' + mlMaxWalls + '</span>'
       + '</div>';
-    html += '<div class="stats-divider"></div>';
+    bodyHtml += '<div class="stats-divider"></div>';
   }
 
-  html += '<div class="stats-section-hdr">Towers</div>';
+  bodyHtml += '<div class="stats-section-hdr">Towers</div>';
   TOWER_TYPES.forEach(type => {
     const m = towerMeta[type];
     if (!m) return;
     const rangeStr = isML
       ? m.range.toFixed(1) + 't'
       : Math.round(m.range * 100) + '%';
-    html += '<div class="stats-row">'
+    bodyHtml += '<div class="stats-row">'
       + '<span class="stats-name">' + m.label + '</span>'
       + '<span class="stats-cost">' + m.cost + 'g</span>'
       + '<span class="stats-type">' + m.damageType + '</span>'
@@ -474,7 +506,23 @@ function updateStatsPanel() {
       + '</div>';
   });
 
-  panel.innerHTML = html;
+  panel.innerHTML =
+    '<button class="stats-toggle-btn" type="button">'
+    + '<span class="stats-toggle-arrow">&#x25B6;</span>'
+    + ' Towers:'
+    + '</button>'
+    + '<div class="stats-body">' + bodyHtml + '</div>';
+
+  if (!hadInit || wasExpanded) panel.classList.add('expanded');
+  panel.dataset.init = '1';
+
+  const toggleBtn = panel.querySelector('.stats-toggle-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      panel.classList.toggle('expanded');
+    });
+  }
 }
 
 function renderMatchupPanel() {
@@ -563,9 +611,13 @@ function localizeState(state) {
   const localizeTowers = function (raw) {
     const t = raw && raw.towers ? raw.towers : {};
     const norm = function (entry) {
-      if (!entry) return { type: null, level: 0 };
-      if (typeof entry === 'string') return { type: entry || null, level: entry ? 1 : 0 };
-      return { type: entry.type || null, level: Number(entry.level) || (entry.type ? 1 : 0) };
+      if (!entry) return { type: null, level: 0, targetMode: 'first' };
+      if (typeof entry === 'string') return { type: entry || null, level: entry ? 1 : 0, targetMode: 'first' };
+      return {
+        type: entry.type || null,
+        level: Number(entry.level) || (entry.type ? 1 : 0),
+        targetMode: String(entry.targetMode || 'first'),
+      };
     };
     return {
       left_outer: norm(t.left_outer),
@@ -603,12 +655,30 @@ function localizeState(state) {
       gold: Number(meRaw.gold) || 0,
       income: Number(meRaw.income) || 0,
       lives: Number(meRaw.lives) || livesStart,
+      barracksLevel: Math.max(1, Number(meRaw.barracksLevel) || 1),
+      autosend: meRaw.autosend && typeof meRaw.autosend === 'object'
+        ? {
+            enabled: !!meRaw.autosend.enabled,
+            enabledUnits: Object.assign({}, meRaw.autosend.enabledUnits || {}),
+            rate: String(meRaw.autosend.rate || 'normal'),
+            tickCounter: Number(meRaw.autosend.tickCounter) || 0,
+          }
+        : { enabled: false, enabledUnits: {}, rate: 'normal', tickCounter: 0 },
       towers: localizeTowers(meRaw),
     },
     enemy: {
       gold: Number(enRaw.gold) || 0,
       income: Number(enRaw.income) || 0,
       lives: Number(enRaw.lives) || livesStart,
+      barracksLevel: Math.max(1, Number(enRaw.barracksLevel) || 1),
+      autosend: enRaw.autosend && typeof enRaw.autosend === 'object'
+        ? {
+            enabled: !!enRaw.autosend.enabled,
+            enabledUnits: Object.assign({}, enRaw.autosend.enabledUnits || {}),
+            rate: String(enRaw.autosend.rate || 'normal'),
+            tickCounter: Number(enRaw.autosend.tickCounter) || 0,
+          }
+        : { enabled: false, enabledUnits: {}, rate: 'normal', tickCounter: 0 },
       towers: localizeTowers(enRaw),
     },
     units,
@@ -652,7 +722,9 @@ function renderFrame() {
   updateSendButtons(local.me.gold);
   updateDefenseButtons(local.me.gold, local.me.towers);
   updateTowerSlots(local.me.towers);
-  updateSendAutoProgressBars(null);
+  updateClassicBarracksHud(local);
+  updateSendAutoProgressBars(local.me);
+  updateLeaderboards(local, null);
 }
 
 function drawBattlefield(local) {
@@ -1460,12 +1532,52 @@ function updateHud(local) {
 }
 
 function updateSendButtons(gold) {
+  const canAct = (lobbyState === 'playing');
   sendButtons.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
-    btn.disabled = !(lobbyState === 'playing' && gold >= m.cost);
-    btn.classList.remove('locked');
+    btn.disabled = !canAct;
+    btn.classList.toggle('locked', canAct && gold < m.cost);
   });
+}
+
+function renderBarracksUpgradeLabel(level, nextDef) {
+  const nextLevel = level + 1;
+  if (!nextDef) {
+    return '<span class="send-label">'
+      + '<span class="send-card-head">'
+      + '<span class="send-card-hot">B</span>'
+      + '<span class="send-card-name">Barracks MAX</span>'
+      + '<span class="send-card-cost">--</span>'
+      + '</span>'
+      + '<span class="send-card-table">'
+      + '<span class="send-card-row"><span class="send-card-key">Need</span><span class="send-card-val">MAX</span></span>'
+      + '</span>'
+      + '</span>';
+  }
+  return '<span class="send-label">'
+    + '<span class="send-card-head">'
+    + '<span class="send-card-hot">B</span>'
+    + '<span class="send-card-name">Barracks Lv' + nextLevel + '</span>'
+    + '<span class="send-card-cost">' + nextDef.cost + 'g</span>'
+    + '</span>'
+    + '<span class="send-card-table">'
+    + '<span class="send-card-row"><span class="send-card-key">Need</span><span class="send-card-val">' + nextDef.reqIncome + 'g/inc</span></span>'
+    + '</span>'
+    + '</span>';
+}
+
+function updateClassicBarracksHud(local) {
+  if (!local || !mlBarracksHud) return;
+  const level = Math.max(1, Number(local.me.barracksLevel) || 1);
+  if (mlBarracksLevel) mlBarracksLevel.textContent = String(level);
+  const nextDef = getMLBarracksLevelDef(level + 1);
+  if (btnBarracksUpgrade) {
+    btnBarracksUpgrade.innerHTML = renderBarracksUpgradeLabel(level, nextDef);
+    btnBarracksUpgrade.disabled = !nextDef || local.me.gold < nextDef.cost || local.me.income < nextDef.reqIncome;
+  }
+  refreshBarracksAutoControl();
+  maybeAutoUpgradeBarracks(local.me.gold, local.me.income, level);
 }
 
 function updateDefenseButtons(gold, towers) {
@@ -1484,12 +1596,13 @@ function updateDefenseButtons(gold, towers) {
 function updateTowerSlots(towers) {
   towerSlots.forEach(slotEl => {
     const slot = slotEl.getAttribute('data-slot');
-    const t = towers[slot] || { type: null, level: 0 };
+    const t = towers[slot] || { type: null, level: 0, targetMode: 'first' };
     const wasOccupied = slotEl.classList.contains('occupied');
     const nowOccupied = !!t.type;
     slotEl.textContent = '';
     slotEl.dataset.towerType = t.type || '';
     slotEl.dataset.towerLevel = String(t.level || 0);
+    slotEl.dataset.towerTargetMode = String(t.targetMode || 'first');
     slotEl.dataset.towerShort = t.type ? shortTower(t.type) : '';
     slotEl.classList.toggle('occupied', nowOccupied);
     // Trigger build animation when a tower is first placed
@@ -1569,7 +1682,7 @@ function showBuildPopout(slotEl) {
   });
 }
 
-function showTowerPopout(slotEl, towerType, towerLevel) {
+function showTowerPopout(slotEl, towerType, towerLevel, targetMode) {
   if (!towerType) {
     towerPopout.style.display = 'none';
     return;
@@ -1591,6 +1704,7 @@ function showTowerPopout(slotEl, towerType, towerLevel) {
     myGold = (currentState && currentState.me && Number.isFinite(currentState.me.gold)) ? currentState.me.gold : 0;
   }
   const canUpgrade = canLevel && myGold >= upgradeCost;
+  const mode = (targetMode === 'last' || targetMode === 'weakest' || targetMode === 'strongest' || targetMode === 'first') ? targetMode : 'first';
   // XSS note (fix #1): towerType comes from slotEl.dataset.towerType which is set from server state
   // unitType strings validated server-side against known keys — not arbitrary user input.
   // activePopSlot comes from slotEl.getAttribute('data-slot') which is a known SLOT_NAMES constant.
@@ -1599,9 +1713,16 @@ function showTowerPopout(slotEl, towerType, towerLevel) {
   towerPopout.innerHTML = ''
     + '<span class="tower-pop-line">' + cap(towerType) + ' Lv' + level + '</span>'
     + '<span class="tower-pop-line">' + stats.damageType + '  dmg ' + stats.dmg.toFixed(1) + '  rng ' + Math.round(stats.range * 100) + '%</span>'
-    + (canLevel
-      ? '<button class="tower-upgrade-btn" data-upgrade-slot="' + activePopSlot + '"' + (canUpgrade ? '' : ' disabled') + '>Upgrade to Lv' + nextLevel + ' (' + upgradeCost + 'g)</button>'
-      : '<span class="tower-pop-line">Max level</span>');
+    + '<span class="tower-pop-line">Target: ' + cap(mode) + '</span>'
+    + '<div class="tower-target-row">'
+    + '<button class="tower-target-btn' + (mode === 'first' ? ' active' : '') + '" data-target-slot="' + activePopSlot + '" data-target-mode="first">First</button>'
+    + '<button class="tower-target-btn' + (mode === 'last' ? ' active' : '') + '" data-target-slot="' + activePopSlot + '" data-target-mode="last">Last</button>'
+    + '<button class="tower-target-btn' + (mode === 'weakest' ? ' active' : '') + '" data-target-slot="' + activePopSlot + '" data-target-mode="weakest">Weakest</button>'
+    + '<button class="tower-target-btn' + (mode === 'strongest' ? ' active' : '') + '" data-target-slot="' + activePopSlot + '" data-target-mode="strongest">Strongest</button>'
+    + '</div>'
+    + '<button class="tower-upgrade-btn" data-upgrade-slot="' + activePopSlot + '"' + (canUpgrade ? '' : ' disabled') + '>'
+    + (canLevel ? ('Upgrade to Lv' + nextLevel + ' (' + upgradeCost + 'g)') : 'MAXED')
+    + '</button>';
   towerPopout.style.display = 'block';
 
   const uiRect = gameUi.getBoundingClientRect();
@@ -1619,6 +1740,43 @@ function showTowerPopout(slotEl, towerType, towerLevel) {
       tryUpgradeTower(slot);
     });
   }
+  towerPopout.querySelectorAll('.tower-target-btn').forEach(btn => {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      const slot = btn.getAttribute('data-target-slot');
+      const nextMode = btn.getAttribute('data-target-mode');
+      trySetTowerTarget(slot, nextMode);
+      showTowerPopout(slotEl, towerType, level, nextMode);
+    });
+  });
+}
+
+function refreshClassicOpenTowerPopout(local) {
+  if (gameMode === 'multilane') return;
+  if (!towerPopout || towerPopout.style.display === 'none') return;
+  if (!activePopSlot) return;
+
+  const upBtn = towerPopout.querySelector('.tower-upgrade-btn');
+  if (!upBtn) return;
+
+  const tower = local && local.me && local.me.towers ? local.me.towers[activePopSlot] : null;
+  if (!tower || !tower.type) {
+    towerPopout.style.display = 'none';
+    activePopSlot = null;
+    return;
+  }
+
+  const nextLevel = (Number(tower.level) || 1) + 1;
+  if (nextLevel > 10) {
+    upBtn.textContent = 'MAXED';
+    upBtn.disabled = true;
+    return;
+  }
+
+  const cost = getTowerUpgradeCost(tower.type, nextLevel);
+  const gold = local.me && Number.isFinite(local.me.gold) ? local.me.gold : 0;
+  upBtn.textContent = 'Upgrade to Lv' + nextLevel + ' (' + cost + 'g)';
+  upBtn.disabled = gold < cost;
 }
 
 function trySpawn(type) {
@@ -1635,7 +1793,13 @@ function tryUpgradeTower(slot) {
   sendAction('upgrade_tower', { slot: slot });
 }
 
+function trySetTowerTarget(slot, targetMode) {
+  if (!slot) return;
+  sendAction('set_tower_target', { slot, targetMode });
+}
+
 function showGameOverBanner(message) {
+  rematchVoted = false;
   const isVictory = message === 'VICTORY';
   gameOverBanner.innerHTML =
     '<span class="banner-main">' + message + '</span>'
@@ -1648,6 +1812,8 @@ function showGameOverBanner(message) {
   gameOverBanner.style.display = 'block';
   document.getElementById('banner-rematch-btn').addEventListener('click', function (e) {
     e.stopPropagation();
+    if (rematchVoted) return;
+    rematchVoted = true;
     socket.emit('request_rematch');
     this.textContent = 'Waiting...';
     this.disabled = true;
@@ -1666,6 +1832,7 @@ function hideGameOverBanner() {
 }
 
 function resetToLobby(msg) {
+  rematchVoted = false;
   myCode = null;
   mySide = null;
   hasFirstSnapshot = false;
@@ -1698,10 +1865,10 @@ function resetToLobby(msg) {
   if (btnReadyMl) btnReadyMl.classList.remove('is-ready');
   if (spectatorBadge) spectatorBadge.style.display = 'none';
 
-  // Restore tower slots and defense bar for classic mode
+  // Restore tower slots for classic mode
   towerSlots.forEach(slotEl => { slotEl.style.display = ''; });
   const defenseBarEl = document.getElementById('defense-bar');
-  if (defenseBarEl) defenseBarEl.style.display = '';
+  if (defenseBarEl) defenseBarEl.style.display = 'none';
 
   // Hide ML-specific UI
   if (mlBarracksHud) mlBarracksHud.style.display = 'none';
@@ -1746,6 +1913,9 @@ function resetToLobby(msg) {
   autosendToggles.forEach(btn => { btn.disabled = false; });
   autosendToggles.forEach(btn => btn.classList.remove('autosend-active'));
   refreshAutosendControls();
+  autoBarracksEnabled = false;
+  autoBarracksLastAttemptMs = 0;
+  refreshBarracksAutoControl();
 
   hideGameUi();
   hideGameOverBanner();
@@ -1769,6 +1939,139 @@ function cap(s) {
   return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
 }
 
+function escHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function countClassicTowers(towersObj) {
+  let n = 0;
+  SLOT_NAMES.forEach(slot => {
+    if (towersObj && towersObj[slot] && towersObj[slot].type) n += 1;
+  });
+  return n;
+}
+
+function calcPowerScore(entry) {
+  const walls = Number(entry.walls) || 0;
+  return Math.round(
+    (Number(entry.income) || 0) * 20
+    + (Number(entry.gold) || 0)
+    + (Number(entry.lives) || 0) * 25
+    + (Number(entry.army) || 0) * 8
+    + (Number(entry.towers) || 0) * 14
+    + (Number(entry.barracks) || 1) * 30
+    + walls
+  );
+}
+
+function buildClassicLeaderboardEntries(local) {
+  if (!local || !local.me || !local.enemy) return [];
+  const myArmy = (local.units || []).filter(u => u.side === 'bottom').length;
+  const enArmy = (local.units || []).filter(u => u.side === 'top').length;
+  return [
+    {
+      laneIndex: 0,
+      name: 'You',
+      income: Number(local.me.income) || 0,
+      gold: Number(local.me.gold) || 0,
+      lives: Number(local.me.lives) || 0,
+      barracks: Number(local.me.barracksLevel) || 1,
+      army: myArmy,
+      towers: countClassicTowers(local.me.towers),
+      walls: 0,
+      eliminated: false,
+    },
+    {
+      laneIndex: 1,
+      name: 'Enemy',
+      income: Number(local.enemy.income) || 0,
+      gold: Number(local.enemy.gold) || 0,
+      lives: Number(local.enemy.lives) || 0,
+      barracks: Number(local.enemy.barracksLevel) || 1,
+      army: enArmy,
+      towers: countClassicTowers(local.enemy.towers),
+      walls: 0,
+      eliminated: false,
+    },
+  ];
+}
+
+function buildMLLeaderboardEntries(local) {
+  if (!local || !Array.isArray(local.lanes)) return [];
+  return local.lanes.map(lane => {
+    const laneIndex = Number(lane.laneIndex);
+    const assign = mlLaneAssignments.find(a => a.laneIndex === laneIndex);
+    const laneName = assign ? assign.displayName : ('Lane ' + laneIndex);
+    const ownerArmy = local.lanes.reduce((acc, ln) => {
+      const units = ln.units || [];
+      return acc + units.filter(u => Number(u.ownerLane) === laneIndex).length;
+    }, 0);
+    return {
+      laneIndex,
+      name: (laneIndex === myLaneIndex ? '\u2605 ' : '') + laneName,
+      income: Number(lane.income) || 0,
+      gold: Number(lane.gold) || 0,
+      lives: Number(lane.lives) || 0,
+      barracks: Number(lane.barracksLevel) || 1,
+      army: ownerArmy,
+      towers: Array.isArray(lane.towerCells) ? lane.towerCells.length : 0,
+      walls: Array.isArray(lane.walls) ? lane.walls.length : 0,
+      eliminated: !!lane.eliminated,
+    };
+  });
+}
+
+function renderLeaderboardPanels(entries) {
+  if (!incomeLeaderboardPanel || !statLeaderboardPanel) return;
+  if (!entries || entries.length === 0) {
+    incomeLeaderboardPanel.innerHTML = '';
+    statLeaderboardPanel.innerHTML = '';
+    return;
+  }
+
+  const incomeRows = entries
+    .slice()
+    .sort((a, b) => (b.income - a.income) || (b.gold - a.gold) || (b.lives - a.lives));
+  const statRows = entries
+    .map(e => Object.assign({}, e, { score: calcPowerScore(e) }))
+    .sort((a, b) => (b.score - a.score) || (b.income - a.income) || (b.gold - a.gold));
+
+  let incomeHtml = '<div class="lb-title">Income Leaderboard</div>';
+  incomeRows.forEach((r, i) => {
+    incomeHtml += '<div class="lb-row">'
+      + '<span class="lb-rank">' + (i + 1) + '</span>'
+      + '<span class="lb-name' + (r.eliminated ? ' lb-elim' : '') + '">' + escHtml(r.name) + '</span>'
+      + '<span class="lb-main">+' + (Number.isInteger(r.income) ? r.income : r.income.toFixed(1)) + '</span>'
+      + '<span class="lb-sub">' + r.gold + 'g</span>'
+      + '</div>';
+  });
+  incomeLeaderboardPanel.innerHTML = incomeHtml;
+
+  let statHtml = '<div class="lb-title">Stat Leaderboard</div>'
+    + '<div class="lb-eqn">Score = income*20 + gold + lives*25 + army*8 + towers*14 + barracks*30 + walls</div>';
+  statRows.forEach((r, i) => {
+    const sub = r.army + 'u/' + r.towers + 't';
+    statHtml += '<div class="lb-row">'
+      + '<span class="lb-rank">' + (i + 1) + '</span>'
+      + '<span class="lb-name' + (r.eliminated ? ' lb-elim' : '') + '">' + escHtml(r.name) + '</span>'
+      + '<span class="lb-main">' + r.score + '</span>'
+      + '<span class="lb-sub">' + sub + '</span>'
+      + '</div>';
+  });
+  statLeaderboardPanel.innerHTML = statHtml;
+}
+
+function updateLeaderboards(classicLocal, mlLocal) {
+  if (lobbyState !== 'playing') return renderLeaderboardPanels([]);
+  if (gameMode === 'multilane') return renderLeaderboardPanels(buildMLLeaderboardEntries(mlLocal));
+  return renderLeaderboardPanels(buildClassicLeaderboardEntries(classicLocal));
+}
+
 // ── Auto-send helpers ─────────────────────────────────────────────────────────
 
 function syncAutosend() {
@@ -1782,7 +2085,7 @@ function syncAutosend() {
 
 function refreshAutosendControls() {
   mlGlobalAutoEnabled = UNIT_TYPES.every(t => !!autosendEnabled[t]);
-  const canToggle = lobbyState === 'playing' && gameMode === 'multilane' && !isSpectator;
+  const canToggle = lobbyState === 'playing' && (gameMode !== 'multilane' || !isSpectator);
   autosendToggles.forEach(btn => {
     const type = btn.getAttribute('data-unit-type');
     const on = !!autosendEnabled[type];
@@ -1797,18 +2100,21 @@ function refreshAutosendControls() {
     btn.classList.toggle('send-auto-on', on);
     btn.textContent = on ? 'ON' : 'A';
     btn.disabled = !canToggle;
-    btn.style.display = (gameMode === 'multilane') ? 'flex' : 'none';
+    btn.style.display = (lobbyState === 'playing') ? 'flex' : 'none';
   });
   updateSendAutoProgressBars();
 }
 
-function updateSendAutoProgressBars(myLaneArg) {
-  const AUTOSEND_TICKS = 5; // 0.25s at 20 Hz
-  const myLane = myLaneArg || (mlCurrentState && mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex]);
-  const as = myLane && myLane.autosend ? myLane.autosend : null;
-  const threshold = AUTOSEND_TICKS;
-  const tickCounter = as ? (Number(as.tickCounter) || 0) : 0;
-  const ratio = Math.max(0, Math.min(1, tickCounter / threshold));
+function updateSendAutoProgressBars(sourceArg) {
+  let as = null;
+  if (gameMode === 'multilane') {
+    const myLane = sourceArg || (mlCurrentState && mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex]);
+    as = myLane && myLane.autosend ? myLane.autosend : null;
+  } else {
+    const meState = sourceArg || (currentState && currentState.me);
+    as = meState && meState.autosend ? meState.autosend : null;
+  }
+  const ratio = 1;
 
   UNIT_TYPES.forEach(type => {
     const wrap = sendAutoProgressByType[type];
@@ -1817,7 +2123,7 @@ function updateSendAutoProgressBars(myLaneArg) {
     const enabled = as
       ? !!(as.enabled && as.enabledUnits && as.enabledUnits[type])
       : !!autosendEnabled[type];
-    const show = (gameMode === 'multilane') && !isSpectator && enabled;
+    const show = (lobbyState === 'playing') && (gameMode !== 'multilane' || !isSpectator) && enabled;
     wrap.style.display = show ? 'block' : 'none';
     fill.style.width = Math.round(ratio * 100) + '%';
   });
@@ -1825,7 +2131,7 @@ function updateSendAutoProgressBars(myLaneArg) {
 
 autosendToggles.forEach(btn => {
   btn.addEventListener('click', () => {
-    if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
+    if (lobbyState !== 'playing' || (gameMode === 'multilane' && isSpectator)) return;
     const type = btn.getAttribute('data-unit-type');
     autosendEnabled[type] = !autosendEnabled[type];
     refreshAutosendControls();
@@ -1838,7 +2144,7 @@ Object.keys(sendAutoBtnByType).forEach(type => {
   autoBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (lobbyState !== 'playing' || gameMode !== 'multilane' || isSpectator) return;
+    if (lobbyState !== 'playing' || (gameMode === 'multilane' && isSpectator)) return;
     autosendEnabled[type] = !autosendEnabled[type];
     refreshAutosendControls();
     syncAutosend();
@@ -1848,12 +2154,13 @@ Object.keys(sendAutoBtnByType).forEach(type => {
 if (autosendRateSelect) {
   autosendRateSelect.addEventListener('change', () => {
     autosendRate = autosendRateSelect.value;
-    if (lobbyState === 'playing' && gameMode === 'multilane' && !isSpectator) syncAutosend();
+    if (lobbyState === 'playing' && (gameMode !== 'multilane' || !isSpectator)) syncAutosend();
   });
 }
 
 updateActionLabels();
 refreshAutosendControls();
+refreshBarracksAutoControl();
 
 // ── Tab event handlers ────────────────────────────────────────────────────────
 
@@ -2051,8 +2358,9 @@ towerSlots.forEach(slotEl => {
   slotEl.addEventListener('click', () => {
     const existing = slotEl.dataset.towerType || '';
     const existingLevel = Number(slotEl.dataset.towerLevel || '0');
+    const existingTargetMode = String(slotEl.dataset.towerTargetMode || 'first');
     if (existing) {
-      showTowerPopout(slotEl, existing, existingLevel);
+      showTowerPopout(slotEl, existing, existingLevel, existingTargetMode);
       return;
     }
     if (draggingTowerType) {
@@ -2116,11 +2424,13 @@ socket.on('match_ready', () => {
   startRenderLoop();
 
   if (autosendBar) autosendBar.style.display = 'none';
-  if (mlBarracksHud) mlBarracksHud.style.display = 'none';
+  if (mlBarracksHud) mlBarracksHud.style.display = 'grid';
   if (mlInfoBar) mlInfoBar.style.display = 'none';
   if (mlLaneTabs) mlLaneTabs.style.display = 'none';
   if (mlCmdBar) mlCmdBar.style.display = 'none';
   if (sideWallBtn) sideWallBtn.style.display = 'none';
+  const defenseBarEl = document.getElementById('defense-bar');
+  if (defenseBarEl) defenseBarEl.style.display = 'none';
   if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
   if (mlLaneNav) mlLaneNav.style.display = 'none';
   if (btnPrevLane) btnPrevLane.style.display = 'none';
@@ -2162,6 +2472,15 @@ socket.on('state_snapshot', state => {
   previousState = currentState || local;
   currentState = local;
   currentStateReceivedAt = performance.now();
+  refreshClassicOpenTowerPopout(local);
+  if (local.me && local.me.autosend) {
+    UNIT_TYPES.forEach(type => {
+      autosendEnabled[type] = !!(local.me.autosend.enabled && local.me.autosend.enabledUnits && local.me.autosend.enabledUnits[type]);
+    });
+    autosendRate = String(local.me.autosend.rate || autosendRate);
+    if (autosendRateSelect) autosendRateSelect.value = autosendRate;
+    refreshAutosendControls();
+  }
 });
 
 socket.on('game_over', payload => {
@@ -2172,8 +2491,10 @@ socket.on('game_over', payload => {
 socket.on('rematch_vote', data => {
   const btn = document.getElementById('banner-rematch-btn');
   if (btn) {
-    btn.textContent = 'Waiting... (' + data.count + '/' + data.needed + ')';
-    btn.disabled = true;
+    btn.textContent = rematchVoted
+      ? ('Waiting... (' + data.count + '/' + data.needed + ')')
+      : ('Rematch (' + data.count + '/' + data.needed + ')');
+    btn.disabled = rematchVoted;
   }
 });
 
@@ -2300,6 +2621,21 @@ function getUnitPixelPos(pathIdx, path, tileW, tileH) {
   return {
     x: (ax + (bx - ax) * frac + 0.5) * tileW,
     y: (ay + (by - ay) * frac + 0.5) * tileH,
+  };
+}
+
+function getMLUnitRenderJitter(unitId, tileSize) {
+  const key = String(unitId || "");
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const xBucket = (hash >>> 0) % 5;         // 0..4
+  const yBucket = ((hash >>> 3) % 3);       // 0..2
+  return {
+    x: (xBucket - 2) * Math.max(1, tileSize * 0.09),
+    y: (yBucket - 1) * Math.max(0.5, tileSize * 0.05),
   };
 }
 
@@ -2486,13 +2822,16 @@ function drawMLGridLane(lane) {
   // Units — smooth movement along path (coordinates are relative to translated origin)
   for (const u of (lane.units || [])) {
     const pos = getUnitPixelPos(u.pathIdx, lane.path, tileSize, tileSize);
+    const jitter = getMLUnitRenderJitter(u.id, tileSize);
+    const drawX = pos.x + jitter.x;
+    const drawY = pos.y + jitter.y;
     const friendly = (u.ownerLane === myLaneIndex);
-    drawUnitShape({ type: u.type, side: friendly ? 'bottom' : 'top' }, pos.x, pos.y);
+    drawUnitShape({ type: u.type, side: friendly ? 'bottom' : 'top' }, drawX, drawY);
     const hpRatio = Math.max(0, Math.min(1, u.hp / u.maxHp));
     ctx.fillStyle = '#252d38';
-    ctx.fillRect(pos.x - 9, pos.y - 12, 18, 3);
+    ctx.fillRect(drawX - 9, drawY - 12, 18, 3);
     ctx.fillStyle = friendly ? '#28c0b0' : '#ff3a3a';
-    ctx.fillRect(pos.x - 9, pos.y - 12, 18 * hpRatio, 3);
+    ctx.fillRect(drawX - 9, drawY - 12, 18 * hpRatio, 3);
   }
 
   // Projectiles
@@ -2809,6 +3148,10 @@ function updateSendButtonsML(myLane) {
     const m = unitMeta[type] || DEFAULT_UNIT_META[type];
     const canAct = (lobbyState === 'playing' && !isSpectator);
     btn.disabled = !canAct;
+    if (!m || !Number.isFinite(m.cost)) {
+      btn.classList.add('locked');
+      return;
+    }
     btn.classList.toggle('locked', canAct && gold < m.cost);
   });
 }
@@ -2915,6 +3258,7 @@ function renderFrameML() {
     updateLaneTabs(local);
     updateBarracksHud(myLane);
   }
+  updateLeaderboards(null, local);
 }
 
 // ── ML socket listeners ───────────────────────────────────────────────────────
@@ -3006,7 +3350,7 @@ socket.on('ml_match_ready', data => {
   if (cmdWallCost) cmdWallCost.textContent = mlWallCost + 'g';
 
   // Side-rail controls for ML mode
-  if (mlBarracksHud) mlBarracksHud.style.display = 'flex';
+  if (mlBarracksHud) mlBarracksHud.style.display = 'grid';
   if (autosendBar) autosendBar.style.display = 'none';
   if (sideWallBtn) sideWallBtn.style.display = 'block';
   if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
@@ -3031,16 +3375,22 @@ socket.on('ml_state_snapshot', state => {
     if (lane) {
       const tc = lane.towerCells && lane.towerCells.find(t => t.x === mlActiveTile.gx && t.y === mlActiveTile.gy);
       if (tc) {
-        if (tc.level !== mlActiveTile.level) {
+        if (tc.level !== mlActiveTile.level || (tc.targetMode || 'first') !== (mlActiveTile.targetMode || 'first')) {
           // Level changed (server confirmed upgrade) — rebuild fully
-          showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level);
+          showMLTowerUpgradeMenu(mlActiveTile.gx, mlActiveTile.gy, tc.type, tc.level, tc.targetMode);
         } else {
           // Same level — only update affordability to avoid flickering on every snapshot
           const upgradeBtn = mlTileMenu.querySelector('[data-upgrade]');
           if (upgradeBtn) {
             const nextLevel = tc.level + 1;
-            const cost = getTowerUpgradeCost(tc.type, nextLevel);
-            upgradeBtn.disabled = nextLevel > 10 || lane.gold < cost;
+            if (nextLevel > 10) {
+              upgradeBtn.textContent = 'MAXED';
+              upgradeBtn.disabled = true;
+            } else {
+              const cost = getTowerUpgradeCost(tc.type, nextLevel);
+              upgradeBtn.textContent = `Upgrade → Lv${nextLevel} (${cost}g)`;
+              upgradeBtn.disabled = lane.gold < cost;
+            }
           }
         }
       } else {
@@ -3110,7 +3460,7 @@ function handleMLCanvasClick(clientX, clientY) {
   const towerCell = lane.towerCells && lane.towerCells.find(t => t.x === gx && t.y === gy);
 
   if (towerCell) {
-    showMLTowerUpgradeMenu(gx, gy, towerCell.type, towerCell.level);
+    showMLTowerUpgradeMenu(gx, gy, towerCell.type, towerCell.level, towerCell.targetMode);
   } else if (isWall) {
     showMLWallConvertMenu(gx, gy);
   } else {
@@ -3192,10 +3542,11 @@ function showMLWallConvertMenu(gx, gy) {
   if (closeBtn) closeBtn.addEventListener('click', closeMLTileMenu);
 }
 
-function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
+function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
   if (!mlTileMenu) return;
   const lvl = level || 1;
-  mlActiveTile = { gx, gy, level: lvl };
+  const mode = (targetMode === 'last' || targetMode === 'weakest' || targetMode === 'strongest' || targetMode === 'first') ? targetMode : 'first';
+  mlActiveTile = { gx, gy, level: lvl, targetMode: mode };
   const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
   const gold = lane ? lane.gold : 0;
 
@@ -3208,12 +3559,15 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
   let html = `<div class="ml-menu-title">${cap(towerType)} Lv${lvl}</div>`;
   html += `<div class="ml-menu-stat">DMG ${stats.dmg.toFixed(1)} | RNG ${stats.range.toFixed(1)} tiles</div>`;
   html += `<div class="ml-menu-stat">${stats.damageType}</div>`;
+  html += `<div class="ml-menu-stat">Target: ${cap(mode)}</div>`;
+  html += `<div class="ml-target-row">`
+    + `<button class="ml-tile-btn secondary${mode === 'first' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="first">First</button>`
+    + `<button class="ml-tile-btn secondary${mode === 'last' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="last">Last</button>`
+    + `<button class="ml-tile-btn secondary${mode === 'weakest' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="weakest">Weakest</button>`
+    + `<button class="ml-tile-btn secondary${mode === 'strongest' ? ' active' : ''}" data-gx="${gx}" data-gy="${gy}" data-target-mode="strongest">Strongest</button>`
+    + `</div>`;
   const sellValue = getTowerSellValue(towerType, lvl);
-  if (canUpgrade) {
-    html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-upgrade${canAfford ? '' : ' disabled'}>Upgrade → Lv${nextLevel} (${cost}g)</button>`;
-  } else {
-    html += `<div class="ml-menu-stat" style="color:var(--gold);margin-top:4px">MAX LEVEL</div>`;
-  }
+  html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-upgrade${canAfford ? '' : ' disabled'}>${canUpgrade ? `Upgrade → Lv${nextLevel} (${cost}g)` : 'MAXED'}</button>`;
   html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-sell>Sell (${sellValue}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Close</button>';
   mlTileMenu.innerHTML = html;
@@ -3231,9 +3585,19 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level) {
       const by = Number(upgradeBtn.getAttribute('data-gy'));
       sendAction('upgrade_tower', { gridX: bx, gridY: by });
       // Keep menu open and optimistically show next level so player can upgrade again
-      showMLTowerUpgradeMenu(bx, by, towerType, lvl + 1);
+      showMLTowerUpgradeMenu(bx, by, towerType, lvl + 1, mode);
     });
   }
+  mlTileMenu.querySelectorAll('[data-target-mode]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const bx = Number(btn.getAttribute('data-gx'));
+      const by = Number(btn.getAttribute('data-gy'));
+      const nextMode = String(btn.getAttribute('data-target-mode') || 'first');
+      sendAction('set_tower_target', { gridX: bx, gridY: by, targetMode: nextMode });
+      showMLTowerUpgradeMenu(bx, by, towerType, lvl, nextMode);
+    });
+  });
   const sellBtn = mlTileMenu.querySelector('[data-sell]');
   if (sellBtn) {
     sellBtn.addEventListener('click', (e) => {
@@ -3284,11 +3648,11 @@ function updateBarracksHud(lane) {
 
   const nextDef = getMLBarracksLevelDef(level + 1);
   if (btnBarracksUpgrade) {
-    const cost = nextDef ? nextDef.cost : '?';
-    const reqIncome = nextDef ? nextDef.reqIncome : 0;
-    btnBarracksUpgrade.textContent = `Barracks Lv${level + 1} (${cost}g, ${reqIncome}g/inc)`;
+    btnBarracksUpgrade.innerHTML = renderBarracksUpgradeLabel(level, nextDef);
     btnBarracksUpgrade.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
   }
+  refreshBarracksAutoControl();
+  maybeAutoUpgradeBarracks(lane.gold, lane.income, level);
 
   // Update mib barracks button
   if (mibBarracksBtn) {
@@ -3296,6 +3660,27 @@ function updateBarracksHud(lane) {
     mibBarracksBtn.innerHTML = '&#x1F3F0; Lv' + level + '\u2192' + (level + 1) + ' (' + cost + 'g)';
     mibBarracksBtn.disabled = !nextDef || lane.gold < nextDef.cost || lane.income < nextDef.reqIncome;
   }
+}
+
+function refreshBarracksAutoControl() {
+  if (!btnBarracksAuto) return;
+  const canToggle = lobbyState === 'playing' && (gameMode !== 'multilane' || !isSpectator);
+  btnBarracksAuto.disabled = !canToggle;
+  btnBarracksAuto.classList.toggle('barracks-auto-on', autoBarracksEnabled);
+  btnBarracksAuto.textContent = autoBarracksEnabled ? 'AUTO ON' : 'AUTO';
+}
+
+function maybeAutoUpgradeBarracks(gold, income, level) {
+  if (!autoBarracksEnabled) return;
+  const canAct = lobbyState === 'playing' && (gameMode !== 'multilane' || !isSpectator);
+  if (!canAct) return;
+  const now = Date.now();
+  if ((now - autoBarracksLastAttemptMs) < 600) return;
+  const nextDef = getMLBarracksLevelDef((Number(level) || 1) + 1);
+  if (!nextDef) return;
+  if (gold < nextDef.cost || income < nextDef.reqIncome) return;
+  autoBarracksLastAttemptMs = now;
+  sendAction('upgrade_barracks', {});
 }
 
 function updateLaneNavLabel() {
@@ -3416,6 +3801,15 @@ cmdRateBtns.forEach(btn => {
 if (mibBarracksBtn) {
   mibBarracksBtn.addEventListener('click', () => {
     sendAction('upgrade_barracks', {});
+  });
+}
+
+if (btnBarracksAuto) {
+  btnBarracksAuto.addEventListener('click', () => {
+    if (lobbyState !== 'playing' || (gameMode === 'multilane' && isSpectator)) return;
+    autoBarracksEnabled = !autoBarracksEnabled;
+    autoBarracksLastAttemptMs = 0;
+    refreshBarracksAutoControl();
   });
 }
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Castle Defender — Multiplayer</title>
-  <link rel="stylesheet" href="styles.css?v=20260303f">
+  <link rel="stylesheet" href="styles.css?v=20260303u">
 </head>
 <body>
 
@@ -135,7 +135,8 @@
         <!-- ML Barracks HUD (shown only in ML mode) -->
         <div id="ml-barracks-hud" style="display:none">
           <span id="ml-barracks-label">Barracks Lv<strong id="ml-barracks-level">1</strong></span>
-          <button id="btn-ml-barracks-upgrade" class="lobby-btn secondary small">Upgrade</button>
+          <button id="btn-ml-barracks-upgrade" class="action-btn barracks-upgrade-btn">Upgrade</button>
+          <button id="btn-ml-barracks-auto" class="barracks-auto-toggle" type="button">AUTO</button>
         </div>
       </div>
 
@@ -168,21 +169,10 @@
           <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
         </div>
 
-        <div id="defense-bar">
-          <div class="bar-label">Walls &amp; Towers</div>
-          <button class="action-btn defense-btn" id="side-wall-btn" type="button">Wall
-Cost 5g
-Place on grid
-Remove for refund</button>
-          <button class="action-btn defense-btn" draggable="true" data-tower-type="archer">Archer</button>
-          <button class="action-btn defense-btn" draggable="true" data-tower-type="fighter">Fighter</button>
-          <button class="action-btn defense-btn" draggable="true" data-tower-type="ballista">Ballista</button>
-          <button class="action-btn defense-btn" draggable="true" data-tower-type="cannon">Cannon</button>
-          <button class="action-btn defense-btn" draggable="true" data-tower-type="mage">Mage</button>
-        </div>
-
-        <div id="matchup-panel"></div>
+        <div id="matchup-panel" class="expanded"></div>
         <div id="stats-panel"></div>
+        <div id="income-leaderboard"></div>
+        <div id="stat-leaderboard"></div>
       </div>
       <div id="tower-slots">
         <div class="tower-slot" data-slot="left_outer"></div>
@@ -214,7 +204,7 @@ Remove for refund</button>
           <button class="cmd-wall-btn" id="cmd-wall-btn">
             <span class="cwb-icon">&#x25A6;</span>
             <span class="cwb-label">Wall</span>
-            <span class="cwb-cost" id="cmd-wall-cost">5g</span>
+            <span class="cwb-cost" id="cmd-wall-cost">2g</span>
           </button>
         </div>
         <div class="cmd-units-zone" id="cmd-units-zone">
@@ -274,7 +264,7 @@ Remove for refund</button>
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="game.js?v=20260303f"></script>
+  <script src="game.js?v=20260303u"></script>
 
 </body>
 </html>
