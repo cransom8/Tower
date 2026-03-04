@@ -5165,6 +5165,7 @@ btnPwSubmit.addEventListener('click', async () => {
     }
   } catch (err) {
     if (err.message === 'email_not_verified') {
+      _showPwError('Please verify your email before signing in. Check your inbox or use Resend below.');
       _showVerifyModal(authEmail.value.trim());
     } else {
       _showPwError(err.message);
