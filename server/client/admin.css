@@ -498,3 +498,170 @@ input:focus, select:focus { border-color: var(--primary); }
 .text-right { text-align: right; }
 .w100 { width: 100%; }
 .load { color: var(--muted); font-style: italic; padding: 24px; text-align: center; }
+
+/* ── Tower Management ── */
+.tower-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.tower-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+.tower-card:hover { border-color: var(--primary); }
+.tower-card--disabled { opacity: 0.55; }
+
+.tower-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tower-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.tower-card-icon-placeholder {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.tower-card-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tower-dtype-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.tower-card-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.tower-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.tower-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tower-stat-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+
+.tower-stat-val {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tower-card-abilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 22px;
+}
+
+.ability-badge {
+  background: #1c2230;
+  border: 1px solid #2d3a50;
+  color: #7eb3e8;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  text-transform: capitalize;
+}
+
+.tower-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Ability modal rows ── */
+.ability-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  transition: border-color 0.15s;
+}
+
+.ability-row--active {
+  border-color: var(--primary);
+  background: #0d1b2e;
+}
+
+.ability-params {
+  padding-left: 26px;
+  margin-top: 4px;
+}
+
+.ability-params input[type="number"] {
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+/* Tower form */
+#modal-body textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+#modal-body details summary::-webkit-details-marker { color: var(--muted); }
+#modal-body details[open] summary { margin-bottom: 0; }

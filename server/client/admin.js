@@ -7,9 +7,7 @@
 // Only non-secret metadata (role, email, displayName) is kept in sessionStorage.
 const S = {
   // Auth
-  authMode:         sessionStorage.getItem('adminAuthMode') || 'secret',
-  secret:           '', // never persisted to sessionStorage
-  adminJwt:         '', // never persisted to sessionStorage; HttpOnly cookie used instead
+  authMode:         sessionStorage.getItem('adminAuthMode') || 'jwt',
   adminRole:        sessionStorage.getItem('adminRole') || '',
   adminEmail:       sessionStorage.getItem('adminEmail') || '',
   adminDisplayName: sessionStorage.getItem('adminDisplayName') || '',
@@ -42,12 +40,8 @@ function can(perm) {
 }
 
 // ── Auth headers ───────────────────────────────────────────────────────────
-// JWT auth uses HttpOnly cookie (cd_admin) — no Authorization header needed.
-// Legacy secret mode still uses X-Admin-Secret header (in-memory only, never stored).
+// JWT is stored as an HttpOnly cookie (cd_admin) — no Authorization header needed.
 function authHeaders() {
-  if (S.authMode === 'secret' && S.secret) {
-    return { 'Content-Type': 'application/json', 'X-Admin-Secret': S.secret };
-  }
   return { 'Content-Type': 'application/json' };
 }
 
@@ -103,67 +97,131 @@ document.querySelectorAll('nav a').forEach(a => {
   });
 });
 
-// ── Login mode tabs ────────────────────────────────────────────────────────
-function setLoginMode(mode) {
-  S.authMode = mode;
-  document.getElementById('login-secret-form')?.classList.toggle('hidden', mode !== 'secret');
-  document.getElementById('login-email-form')?.classList.toggle('hidden', mode !== 'email');
-  document.getElementById('ltab-secret')?.classList.toggle('active', mode === 'secret');
-  document.getElementById('ltab-email')?.classList.toggle('active', mode === 'email');
+// ── Login mode ─────────────────────────────────────────────────────────────
+function setLoginMode(_mode) {
+  // Secret Key mode removed — always use email/Google/2FA
+  renderGoogleBtn();
 }
 window.setLoginMode = setLoginMode;
+
+// ── Google Sign-In ─────────────────────────────────────────────────────────
+function renderGoogleBtn() {
+  const container = document.getElementById('admin-google-btn-container');
+  if (!container || container.dataset.rendered) return;
+  const clientId = window.__GOOGLE_CLIENT_ID__;
+  if (!clientId || typeof google === 'undefined') return;
+  google.accounts.id.initialize({
+    client_id: clientId,
+    callback: handleAdminGoogleCredential,
+    ux_mode: 'popup',
+  });
+  google.accounts.id.renderButton(container, {
+    type: 'standard', shape: 'rectangular', theme: 'filled_black',
+    text: 'signin_with', size: 'large', width: 280,
+  });
+  container.dataset.rendered = '1';
+}
+
+async function handleAdminGoogleCredential(response) {
+  const errEl = document.getElementById('login-err');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/admin/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: response.credential }),
+      credentials: 'include',
+    });
+    const d = await res.json();
+    if (!res.ok) { errEl.textContent = d.error || 'Google login failed.'; return; }
+    if (d.twoFaRequired) {
+      S._pendingTicket = d.ticket;
+      show2faStep();
+      return;
+    }
+    finishLogin(d);
+  } catch (err) {
+    errEl.textContent = err.message || 'Google login failed.';
+  }
+}
+window.handleAdminGoogleCredential = handleAdminGoogleCredential;
+
+// ── 2FA step helpers ───────────────────────────────────────────────────────
+function show2faStep() {
+  document.getElementById('login-pass-section')?.classList.add('hidden');
+  document.getElementById('login-2fa-section')?.classList.remove('hidden');
+  document.getElementById('login-2fa-code')?.focus();
+}
+
+function cancelLogin2fa() {
+  S._pendingTicket = null;
+  document.getElementById('login-pass-section')?.classList.remove('hidden');
+  document.getElementById('login-2fa-section')?.classList.add('hidden');
+  document.getElementById('login-2fa-code').value = '';
+  document.getElementById('login-err').textContent = '';
+}
+window.cancelLogin2fa = cancelLogin2fa;
+
+async function doLogin2fa() {
+  const errEl = document.getElementById('login-err');
+  const code   = document.getElementById('login-2fa-code')?.value.trim();
+  if (!code) { errEl.textContent = 'Enter your 2FA code.'; return; }
+  try {
+    const res = await fetch('/admin/login/2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket: S._pendingTicket, code }),
+      credentials: 'include',
+    });
+    const d = await res.json();
+    if (!res.ok) { errEl.textContent = d.error || '2FA failed.'; return; }
+    S._pendingTicket = null;
+    finishLogin(d);
+  } catch (err) {
+    errEl.textContent = err.message || '2FA failed.';
+  }
+}
+window.doLogin2fa = doLogin2fa;
+
+function finishLogin(d) {
+  S.adminRole        = d.role;
+  S.adminEmail       = d.email;
+  S.adminDisplayName = d.displayName || d.email;
+  S.authMode         = 'jwt';
+  sessionStorage.setItem('adminRole',        d.role);
+  sessionStorage.setItem('adminEmail',       d.email);
+  sessionStorage.setItem('adminDisplayName', d.displayName || d.email);
+  sessionStorage.setItem('adminAuthMode',    'jwt');
+  enterApp();
+}
 
 // ── Login / Logout ─────────────────────────────────────────────────────────
 async function doLogin() {
   const errEl = document.getElementById('login-err');
   errEl.textContent = '';
-
+  const email    = document.getElementById('login-email')?.value.trim();
+  const password = document.getElementById('login-password')?.value;
+  if (!email || !password) { errEl.textContent = 'Enter email and password.'; return; }
   try {
-    if (S.authMode === 'email') {
-      const email    = document.getElementById('login-email')?.value.trim();
-      const password = document.getElementById('login-password')?.value;
-      if (!email || !password) { errEl.textContent = 'Enter email and password.'; return; }
-
-      const res = await fetch('/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        errEl.textContent = d.error || 'Login failed.';
-        return;
-      }
-      const d = await res.json();
-      // JWT is stored as HttpOnly cookie by server — NOT in sessionStorage
-      S.adminRole        = d.role;
-      S.adminEmail       = d.email;
-      S.adminDisplayName = d.displayName || d.email;
-      S.authMode         = 'jwt';
-      sessionStorage.setItem('adminRole',        d.role);
-      sessionStorage.setItem('adminEmail',       d.email);
-      sessionStorage.setItem('adminDisplayName', d.displayName || d.email);
-      sessionStorage.setItem('adminAuthMode',    'jwt');
-    } else {
-      const secret = document.getElementById('login-secret')?.value.trim();
-      if (!secret) { errEl.textContent = 'Enter admin secret.'; return; }
-      // Secret kept in memory only — never written to sessionStorage
-      S.secret   = secret;
-      S.authMode = 'secret';
-      const r = await fetch('/admin/stats/daily', { method: 'GET', credentials: 'include', headers: authHeaders() });
-      if (!r.ok) throw new Error('Invalid secret');
-      S.adminRole        = 'owner';
-      S.adminEmail       = 'ADMIN_SECRET';
-      S.adminDisplayName = 'Admin (Secret Key)';
-      sessionStorage.setItem('adminRole',        'owner');
-      sessionStorage.setItem('adminEmail',       'ADMIN_SECRET');
-      sessionStorage.setItem('adminDisplayName', 'Admin (Secret Key)');
-      sessionStorage.setItem('adminAuthMode',    'secret');
+    const res = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      errEl.textContent = d.error || 'Login failed.';
+      return;
     }
-    enterApp();
+    const d = await res.json();
+    if (d.twoFaRequired) {
+      S._pendingTicket = d.ticket;
+      show2faStep();
+      return;
+    }
+    finishLogin(d);
   } catch (err) {
-    S.secret   = '';
-    S.adminJwt = '';
     errEl.textContent = err.message || 'Login failed.';
   }
 }
@@ -177,6 +235,8 @@ function enterApp() {
     const roleBadge = S.adminRole ? ` <span class="badge badge-blue" style="font-size:10px">${esc(S.adminRole)}</span>` : '';
     identity.innerHTML = esc(S.adminDisplayName) + roleBadge;
   }
+  const btnMyAccount = document.getElementById('btn-my-account');
+  if (btnMyAccount) btnMyAccount.style.display = '';
   if (can('admin.write')) {
     document.getElementById('nav-team')?.classList.remove('hidden');
   }
@@ -185,12 +245,11 @@ function enterApp() {
 }
 
 function doLogout() {
-  // Clear server-side HttpOnly cookie
   fetch('/admin/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-  // Clear non-secret sessionStorage metadata
   ['adminRole','adminEmail','adminDisplayName','adminAuthMode']
     .forEach(k => sessionStorage.removeItem(k));
-  S.secret = S.adminJwt = S.adminRole = S.adminEmail = S.adminDisplayName = '';
+  S.adminRole = S.adminEmail = S.adminDisplayName = '';
+  S.authMode = 'jwt';
   stopLivePoll();
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login-screen').style.display = '';
@@ -222,6 +281,7 @@ function loadTab(tab) {
   const m = {
     dashboard: loadDashboard,
     players:   loadPlayers,
+    towers:    loadTowers,
     anticheat: loadAnticheat,
     matches:   loadMatches,
     analytics: loadAnalytics,
@@ -257,6 +317,7 @@ function esc(s) {
 function statusBadge(status) {
   const map = {
     active: 'badge-green', suspended: 'badge-red',
+    verified: 'badge-green', unverified: 'badge-amber',
     completed: 'badge-blue', in_progress: 'badge-amber',
     abandoned: 'badge-gray', pending: 'badge-gray',
     win: 'badge-green', loss: 'badge-red', draw: 'badge-gray',
@@ -381,6 +442,8 @@ function renderPlayersTable(wrap) {
     <tr>
       <td><a href="#" onclick="openPlayerModal('${p.id}');return false">${esc(p.display_name)}</a></td>
       <td class="mono text-muted" style="font-size:11px">${p.id.slice(0,8)}…</td>
+      <td class="text-muted">${esc(p.email || '—')}</td>
+      <td>${statusBadge(p.email_verified ? 'verified' : 'unverified')}</td>
       <td>${statusBadge(p.status)}</td>
       <td>${p.rating != null ? Math.round(p.rating) : '—'}</td>
       <td>${p.wins ?? 0} / ${p.losses ?? 0}</td>
@@ -397,7 +460,7 @@ function renderPlayersTable(wrap) {
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Display Name</th><th>ID</th><th>Status</th>
+          <th>Display Name</th><th>ID</th><th>Email</th><th>Verification</th><th>Status</th>
           <th>Rating</th><th>W/L</th><th>Joined</th><th>Actions</th>
         </tr></thead>
         <tbody>${trs}</tbody>
@@ -448,6 +511,18 @@ async function openPlayerModal(id) {
           <div class="form-group">
             <label>ID</label>
             <div class="mono" style="font-size:12px">${p.id}</div>
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <div>${esc(p.email || '—')}</div>
+          </div>
+          <div class="form-group">
+            <label>Verification</label>
+            <div>${statusBadge(p.email_verified ? 'verified' : 'unverified')}</div>
+          </div>
+          <div class="form-group">
+            <label>Auth Methods</label>
+            <div class="text-muted">${p.has_google_auth ? 'Google' : ''}${p.has_google_auth && p.has_password_auth ? ' + ' : ''}${p.has_password_auth ? 'Password' : ''}${!p.has_google_auth && !p.has_password_auth ? 'Unknown' : ''}</div>
           </div>
           <div class="form-group">
             <label>Status</label>
@@ -944,6 +1019,31 @@ function renderConfig() {
       <td>${t.splash != null ? (t.splash ? 'Yes' : 'No') : '—'}</td>
     </tr>`).join('');
 
+  // Damage vs Armor multiplier matrix
+  const dmgMults = cfg.damageMultipliers || {};
+  const dmgTypes   = Object.keys(dmgMults);
+  const armorTypes = dmgTypes.length ? Object.keys(dmgMults[dmgTypes[0]]) : [];
+
+  function multCell(dmgType, armorType, val) {
+    const color = val > 1.0 ? '#1b5e20' : val < 1.0 ? '#b71c1c' : '#1a2430';
+    const textColor = val > 1.0 ? '#a5d6a7' : val < 1.0 ? '#ef9a9a' : '#90a4ae';
+    if (canWrite && isDraft) {
+      return `<td style="padding:2px 4px">
+        <input type="number" class="cfg-input" data-section="damageMultipliers"
+          data-dmgtype="${esc(dmgType)}" data-armortype="${esc(armorType)}"
+          value="${val}" step="0.01" min="0" max="5"
+          style="width:58px;background:${color};color:${textColor};border-color:#444;text-align:center">
+      </td>`;
+    }
+    return `<td style="background:${color};color:${textColor};text-align:center;font-size:12px;padding:4px 8px">${val.toFixed(2)}</td>`;
+  }
+
+  const dmgMatrixRows = dmgTypes.map(dt => `
+    <tr>
+      <td><strong>${esc(dt)}</strong></td>
+      ${armorTypes.map(at => multCell(dt, at, dmgMults[dt]?.[at] ?? 1)).join('')}
+    </tr>`).join('');
+
   const histHtml = configHistory.slice(0, 8).map(v => `
     <tr>
       <td class="mono text-muted" style="font-size:11px">${v.id.slice(0,8)}</td>
@@ -1006,6 +1106,21 @@ function renderConfig() {
       </div>
     </div>
 
+    <div class="section" style="margin-bottom:16px">
+      <div class="section-header"><h3>Damage vs Armor Multipliers</h3></div>
+      <div class="section-body" style="padding:0">
+        <div class="tbl-wrap">
+          ${dmgTypes.length ? `<table>
+            <thead><tr>
+              <th>Dmg Type ↓ / Armor →</th>
+              ${armorTypes.map(a => `<th>${esc(a)}</th>`).join('')}
+            </tr></thead>
+            <tbody>${dmgMatrixRows}</tbody>
+          </table>` : '<p class="text-muted" style="padding:12px">No multiplier data.</p>'}
+        </div>
+      </div>
+    </div>
+
     <div class="section">
       <div class="section-header"><h3>Version History</h3></div>
       <div class="section-body" style="padding:0">
@@ -1049,6 +1164,10 @@ function collectDraftEdits() {
       configDraft[configMode].unitDefs[inp.dataset.unit][key] = val;
     } else if (section === 'towerDefs') {
       configDraft[configMode].towerDefs[inp.dataset.tower][key] = val;
+    } else if (section === 'damageMultipliers') {
+      const { dmgtype, armortype } = inp.dataset;
+      if (!configDraft[configMode].damageMultipliers[dmgtype]) return;
+      configDraft[configMode].damageMultipliers[dmgtype][armortype] = val;
     }
   });
 }
@@ -1436,14 +1555,540 @@ async function submitEditAdmin(id) {
 window.submitEditAdmin = submitEditAdmin;
 
 // ═══════════════════════════════════════════════════════════════════════
+// MY ACCOUNT (self-management: password, 2FA, linked auth)
+// ═══════════════════════════════════════════════════════════════════════
+async function myAccountModal() {
+  let me;
+  try { me = (await api('GET', '/admin/me')).user; }
+  catch (err) { toast(`Load failed: ${err.message}`, 'err'); return; }
+
+  const has2fa   = !!me.totp_enabled;
+  const hasGoogle = !!me.has_google;
+
+  openModal('My Account', `
+    <div class="section-header" style="margin-bottom:12px">
+      <div>
+        <strong>${esc(me.display_name)}</strong>
+        <span class="badge badge-blue" style="font-size:10px;margin-left:6px">${esc(me.role)}</span>
+      </div>
+      <div class="text-muted" style="font-size:12px">${esc(me.email)}</div>
+    </div>
+
+    <div class="form-group" style="border-top:1px solid #333;padding-top:16px">
+      <label style="font-weight:600">Change Password</label>
+      <input type="password" id="me-cur-pass" placeholder="Current password (leave blank if none set)" style="margin-bottom:6px">
+      <input type="password" id="me-new-pass" placeholder="New password (min 8 chars)">
+    </div>
+    <div style="margin-bottom:20px">
+      <button class="btn-primary btn-sm" onclick="submitMyPassword()">Update Password</button>
+    </div>
+
+    <div style="border-top:1px solid #333;padding-top:16px">
+      <label style="font-weight:600;display:block;margin-bottom:8px">Two-Factor Authentication</label>
+      ${has2fa
+        ? `<p class="text-muted" style="font-size:12px;margin-bottom:8px">2FA is <strong style="color:#4caf50">enabled</strong>. Enter your current code to disable it.</p>
+           <input type="text" id="me-2fa-disable-code" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="margin-bottom:6px">
+           <button class="btn-sm" style="background:#c62828" onclick="submitDisable2fa()">Disable 2FA</button>`
+        : `<p class="text-muted" style="font-size:12px;margin-bottom:8px">2FA is <strong style="color:#888">not enabled</strong>.</p>
+           <button class="btn-sm btn-primary" onclick="setup2faFlow()">Set up 2FA</button>`
+      }
+    </div>
+
+    <div style="border-top:1px solid #333;padding-top:16px;margin-top:16px">
+      <label style="font-weight:600;display:block;margin-bottom:4px">Linked Auth</label>
+      <p class="text-muted" style="font-size:12px">
+        Password login: ${me.password_hash !== undefined ? 'set' : (hasGoogle ? 'none (SSO-only)' : 'set')}&nbsp;&nbsp;
+        Google SSO: ${hasGoogle ? '<span style="color:#4caf50">linked</span>' : '<span style="color:#888">not linked</span>'}
+      </p>
+    </div>
+  `, '');
+}
+window.myAccountModal = myAccountModal;
+
+async function submitMyPassword() {
+  const cur  = document.getElementById('me-cur-pass')?.value;
+  const next = document.getElementById('me-new-pass')?.value;
+  if (!next || next.length < 8) { toast('New password must be at least 8 chars', 'err'); return; }
+  try {
+    await api('POST', '/admin/me/password', { currentPassword: cur || undefined, newPassword: next });
+    toast('Password updated', 'ok');
+    document.getElementById('me-cur-pass').value = '';
+    document.getElementById('me-new-pass').value = '';
+  } catch (err) { toast(`Failed: ${err.message}`, 'err'); }
+}
+window.submitMyPassword = submitMyPassword;
+
+async function setup2faFlow() {
+  let data;
+  try { data = await api('POST', '/admin/me/2fa/setup'); }
+  catch (err) { toast(`Setup failed: ${err.message}`, 'err'); return; }
+
+  openModal('Set up 2FA', `
+    <p style="font-size:13px;margin-bottom:12px">
+      Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.), then enter the 6-digit code to confirm.
+    </p>
+    <div style="text-align:center;margin-bottom:12px">
+      <img src="${data.qrCodeDataUrl}" alt="QR Code" style="max-width:200px;border-radius:4px">
+    </div>
+    <p class="text-muted" style="font-size:11px;text-align:center;margin-bottom:12px">
+      Manual key: <code>${esc(data.secret)}</code>
+    </p>
+    <div class="form-group">
+      <label>Confirmation Code</label>
+      <input type="text" id="me-2fa-enable-code" placeholder="000000" maxlength="6" inputmode="numeric"
+        onkeydown="if(event.key==='Enter')submitEnable2fa()">
+    </div>
+  `, `
+    <button class="btn-primary" onclick="submitEnable2fa()">Enable 2FA</button>
+    <button onclick="closeModal()">Cancel</button>
+  `);
+}
+window.setup2faFlow = setup2faFlow;
+
+async function submitEnable2fa() {
+  const code = document.getElementById('me-2fa-enable-code')?.value.trim();
+  if (!code) { toast('Enter the 6-digit code', 'err'); return; }
+  try {
+    await api('POST', '/admin/me/2fa/enable', { code });
+    toast('2FA enabled — you will need your authenticator on next login', 'ok');
+    closeModal();
+  } catch (err) { toast(`Failed: ${err.message}`, 'err'); }
+}
+window.submitEnable2fa = submitEnable2fa;
+
+async function submitDisable2fa() {
+  const code = document.getElementById('me-2fa-disable-code')?.value.trim();
+  if (!code) { toast('Enter your current 2FA code', 'err'); return; }
+  try {
+    await api('POST', '/admin/me/2fa/disable', { code });
+    toast('2FA disabled', 'ok');
+    closeModal();
+  } catch (err) { toast(`Failed: ${err.message}`, 'err'); }
+}
+window.submitDisable2fa = submitDisable2fa;
+
+// ═══════════════════════════════════════════════════════════════════════
+// TOWERS
+// ═══════════════════════════════════════════════════════════════════════
+
+const TOWER_CATEGORIES = ['damage','slow_control','aura_support','economy','special'];
+const DAMAGE_TYPES     = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
+const TARGETING_OPTS   = ['first','last','strongest','weakest','closest'];
+
+const CATEGORY_LABELS = {
+  damage: 'Damage', slow_control: 'Slow / Control',
+  aura_support: 'Aura / Support', economy: 'Economy', special: 'Special',
+};
+const DTYPE_COLORS = {
+  NORMAL: '#aaa', PIERCE: '#4fc3f7', SPLASH: '#ff7043',
+  SIEGE:  '#ab47bc', MAGIC: '#7e57c2', PHYSICAL: '#ff8a65', TRUE: '#ef5350',
+};
+
+async function loadTowers() {
+  setContent('<p class="load">Loading towers…</p>');
+  try {
+    const d = await api('GET', '/admin/towers');
+    const towers = d.towers || [];
+    renderTowerList(towers);
+  } catch (err) {
+    setContent(`<p class="load text-danger">Error: ${esc(err.message)}</p>`);
+  }
+}
+
+function renderTowerList(towers) {
+  const canEdit = can('config.write');
+  const cards = towers.map(t => towerCard(t, canEdit)).join('');
+  setContent(`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <h2 style="margin:0">Towers</h2>
+        <p class="text-muted" style="font-size:12px;margin:4px 0 0">
+          ${towers.length} tower${towers.length !== 1 ? 's' : ''} — data-driven, no deployment required
+        </p>
+      </div>
+      ${canEdit ? '<button class="btn-success" onclick="openCreateTowerModal()">+ New Tower</button>' : ''}
+    </div>
+
+    ${towers.length === 0
+      ? '<div class="section"><div class="section-body" style="padding:32px;text-align:center;color:var(--muted)">No towers yet. Click <strong>+ New Tower</strong> to create one.</div></div>'
+      : `<div class="tower-grid">${cards}</div>`}
+  `);
+}
+
+function towerCard(t, canEdit) {
+  const icon = t.icon_url
+    ? `<img src="${esc(t.icon_url)}" alt="${esc(t.name)}" class="tower-card-icon">`
+    : `<div class="tower-card-icon-placeholder">${esc(t.name[0] || '?')}</div>`;
+
+  const dtColor = DTYPE_COLORS[t.damage_type] || '#aaa';
+  const abilities = (t.abilities || []);
+  const abilityBadges = abilities.map(a =>
+    `<span class="ability-badge">${esc(a.ability_key.replace(/_/g,' '))}</span>`
+  ).join('') || '<span class="text-muted" style="font-size:11px">No abilities</span>';
+
+  return `
+    <div class="tower-card ${t.enabled ? '' : 'tower-card--disabled'}">
+      <div class="tower-card-header">
+        ${icon}
+        <div class="tower-card-title">
+          <strong>${esc(t.name)}</strong>
+          <span class="badge ${t.enabled ? 'badge-green' : 'badge-gray'}" style="font-size:10px">
+            ${t.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        </div>
+        <span class="tower-dtype-badge" style="background:${dtColor}22;color:${dtColor};border:1px solid ${dtColor}44">
+          ${esc(t.damage_type)}
+        </span>
+      </div>
+
+      <p class="tower-card-desc text-muted">${esc(t.description || '—')}</p>
+
+      <div class="tower-stat-grid">
+        <div class="tower-stat"><span class="tower-stat-label">Damage</span><span class="tower-stat-val">${(+t.attack_damage).toFixed(1)}</span></div>
+        <div class="tower-stat"><span class="tower-stat-label">Atk Speed</span><span class="tower-stat-val">${(+t.attack_speed).toFixed(2)}/s</span></div>
+        <div class="tower-stat"><span class="tower-stat-label">Range</span><span class="tower-stat-val">${(+t.range).toFixed(3)}</span></div>
+        <div class="tower-stat"><span class="tower-stat-label">Cost</span><span class="tower-stat-val">${t.base_cost}g</span></div>
+        ${t.splash_radius ? `<div class="tower-stat"><span class="tower-stat-label">Splash R</span><span class="tower-stat-val">${(+t.splash_radius).toFixed(3)}</span></div>` : ''}
+        <div class="tower-stat"><span class="tower-stat-label">Category</span><span class="tower-stat-val">${esc(CATEGORY_LABELS[t.category] || t.category)}</span></div>
+      </div>
+
+      <div class="tower-card-abilities">${abilityBadges}</div>
+
+      <div class="tower-card-actions">
+        ${canEdit ? `
+          <button class="btn-sm btn-primary" onclick="openEditTowerModal(${t.id})">Edit</button>
+          <button class="btn-sm" onclick="openAbilityModal(${t.id},'${esc(t.name)}')">Abilities</button>
+          <button class="btn-sm" onclick="toggleTower(${t.id},${!t.enabled})" style="${t.enabled ? 'background:#c62828' : ''}">
+            ${t.enabled ? 'Disable' : 'Enable'}
+          </button>
+          <button class="btn-sm" style="background:#b71c1c" onclick="deleteTower(${t.id},'${esc(t.name)}')">Delete</button>
+        ` : ''}
+      </div>
+    </div>`;
+}
+
+// ── Tower create/edit modal ──────────────────────────────────────────────────
+
+function towerFormHtml(t) {
+  const targeting = (t.targeting_options || 'first').split(',').map(s => s.trim());
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Tower Name *</label>
+        <input type="text" id="tf-name" value="${esc(t.name || '')}" placeholder="e.g. Ice Archer">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Description</label>
+        <textarea id="tf-desc" rows="2" style="resize:vertical">${esc(t.description || '')}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label>Category</label>
+        <select id="tf-category">
+          ${TOWER_CATEGORIES.map(c =>
+            `<option value="${c}" ${(t.category||'damage')===c?'selected':''}>${esc(CATEGORY_LABELS[c])}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Damage Type</label>
+        <select id="tf-dtype">
+          ${DAMAGE_TYPES.map(d =>
+            `<option value="${d}" ${(t.damage_type||'NORMAL')===d?'selected':''}>${d}</option>`
+          ).join('')}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Attack Damage *</label>
+        <input type="number" id="tf-dmg" value="${t.attack_damage||10}" step="0.1" min="0.1">
+      </div>
+      <div class="form-group">
+        <label>Attack Speed (attacks/s)</label>
+        <input type="number" id="tf-aspd" value="${t.attack_speed||1}" step="0.05" min="0.01">
+      </div>
+      <div class="form-group">
+        <label>Range *</label>
+        <input type="number" id="tf-range" value="${t.range||0.35}" step="0.01" min="0.01">
+      </div>
+      <div class="form-group">
+        <label>Base Cost (gold) *</label>
+        <input type="number" id="tf-cost" value="${t.base_cost||10}" step="1" min="1">
+      </div>
+      <div class="form-group">
+        <label>Splash Radius <span class="text-muted">(blank = none)</span></label>
+        <input type="number" id="tf-splash" value="${t.splash_radius||''}" step="0.01" min="0" placeholder="e.g. 0.08">
+      </div>
+      <div class="form-group">
+        <label>Projectile Speed <span class="text-muted">(blank = instant)</span></label>
+        <input type="number" id="tf-pspeed" value="${t.projectile_speed||''}" step="0.001" min="0" placeholder="e.g. 0.02">
+      </div>
+    </div>
+
+    <details style="margin:12px 0">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:8px">Upgrade Scaling</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:8px 0">
+        <div class="form-group">
+          <label style="font-size:11px">Upgrade Cost Mult</label>
+          <input type="number" id="tf-ucm" value="${t.upgrade_cost_mult||1}" step="0.05" min="0.1">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Damage Scaling/lvl</label>
+          <input type="number" id="tf-dscale" value="${t.damage_scaling||0.12}" step="0.01" min="0">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Range Scaling/lvl</label>
+          <input type="number" id="tf-rscale" value="${t.range_scaling||0.015}" step="0.001" min="0">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Atk Speed Scaling/lvl</label>
+          <input type="number" id="tf-ascale" value="${t.attack_speed_scaling||0.015}" step="0.001" min="0">
+        </div>
+      </div>
+    </details>
+
+    <details style="margin:12px 0">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:8px">Targeting Options</summary>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 0">
+        ${TARGETING_OPTS.map(o => `
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" class="tf-target" value="${o}" ${targeting.includes(o)?'checked':''}> ${o}
+          </label>`).join('')}
+      </div>
+    </details>
+
+    <details style="margin:12px 0">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:8px">Visual Assets (URL)</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 0">
+        <div class="form-group">
+          <label style="font-size:11px">Icon URL</label>
+          <input type="url" id="tf-icon" value="${esc(t.icon_url||'')}" placeholder="https://…">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Sprite URL</label>
+          <input type="url" id="tf-sprite" value="${esc(t.sprite_url||'')}" placeholder="https://…">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Projectile URL</label>
+          <input type="url" id="tf-proj" value="${esc(t.projectile_url||'')}" placeholder="https://…">
+        </div>
+        <div class="form-group">
+          <label style="font-size:11px">Animation URL</label>
+          <input type="url" id="tf-anim" value="${esc(t.animation_url||'')}" placeholder="https://…">
+        </div>
+      </div>
+    </details>
+
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="tf-enabled" ${(t.enabled !== false) ? 'checked' : ''}> Enabled in game
+      </label>
+    </div>
+  `;
+}
+
+function gatherTowerForm() {
+  const targets = [...document.querySelectorAll('.tf-target:checked')].map(c => c.value);
+  return {
+    name:                 document.getElementById('tf-name')?.value.trim(),
+    description:          document.getElementById('tf-desc')?.value.trim(),
+    category:             document.getElementById('tf-category')?.value,
+    damage_type:          document.getElementById('tf-dtype')?.value,
+    attack_damage:        +document.getElementById('tf-dmg')?.value,
+    attack_speed:         +document.getElementById('tf-aspd')?.value,
+    range:                +document.getElementById('tf-range')?.value,
+    base_cost:            +document.getElementById('tf-cost')?.value,
+    splash_radius:        document.getElementById('tf-splash')?.value ? +document.getElementById('tf-splash')?.value : null,
+    projectile_speed:     document.getElementById('tf-pspeed')?.value ? +document.getElementById('tf-pspeed')?.value : null,
+    upgrade_cost_mult:    +document.getElementById('tf-ucm')?.value,
+    damage_scaling:       +document.getElementById('tf-dscale')?.value,
+    range_scaling:        +document.getElementById('tf-rscale')?.value,
+    attack_speed_scaling: +document.getElementById('tf-ascale')?.value,
+    targeting_options:    targets.join(',') || 'first',
+    icon_url:             document.getElementById('tf-icon')?.value.trim() || null,
+    sprite_url:           document.getElementById('tf-sprite')?.value.trim() || null,
+    projectile_url:       document.getElementById('tf-proj')?.value.trim() || null,
+    animation_url:        document.getElementById('tf-anim')?.value.trim() || null,
+    enabled:              document.getElementById('tf-enabled')?.checked,
+  };
+}
+
+function openCreateTowerModal() {
+  openModal('New Tower', towerFormHtml({}), `
+    <button class="btn-primary" onclick="submitCreateTower()">Create Tower</button>
+    <button onclick="closeModal()">Cancel</button>
+  `);
+}
+window.openCreateTowerModal = openCreateTowerModal;
+
+async function submitCreateTower() {
+  const data = gatherTowerForm();
+  if (!data.name) { toast('Tower Name is required', 'err'); return; }
+  if (!data.attack_damage || data.attack_damage <= 0) { toast('Attack Damage must be > 0', 'err'); return; }
+  if (!data.range || data.range <= 0) { toast('Range must be > 0', 'err'); return; }
+  if (!data.base_cost || data.base_cost <= 0) { toast('Base Cost must be > 0', 'err'); return; }
+  try {
+    await api('POST', '/admin/towers', data);
+    toast(`Tower "${data.name}" created`, 'ok');
+    closeModal();
+    loadTowers();
+  } catch (err) { toast(`Create failed: ${err.message}`, 'err'); }
+}
+window.submitCreateTower = submitCreateTower;
+
+async function openEditTowerModal(id) {
+  try {
+    const d = await api('GET', `/admin/towers/${id}`);
+    const t = d.tower;
+    openModal(`Edit Tower: ${t.name}`, towerFormHtml(t), `
+      <button class="btn-primary" onclick="submitEditTower(${id})">Save Changes</button>
+      <button onclick="closeModal()">Cancel</button>
+    `);
+  } catch (err) { toast(`Load failed: ${err.message}`, 'err'); }
+}
+window.openEditTowerModal = openEditTowerModal;
+
+async function submitEditTower(id) {
+  const data = gatherTowerForm();
+  if (!data.name) { toast('Tower Name is required', 'err'); return; }
+  try {
+    await api('PATCH', `/admin/towers/${id}`, data);
+    toast('Tower updated', 'ok');
+    closeModal();
+    loadTowers();
+  } catch (err) { toast(`Update failed: ${err.message}`, 'err'); }
+}
+window.submitEditTower = submitEditTower;
+
+async function toggleTower(id, enable) {
+  try {
+    await api('PATCH', `/admin/towers/${id}`, { enabled: enable });
+    toast(`Tower ${enable ? 'enabled' : 'disabled'}`, 'ok');
+    loadTowers();
+  } catch (err) { toast(`Failed: ${err.message}`, 'err'); }
+}
+window.toggleTower = toggleTower;
+
+async function deleteTower(id, name) {
+  if (!confirm(`Delete tower "${name}"? This cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/admin/towers/${id}`);
+    toast(`Tower "${name}" deleted`, 'ok');
+    loadTowers();
+  } catch (err) { toast(`Delete failed: ${err.message}`, 'err'); }
+}
+window.deleteTower = deleteTower;
+
+// ── Ability management modal ─────────────────────────────────────────────────
+
+async function openAbilityModal(towerId, towerName) {
+  let towerData, abilityCatalog;
+  try {
+    [towerData, abilityCatalog] = await Promise.all([
+      api('GET', `/admin/towers/${towerId}`),
+      api('GET', '/admin/abilities'),
+    ]);
+  } catch (err) { toast(`Load failed: ${err.message}`, 'err'); return; }
+
+  const tower     = towerData.tower;
+  const catalog   = abilityCatalog.abilities || [];
+  const assigned  = new Map((tower.abilities || []).map(a => [a.ability_key, a.params]));
+
+  const catalogByCat = {};
+  for (const ab of catalog) {
+    (catalogByCat[ab.category] = catalogByCat[ab.category] || []).push(ab);
+  }
+
+  const catLabels = { damage: 'Damage', status_effect: 'Status Effects', utility: 'Utility', aura: 'Aura Effects' };
+
+  let html = `<p class="text-muted" style="font-size:12px;margin-bottom:16px">
+    Attach modular abilities to <strong>${esc(towerName)}</strong>. Each ability can have configurable parameters.
+  </p>`;
+
+  for (const [cat, abs] of Object.entries(catalogByCat)) {
+    html += `<h4 style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:16px 0 8px">${catLabels[cat]||cat}</h4>`;
+    for (const ab of abs) {
+      const isAssigned = assigned.has(ab.key);
+      const params     = isAssigned ? assigned.get(ab.key) : {};
+      const schema     = ab.param_schema || {};
+      const paramEntries = Object.entries(schema);
+
+      html += `
+        <div class="ability-row ${isAssigned ? 'ability-row--active' : ''}" id="ab-row-${ab.key.replace(/[^a-z0-9]/g,'_')}">
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" class="ab-check" id="ab-${ab.key}" data-key="${ab.key}"
+              ${isAssigned ? 'checked' : ''} onchange="toggleAbilityRow('${ab.key}',${towerId})">
+            <div>
+              <label for="ab-${ab.key}" style="font-weight:600;font-size:13px;cursor:pointer">${esc(ab.name)}</label>
+              <p class="text-muted" style="font-size:11px;margin:2px 0 0">${esc(ab.description)}</p>
+            </div>
+          </div>
+          ${paramEntries.length > 0 ? `
+            <div class="ability-params ${isAssigned ? '' : 'hidden'}" id="ab-params-${ab.key.replace(/[^a-z0-9]/g,'_')}">
+              ${paramEntries.map(([pkey, pdef]) => `
+                <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+                  <label style="font-size:11px;color:var(--muted);min-width:120px">${esc(pdef.label||pkey)}</label>
+                  <input type="number" class="ab-param" data-ability="${ab.key}" data-param="${pkey}"
+                    value="${params[pkey] !== undefined ? params[pkey] : pdef.default}"
+                    step="${pdef.type==='integer'?1:0.1}"
+                    min="${pdef.min!==undefined?pdef.min:''}"
+                    max="${pdef.max!==undefined?pdef.max:''}"
+                    style="width:80px"
+                    onchange="saveAbilityParam(${towerId},'${ab.key}')">
+                </div>`).join('')}
+            </div>` : ''}
+        </div>`;
+    }
+  }
+
+  openModal(`Abilities: ${towerName}`, html, `<button onclick="closeModal();loadTowers()">Done</button>`);
+}
+window.openAbilityModal = openAbilityModal;
+
+function toggleAbilityRow(abilityKey, towerId) {
+  const cb       = document.getElementById(`ab-${abilityKey}`);
+  const safeKey  = abilityKey.replace(/[^a-z0-9]/g,'_');
+  const paramDiv = document.getElementById(`ab-params-${safeKey}`);
+  const row      = document.getElementById(`ab-row-${safeKey}`);
+
+  if (cb.checked) {
+    paramDiv?.classList.remove('hidden');
+    row?.classList.add('ability-row--active');
+    saveAbilityParam(towerId, abilityKey);
+  } else {
+    paramDiv?.classList.add('hidden');
+    row?.classList.remove('ability-row--active');
+    api('DELETE', `/admin/towers/${towerId}/abilities/${abilityKey}`)
+      .then(() => toast(`Ability removed`, 'ok'))
+      .catch(err => toast(`Remove failed: ${err.message}`, 'err'));
+  }
+}
+window.toggleAbilityRow = toggleAbilityRow;
+
+function saveAbilityParam(towerId, abilityKey) {
+  const inputs = document.querySelectorAll(`.ab-param[data-ability="${abilityKey}"]`);
+  const params = {};
+  inputs.forEach(inp => { params[inp.dataset.param] = +inp.value; });
+  api('POST', `/admin/towers/${towerId}/abilities`, { ability_key: abilityKey, params })
+    .catch(err => toast(`Save failed: ${err.message}`, 'err'));
+}
+window.saveAbilityParam = saveAbilityParam;
+
+// ═══════════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════════
 async function init() {
-  setLoginMode(S.authMode);
+  // Fetch public config (Google client ID etc.)
+  try {
+    const cfg = await fetch('/config').then(r => r.json());
+    if (cfg.googleClientId) window.__GOOGLE_CLIENT_ID__ = cfg.googleClientId;
+  } catch { /* non-fatal */ }
 
-  const hasSecret = S.authMode === 'secret' && S.secret;
-  const hasJwt    = S.authMode === 'jwt'    && S.adminJwt;
-  if (!hasSecret && !hasJwt) return;
+  // Render Google button (GSI may not be loaded yet)
+  if (typeof google !== 'undefined') renderGoogleBtn();
+  else window.addEventListener('load', renderGoogleBtn, { once: true });
+
+  if (S.authMode !== 'jwt') return;
 
   try {
     await api('GET', '/admin/stats/daily');

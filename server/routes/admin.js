@@ -70,18 +70,8 @@ function verifyAdminToken(token) {
   return payload;
 }
 
-// requireAdmin: accepts X-Admin-Secret header (legacy) OR Bearer admin JWT OR cd_admin cookie
+// requireAdmin: accepts Bearer admin JWT OR cd_admin cookie
 function requireAdmin(req, res, next) {
-  const secret = process.env.ADMIN_SECRET;
-
-  // Legacy: secret header → treated as owner
-  if (secret && req.headers['x-admin-secret'] === secret) {
-    req.adminRole  = 'owner';
-    req.adminEmail = 'ADMIN_SECRET';
-    return next();
-  }
-
-  // Bearer admin JWT (Authorization header)
   const auth = req.headers['authorization'];
   const bearerToken = auth?.startsWith('Bearer ') ? auth.slice(7) : null;
   const cookieToken = req.cookies?.cd_admin || null;
@@ -97,7 +87,6 @@ function requireAdmin(req, res, next) {
     } catch { /* fall through */ }
   }
 
-  if (!secret) return res.status(503).json({ error: 'Admin not configured — set ADMIN_SECRET' });
   return res.status(403).json({ error: 'Forbidden' });
 }
 
@@ -161,14 +150,25 @@ router.post('/login', async (req, res) => {
 
   try {
     const r = await db.query(
-      `SELECT id, email, display_name, role, active, password_hash
+      `SELECT id, email, display_name, role, active, password_hash, totp_enabled
        FROM admin_users WHERE lower(email) = lower($1)`,
       [email]
     );
     const user = r.rows[0];
     if (!user || !user.active) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user.password_hash) return res.status(401).json({ error: 'Password login not available — use Google SSO' });
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+
+    // If 2FA is enabled, issue a short-lived pending ticket instead of a full JWT
+    if (user.totp_enabled) {
+      const ticket = jwt.sign(
+        { type: 'admin_2fa_pending', id: user.id },
+        getAdminJwtSecret(),
+        { algorithm: 'HS256', expiresIn: '5m' }
+      );
+      return res.json({ twoFaRequired: true, ticket });
+    }
 
     await db.query(`UPDATE admin_users SET last_login = NOW() WHERE id = $1`, [user.id]);
     const token = issueAdminToken(user);
@@ -184,6 +184,231 @@ router.post('/login', async (req, res) => {
 router.post('/logout', (req, res) => {
   clearAdminCookie(res);
   res.json({ ok: true });
+});
+
+// POST /admin/login/2fa — complete 2FA step after password login
+router.post('/login/2fa', async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const { ticket, code } = req.body;
+  if (!ticket || !code) return res.status(400).json({ error: 'ticket and code required' });
+  try {
+    const payload = jwt.verify(ticket, getAdminJwtSecret(), { algorithms: ['HS256'] });
+    if (payload.type !== 'admin_2fa_pending') return res.status(401).json({ error: 'Invalid ticket' });
+
+    const db = require('../db');
+    const r = await db.query(
+      `SELECT id, email, display_name, role, active, totp_secret, totp_enabled
+       FROM admin_users WHERE id = $1`,
+      [payload.id]
+    );
+    const user = r.rows[0];
+    if (!user || !user.active || !user.totp_enabled) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const { authenticator } = require('otplib');
+    authenticator.options = { window: 1 };
+    const valid = authenticator.verify({ token: String(code).replace(/\s/g, ''), secret: user.totp_secret });
+    if (!valid) return res.status(401).json({ error: 'Invalid 2FA code' });
+
+    await db.query(`UPDATE admin_users SET last_login = NOW() WHERE id = $1`, [user.id]);
+    const token = issueAdminToken(user);
+    setAdminCookie(res, token);
+    res.json({ token, role: user.role, displayName: user.display_name, email: user.email });
+  } catch (err) {
+    log.error('[admin] POST /login/2fa failed', { err: err.message });
+    res.status(401).json({ error: 'Invalid or expired ticket' });
+  }
+});
+
+// POST /admin/auth/google — Google SSO login for admin (must already have account)
+router.post('/auth/google', async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const { credential } = req.body;
+  if (!credential) return res.status(400).json({ error: 'credential required' });
+
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  if (!googleClientId) return res.status(503).json({ error: 'Google SSO not configured' });
+
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (!checkAdminLoginRateLimit(ip)) {
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+
+  try {
+    const { OAuth2Client } = require('google-auth-library');
+    const gClient = new OAuth2Client(googleClientId);
+    const ticket = await gClient.verifyIdToken({ idToken: credential, audience: googleClientId });
+    const p = ticket.getPayload();
+    const googleId = p.sub;
+    const email = p.email;
+
+    const db = require('../db');
+    // Match by google_id first, then fall back to email (to auto-link on first SSO use)
+    const r = await db.query(
+      `SELECT id, email, display_name, role, active, totp_enabled, totp_secret, google_id
+       FROM admin_users
+       WHERE google_id = $1 OR lower(email) = lower($2)
+       ORDER BY (google_id = $1) DESC
+       LIMIT 1`,
+      [googleId, email]
+    );
+    const user = r.rows[0];
+    if (!user || !user.active) {
+      return res.status(401).json({ error: 'No admin account found for this Google account. Contact an owner to create one.' });
+    }
+
+    // Auto-link google_id on first SSO login via email match
+    if (!user.google_id) {
+      await db.query(`UPDATE admin_users SET google_id = $1 WHERE id = $2`, [googleId, user.id]);
+    }
+
+    // If 2FA is enabled, issue a pending ticket
+    if (user.totp_enabled) {
+      const pendingTicket = jwt.sign(
+        { type: 'admin_2fa_pending', id: user.id },
+        getAdminJwtSecret(),
+        { algorithm: 'HS256', expiresIn: '5m' }
+      );
+      return res.json({ twoFaRequired: true, ticket: pendingTicket });
+    }
+
+    await db.query(`UPDATE admin_users SET last_login = NOW() WHERE id = $1`, [user.id]);
+    const token = issueAdminToken(user);
+    setAdminCookie(res, token);
+    res.json({ token, role: user.role, displayName: user.display_name, email: user.email });
+  } catch (err) {
+    log.error('[admin] POST /auth/google failed', { err: err.message });
+    res.status(401).json({ error: 'Google authentication failed' });
+  }
+});
+
+// ── Self-management (authenticated admin acting on their own account) ─────────
+
+// GET /admin/me — return own account info
+router.get('/me', requireAdmin, async (req, res) => {
+  if (!req.adminUserId) return res.status(400).json({ error: 'Only JWT-authenticated admins can use /me' });
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  try {
+    const r = await db.query(
+      `SELECT id, email, display_name, role, active, totp_enabled,
+              (google_id IS NOT NULL) AS has_google, created_at, last_login
+       FROM admin_users WHERE id = $1`,
+      [req.adminUserId]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ user: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] GET /me failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/me/password — change own password
+router.post('/me/password', requireAdmin, async (req, res) => {
+  if (!req.adminUserId) return res.status(400).json({ error: 'Only JWT-authenticated admins can use /me' });
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const { currentPassword, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 chars' });
+  }
+  try {
+    const r = await db.query(
+      `SELECT password_hash FROM admin_users WHERE id = $1`, [req.adminUserId]
+    );
+    const user = r.rows[0];
+    if (!user) return res.status(404).json({ error: 'Not found' });
+    // If account has a password, require the current password for confirmation
+    if (user.password_hash) {
+      if (!currentPassword) return res.status(400).json({ error: 'currentPassword required' });
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    await db.query(`UPDATE admin_users SET password_hash = $1 WHERE id = $2`, [hash, req.adminUserId]);
+    await audit(db, 'change_own_password', 'admin_user', req.adminUserId, {}, req.adminEmail, req.ip);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('[admin] POST /me/password failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/me/2fa/setup — generate TOTP secret + QR code (pending, not yet enabled)
+router.post('/me/2fa/setup', requireAdmin, async (req, res) => {
+  if (!req.adminUserId) return res.status(400).json({ error: 'Only JWT-authenticated admins can use /me' });
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  try {
+    const { authenticator } = require('otplib');
+    const QRCode = require('qrcode');
+    const r = await db.query(`SELECT display_name FROM admin_users WHERE id = $1`, [req.adminUserId]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const secret = authenticator.generateSecret();
+    await db.query(
+      `UPDATE admin_users SET totp_secret = $1, totp_enabled = false WHERE id = $2`,
+      [secret, req.adminUserId]
+    );
+    const otpauth = authenticator.keyuri(r.rows[0].display_name, 'CastleDefender Admin', secret);
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
+    res.json({ secret, qrCodeDataUrl });
+  } catch (err) {
+    log.error('[admin] POST /me/2fa/setup failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/me/2fa/enable — confirm TOTP code and activate 2FA
+router.post('/me/2fa/enable', requireAdmin, async (req, res) => {
+  if (!req.adminUserId) return res.status(400).json({ error: 'Only JWT-authenticated admins can use /me' });
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'code required' });
+  try {
+    const r = await db.query(
+      `SELECT totp_secret FROM admin_users WHERE id = $1`, [req.adminUserId]
+    );
+    if (!r.rows[0]?.totp_secret) return res.status(400).json({ error: 'Run /me/2fa/setup first' });
+    const { authenticator } = require('otplib');
+    authenticator.options = { window: 1 };
+    const valid = authenticator.verify({ token: String(code).replace(/\s/g, ''), secret: r.rows[0].totp_secret });
+    if (!valid) return res.status(401).json({ error: 'Invalid code' });
+    await db.query(`UPDATE admin_users SET totp_enabled = true WHERE id = $1`, [req.adminUserId]);
+    await audit(db, 'enable_2fa', 'admin_user', req.adminUserId, {}, req.adminEmail, req.ip);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('[admin] POST /me/2fa/enable failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/me/2fa/disable — verify current TOTP then disable
+router.post('/me/2fa/disable', requireAdmin, async (req, res) => {
+  if (!req.adminUserId) return res.status(400).json({ error: 'Only JWT-authenticated admins can use /me' });
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'code required' });
+  try {
+    const r = await db.query(
+      `SELECT totp_secret, totp_enabled FROM admin_users WHERE id = $1`, [req.adminUserId]
+    );
+    if (!r.rows[0]?.totp_enabled) return res.status(400).json({ error: '2FA is not enabled' });
+    const { authenticator } = require('otplib');
+    authenticator.options = { window: 1 };
+    const valid = authenticator.verify({ token: String(code).replace(/\s/g, ''), secret: r.rows[0].totp_secret });
+    if (!valid) return res.status(401).json({ error: 'Invalid code' });
+    await db.query(
+      `UPDATE admin_users SET totp_enabled = false, totp_secret = NULL WHERE id = $1`,
+      [req.adminUserId]
+    );
+    await audit(db, 'disable_2fa', 'admin_user', req.adminUserId, {}, req.adminEmail, req.ip);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('[admin] POST /me/2fa/disable failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // POST /admin/setup — create first admin user (only when table is empty)
@@ -265,13 +490,13 @@ router.post('/users', requireAdmin, requirePermission('admin.write'), async (req
   }
 });
 
-// PATCH /admin/users/:id — update role or active status (owner only)
+// PATCH /admin/users/:id — update role, active status, displayName, or password (owner only)
 router.patch('/users/:id', requireAdmin, async (req, res) => {
   if (req.adminRole !== 'owner') return res.status(403).json({ error: 'Only owners can modify admin users' });
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid user ID' });
   const db = require('../db');
-  const { role, active } = req.body;
+  const { role, active, password, displayName } = req.body;
   const sets = []; const params = [];
   if (role !== undefined) {
     if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
@@ -279,6 +504,15 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
   }
   if (active !== undefined) {
     params.push(!!active); sets.push(`active = $${params.length}`);
+  }
+  if (displayName !== undefined) {
+    params.push(String(displayName).trim().slice(0, 40));
+    sets.push(`display_name = $${params.length}`);
+  }
+  if (password !== undefined && password !== '') {
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 chars' });
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    params.push(hash); sets.push(`password_hash = $${params.length}`);
   }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
   params.push(req.params.id);
@@ -289,7 +523,8 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
       params
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Admin user not found' });
-    await audit(db, 'update_admin_user', 'admin_user', req.params.id, { role, active }, req.adminEmail, req.ip);
+    await audit(db, 'update_admin_user', 'admin_user', req.params.id,
+      { role, active, displayName, passwordChanged: !!password }, req.adminEmail, req.ip);
     res.json({ user: result.rows[0] });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
@@ -369,7 +604,13 @@ router.get('/players', requireAdmin, async (req, res) => {
   try {
     const [rows, totalRes] = await Promise.all([
       db.query(
-        `SELECT p.id, p.display_name, p.region, p.status, p.created_at,
+        `SELECT p.id, p.display_name, p.email, p.email_verified, p.region, p.status, p.created_at,
+                CASE
+                  WHEN p.google_id IS NOT NULL AND p.password_hash IS NOT NULL THEN 'google+password'
+                  WHEN p.google_id IS NOT NULL THEN 'google'
+                  WHEN p.password_hash IS NOT NULL THEN 'password'
+                  ELSE 'unknown'
+                END AS auth_provider,
                 r.rating, r.wins, r.losses
          FROM players p
          LEFT JOIN ratings r ON r.player_id = p.id AND r.mode = '2v2_ranked'
@@ -393,7 +634,9 @@ router.get('/players/:id', requireAdmin, async (req, res) => {
   try {
     const [playerRes, ratingsRes, matchesRes, ratingHistRes] = await Promise.all([
       db.query(
-        `SELECT id, display_name, region, status, ban_reason, banned_at, created_at, updated_at
+        `SELECT id, display_name, email, email_verified, region, status, ban_reason, banned_at, created_at, updated_at,
+                (google_id IS NOT NULL)   AS has_google_auth,
+                (password_hash IS NOT NULL) AS has_password_auth
          FROM players WHERE id = $1`, [req.params.id]
       ),
       db.query(`SELECT mode, mu, sigma, rating, wins, losses FROM ratings WHERE player_id = $1`, [req.params.id]),
@@ -822,8 +1065,8 @@ router.patch('/flags/:name', requireAdmin, requirePermission('flag.write'), asyn
 
 // GET /admin/game-config — active config for a mode (defaults if nothing published)
 router.get('/game-config', requireAdmin, async (req, res) => {
-  const { getDefaults } = require('../gameDefaults');
-  const defaults = { classic: getDefaults('classic'), multilane: getDefaults('multilane') };
+  const { CLASSIC, MULTILANE } = require('../gameDefaults');
+  const defaults = { classic: CLASSIC, multilane: MULTILANE };
 
   if (!process.env.DATABASE_URL) return res.json({ classic: defaults.classic, multilane: defaults.multilane, dbSource: false });
   const db  = require('../db');
@@ -924,6 +1167,256 @@ router.post('/game-config/:id/activate', requireAdmin, requirePermission('config
     res.json({ activated: true, config: check.rows[0], note: 'Changes take effect on next server restart.' });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Tower Management ──────────────────────────────────────────────────────────
+
+// GET /admin/towers — list all towers (with ability count)
+router.get('/towers', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ towers: [] });
+  const db = require('../db');
+  try {
+    const rows = await db.query(`
+      SELECT t.*,
+        COALESCE(json_agg(
+          json_build_object('ability_key', a.ability_key, 'params', a.params)
+          ORDER BY a.id
+        ) FILTER (WHERE a.id IS NOT NULL), '[]') AS abilities
+      FROM towers t
+      LEFT JOIN tower_ability_assignments a ON a.tower_id = t.id
+      GROUP BY t.id
+      ORDER BY t.id`
+    );
+    res.json({ towers: rows.rows });
+  } catch (err) {
+    log.error('[admin] GET /towers error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/towers/:id — single tower with abilities
+router.get('/towers/:id', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid tower ID' });
+  try {
+    const [tRow, aRows] = await Promise.all([
+      db.query('SELECT * FROM towers WHERE id=$1', [id]),
+      db.query('SELECT * FROM tower_ability_assignments WHERE tower_id=$1 ORDER BY id', [id]),
+    ]);
+    if (!tRow.rows[0]) return res.status(404).json({ error: 'Tower not found' });
+    res.json({ tower: { ...tRow.rows[0], abilities: aRows.rows } });
+  } catch (err) {
+    log.error('[admin] GET /towers/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/towers — create tower
+router.post('/towers', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const {
+    name, description = '', category = 'damage', enabled = true,
+    attack_damage, attack_speed = 1.0, range, projectile_speed, splash_radius, damage_type = 'NORMAL',
+    targeting_options = 'first', base_cost, upgrade_cost_mult = 1.0,
+    damage_scaling = 0.12, range_scaling = 0.015, attack_speed_scaling = 0.015,
+    icon_url, sprite_url, projectile_url, animation_url,
+  } = req.body;
+
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
+  if (!Number.isFinite(+attack_damage) || +attack_damage <= 0)
+    return res.status(400).json({ error: 'attack_damage must be > 0' });
+  if (!Number.isFinite(+range) || +range <= 0)
+    return res.status(400).json({ error: 'range must be > 0' });
+  if (!Number.isFinite(+base_cost) || +base_cost <= 0)
+    return res.status(400).json({ error: 'base_cost must be > 0' });
+
+  const VALID_CATS  = ['damage','slow_control','aura_support','economy','special'];
+  const VALID_DTYPE = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
+  if (!VALID_CATS.includes(category))  return res.status(400).json({ error: 'Invalid category' });
+  if (!VALID_DTYPE.includes(damage_type)) return res.status(400).json({ error: 'Invalid damage_type' });
+
+  try {
+    const r = await db.query(`
+      INSERT INTO towers (name, description, category, enabled,
+        attack_damage, attack_speed, range, projectile_speed, splash_radius, damage_type,
+        targeting_options, base_cost, upgrade_cost_mult,
+        damage_scaling, range_scaling, attack_speed_scaling,
+        icon_url, sprite_url, projectile_url, animation_url)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+      RETURNING *`,
+      [name.trim(), description, category, !!enabled,
+       +attack_damage, +attack_speed, +range,
+       projectile_speed != null ? +projectile_speed : null,
+       splash_radius    != null ? +splash_radius    : null,
+       damage_type, targeting_options, +base_cost, +upgrade_cost_mult,
+       +damage_scaling, +range_scaling, +attack_speed_scaling,
+       icon_url || null, sprite_url || null, projectile_url || null, animation_url || null]
+    );
+    await audit(db, 'create_tower', 'tower', r.rows[0].id,
+      { name: r.rows[0].name }, req.adminEmail, req.ip);
+    res.status(201).json({ tower: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] POST /towers error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/towers/:id — update tower
+router.patch('/towers/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid tower ID' });
+
+  const allowed = [
+    'name','description','category','enabled',
+    'attack_damage','attack_speed','range','projectile_speed','splash_radius','damage_type',
+    'targeting_options','base_cost','upgrade_cost_mult',
+    'damage_scaling','range_scaling','attack_speed_scaling',
+    'icon_url','sprite_url','projectile_url','animation_url',
+  ];
+  const VALID_CATS  = ['damage','slow_control','aura_support','economy','special'];
+  const VALID_DTYPE = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
+
+  const sets = []; const vals = [];
+  for (const key of allowed) {
+    if (!(key in req.body)) continue;
+    let v = req.body[key];
+    if (key === 'category'    && !VALID_CATS.includes(v))   return res.status(400).json({ error: 'Invalid category' });
+    if (key === 'damage_type' && !VALID_DTYPE.includes(v))  return res.status(400).json({ error: 'Invalid damage_type' });
+    if (['attack_damage','attack_speed','range','projectile_speed','splash_radius',
+         'base_cost','upgrade_cost_mult','damage_scaling','range_scaling','attack_speed_scaling'].includes(key)) {
+      if (v !== null && v !== '') v = +v;
+    }
+    if (key === 'enabled') v = !!v;
+    sets.push(`${key}=$${vals.length + 1}`);
+    vals.push(v === '' ? null : v);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  sets.push(`updated_at=NOW()`);
+  vals.push(id);
+
+  try {
+    const r = await db.query(
+      `UPDATE towers SET ${sets.join(',')} WHERE id=$${vals.length} RETURNING *`, vals
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Tower not found' });
+    await audit(db, 'update_tower', 'tower', id,
+      { fields: Object.keys(req.body) }, req.adminEmail, req.ip);
+    res.json({ tower: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PATCH /towers/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/towers/:id — delete tower
+router.delete('/towers/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid tower ID' });
+  try {
+    const r = await db.query('DELETE FROM towers WHERE id=$1 RETURNING id, name', [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Tower not found' });
+    await audit(db, 'delete_tower', 'tower', id,
+      { name: r.rows[0].name }, req.adminEmail, req.ip);
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /towers/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/abilities — list all predefined ability templates
+router.get('/abilities', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ abilities: [] });
+  const db = require('../db');
+  try {
+    const r = await db.query('SELECT * FROM tower_abilities ORDER BY category, name');
+    res.json({ abilities: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /abilities error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/towers/:id/abilities — attach ability to tower
+router.post('/towers/:id/abilities', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const tower_id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tower_id)) return res.status(400).json({ error: 'Invalid tower ID' });
+  const { ability_key, params = {} } = req.body;
+  if (!ability_key || typeof ability_key !== 'string')
+    return res.status(400).json({ error: 'ability_key required' });
+
+  try {
+    const check = await db.query('SELECT key FROM tower_abilities WHERE key=$1', [ability_key]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Ability not found' });
+    const r = await db.query(`
+      INSERT INTO tower_ability_assignments (tower_id, ability_key, params)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (tower_id, ability_key) DO UPDATE SET params=$3
+      RETURNING *`,
+      [tower_id, ability_key, JSON.stringify(params)]
+    );
+    await audit(db, 'assign_ability', 'tower', tower_id,
+      { ability_key, params }, req.adminEmail, req.ip);
+    res.status(201).json({ assignment: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] POST /towers/:id/abilities error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/towers/:id/abilities/:abilityKey — update ability params
+router.patch('/towers/:id/abilities/:abilityKey', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const tower_id   = parseInt(req.params.id, 10);
+  const ability_key = req.params.abilityKey;
+  if (!Number.isFinite(tower_id)) return res.status(400).json({ error: 'Invalid tower ID' });
+  const { params = {} } = req.body;
+  try {
+    const r = await db.query(
+      `UPDATE tower_ability_assignments SET params=$1
+       WHERE tower_id=$2 AND ability_key=$3 RETURNING *`,
+      [JSON.stringify(params), tower_id, ability_key]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Assignment not found' });
+    await audit(db, 'update_ability_params', 'tower', tower_id,
+      { ability_key, params }, req.adminEmail, req.ip);
+    res.json({ assignment: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PATCH /towers/:id/abilities/:key error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/towers/:id/abilities/:abilityKey — remove ability from tower
+router.delete('/towers/:id/abilities/:abilityKey', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const tower_id   = parseInt(req.params.id, 10);
+  const ability_key = req.params.abilityKey;
+  if (!Number.isFinite(tower_id)) return res.status(400).json({ error: 'Invalid tower ID' });
+  try {
+    const r = await db.query(
+      `DELETE FROM tower_ability_assignments WHERE tower_id=$1 AND ability_key=$2 RETURNING id`,
+      [tower_id, ability_key]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Assignment not found' });
+    await audit(db, 'remove_ability', 'tower', tower_id,
+      { ability_key }, req.adminEmail, req.ip);
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /towers/:id/abilities/:key error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

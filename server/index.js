@@ -97,6 +97,11 @@ app.use((req, _res, next) => {
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use((_req, res, next) => {
+  const isAdminDocument = _req.path === '/admin.html';
+  const scriptSrc = isAdminDocument
+    ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
+    : "script-src 'self' https://accounts.google.com https://cdn.socket.io; ";
+
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
@@ -107,7 +112,7 @@ app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' https://accounts.google.com https://cdn.socket.io; " +
+    scriptSrc +
     "connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
@@ -133,6 +138,29 @@ app.get("/config", (_req, res) => {
     googleClientId:      process.env.GOOGLE_CLIENT_ID || "",
     passwordAuthEnabled: !!db,  // true whenever DB is connected
   });
+});
+
+// Public tower catalog — returns enabled towers with abilities
+app.get("/api/towers", async (_req, res) => {
+  if (!db) return res.json({ towers: [] });
+  try {
+    const rows = await db.query(`
+      SELECT t.*,
+        COALESCE(json_agg(
+          json_build_object('ability_key', a.ability_key, 'params', a.params)
+          ORDER BY a.id
+        ) FILTER (WHERE a.id IS NOT NULL), '[]') AS abilities
+      FROM towers t
+      LEFT JOIN tower_ability_assignments a ON a.tower_id = t.id
+      WHERE t.enabled = true
+      GROUP BY t.id
+      ORDER BY t.id`
+    );
+    res.json({ towers: rows.rows });
+  } catch (err) {
+    log.error('[api] GET /api/towers error', { err: err.message });
+    res.json({ towers: [] });
+  }
 });
 
 // Serve web app client at both / and /client for production compatibility.
@@ -640,7 +668,7 @@ function startMLGame(roomId, code, io) {
   const laneTeams = new Array(playerCount).fill("red");
   for (const a of laneAssignments) {
     if (Number.isInteger(a.laneIndex) && a.laneIndex >= 0 && a.laneIndex < playerCount) {
-      laneTeams[a.laneIndex] = a.team === "blue" ? "blue" : "red";
+      laneTeams[a.laneIndex] = a.team || "red";
     }
   }
   const game = simMl.createMLGame(playerCount, { ...room.settings, laneTeams });
@@ -1672,12 +1700,13 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(normalized, room));
 
     // Auto-start when all human players are ready and total (human + AI) >= 2
+    // FFA rooms skip auto-start — host uses force-start to control when the game begins
     const totalPlayers = room.players.length + (room.aiPlayers || []).length;
     const teamCheck = validateMlTeamSetup(room);
     if (!teamCheck.ok) {
       return socket.emit("error_message", { message: teamCheck.reason });
     }
-    if (totalPlayers >= 2 && room.readySet.size === room.players.length) {
+    if (room.pvpMode !== 'ffa' && totalPlayers >= 2 && room.readySet.size === room.players.length) {
       startMLGame(room.roomId, normalized, io);
     }
   });

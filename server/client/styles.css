@@ -114,11 +114,15 @@ html, body {
   background: var(--stone2);
   border: 1px solid var(--muted2);
   border-radius: 8px;
-  padding: 32px 28px;
+  padding: 28px 24px;
   min-width: 300px;
-  max-width: 380px;
-  width: 90%;
+  max-width: 400px;
+  width: 92%;
+  max-height: 92vh;
+  overflow-y: auto;
   text-align: center;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted2) transparent;
 }
 
 .lobby-card h1 {
@@ -371,6 +375,232 @@ html, body {
 #lobby-status.error { color: var(--red); }
 #lobby-status.ok    { color: var(--green); }
 #lobby-status.wait  { color: var(--gold); }
+
+/* ── Wizard (3-step lobby) ──────────────────────────────────────────────────── */
+
+/* Step indicator breadcrumb */
+#wizard-breadcrumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+.wb-step {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.56rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+.wb-step.wb-active {
+  color: var(--text);
+}
+.wb-step.wb-current {
+  color: var(--gold);
+  border-color: rgba(232,168,40,0.3);
+  background: rgba(232,168,40,0.08);
+}
+.wb-sep {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+/* Game cards — Step 1 */
+.game-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.game-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--muted2);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  position: relative;
+  text-align: left;
+  outline: none;
+}
+.game-card:focus-visible {
+  border-color: var(--blue2);
+}
+.game-card:hover:not(.disabled) {
+  border-color: var(--stone3);
+  background: rgba(255,255,255,0.035);
+}
+.game-card.selected {
+  border-color: var(--gold2);
+  background: rgba(232,168,40,0.07);
+  box-shadow: 0 0 14px rgba(232,168,40,0.18);
+}
+.game-card.disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.game-card-art {
+  flex: 0 0 76px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.game-card-art svg {
+  width: 100%;
+  height: 100%;
+}
+.game-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.game-card-label {
+  font-family: 'Cinzel', serif;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+  line-height: 1.2;
+}
+.game-card.selected .game-card-label {
+  color: var(--gold);
+}
+.game-card-sub {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.47rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.game-card-soon-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.4rem;
+  background: rgba(120,100,40,0.25);
+  border: 1px solid var(--gold3);
+  color: var(--gold3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Mode cards — Step 2 */
+.mode-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.mode-cards-2col {
+  grid-template-columns: 1fr 1fr;
+}
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 8px;
+  border: 1px solid var(--muted2);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  min-height: 86px;
+  outline: none;
+  text-align: center;
+}
+.mode-card:focus-visible {
+  border-color: var(--blue2);
+}
+.mode-card:hover {
+  border-color: var(--stone3);
+  background: rgba(255,255,255,0.035);
+}
+.mode-card.selected {
+  border-color: var(--gold2);
+  background: rgba(232,168,40,0.07);
+  box-shadow: 0 0 12px rgba(232,168,40,0.16);
+}
+.mc-icon {
+  font-size: 1.35rem;
+  margin-bottom: 5px;
+  line-height: 1;
+}
+.mc-label {
+  font-family: 'Cinzel', serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.mode-card.selected .mc-label {
+  color: var(--gold);
+}
+.mc-desc {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.44rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+/* TD match type tabs — Step 3 */
+.setup-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.stab {
+  flex: 1;
+  padding: 7px 4px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  background: none;
+  border: 1px solid var(--muted2);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.stab:hover {
+  color: var(--text);
+  border-color: var(--stone3);
+}
+.stab.active {
+  color: var(--gold);
+  border-color: var(--gold2);
+  background: rgba(232,168,40,0.07);
+}
+
+/* Wizard nav row */
+#wizard-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.wizard-back-btn {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 10px 18px;
+  font-size: 0.62rem;
+}
+.wizard-next-btn {
+  flex: 1;
+}
 
 /* ── Game Canvas ────────────────────────────────────────────────────────────── */
 
@@ -2302,7 +2532,7 @@ html, body {
 
 #left-rail .send-card-head {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
+  grid-template-columns: 18px 30px 1fr auto;
   align-items: center;
   gap: 4px;
   padding: 3px 4px;
@@ -2326,6 +2556,25 @@ html, body {
   color: #d0dfeb;
   font-size: 0.58rem;
   line-height: 1.1;
+}
+
+#left-rail .send-card-photo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(40, 192, 176, 0.5);
+  border-radius: 3px;
+  background: rgba(40, 192, 176, 0.14);
+  overflow: hidden;
+}
+
+#left-rail .send-card-photo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 #left-rail .send-card-cost {

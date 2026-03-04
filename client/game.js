@@ -32,6 +32,40 @@ const DEFAULT_UNIT_META = {
   warlock:  { label: 'Warlock',  cost: 18, income: 2,   dmg: 12, hp: 80,  bounty: 5, armorType: 'MAGIC',     damageType: 'MAGIC',  speedPerTick: MARCH_SPEED,  atkCdTicks: 11, range: 0.045, special: 'Tower -25% dmg 3s' },
   golem:    { label: 'Golem',    cost: 25, income: 3,   dmg: 14, hp: 240, bounty: 6, armorType: 'HEAVY',     damageType: 'NORMAL', speedPerTick: 0.00090563,   atkCdTicks: 13, range: 0.045, special: '+25% gate dmg' },
 };
+const UNIT_PHOTO_SRC = Object.freeze({
+  runner: 'assets/units/runner.svg',
+  footman: 'assets/units/footman.svg',
+  ironclad: 'assets/units/ironclad.svg',
+  warlock: 'assets/units/warlock.svg',
+  golem: 'assets/units/golem.svg',
+});
+const RENDER_UNIT_ICON_KEY = Object.freeze({
+  runner: 'unit_icon_runner',
+  footman: 'unit_icon_footman',
+  ironclad: 'unit_icon_ironclad',
+  warlock: 'unit_icon_warlock',
+  golem: 'unit_icon_golem',
+});
+const RENDER_UNIT_ATLAS_KEY = Object.freeze({
+  runner: 'unit_atlas_runner',
+  footman: 'unit_atlas_footman',
+  ironclad: 'unit_atlas_ironclad',
+  warlock: 'unit_atlas_warlock',
+  golem: 'unit_atlas_golem',
+});
+const RENDER_FEATURES = Object.freeze({
+  useLegacyUnitShapes: true,
+  enableSpriteUnits: true,
+});
+let renderAssetsManager = null;
+let renderAssetsReady = false;
+let renderAssetsLoadError = '';
+let renderAssetsLoadPromise = null;
+const unitSpriteAnimStateById = {};
+let unitSpriteAnimCleanupAt = 0;
+const UNIT_SPRITE_STATES = Object.freeze(['idle', 'walk', 'attack']);
+const UNIT_SPRITE_FRAMES_PER_STATE = 4;
+let unitSpriteSheetByType = {};
 const DEFAULT_TOWER_META = {
   archer: { label: 'Archer', cost: 10, range: 0.30, dmg: 6.6, atkCdTicks: 12, damageType: 'PIERCE' },
   fighter: { label: 'Fighter', cost: 12, range: 0.18, dmg: 8.8, atkCdTicks: 11, damageType: 'NORMAL' },
@@ -62,7 +96,7 @@ let rematchVoted = false;
 let draggingTowerType = null;
 let activePopSlot = null;
 
-// ── Multi-lane state ──────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Multi-lane state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 let gameMode = 'classic';       // 'classic' | 'multilane'
 let myLaneIndex = null;
 let mlPlayerCount = 0;
@@ -110,14 +144,14 @@ let mlSelectionTowerType = null;
 let mlWallCost = 2;
 let mlMaxWalls = null;
 
-// ── Auto-send state ───────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Auto-send state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 let autosendEnabled = {};       // { runner: bool, footman: bool, ... }
 let autosendRate = 'normal';
 UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
 let autoBarracksEnabled = false;
 let autoBarracksLastAttemptMs = 0;
 
-// ── ML mobile UI state ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML mobile UI state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const ML_INCOME_PERIOD = 240;   // ticks between income payouts
 let mlGlobalAutoEnabled = false;
 let floatingTexts = [];         // [{x,y,text,color,alpha,age}]
@@ -539,11 +573,13 @@ sendButtons.forEach(btn => {
   sendAutoProgressFillByType[type] = progFill;
 });
 
-// ── Multi-lane DOM refs ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Multi-lane DOM refs Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const mlLobbyPanel = document.getElementById('ml-lobby-panel');
 const mlPlayerList = document.getElementById('ml-player-list');
 const mlTeamSetupStatus = document.getElementById('ml-team-setup-status');
 const btnCreateMl = document.getElementById('btn-create-ml');
+const btnToggleMlJoin = document.getElementById('btn-toggle-ml-join');
+const mlJoinForm = document.getElementById('ml-join-form');
 const btnJoinMl = document.getElementById('btn-join-ml');
 const mlJoinInput = document.getElementById('ml-join-code-input');
 const mlNameInput = document.getElementById('ml-name-input');
@@ -580,7 +616,7 @@ const btnAddAiEasy = document.getElementById('btn-add-ai-easy');
 const btnAddAiMedium = document.getElementById('btn-add-ai-medium');
 const btnAddAiHard = document.getElementById('btn-add-ai-hard');
 
-// ── ML grid UI DOM refs ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML grid UI DOM refs Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const mlBarracksHud = document.getElementById('ml-barracks-hud');
 const mlBarracksLevel = document.getElementById('ml-barracks-level');
 const btnBarracksUpgrade = document.getElementById('btn-ml-barracks-upgrade');
@@ -591,12 +627,12 @@ const btnPrevLane = document.getElementById('btn-ml-prev-lane');
 const btnNextLane = document.getElementById('btn-ml-next-lane');
 const mlTileMenu = document.getElementById('ml-tile-menu');
 
-// ── Auto-send DOM refs ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Auto-send DOM refs Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const autosendBar = document.getElementById('autosend-bar');
 const autosendToggles = Array.from(document.querySelectorAll('.autosend-toggle'));
 const autosendRateSelect = document.getElementById('autosend-rate');
 
-// ── ML mobile UI DOM refs ─────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML mobile UI DOM refs Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const hudBar          = document.getElementById('hud-bar');
 const mlInfoBar       = document.getElementById('ml-info-bar');
 const mibLives        = document.getElementById('mib-lives');
@@ -823,6 +859,41 @@ function drawWaiting() {
   ctx.fillText('Waiting for state...', canvas.width / 2, canvas.height / 2);
 }
 
+function getRenderFeatureFlags() {
+  return RENDER_FEATURES;
+}
+
+function initRenderAssets() {
+  if (renderAssetsLoadPromise) return renderAssetsLoadPromise;
+  if (!window.RenderAssets || typeof window.RenderAssets.createManager !== 'function') {
+    renderAssetsLoadError = 'RenderAssets API unavailable';
+    return Promise.resolve(null);
+  }
+  renderAssetsManager = window.RenderAssets.createManager();
+  renderAssetsLoadPromise = renderAssetsManager.loadAll()
+    .then(() => {
+      renderAssetsReady = true;
+      renderAssetsLoadError = '';
+      rebuildUnitSpriteSheets();
+      return renderAssetsManager;
+    })
+    .catch((err) => {
+      renderAssetsReady = false;
+      renderAssetsLoadError = (err && err.message) ? err.message : 'failed to load render assets';
+      return null;
+    });
+  return renderAssetsLoadPromise;
+}
+
+function getSendButtonUnitIconSrc(type) {
+  const fallback = UNIT_PHOTO_SRC[type] || UNIT_PHOTO_SRC.runner;
+  if (!renderAssetsReady || !renderAssetsManager) return fallback;
+  const key = RENDER_UNIT_ICON_KEY[type];
+  if (!key) return fallback;
+  const src = renderAssetsManager.getSource(key);
+  return src || fallback;
+}
+
 function applyMatchConfig(config) {
   if (!config || typeof config !== 'object') return;
   if (Number.isFinite(config.tickHz)) tickHz = config.tickHz;
@@ -910,6 +981,9 @@ function updateActionLabels() {
       labelEl.innerHTML =
         '<div class="send-card-head">'
         + '<span class="send-card-hot">' + escHtml(String(hot)) + '</span>'
+        + '<span class="send-card-photo">'
+        + '<img class="send-card-photo-img" src="' + escHtml(getSendButtonUnitIconSrc(type)) + '" alt="' + escHtml(m.label) + ' icon">'
+        + '</span>'
         + '<span class="send-card-name">' + escHtml(m.label) + '</span>'
         + '<span class="send-card-cost">' + escHtml(formatScaledStat(m.cost, mlMyBarracksUnitCostMult, 0)) + 'g</span>'
         + '</div>'
@@ -1304,56 +1378,45 @@ function drawBattlefield(local) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // ── Background gradient ───────────────────────────────────
   const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0,   '#0c0f14');
-  bg.addColorStop(0.5, '#111e13');
-  bg.addColorStop(1,   '#0f0d0a');
+  bg.addColorStop(0, '#110b08');
+  bg.addColorStop(0.55, '#24120a');
+  bg.addColorStop(1, '#140906');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // ── Territory zone tints ──────────────────────────────────
-  const eZone = ctx.createLinearGradient(0, 0, 0, h * 0.44);
-  eZone.addColorStop(0, 'rgba(160,28,28,0.16)');
-  eZone.addColorStop(1, 'rgba(160,28,28,0)');
-  ctx.fillStyle = eZone; ctx.fillRect(0, 0, w, h * 0.44);
-  const mZone = ctx.createLinearGradient(0, h * 0.56, 0, h);
-  mZone.addColorStop(0, 'rgba(18,140,120,0)');
-  mZone.addColorStop(1, 'rgba(18,140,120,0.16)');
-  ctx.fillStyle = mZone; ctx.fillRect(0, h * 0.56, w, h * 0.44);
-
-  // ── Side terrain: castle walls + trees + torches ──────────
   drawBattlefieldSides(w, h, laneX, laneW);
 
-  // ── Lane: cobblestone path ────────────────────────────────
-  ctx.fillStyle = '#12221a';
+  ctx.fillStyle = '#3c434f';
   ctx.fillRect(laneX - laneW / 2, 0, laneW, h);
   drawLaneCobblestones(laneX, laneW, h);
 
-  // Lane edge glow + border
   ctx.save();
   const lg1 = ctx.createLinearGradient(laneX - laneW / 2, 0, laneX - laneW / 2 + 14, 0);
-  lg1.addColorStop(0, 'rgba(40,192,100,0.14)'); lg1.addColorStop(1, 'transparent');
-  ctx.fillStyle = lg1; ctx.fillRect(laneX - laneW / 2 + 1, 0, 14, h);
+  lg1.addColorStop(0, 'rgba(255,145,42,0.24)');
+  lg1.addColorStop(1, 'transparent');
+  ctx.fillStyle = lg1;
+  ctx.fillRect(laneX - laneW / 2 + 1, 0, 14, h);
   const lg2 = ctx.createLinearGradient(laneX + laneW / 2 - 14, 0, laneX + laneW / 2, 0);
-  lg2.addColorStop(0, 'transparent'); lg2.addColorStop(1, 'rgba(40,192,100,0.14)');
-  ctx.fillStyle = lg2; ctx.fillRect(laneX + laneW / 2 - 13, 0, 14, h);
-  ctx.strokeStyle = '#284030'; ctx.lineWidth = 2;
+  lg2.addColorStop(0, 'transparent');
+  lg2.addColorStop(1, 'rgba(255,145,42,0.24)');
+  ctx.fillStyle = lg2;
+  ctx.fillRect(laneX + laneW / 2 - 13, 0, 14, h);
+  ctx.strokeStyle = '#2a313d';
+  ctx.lineWidth = 2;
   ctx.strokeRect(laneX - laneW / 2, 0, laneW, h);
   ctx.restore();
 
-  // ── Castle gate structures ────────────────────────────────
   drawCastleGateStructure(local.enemy.lives, livesStart, laneX, laneW, w, h * 0.06, '#ff3a3a', true);
-  drawCastleGateStructure(local.me.lives,    livesStart, laneX, laneW, w, h * 0.94, '#28c0b0', false);
+  drawCastleGateStructure(local.me.lives, livesStart, laneX, laneW, w, h * 0.94, '#28c0b0', false);
 
-  // ── Enemy tower icons + my tower slot positions ───────────
   drawTowerIcons(local.enemy.towers, false, laneX, laneW, h);
   updateTowerSlotPositions(laneX, laneW, h);
 
-  // ── Debug overlay ─────────────────────────────────────────
   ctx.fillStyle = 'rgba(140,180,200,0.3)';
   ctx.font = '11px "Share Tech Mono", monospace';
-  ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
   ctx.fillText('T:' + local.tick + '  U:' + local.units.length, w - 10, 10);
   if (lastActionAck) ctx.fillText(lastActionAck, w - 10, 26);
 }
@@ -1364,7 +1427,6 @@ function drawLaneCobblestones(laneX, laneW, h) {
   const cols = Math.max(3, Math.floor(laneW / 18));
   const stoneW = laneW / cols;
   const lx0 = laneX - laneW / 2;
-  // Subtle stone-shade variation per block
   for (let row = 0; row * stoneH < h; row++) {
     const sy = row * stoneH;
     const offsetX = (row % 2) * (stoneW / 2);
@@ -1373,15 +1435,14 @@ function drawLaneCobblestones(laneX, laneW, h) {
       if (sx + stoneW < lx0 || sx > lx0 + laneW) continue;
       const shade = (row * 7 + col * 13 + row % 2) % 3;
       if (shade > 0) {
-        ctx.fillStyle = shade === 1 ? 'rgba(30,70,40,0.09)' : 'rgba(8,28,16,0.07)';
+        ctx.fillStyle = shade === 1 ? 'rgba(120,132,150,0.16)' : 'rgba(20,26,34,0.2)';
         const rx = Math.max(sx + 1, lx0 + 1);
         const rw = Math.min(sx + stoneW - 2, lx0 + laneW - 1) - rx;
         if (rw > 0) ctx.fillRect(rx, sy + 1, rw, Math.min(stoneH - 2, h - sy - 1));
       }
     }
   }
-  // Mortar joint lines — horizontal
-  ctx.strokeStyle = 'rgba(8,26,16,0.6)';
+  ctx.strokeStyle = 'rgba(20,26,36,0.68)';
   ctx.lineWidth = 1;
   for (let row = 1; row * stoneH < h; row++) {
     ctx.beginPath();
@@ -1389,7 +1450,6 @@ function drawLaneCobblestones(laneX, laneW, h) {
     ctx.lineTo(lx0 + laneW, row * stoneH);
     ctx.stroke();
   }
-  // Mortar joint lines — vertical (offset alternating rows)
   for (let row = 0; row * stoneH < h; row++) {
     const offsetX = (row % 2) * (stoneW / 2);
     for (let col = 1; col <= cols; col++) {
@@ -1435,55 +1495,56 @@ function drawBattleFlag(x, y, color) {
 function drawBattlefieldSides(w, h, laneX, laneW) {
   const leftEdge = laneX - laneW / 2;
   const rightEdge = laneX + laneW / 2;
-  const sideW = leftEdge;
+  const now = Date.now() * 0.0018;
 
-  // ── Narrow stone wall strips along canvas edges ───────────
-  const wallW = 18;
-  const stone = '#252f3c'; const mortar = '#141e2c';
-  ctx.fillStyle = stone;
-  ctx.fillRect(0, 0, wallW, h);
-  ctx.fillRect(w - wallW, 0, wallW, h);
-  ctx.strokeStyle = mortar; ctx.lineWidth = 1;
-  for (let sy = 0; sy < h; sy += 24) {
-    const row = Math.floor(sy / 24);
-    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(wallW, sy); ctx.stroke();
-    if (row % 2 === 0) { ctx.beginPath(); ctx.moveTo(wallW / 2, sy); ctx.lineTo(wallW / 2, Math.min(sy + 24, h)); ctx.stroke(); }
-    ctx.beginPath(); ctx.moveTo(w - wallW, sy); ctx.lineTo(w, sy); ctx.stroke();
-    if (row % 2 === 1) { ctx.beginPath(); ctx.moveTo(w - wallW / 2, sy); ctx.lineTo(w - wallW / 2, Math.min(sy + 24, h)); ctx.stroke(); }
-  }
-  // Inner-edge merlons on wall strips (facing the battlefield)
-  const mw = 8, mh = 12, mg = 6;
-  ctx.fillStyle = '#2c3848';
-  for (let my = 6; my < h; my += mw + mg) {
-    ctx.fillRect(wallW - 2, my, 6, mh); ctx.strokeStyle = mortar; ctx.lineWidth = 1; ctx.strokeRect(wallW - 2, my, 6, mh);
-    ctx.fillRect(w - wallW - 4, my, 6, mh); ctx.strokeRect(w - wallW - 4, my, 6, mh);
+  const lavaGrad = ctx.createLinearGradient(0, 0, 0, h);
+  lavaGrad.addColorStop(0, '#3b1309');
+  lavaGrad.addColorStop(0.45, '#7a1f0b');
+  lavaGrad.addColorStop(1, '#2a0a06');
+  ctx.fillStyle = lavaGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  for (let i = 0; i < 22; i++) {
+    const y = (i / 22) * h;
+    const wave = Math.sin(now + i * 0.85) * 16;
+    const alpha = 0.16 + (Math.sin(now * 1.7 + i) + 1) * 0.1;
+    ctx.fillStyle = 'rgba(255,116,26,' + alpha.toFixed(3) + ')';
+    ctx.fillRect(0, y + wave, w, 8);
   }
 
-  // ── Trees (deterministic positions) ───────────────────────
-  const treeDefs = [
-    { rx: -0.38, ry: 0.11, s: 1.0 }, { rx: -0.22, ry: 0.26, s: 0.8 },
-    { rx: -0.45, ry: 0.37, s: 1.1 }, { rx: -0.16, ry: 0.52, s: 0.9 },
-    { rx: -0.40, ry: 0.63, s: 1.0 }, { rx: -0.24, ry: 0.75, s: 0.85 },
-    { rx: -0.42, ry: 0.87, s: 0.95 },
-    { rx:  0.34, ry: 0.14, s: 0.9 }, { rx:  0.20, ry: 0.30, s: 1.1 },
-    { rx:  0.41, ry: 0.43, s: 0.85 }, { rx:  0.17, ry: 0.57, s: 1.0 },
-    { rx:  0.37, ry: 0.69, s: 0.9 }, { rx:  0.19, ry: 0.81, s: 0.95 },
-    { rx:  0.39, ry: 0.92, s: 1.0 },
-  ];
-  treeDefs.forEach(t => drawTree(laneX + t.rx * (sideW + wallW) * 1.5, t.ry * h, t.s));
+  for (let i = 0; i < 44; i++) {
+    const ex = (i * 73) % w;
+    const ey = ((i * 41) % h) + Math.sin(now * 2.4 + i) * 5;
+    const er = 1.6 + ((i % 4) * 0.6);
+    ctx.fillStyle = 'rgba(255,198,92,0.2)';
+    ctx.beginPath();
+    ctx.arc(ex, ey, er, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  // ── Ruin rocks ────────────────────────────────────────────
-  const rockDefs = [
-    { rx: -0.14, ry: 0.20 }, { rx: -0.30, ry: 0.47 }, { rx: -0.12, ry: 0.71 }, { rx: -0.27, ry: 0.84 },
-    { rx:  0.13, ry: 0.23 }, { rx:  0.26, ry: 0.53 }, { rx:  0.11, ry: 0.74 }, { rx:  0.29, ry: 0.90 },
-  ];
-  rockDefs.forEach(r => drawRuinRock(laneX + r.rx * (sideW + wallW) * 1.4, r.ry * h));
+  const parapetW = 13;
+  ctx.fillStyle = '#2f3640';
+  ctx.fillRect(leftEdge - parapetW, 0, parapetW, h);
+  ctx.fillRect(rightEdge, 0, parapetW, h);
+  ctx.strokeStyle = '#1d232d';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(leftEdge - parapetW, 0, parapetW, h);
+  ctx.strokeRect(rightEdge, 0, parapetW, h);
 
-  // ── Torches along lane edges ───────────────────────────────
-  [0.17, 0.38, 0.60, 0.81].forEach(ty => {
-    drawTorch(leftEdge - 5, ty * h);
-    drawTorch(rightEdge + 5, ty * h);
-  });
+  const ribCount = 10;
+  for (let i = 0; i <= ribCount; i++) {
+    const y = (i / ribCount) * h;
+    ctx.strokeStyle = 'rgba(26,30,40,0.72)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(leftEdge - parapetW, y);
+    ctx.lineTo(0, y + 22);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(rightEdge + parapetW, y);
+    ctx.lineTo(w, y + 22);
+    ctx.stroke();
+  }
 }
 
 function drawTree(x, y, scale) {
@@ -1547,7 +1608,7 @@ function drawCastleGateStructure(hp, maxHp, laneX, laneW, canvasW, centerY, colo
   const stone = '#25303e', stoneDark = '#1e2836', stoneLight = '#2e3c50', mortar = '#131d2b';
   const gateTop = isEnemy ? centerY - 6 : centerY - gateH + 6;
 
-  // ── Full-width wall (canvas-edge to lane) ─────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Full-width wall (canvas-edge to lane) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const wallH = Math.floor(gateH * 0.52), wallTop = gateTop + (gateH - wallH) / 2;
   ctx.fillStyle = stoneDark;
   ctx.fillRect(0, wallTop, laneX - laneW / 2 - towerW, wallH);
@@ -1565,7 +1626,7 @@ function drawCastleGateStructure(hp, maxHp, laneX, laneW, canvasW, centerY, colo
     ctx.fillRect(mx, bY, merlonW, merlonH); ctx.strokeStyle = mortar; ctx.lineWidth = 1; ctx.strokeRect(mx, bY, merlonW, merlonH);
   }
 
-  // ── Flanking towers ───────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Flanking towers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const lTX = laneX - laneW / 2 - towerW, rTX = laneX + laneW / 2;
   [lTX, rTX].forEach(tx => {
     ctx.fillStyle = stone;
@@ -1589,7 +1650,7 @@ function drawCastleGateStructure(hp, maxHp, laneX, laneW, canvasW, centerY, colo
     }
   });
 
-  // ── Gate portcullis ───────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Gate portcullis Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   ctx.fillStyle = '#090e16';
   ctx.fillRect(laneX - laneW / 2, gateTop, laneW, gateH);
   // HP fill tint
@@ -1614,23 +1675,23 @@ function drawCastleGateStructure(hp, maxHp, laneX, laneW, canvasW, centerY, colo
   ctx.strokeStyle = color; ctx.globalAlpha = 0.5; ctx.lineWidth = 2;
   ctx.strokeRect(laneX - laneW / 2, gateTop, laneW, gateH); ctx.globalAlpha = 1;
 
-  // ── Banner flags on tower peaks ───────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Banner flags on tower peaks Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   drawBattleFlag(lTX + towerW / 2, gateTop - merlonH + 1, color);
   drawBattleFlag(rTX + towerW / 2, gateTop - merlonH + 1, color);
 
-  // ── HP bar ────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ HP bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   const hpBarH = 7, hpBarY = isEnemy ? gateTop + gateH + 5 : gateTop - hpBarH - 5;
   ctx.fillStyle = '#0c1820'; ctx.fillRect(laneX - laneW / 2, hpBarY, laneW, hpBarH);
   ctx.fillStyle = color; ctx.fillRect(laneX - laneW / 2, hpBarY, laneW * ratio, hpBarH);
   ctx.strokeStyle = color; ctx.globalAlpha = 0.3; ctx.lineWidth = 1;
   ctx.strokeRect(laneX - laneW / 2, hpBarY, laneW, hpBarH); ctx.globalAlpha = 1;
 
-  // ── Label ─────────────────────────────────────────────────
+  // Ã¢â€â‚¬Ã¢â€â‚¬ Label Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   ctx.fillStyle = color; ctx.font = 'bold 10px "Cinzel", serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = isEnemy ? 'bottom' : 'top';
   const labelY = isEnemy ? gateTop - merlonH - 4 : gateTop + gateH + merlonH / 2 + 8;
-  ctx.fillText((isEnemy ? 'ENEMY GATE' : 'YOUR GATE') + '  ♥ ' + Math.max(0, Math.floor(hp)), laneX, labelY);
+  ctx.fillText((isEnemy ? 'ENEMY GATE' : 'YOUR GATE') + '  Ã¢â„¢Â¥ ' + Math.max(0, Math.floor(hp)), laneX, labelY);
 }
 
 function drawTowerIcons(towers, isMine, laneX, laneW, h) {
@@ -1802,7 +1863,7 @@ function drawUnits(units) {
   units.forEach(u => {
     const x = laneX + (offsetById[u.id] || 0);
     const y = u.y * canvas.height;
-    drawUnitShape(u, x, y);
+    drawUnitVisual(u, x, y);
     drawUnitHp(u, x, y);
   });
 }
@@ -1858,6 +1919,7 @@ function drawUnitFireAura(u, front) {
 }
 
 function drawUnitShape(u, x, y) {
+  const UNIT_VISUAL_SCALE = 1.12;
   const friendly = u.side === 'bottom';
   const teamCol = friendly ? '#ff9b2f' : '#ff5f2e';
   const hi = '#ffe8bb';
@@ -1867,6 +1929,7 @@ function drawUnitShape(u, x, y) {
   const pulse = 0.5 + Math.sin(t + ((u && u.id) ? String(u.id).length : 0)) * 0.5;
   ctx.save();
   ctx.translate(x, y);
+  ctx.scale(UNIT_VISUAL_SCALE, UNIT_VISUAL_SCALE);
   drawUnitFireAura(u, front);
   ctx.fillStyle = 'rgba(6,2,1,0.45)';
   ctx.beginPath();
@@ -2003,22 +2066,252 @@ function drawUnitShape(u, x, y) {
   ctx.ellipse(0, 1, 7.5, 10.5, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
+  // Subtle rim-light outline to improve readability against busy backgrounds.
+  ctx.strokeStyle = friendly ? 'rgba(255,208,132,0.34)' : 'rgba(255,146,108,0.34)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(0, -1, 8.6, 11.8, 0, 0, Math.PI * 2);
+  ctx.stroke();
 
   ctx.restore();
+}
+
+function shouldRenderSpriteUnits() {
+  const flags = getRenderFeatureFlags();
+  return !!(flags && flags.enableSpriteUnits && renderAssetsReady && renderAssetsManager);
+}
+
+function getUnitSpriteScale(type) {
+  if (type === 'golem') return 1.25;
+  if (type === 'runner') return 0.95;
+  return 1;
+}
+
+function getSpriteStateRow(state) {
+  const idx = UNIT_SPRITE_STATES.indexOf(state);
+  return idx >= 0 ? idx : 0;
+}
+
+function rebuildUnitSpriteSheets() {
+  unitSpriteSheetByType = {};
+  if (!renderAssetsReady || !renderAssetsManager) return;
+  UNIT_TYPES.forEach((type) => {
+    const authoredAtlasKey = RENDER_UNIT_ATLAS_KEY[type];
+    const authoredAtlas = authoredAtlasKey ? renderAssetsManager.getImage(authoredAtlasKey) : null;
+    let sheet = null;
+    if (authoredAtlas) {
+      sheet = {
+        image: authoredAtlas,
+        frameW: 52,
+        frameH: 52,
+        cols: UNIT_SPRITE_FRAMES_PER_STATE,
+        rows: UNIT_SPRITE_STATES.length,
+      };
+    }
+    if (!sheet) {
+      const key = RENDER_UNIT_ICON_KEY[type];
+      const base = key ? renderAssetsManager.getImage(key) : null;
+      if (base) sheet = buildUnitSpriteSheetFromIcon(type, base);
+    }
+    if (sheet) unitSpriteSheetByType[type] = sheet;
+  });
+}
+
+function buildUnitSpriteSheetFromIcon(type, baseImage) {
+  if (!baseImage || !baseImage.width || !baseImage.height) return null;
+  if (typeof document === 'undefined' || !document.createElement) return null;
+
+  const frameW = 52;
+  const frameH = 52;
+  const cols = UNIT_SPRITE_FRAMES_PER_STATE;
+  const rows = UNIT_SPRITE_STATES.length;
+  const canvasSheet = document.createElement('canvas');
+  canvasSheet.width = frameW * cols;
+  canvasSheet.height = frameH * rows;
+  const sctx = canvasSheet.getContext('2d');
+  if (!sctx) return null;
+
+  const baseSize = 28 * getUnitSpriteScale(type);
+  for (let r = 0; r < rows; r++) {
+    const state = UNIT_SPRITE_STATES[r];
+    for (let c = 0; c < cols; c++) {
+      const fx = c * frameW;
+      const fy = r * frameH;
+      const centerX = fx + (frameW / 2);
+      const centerY = fy + (frameH / 2);
+      const phase = c / Math.max(1, cols - 1);
+
+      let bob = Math.sin((phase * Math.PI * 2)) * 0.5;
+      let tilt = 0;
+      let sx = 1;
+      let sy = 1;
+      let lungeY = 0;
+
+      if (state === 'walk') {
+        const wave = Math.sin((phase * Math.PI * 2));
+        bob = wave * 1.3;
+        tilt = wave * 0.05;
+        sx = 1 + wave * 0.07;
+        sy = 1 - wave * 0.06;
+      } else if (state === 'attack') {
+        const pulse = phase < 0.5 ? (phase * 2) : ((1 - phase) * 2);
+        lungeY = -3.1 * pulse;
+        tilt = -0.02 - (pulse * 0.055);
+        sx = 1 + (pulse * 0.1);
+        sy = 1 - (pulse * 0.1);
+      }
+
+      sctx.save();
+      sctx.translate(centerX, centerY + bob + lungeY);
+      sctx.rotate(tilt);
+      sctx.scale(sx, sy);
+      sctx.drawImage(baseImage, -baseSize / 2, -baseSize / 2, baseSize, baseSize);
+      sctx.restore();
+    }
+  }
+
+  return {
+    image: canvasSheet,
+    frameW,
+    frameH,
+    cols,
+    rows,
+  };
+}
+
+function getUnitAttackCycleMs(type) {
+  const m = unitMeta[type] || DEFAULT_UNIT_META[type];
+  const atkCdTicks = m && Number.isFinite(m.atkCdTicks) ? Number(m.atkCdTicks) : 10;
+  const hz = Math.max(1, Number.isFinite(tickHz) ? tickHz : 20);
+  return Math.max(250, (atkCdTicks / hz) * 1000);
+}
+
+function unitAnimSeed(id, type) {
+  const base = id == null ? String(type || '') : String(id);
+  let h = 0;
+  for (let i = 0; i < base.length; i++) h = ((h * 31) + base.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function cleanupUnitSpriteAnimState(nowMs) {
+  if (nowMs < unitSpriteAnimCleanupAt) return;
+  unitSpriteAnimCleanupAt = nowMs + 2000;
+  const staleMs = 5000;
+  Object.keys(unitSpriteAnimStateById).forEach((k) => {
+    const s = unitSpriteAnimStateById[k];
+    if (!s || (nowMs - s.lastSeenAt) > staleMs) delete unitSpriteAnimStateById[k];
+  });
+}
+
+function getUnitSpriteAnimState(u, x, y) {
+  const nowMs = Date.now();
+  cleanupUnitSpriteAnimState(nowMs);
+
+  const key = (u && (u.id !== undefined && u.id !== null)) ? String(u.id) : ('anon:' + String(u && u.type || 'unit'));
+  const prev = unitSpriteAnimStateById[key];
+  const seed = unitAnimSeed(u && u.id, u && u.type);
+  let moving = false;
+
+  if (prev) {
+    const dt = Math.max(1, nowMs - prev.lastSeenAt);
+    const dx = x - prev.x;
+    const dy = y - prev.y;
+    const speedPxPerMs = Math.hypot(dx, dy) / dt;
+    moving = speedPxPerMs > 0.015;
+  }
+
+  unitSpriteAnimStateById[key] = { x, y, lastSeenAt: nowMs };
+
+  const cycleMs = getUnitAttackCycleMs(u && u.type);
+  const phaseMs = (nowMs + (seed % 1200)) % cycleMs;
+  const attackWindow = Math.min(210, cycleMs * 0.26);
+  const attackProgress = phaseMs <= attackWindow ? (phaseMs / attackWindow) : 0;
+
+  let state = 'idle';
+  if (moving) state = 'walk';
+  else if (attackProgress > 0) state = 'attack';
+
+  return {
+    seed,
+    nowMs,
+    state,
+    moving,
+    attackProgress,
+  };
+}
+
+function drawUnitSprite(u, x, y) {
+  if (!shouldRenderSpriteUnits()) return false;
+  if (!u || !u.type) return false;
+  const key = RENDER_UNIT_ICON_KEY[u.type];
+  if (!key) return false;
+  const img = renderAssetsManager.getImage(key);
+  if (!img) return false;
+
+  const anim = getUnitSpriteAnimState(u, x, y);
+  const sheet = unitSpriteSheetByType[u.type] || null;
+  const scale = getUnitSpriteScale(u.type);
+  const drawW = 30 * scale;
+  const drawH = 30 * scale;
+  const friendly = u.side === 'bottom';
+
+  ctx.save();
+  ctx.translate(x, y);
+  if (!friendly) ctx.scale(-1, 1);
+
+  ctx.fillStyle = 'rgba(6,2,1,0.42)';
+  ctx.beginPath();
+  ctx.ellipse(0, 8, 8 * scale, 2.6 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const rim = friendly ? 'rgba(40,192,176,0.38)' : 'rgba(255,90,70,0.35)';
+  ctx.strokeStyle = rim;
+  ctx.lineWidth = 1;
+  ctx.strokeRect((-drawW / 2) - 1.5, (-drawH / 2) - 1.5, drawW + 3, drawH + 3);
+
+  if (sheet) {
+    const row = getSpriteStateRow(anim.state);
+    let frame = 0;
+    if (anim.state === 'attack') {
+      frame = Math.min(sheet.cols - 1, Math.floor(anim.attackProgress * sheet.cols));
+    } else if (anim.state === 'walk') {
+      const walkFps = 10;
+      frame = Math.floor((anim.nowMs / (1000 / walkFps)) + (anim.seed % sheet.cols)) % sheet.cols;
+    } else {
+      const idleFps = 4;
+      frame = Math.floor((anim.nowMs / (1000 / idleFps)) + (anim.seed % sheet.cols)) % sheet.cols;
+    }
+    const frameRect = { x: frame * sheet.frameW, y: row * sheet.frameH, w: sheet.frameW, h: sheet.frameH };
+    if (window.SpriteRenderer && typeof window.SpriteRenderer.drawSpriteFrame === 'function') {
+      window.SpriteRenderer.drawSpriteFrame(ctx, sheet.image, frameRect, -drawW / 2, -drawH / 2, drawW, drawH, { alpha: 1 });
+    } else {
+      ctx.drawImage(sheet.image, frameRect.x, frameRect.y, frameRect.w, frameRect.h, -drawW / 2, -drawH / 2, drawW, drawH);
+    }
+  } else {
+    ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+  }
+
+  ctx.restore();
+  return true;
+}
+
+function drawUnitVisual(u, x, y) {
+  if (drawUnitSprite(u, x, y)) return;
+  drawUnitShape(u, x, y);
 }
 
 function drawProjectiles(projectiles) {
   for (const p of projectiles) {
     const px = p.x * canvas.width;
     const py = p.y * canvas.height;
-    // bottom-side units travel up (-π/2), top-side travel down (+π/2)
+    // bottom-side units travel up (-Ãâ‚¬/2), top-side travel down (+Ãâ‚¬/2)
     const angle = (p.side === 'bottom') ? -Math.PI / 2 : Math.PI / 2;
     drawProjectileAt(p.projectileType, p.damageType || '', px, py, angle);
   }
 }
 
 // Draws a single projectile centered at (px, py) traveling in direction travelAngle
-// (canvas convention: 0=right, π/2=down, -π/2=up).
+// (canvas convention: 0=right, Ãâ‚¬/2=down, -Ãâ‚¬/2=up).
 function drawProjectileAt(projectileType, damageType, px, py, travelAngle) {
   const c = projectileColor(projectileType);
   ctx.save();
@@ -2491,9 +2784,12 @@ function resetToLobby(msg) {
   _soloMode  = false;
   _gameType  = 't2t';
   _pvpMode   = '1v1';
-  _matchType = 'ranked';
+  _matchType = null;
   activateGameType('t2t');
-  activateLobbyTab('ranked');
+  // Clear wizard selections and return to step 1
+  document.querySelectorAll('#ws-1 .game-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('#ws2-t2t .mode-card, #ws2-td .mode-card').forEach(c => c.classList.remove('selected'));
+  gotoWizardStep(1);
   hideMLLobbyPanel();
   if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'none';
   if (btnForceStart) btnForceStart.style.display = 'none';
@@ -2711,7 +3007,7 @@ function updateLeaderboards(classicLocal, mlLocal) {
   return renderLeaderboardPanels(buildClassicLeaderboardEntries(classicLocal));
 }
 
-// ── Auto-send helpers ─────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Auto-send helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function syncAutosend() {
   const anyEnabled = Object.values(autosendEnabled).some(v => v);
@@ -2805,7 +3101,7 @@ applyMlSettingsToUi(DEFAULT_MATCH_SETTINGS);
 setClassicSettingsEditable(true);
 setMlSettingsEditable(false);
 
-// ── Tab helpers and event handlers ────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Tab helpers and event handlers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function updateLobbyContent() {
   // Queue description + button label
@@ -2820,9 +3116,8 @@ function updateLobbyContent() {
   // Private sub-panel
   if (privateTtUI) privateTtUI.style.display = _gameType === 'td' ? 'none' : '';
   if (privateTdUI) privateTdUI.style.display = _gameType === 'td' ? '' : 'none';
-  // Solo sub-panel
-  if (soloTtUI) soloTtUI.style.display = _gameType === 'td' ? 'none' : '';
-  if (soloTdUI) soloTdUI.style.display = _gameType === 'td' ? '' : 'none';
+  // Solo sub-panel — AI difficulty picker always shown (solo always uses multilane)
+  if (soloTdUI) soloTdUI.style.display = '';
 }
 
 function setPvpModeUiVisibility(show) {
@@ -2847,7 +3142,14 @@ function activateLobbyTab(tab) {
 
 function activateGameType(type) {
   _gameType = type;
-  if (type === 't2t') _pvpMode = '1v1';
+  if (type === 't2t') {
+    _pvpMode = '1v1';
+  } else if (_pvpMode === '1v1') {
+    // '1v1' is t2t-only; default TD to FFA and sync button visuals
+    _pvpMode = 'ffa';
+    [btnPvpFfa, btnPvpTwoV2].forEach(b => b && b.classList.remove('active'));
+    if (btnPvpFfa) btnPvpFfa.classList.add('active');
+  }
   [btnGameT2t, btnGameTd].forEach(b => b && b.classList.remove('active'));
   const gameEl = { t2t: btnGameT2t, td: btnGameTd }[type];
   if (gameEl) gameEl.classList.add('active');
@@ -2889,7 +3191,7 @@ if (btnPvpTwoV2) btnPvpTwoV2.addEventListener('click', () => {
   activatePvpMode('2v2');
 });
 
-btnTabRanked.addEventListener('click', () => {
+if (btnTabRanked) btnTabRanked.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
@@ -2897,7 +3199,7 @@ btnTabRanked.addEventListener('click', () => {
   hideMLLobbyPanel();
 });
 
-btnTabUnranked.addEventListener('click', () => {
+if (btnTabUnranked) btnTabUnranked.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
@@ -2905,7 +3207,7 @@ btnTabUnranked.addEventListener('click', () => {
   hideMLLobbyPanel();
 });
 
-btnTabPrivate.addEventListener('click', () => {
+if (btnTabPrivate) btnTabPrivate.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
@@ -2915,7 +3217,7 @@ btnTabPrivate.addEventListener('click', () => {
   setClassicSettingsEditable(isClassicHost || myCode === null);
 });
 
-btnTabSolo.addEventListener('click', () => {
+if (btnTabSolo) btnTabSolo.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
@@ -2926,6 +3228,149 @@ btnTabSolo.addEventListener('click', () => {
 
 // Initialize queue description on page load
 updateLobbyContent();
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Wizard navigation Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+
+const wsPane1     = document.getElementById('ws-1');
+const wsPane2     = document.getElementById('ws-2');
+const wsPane3     = document.getElementById('ws-3');
+const ws2T2t      = document.getElementById('ws2-t2t');
+const ws2Td       = document.getElementById('ws2-td');
+const ws3TdTabs   = document.getElementById('ws3-td-tabs');
+const wWizardBack = document.getElementById('wizard-back');
+const wbc1        = document.getElementById('wbc-1');
+const wbc2        = document.getElementById('wbc-2');
+const wbc3        = document.getElementById('wbc-3');
+let _wizardStep   = 1;
+
+function gotoWizardStep(n) {
+  _wizardStep = n;
+  if (wsPane1) wsPane1.style.display = n === 1 ? '' : 'none';
+  if (wsPane2) wsPane2.style.display = n === 2 ? '' : 'none';
+  if (wsPane3) wsPane3.style.display = n === 3 ? '' : 'none';
+  // Breadcrumb
+  [wbc1, wbc2, wbc3].forEach((b, i) => {
+    if (!b) return;
+    b.classList.toggle('wb-active', i + 1 < n);
+    b.classList.toggle('wb-current', i + 1 === n);
+  });
+  // Back button: visible on steps 2+
+  if (wWizardBack) wWizardBack.style.display = n > 1 ? '' : 'none';
+  // Step-specific setup
+  if (n === 2) {
+    if (ws2T2t) ws2T2t.style.display = _gameType === 'td' ? 'none' : '';
+    if (ws2Td)  ws2Td.style.display  = _gameType === 'td' ? '' : 'none';
+    // Restore sticky selection when navigating back to step 2
+    if (_gameType === 't2t' && _matchType) {
+      document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => {
+        c.classList.toggle('selected', c.dataset.matchtype === _matchType);
+      });
+    }
+    if (_gameType === 'td' && _pvpMode !== '1v1') {
+      document.querySelectorAll('#ws2-td .mode-card').forEach(c => {
+        c.classList.toggle('selected', c.dataset.pvp === _pvpMode);
+      });
+    }
+  }
+  if (n === 3) {
+    if (ws3TdTabs) ws3TdTabs.style.display = _gameType === 'td' ? '' : 'none';
+    setLobbyState('idle');
+    setStatus('', '');
+    gameMode = _gameType === 'td' ? 'multilane' : 'classic';
+    hideMLLobbyPanel();
+    const tab = _matchType || 'ranked';
+    if (_gameType === 'td') {
+      activateLobbyTab(tab);
+      document.querySelectorAll('#ws3-td-tabs .stab').forEach(t => {
+        t.classList.toggle('active', t.dataset.matchtype === tab);
+      });
+    } else {
+      activateLobbyTab(_matchType);
+      if (_matchType === 'private') setClassicSettingsEditable(isClassicHost || myCode === null);
+      if (_matchType === 'solo') gameMode = 'multilane';
+    }
+  }
+}
+
+// Game card clicks — Step 1 Ã¢â€ â€™ auto-advance to Step 2
+document.querySelectorAll('#ws-1 .game-card:not(.disabled)').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws-1 .game-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    const game = card.dataset.game;
+    activateGameType(game);
+    if (game === 't2t') {
+      _matchType = null;
+      document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => c.classList.remove('selected'));
+    }
+    gotoWizardStep(2);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// Mode card clicks — T2T match type (Step 2) Ã¢â€ â€™ auto-advance to Step 3
+document.querySelectorAll('#ws2-t2t .mode-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    _matchType = card.dataset.matchtype;
+    gotoWizardStep(3);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// Mode card clicks — TD team format (Step 2) Ã¢â€ â€™ auto-advance to Step 3
+document.querySelectorAll('#ws2-td .mode-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws2-td .mode-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    activatePvpMode(card.dataset.pvp);
+    gotoWizardStep(3);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// TD match type tabs — Step 3
+document.querySelectorAll('#ws3-td-tabs .stab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('#ws3-td-tabs .stab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    _matchType = tab.dataset.matchtype;
+    setLobbyState('idle');
+    setStatus('', '');
+    gameMode = 'multilane';
+    activateLobbyTab(_matchType);
+    hideMLLobbyPanel();
+  });
+});
+
+// Wizard Back
+if (wWizardBack) wWizardBack.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
+  hideMLLobbyPanel();
+  if (_wizardStep > 1) gotoWizardStep(_wizardStep - 1);
+});
+
+// Initialize wizard
+gotoWizardStep(1);
+
+if (btnToggleMlJoin) {
+  btnToggleMlJoin.addEventListener('click', () => {
+    const visible = mlJoinForm && mlJoinForm.style.display !== 'none';
+    if (mlJoinForm) mlJoinForm.style.display = visible ? 'none' : '';
+  });
+}
 
 btnCreateMl.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
@@ -2950,7 +3395,7 @@ mlJoinInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') btnJoinMl.click();
 });
 
-// ── Lobby queue entry button ──────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Lobby queue entry button Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 if (btnQueueFind) {
   btnQueueFind.addEventListener('click', () => {
@@ -2969,7 +3414,7 @@ if (btnQueueFind) {
   });
 }
 
-// ── Solo mode ─────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Solo mode Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const btnSoloPlay   = document.getElementById('btn-solo-play');
 const soloNameInput = document.getElementById('solo-name-input');
@@ -3005,7 +3450,7 @@ btnForceStart.addEventListener('click', () => {
   socket.emit('ml_force_start', { code: mlMyCode });
 });
 
-// ── AI add/remove buttons (host only) ─────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ AI add/remove buttons (host only) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 ['easy', 'medium', 'hard'].forEach(diff => {
   const btn = document.getElementById('btn-add-ai-' + diff);
   if (btn) {
@@ -3315,7 +3760,7 @@ socket.on('rematch_vote', data => {
 });
 
 
-// ── Share-link auto-join ──────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Share-link auto-join Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 (function handleShareLink() {
   const params = new URLSearchParams(window.location.search);
   const classicCode = params.get('join');
@@ -3351,7 +3796,7 @@ socket.on('rematch_vote', data => {
   }
 }());
 
-// ── Disconnect / reconnect helpers ───────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Disconnect / reconnect helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 let _disconnectCountdownHandle = null;
 
 function showDisconnectNotice(html) {
@@ -3388,7 +3833,7 @@ socket.on('connect', () => {
   if (lobbyState !== 'playing') setStatus('', '');
   const token = localStorage.getItem('cd_reconnect');
   if (token) {
-    console.log('[reconnect] attempting rejoin…');
+    console.log('[reconnect] attempting rejoinÃ¢â‚¬Â¦');
     socket.emit('rejoin_game', { token });
   }
 });
@@ -3465,7 +3910,7 @@ socket.on('disconnect', reason => {
   if (reason === 'io client disconnect') return;
   if (lobbyState === 'playing') {
     if (localStorage.getItem('cd_reconnect')) {
-      showDisconnectNotice('Reconnecting…');
+      showDisconnectNotice('ReconnectingÃ¢â‚¬Â¦');
     } else {
       resetToLobby('Connection lost. Game ended.');
     }
@@ -3480,7 +3925,7 @@ socket.on('connect_error', err => {
 
 // fix #7: removed unnecessary window.sendAction global exposure
 
-// ── Multi-lane render helpers ─────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Multi-lane render helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function buildMLInterpolatedState(nowMs) {
   if (!mlCurrentState) return null;
@@ -3512,7 +3957,7 @@ function buildMLInterpolatedState(nowMs) {
   return result;
 }
 
-// ── ML grid rendering ─────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML grid rendering Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 // Returns square-tile layout centered in the middle pane between side rails.
 // Prefer full-height lanes; if width is constrained, shrink to fit center pane.
@@ -3580,24 +4025,24 @@ function drawMLGridLane(lane, local) {
   // Full-canvas background — gutters get stone tile pattern, grid gets dark fill
   ctx.clearRect(0, 0, w, h);
 
-  // Stone tile pattern for gutters (areas outside the centered grid rect)
-  const stoneSz = 24;
-  for (let gsy = 0; gsy < h; gsy += stoneSz) {
-    for (let gsx = 0; gsx < w; gsx += stoneSz) {
-      if (gsx + stoneSz > offsetX && gsx < offsetX + gridW &&
-          gsy + stoneSz > offsetY && gsy < offsetY + gridH) continue;
-      const shade = ((Math.floor(gsx / stoneSz) * 3 + Math.floor(gsy / stoneSz) * 7) & 3);
-      const stoneColors = ['#0d1118', '#0b0f15', '#0e1220', '#0c1019'];
-      ctx.fillStyle = stoneColors[shade];
-      ctx.fillRect(gsx, gsy, stoneSz, stoneSz);
-      ctx.strokeStyle = '#050810';
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(gsx + 0.5, gsy + 0.5, stoneSz - 1, stoneSz - 1);
-    }
+  // Lava chasm outside the grid
+  const lavaGrad = ctx.createLinearGradient(0, 0, 0, h);
+  lavaGrad.addColorStop(0, '#3b1309');
+  lavaGrad.addColorStop(0.45, '#7a1f0b');
+  lavaGrad.addColorStop(1, '#2a0a06');
+  ctx.fillStyle = lavaGrad;
+  ctx.fillRect(0, 0, w, h);
+  const lavaNow = Date.now() * 0.0018;
+  for (let i = 0; i < 20; i++) {
+    const y = (i / 20) * h;
+    const wave = Math.sin(lavaNow + i * 0.9) * 14;
+    const alpha = 0.14 + (Math.sin(lavaNow * 1.6 + i) + 1) * 0.08;
+    ctx.fillStyle = 'rgba(255,116,26,' + alpha.toFixed(3) + ')';
+    ctx.fillRect(0, y + wave, w, 7);
   }
 
-  // Grid area base fill
-  ctx.fillStyle = '#080c14';
+  // Grid area base fill (bridge platform)
+  ctx.fillStyle = '#2f3643';
   ctx.fillRect(offsetX, offsetY, gridW, gridH);
 
   // Zone tints — spawn zone (teal, top) / castle zone (amber, bottom)
@@ -3615,15 +4060,15 @@ function drawMLGridLane(lane, local) {
   ctx.fillStyle = botZoneGrad;
   ctx.fillRect(offsetX, botZoneAbsY, gridW, offsetY + gridH - botZoneAbsY);
 
-  // Subtle glow strips on left and right grid edges
+  // Warm glow strips on left and right grid edges
   const lgGrad = ctx.createLinearGradient(offsetX, 0, offsetX + 14, 0);
-  lgGrad.addColorStop(0, 'rgba(40,192,176,0.22)');
-  lgGrad.addColorStop(1, 'rgba(40,192,176,0)');
+  lgGrad.addColorStop(0, 'rgba(255,145,42,0.24)');
+  lgGrad.addColorStop(1, 'rgba(255,145,42,0)');
   ctx.fillStyle = lgGrad;
   ctx.fillRect(offsetX, offsetY, 14, gridH);
   const rgGrad = ctx.createLinearGradient(offsetX + gridW - 14, 0, offsetX + gridW, 0);
-  rgGrad.addColorStop(0, 'rgba(40,192,176,0)');
-  rgGrad.addColorStop(1, 'rgba(40,192,176,0.22)');
+  rgGrad.addColorStop(0, 'rgba(255,145,42,0)');
+  rgGrad.addColorStop(1, 'rgba(255,145,42,0.24)');
   ctx.fillStyle = rgGrad;
   ctx.fillRect(offsetX + gridW - 14, offsetY, 14, gridH);
 
@@ -3635,11 +4080,11 @@ function drawMLGridLane(lane, local) {
   if (lane.path && lane.path.length > 0) {
     for (const { x, y } of lane.path) {
       const ptx = x * tileSize, pty = y * tileSize;
-      const dirtShade = ((x * 5 + y * 3) & 3);
-      const dirtColors = ['#1e1a0e', '#221e10', '#1a1608', '#201c0c'];
-      ctx.fillStyle = dirtColors[dirtShade];
+      const stoneShade = ((x * 5 + y * 3) & 3);
+      const stoneColors = ['#4a515f', '#444c58', '#3a424f', '#505869'];
+      ctx.fillStyle = stoneColors[stoneShade];
       ctx.fillRect(ptx, pty, tileSize, tileSize);
-      ctx.fillStyle = 'rgba(100,90,60,0.38)';
+      ctx.fillStyle = 'rgba(160,172,192,0.25)';
       ctx.fillRect(ptx + Math.floor(tileSize * 0.2), pty + Math.floor(tileSize * 0.3), 2, 2);
       ctx.fillRect(ptx + Math.floor(tileSize * 0.6), pty + Math.floor(tileSize * 0.65), 2, 2);
     }
@@ -3799,7 +4244,7 @@ function drawMLGridLane(lane, local) {
     const myLane = local.lanes && local.lanes[myLaneIndex];
     const ownerLane = local.lanes && local.lanes[u.ownerLane];
     const friendly = !!myLane && !!ownerLane && myLane.team === ownerLane.team;
-    drawUnitShape({ type: u.type, side: friendly ? 'bottom' : 'top' }, drawX, drawY);
+    drawUnitVisual({ id: u.id, type: u.type, side: friendly ? 'bottom' : 'top' }, drawX, drawY);
     const hpRatio = Math.max(0, Math.min(1, u.hp / u.maxHp));
     ctx.fillStyle = '#252d38';
     ctx.fillRect(drawX - 9, drawY - 12, 18, 3);
@@ -3912,7 +4357,7 @@ function drawMLGridLane(lane, local) {
   updateAndDrawFloatingTexts();
 }
 
-// ── ML floating text animations ───────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML floating text animations Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function spawnFloatingText(x, y, text, color) {
   floatingTexts.push({ x, y, text, color, alpha: 1, age: 0 });
@@ -3939,7 +4384,7 @@ function updateAndDrawFloatingTexts() {
   }
 }
 
-// ── ML Info Bar update ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML Info Bar update Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function updateMLInfoBar(myLane, state) {
   if (!myLane) return;
@@ -3996,7 +4441,7 @@ function updateMLInfoBar(myLane, state) {
   }
 }
 
-// ── ML Lane Tabs ──────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML Lane Tabs Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function initMLLaneTabs() {
   if (!mlLaneTabs) return;
@@ -4049,7 +4494,7 @@ function switchViewingLane(index) {
   closeMLTileMenu();
 }
 
-// ── ML Command Bar update ─────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML Command Bar update Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function updateCmdBar(myLane) {
   if (!myLane) return;
@@ -4289,7 +4734,7 @@ function renderFrameML() {
   updateLeaderboards(null, local);
 }
 
-// ── ML socket listeners ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML socket listeners Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 socket.on('ml_room_created', data => {
   gameMode = 'multilane';
@@ -4618,7 +5063,7 @@ function normalizeMLSelectionForLane(lane) {
   }
 }
 
-// ── ML grid interaction ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML grid interaction Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function applyMLDragSelection() {
   if (!mlCurrentState || !mlDragSelectAnchor || !mlDragSelectCurrent) return false;
@@ -4943,7 +5388,7 @@ function updateBarracksHud(lane) {
   if (mlBarracksLevel) mlBarracksLevel.textContent = String(level);
   if (mibBarracksLv) mibBarracksLv.textContent = String(level);
 
-  // Detect barracks level increase → screen flash + feedback
+  // Detect barracks level increase Ã¢â€ â€™ screen flash + feedback
   if (mlPrevBarracksLevel !== -1 && level > mlPrevBarracksLevel) {
     canvasWrap.classList.remove('barracks-upgraded');
     void canvasWrap.offsetWidth;
@@ -5022,7 +5467,7 @@ function updateLaneNavLabel() {
   }
 }
 
-// ── ML grid event listeners ───────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML grid event listeners Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 canvas.addEventListener('click', function (e) {
   if (gameMode !== 'multilane') return;
@@ -5081,7 +5526,7 @@ if (mlMidNextBtn) {
   });
 }
 
-// ── ML Command Bar event listeners ────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ ML Command Bar event listeners Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 // Global AUTO toggle
 if (cmdGlobalAuto) {
@@ -5156,7 +5601,7 @@ if (sideWallBtn) {
   });
 }
 
-// ── Drag-to-place walls ───────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Drag-to-place walls Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 canvas.addEventListener('mousedown', (e) => {
   if (gameMode !== 'multilane') return;
@@ -5265,7 +5710,7 @@ canvas.addEventListener('touchmove', (e) => {
   updateStraightWallDragPreview(gx, gy);
 }, { passive: false });
 
-// ── Auth bar ──────────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Auth bar Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const authSigninArea  = document.getElementById('auth-signin-area');
 const authProfileArea = document.getElementById('auth-profile-area');
@@ -5325,7 +5770,7 @@ btnAuthSignout.addEventListener('click', () => {
   Auth.logout();
 });
 
-// ── Password auth form logic ──────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Password auth form logic Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const tabLogin      = document.getElementById('tab-login');
 const tabRegister   = document.getElementById('tab-register');
@@ -5429,7 +5874,7 @@ btnPwSubmit.addEventListener('click', async () => {
   el.addEventListener('keydown', e => { if (e.key === 'Enter') btnPwSubmit.click(); });
 });
 
-// ── 2FA settings modal ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ 2FA settings modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const tfaModal          = document.getElementById('tfa-modal');
 const tfaStateDisabled  = document.getElementById('tfa-state-disabled');
@@ -5509,7 +5954,7 @@ document.getElementById('btn-tfa-confirm-disable').addEventListener('click', asy
   }
 });
 
-// ── Forgot password ───────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Forgot password Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const forgotForm      = document.getElementById('auth-forgot-form');
 const authPwForm      = document.getElementById('auth-pw-form');
@@ -5562,7 +6007,7 @@ btnForgotSubmit.addEventListener('click', async () => {
 
 forgotEmail.addEventListener('keydown', e => { if (e.key === 'Enter') btnForgotSubmit.click(); });
 
-// ── Email verification modal ──────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Email verification modal Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 let _pendingVerifyEmail = '';
 
@@ -5610,7 +6055,7 @@ document.getElementById('btn-verify-close').addEventListener('click', () => {
   });
 })();
 
-// ── Reset password modal (handles ?reset=<token> in URL) ─────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Reset password modal (handles ?reset=<token> in URL) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const resetModal    = document.getElementById('reset-modal');
 const resetPassword = document.getElementById('reset-password');
@@ -5680,6 +6125,12 @@ window.onGoogleSignIn = async (response) => {
   }
 };
 
+initRenderAssets().then(() => {
+  if (!renderAssetsReady && renderAssetsLoadError) {
+    console.warn('[render-assets]', renderAssetsLoadError);
+  }
+});
+
 // Boot auth: fetch public config, then init
 (async () => {
   try {
@@ -5711,7 +6162,7 @@ window.onGoogleSignIn = async (response) => {
   await Auth.init(onAuthStateChange);
 })();
 
-// ── Party panel ───────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Party panel Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 let _currentParty   = null; // local party state
 let _queueStatus    = 'idle'; // 'idle' | 'queued' | 'matched'
@@ -5720,7 +6171,7 @@ let _queueElapsed   = 0;
 let _queueSize      = 0;
 let _queueInterval  = null; // local elapsed timer
 
-// ── Friends panel state ────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Friends panel state Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 let _friendsList       = [];
 let _pendingPartyInvite = null;
 let _friendsMsgTimer   = null;
@@ -5782,8 +6233,8 @@ function renderPartyPanel(party) {
     queueStatusText.className   = '';
   } else if (_queueStatus === 'queued') {
     const modeLabel = _queueMode === 'ranked_2v2' ? 'Ranked 2v2' : 'Casual 2v2';
-    const sizeStr   = _queueSize > 0 ? ` · ${_queueSize} in queue` : '';
-    queueStatusText.textContent = `Searching ${modeLabel}… ${_queueElapsed}s${sizeStr}`;
+    const sizeStr   = _queueSize > 0 ? ` Ã‚Â· ${_queueSize} in queue` : '';
+    queueStatusText.textContent = `Searching ${modeLabel}Ã¢â‚¬Â¦ ${_queueElapsed}s${sizeStr}`;
     queueStatusText.className   = 'queued';
   } else if (_queueStatus === 'matched') {
     queueStatusText.textContent = 'Match found!';
@@ -5793,7 +6244,7 @@ function renderPartyPanel(party) {
   renderFriendsPanel(_friendsList);
 }
 
-// ── Friends panel rendering ────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Friends panel rendering Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 function _showFriendsMsg(msg, durationMs = 4000) {
   const el = document.getElementById('friends-msg');
@@ -5832,7 +6283,7 @@ function renderFriendsPanel(friends) {
   const acceptedTotal  = _friendsList.filter(f => f.status === 'accepted').length;
   onlineCount.textContent = acceptedTotal > 0 ? `${acceptedOnline}/${acceptedTotal} online` : '';
 
-  // Sort: online accepted → offline accepted → pending_received → pending_sent
+  // Sort: online accepted Ã¢â€ â€™ offline accepted Ã¢â€ â€™ pending_received Ã¢â€ â€™ pending_sent
   const ORDER = { accepted_online: 0, accepted_offline: 1, pending_received: 2, pending_sent: 3 };
   const sorted = [..._friendsList].sort((a, b) => {
     const keyA = a.status === 'accepted' ? (a.online ? 'accepted_online' : 'accepted_offline') : a.status;
@@ -5993,7 +6444,7 @@ btnQueueLeave.addEventListener('click', () => {
   socket.emit('queue:leave');
 });
 
-// ── Party / queue socket listeners ────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Party / queue socket listeners Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 socket.on('party_update', ({ party }) => {
   _currentParty = party;
@@ -6041,7 +6492,7 @@ socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents }) => {
 
   setMlSettingsEditable(false);
   setLobbyState('waiting');
-  setStatus('Match found! Joining…', 'ok');
+  setStatus('Match found! JoiningÃ¢â‚¬Â¦', 'ok');
 
   // Hide all sections so the ML lobby panel shows correctly
   activateGameType('td');
@@ -6059,7 +6510,7 @@ socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents }) => {
   setStatus(`Match found! Team: ${tmStr} | vs: ${oppStr}`, 'ok');
 });
 
-// ── Friends panel events & socket listeners ────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Friends panel events & socket listeners Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 window.addEventListener('resize', () => _repositionFriendsPanel());
 if (window.visualViewport) {
@@ -6138,7 +6589,7 @@ socket.on('party_invite_sent', ({ displayName }) => {
   _showFriendsMsg(`Party invite sent to ${displayName || 'player'}.`);
 });
 
-// ── Leaderboard ───────────────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬ Leaderboard Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 (function () {
   const overlay   = document.getElementById('lb-overlay');
@@ -6159,7 +6610,7 @@ socket.on('party_invite_sent', ({ displayName }) => {
   let currentPage = 1;
   let totalEntries = 0;
   const PAGE_SIZE = 50;
-  const MEDALS = ['🥇', '🥈', '🥉'];
+  const MEDALS = ['Ã°Å¸Â¥â€¡', 'Ã°Å¸Â¥Ë†', 'Ã°Å¸Â¥â€°'];
 
   function myPlayerId() {
     if (typeof Auth !== 'undefined' && Auth.isSignedIn()) {
@@ -6189,7 +6640,7 @@ socket.on('party_invite_sent', ({ displayName }) => {
       // Season banner
       if (data.season) {
         const sd = new Date(data.season.start_date).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
-        seasonBar.textContent = `Season: ${data.season.name}  ·  Started ${sd}`;
+        seasonBar.textContent = `Season: ${data.season.name}  Ã‚Â·  Started ${sd}`;
       } else {
         seasonBar.textContent = 'Off-season';
       }

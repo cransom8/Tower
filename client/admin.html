@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Castle Defender — Admin</title>
   <link rel="stylesheet" href="/admin.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -14,36 +15,42 @@
     <h1>⚙ Admin Dashboard</h1>
     <p>Authenticate to continue.</p>
 
-    <div class="login-tabs">
-      <button class="login-tab active" id="ltab-secret" onclick="setLoginMode('secret')">Secret Key</button>
-      <button class="login-tab" id="ltab-email" onclick="setLoginMode('email')">Email &amp; Password</button>
-    </div>
-
-    <div id="login-secret-form">
-      <div class="form-group">
-        <label>Admin Secret</label>
-        <input type="password" id="login-secret" placeholder="ADMIN_SECRET value"
-          autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <div id="login-email-form">
+      <div id="login-pass-section">
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="admin@example.com"
+            onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="login-password" placeholder="Password"
+            autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <p class="text-muted" style="font-size:11px;margin-bottom:12px">
+          First time? Use <code>POST /admin/setup</code> with your ADMIN_SECRET to create the first admin account.
+        </p>
+        <button class="btn-primary w100" onclick="doLogin()">Sign In</button>
+        <div style="display:flex;align-items:center;gap:8px;margin:12px 0">
+          <hr style="flex:1;border:none;border-top:1px solid #333">
+          <span class="text-muted" style="font-size:11px">or</span>
+          <hr style="flex:1;border:none;border-top:1px solid #333">
+        </div>
+        <div id="admin-google-btn-container" style="display:flex;justify-content:center"></div>
+      </div>
+      <div id="login-2fa-section" class="hidden">
+        <p style="margin-bottom:12px;font-size:13px">Enter the 6-digit code from your authenticator app.</p>
+        <div class="form-group">
+          <label>2FA Code</label>
+          <input type="text" id="login-2fa-code" placeholder="000000" maxlength="6"
+            inputmode="numeric" autocomplete="one-time-code"
+            onkeydown="if(event.key==='Enter')doLogin2fa()">
+        </div>
+        <button class="btn-primary w100" onclick="doLogin2fa()">Verify</button>
+        <button class="btn-sm" style="margin-top:8px;width:100%" onclick="cancelLogin2fa()">← Back</button>
       </div>
     </div>
 
-    <div id="login-email-form" class="hidden">
-      <div class="form-group">
-        <label>Email</label>
-        <input type="email" id="login-email" placeholder="admin@example.com"
-          onkeydown="if(event.key==='Enter')doLogin()">
-      </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="login-password" placeholder="Password"
-          autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-      </div>
-      <p class="text-muted" style="font-size:11px;margin-bottom:12px">
-        First time? Use <code>POST /admin/setup</code> with your ADMIN_SECRET to create the first admin account.
-      </p>
-    </div>
-
-    <button class="btn-primary w100" onclick="doLogin()">Sign In</button>
     <p id="login-err" class="text-danger mt8" style="font-size:12px"></p>
   </div>
 </div>
@@ -56,6 +63,7 @@
     <span id="live-label" class="text-muted" style="font-size:12px">—</span>
     <span class="spacer"></span>
     <span id="admin-identity" class="text-muted" style="font-size:12px"></span>
+    <button class="btn-sm" id="btn-my-account" onclick="myAccountModal()" style="display:none">My Account</button>
     <button class="btn-sm" onclick="refreshCurrent()">↻ Refresh</button>
     <button class="btn-sm" onclick="doLogout()">Logout</button>
   </header>
@@ -63,6 +71,7 @@
   <nav>
     <a href="#" class="active" data-tab="dashboard"><span class="icon">📊</span> Dashboard</a>
     <a href="#" data-tab="players"><span class="icon">👤</span> Players</a>
+    <a href="#" data-tab="towers"><span class="icon">🏰</span> Towers</a>
     <a href="#" data-tab="anticheat"><span class="icon">🛡</span> Anti-cheat</a>
     <a href="#" data-tab="matches"><span class="icon">⚔</span> Matches</a>
     <a href="#" data-tab="analytics"><span class="icon">📈</span> Analytics</a>
