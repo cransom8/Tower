@@ -1,4 +1,5 @@
 'use strict';
+const log = require('../logger');
 
 // ── Season Service ─────────────────────────────────────────────────────────────
 //
@@ -16,7 +17,7 @@ async function getActiveSeason(db) {
     );
     return res.rows[0] || null;
   } catch (err) {
-    console.error('[season] getActiveSeason:', err.message);
+    log.error('[season] getActiveSeason:', { err: err.message });
     return null;
   }
 }
@@ -36,7 +37,7 @@ async function updatePeakRating(db, seasonId, playerId, mode, newRating) {
       [seasonId, playerId, mode, newRating]
     );
   } catch (err) {
-    console.error('[season] updatePeakRating:', err.message);
+    log.error('[season] updatePeakRating:', { err: err.message });
   }
 }
 
@@ -82,7 +83,7 @@ async function closeSeason(db, seasonId) {
     );
 
     await client.query('COMMIT');
-    console.log(`[season] closed season ${seasonId}: ${snap.rowCount} snapshots, ${reset.rowCount} resets`);
+    log.info(`[season] closed season ${seasonId}: ${snap.rowCount} snapshots, ${reset.rowCount} resets`);
     return { snapshotCount: snap.rowCount, resetCount: reset.rowCount };
   } catch (err) {
     await client.query('ROLLBACK');

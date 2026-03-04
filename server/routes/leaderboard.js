@@ -1,4 +1,5 @@
 'use strict';
+const log = require('../logger');
 
 const express = require('express');
 const router  = express.Router();
@@ -72,7 +73,7 @@ router.get('/', async (req, res) => {
       total: countRes.rows[0].total,
     });
   } catch (err) {
-    console.error('[leaderboard] error:', err.message);
+    log.error('[leaderboard] error:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

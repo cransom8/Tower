@@ -14,21 +14,41 @@ const crypto = require("crypto");
 
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
-const aiModule = require("./ai");
+const aiRuntime = require("../ai/sim_runner");
 const authService = require("./auth");
 const matchmaker = require("./services/matchmaker");
 const log = require("./logger");
 const db = process.env.DATABASE_URL ? require("./db") : null;
 const ratingService = process.env.DATABASE_URL ? require("./services/rating") : null;
 const seasonService = process.env.DATABASE_URL ? require("./services/season") : null;
+const gameConfig    = require("./gameConfig");
+if (db) {
+  gameConfig.loadActiveConfigs(db).catch(err =>
+    log.warn('game config load failed, using hardcoded defaults', { err: err.message })
+  );
+}
 
 const app = express();
 // H-4: restrict CORS to known origin; wildcard is unsafe for auth endpoints
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
   methods: ['GET', 'POST', 'PATCH'],
+  credentials: true,
 }));
 app.use(express.json());
+// Minimal cookie parser — populates req.cookies without adding a dependency
+app.use((req, _res, next) => {
+  const cookies = {};
+  for (const pair of String(req.headers.cookie || '').split(';')) {
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    const k = pair.slice(0, eq).trim();
+    const v = pair.slice(eq + 1).trim();
+    try { cookies[k] = decodeURIComponent(v); } catch { cookies[k] = v; }
+  }
+  req.cookies = cookies;
+  next();
+});
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use((_req, res, next) => {
@@ -36,19 +56,19 @@ app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  // M-5: HSTS (production only) + CSP to limit script execution to known sources
-  if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  }
+  // HSTS: always set; shorter max-age in non-production
+  const hstsTtl = process.env.NODE_ENV === 'production' ? 31536000 : 3600;
+  res.setHeader('Strict-Transport-Security', `max-age=${hstsTtl}; includeSubDomains; preload`);
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
     "script-src 'self' https://accounts.google.com https://cdn.socket.io; " +
-    "connect-src 'self' wss: ws: https://accounts.google.com; " +
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; " +
     "font-src 'self' https://fonts.gstatic.com; " +
     "img-src 'self' data: https:; " +
-    "frame-src https://accounts.google.com;"
+    "frame-src https://accounts.google.com; " +
+    "frame-ancestors 'self';"
   );
   next();
 });
@@ -84,15 +104,59 @@ app.use("/client", express.static(clientDir));
 const server = http.createServer(app);
 const io = new Server(server, {
   maxHttpBufferSize: 1e4, // fix #8: cap incoming message size at 10 KB
-  cors: { origin: process.env.ALLOWED_ORIGIN || "*", methods: ["GET", "POST"] }, // fix #2: use env var in production
+  cors: {
+    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
+
+// Admin: expose io for live-stats route
+app.locals.io = io;
+
+// Admin: force-terminate an active match (called by POST /admin/matches/:id/terminate)
+app.locals.terminateMatch = async function terminateMatch(roomId) {
+  const entry = gamesByRoomId.get(roomId);
+  if (!entry) return false;
+  clearInterval(entry.tickHandle);
+  gamesByRoomId.delete(roomId);
+  // Notify all sockets in the room
+  io.to(roomId).emit('game_over',    { winner: null, reason: 'admin_terminated' });
+  io.to(roomId).emit('ml_game_over', { winnerLaneIndex: null, winnerName: null, reason: 'admin_terminated' });
+  // Mark abandoned in DB
+  if (db && entry.matchIdPromise) {
+    const matchId = await Promise.resolve(entry.matchIdPromise).catch(() => null);
+    if (matchId) {
+      await db.query(
+        `UPDATE matches SET status='abandoned', ended_at=NOW() WHERE id=$1`, [matchId]
+      ).catch(() => {});
+    }
+  }
+  log.info('match terminated by admin', { roomId });
+  return true;
+};
+
+// ── Cookie parsing helper ─────────────────────────────────────────────────────
+function parseCookies(cookieStr) {
+  const out = {};
+  for (const pair of String(cookieStr || '').split(';')) {
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    const k = pair.slice(0, eq).trim();
+    const v = pair.slice(eq + 1).trim();
+    try { out[k] = decodeURIComponent(v); } catch { out[k] = v; }
+  }
+  return out;
+}
 
 // ── Socket.IO auth middleware ─────────────────────────────────────────────────
 // Auth is optional — guests without a token continue as before.
+// Accepts token from handshake.auth.token (legacy) or cd_access cookie.
 // Authenticated players get socket.playerId / socket.playerDisplayName attached.
 // Banned players get socket.playerBanned = true; requireAuthSocket checks this.
 io.use(async (socket, next) => {
-  const token = socket.handshake.auth?.token;
+  const cookies = parseCookies(socket.handshake.headers?.cookie);
+  const token = socket.handshake.auth?.token || cookies['cd_access'] || null;
   if (token) {
     try {
       const payload = authService.verifyAccessToken(token);
@@ -150,8 +214,13 @@ const RECONNECT_GRACE_MS = 120_000; // 2 minutes grace before forfeit
 const disconnectGrace = new Map();
 
 // Expose via app.locals so REST routes can read them
-app.locals.partiesById = partiesById;
+app.locals.partiesById     = partiesById;
 app.locals.partyByPlayerId = partyByPlayerId;
+// Admin dashboard live-state access
+app.locals.gamesByRoomId   = gamesByRoomId;
+app.locals.roomsByCode     = roomsByCode;
+app.locals.mlRoomsByCode   = mlRoomsByCode;
+app.locals.socketByPlayerId = socketByPlayerId;
 
 // fix #4: per-socket rate-limit counters
 // socketId -> { lobbyCount, lobbyWindowStart, actionCount, actionWindowStart }
@@ -184,7 +253,7 @@ function checkActionRateLimit(socketId) {
     r.actionWindowStart = now;
   }
   r.actionCount++;
-  return r.actionCount <= 30; // max 30 player_actions per second
+  return r.actionCount <= 10; // max 10 player_actions per second
 }
 
 function generateCode(len = 6) {
@@ -196,7 +265,7 @@ function generateCode(len = 6) {
 
 // ── Reconnect token helpers ───────────────────────────────────────────────────
 const jwt = require("jsonwebtoken");
-const RECONNECT_JWT_SECRET = process.env.JWT_SECRET || "dev_reconnect_secret";
+const RECONNECT_JWT_SECRET = process.env.JWT_SECRET; // required — server/auth.js throws at startup if unset
 
 function issueReconnectToken(roomId, code, mode, seatKey, socket) {
   return jwt.sign(
@@ -235,7 +304,7 @@ async function logMatchStart(roomId, mode) {
     );
     return r.rows[0].id;
   } catch (err) {
-    console.error("[match] insert failed:", err.message);
+    log.error('[match] insert failed:', { err: err.message });
     return null;
   }
 }
@@ -257,7 +326,7 @@ async function logMatchEnd(matchIdPromise, winnerLane, playerSnapshots) {
       );
     }
   } catch (err) {
-    console.error("[match] close failed:", err.message);
+    log.error('[match] close failed:', { err: err.message });
   }
 }
 
@@ -371,16 +440,45 @@ function createMLRoom(hostSocketId, displayName, settings) {
     roomId,
     players: [hostSocketId],
     laneBySocketId: new Map([[hostSocketId, 0]]),
+    playerTeamsBySocketId: new Map([[hostSocketId, "red"]]),
     readySet: new Set(),
     playerNames: new Map([[hostSocketId, sanitizeDisplayName(displayName)]]),
     createdAt: Date.now(),
     mode: "multilane",
     hostSocketId,
-    aiPlayers: [], // [{ laneIndex, difficulty }]
+    aiPlayers: [], // [{ laneIndex, difficulty, team }]
     settings: normalizeMatchSettings(settings),
   };
   mlRoomsByCode.set(code, room);
   return { code, roomId };
+}
+
+function countMlTeams(room) {
+  const counts = { red: 0, blue: 0 };
+  for (const sid of room.players || []) {
+    const t = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
+    counts[t] += 1;
+  }
+  for (const ai of room.aiPlayers || []) {
+    const t = ai.team === "blue" ? "blue" : "red";
+    counts[t] += 1;
+  }
+  return counts;
+}
+
+function pickBalancedMlTeam(room) {
+  const counts = countMlTeams(room);
+  return counts.red <= counts.blue ? "red" : "blue";
+}
+
+function validateMlTeamSetup(room) {
+  const total = (room.players?.length || 0) + (room.aiPlayers?.length || 0);
+  if (total !== 4) return { ok: true };
+  const counts = countMlTeams(room);
+  if (counts.red !== 2 || counts.blue !== 2) {
+    return { ok: false, reason: "For 4-player matches, assign exactly 2 Red and 2 Blue before starting." };
+  }
+  return { ok: true };
 }
 
 function mlLobbyUpdatePayload(code, room) {
@@ -389,6 +487,7 @@ function mlLobbyUpdatePayload(code, room) {
     displayName: room.playerNames.get(sid) || "Player",
     ready: room.readySet.has(sid),
     isAI: false,
+    team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
   }));
   const aiPlayers = (room.aiPlayers || []).map(ai => ({
     laneIndex: ai.laneIndex,
@@ -396,6 +495,7 @@ function mlLobbyUpdatePayload(code, room) {
     ready: true,
     isAI: true,
     difficulty: ai.difficulty,
+    team: ai.team === "blue" ? "blue" : "red",
   }));
   const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
   return { code, players, hostLaneIndex: 0, settings: normalizeMatchSettings(room.settings) };
@@ -403,6 +503,53 @@ function mlLobbyUpdatePayload(code, room) {
 
 function capFirst(s) {
   return String(s || "").charAt(0).toUpperCase() + String(s || "").slice(1);
+}
+
+function buildMlMatchSeed(roomId, code, laneAssignments) {
+  const parts = laneAssignments
+    .slice()
+    .sort((a, b) => a.laneIndex - b.laneIndex)
+    .map((a) => `${a.laneIndex}:${a.team}:${a.isAI ? "ai" : "human"}`);
+  return `${roomId}:${code}:${parts.join("|")}`;
+}
+
+function resolveDefaultMultilaneTarget(game, sourceLaneIndex) {
+  if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1) return null;
+  const sourceLane = game.lanes[sourceLaneIndex];
+  if (!sourceLane) return null;
+  const total = Math.min(Number(game.playerCount) || game.lanes.length, game.lanes.length);
+  for (let step = 1; step < total; step++) {
+    const idx = (sourceLaneIndex + step) % total;
+    const lane = game.lanes[idx];
+    if (!lane || lane.eliminated) continue;
+    if (lane.team === sourceLane.team) continue;
+    return idx;
+  }
+  return null;
+}
+
+function applyMultilaneAction(entry, laneIndex, action) {
+  const res = simMl.applyMLAction(entry.game, laneIndex, action);
+  const tracker = entry.botController && entry.botController.runtimeTracker;
+  if (tracker) {
+    if (!res.ok) {
+      tracker.recordInvalidAction(laneIndex);
+    } else if (action && action.type === "spawn_unit") {
+      const requestedTarget = Number(action.data && action.data.targetLaneIndex);
+      const targetLaneIndex = Number.isInteger(requestedTarget)
+        ? requestedTarget
+        : resolveDefaultMultilaneTarget(entry.game, laneIndex);
+      tracker.recordSendEvent(
+        laneIndex,
+        targetLaneIndex,
+        action.data && action.data.unitType,
+        1,
+        1,
+        entry.game.tick
+      );
+    }
+  }
+  return res;
 }
 
 function startMLGame(roomId, code, io) {
@@ -413,26 +560,43 @@ function startMLGame(roomId, code, io) {
   const humanCount = room.players.length;
   const aiList = room.aiPlayers || [];
   const playerCount = humanCount + aiList.length;
-  const game = simMl.createMLGame(playerCount, room.settings);
-
   const laneAssignments = [
     ...room.players.map(sid => ({
       laneIndex: room.laneBySocketId.get(sid),
       displayName: room.playerNames.get(sid) || "Player",
       isAI: false,
+      team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
     })),
     ...aiList.map(ai => ({
       laneIndex: ai.laneIndex,
       displayName: "CPU (" + capFirst(ai.difficulty) + ")",
       isAI: true,
+      team: ai.team === "blue" ? "blue" : "red",
     })),
   ];
+  const laneTeams = new Array(playerCount).fill("red");
+  for (const a of laneAssignments) {
+    if (Number.isInteger(a.laneIndex) && a.laneIndex >= 0 && a.laneIndex < playerCount) {
+      laneTeams[a.laneIndex] = a.team === "blue" ? "blue" : "red";
+    }
+  }
+  const game = simMl.createMLGame(playerCount, { ...room.settings, laneTeams });
 
   io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments });
   io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
-
-  // Start AI loops
-  const aiHandles = aiList.map(ai => aiModule.startAI(game, ai.laneIndex, ai.difficulty));
+  const botController = aiList.length > 0
+    ? aiRuntime.createBotController({
+      game,
+      seed: buildMlMatchSeed(roomId, code, laneAssignments),
+      tickMs: simMl.TICK_MS,
+      botTickMs: 500,
+      runtimeOptions: { waveTickInterval: simMl.INCOME_INTERVAL_TICKS || 240 },
+      botConfigs: aiList.map((ai) => ({
+        laneIndex: ai.laneIndex,
+        difficulty: ai.difficulty,
+      })),
+    })
+    : null;
 
   // Snapshot authenticated players for DB logging
   const playerSnapshot = room.players
@@ -454,7 +618,13 @@ function startMLGame(roomId, code, io) {
     const entry = gamesByRoomId.get(roomId);
     if (!entry) return;
 
+    const prevLite = entry.botController ? aiRuntime.captureStateLite(entry.game) : null;
+    if (entry.botController) entry.botController.onBeforeSimTick(entry.game);
     simMl.mlTick(entry.game);
+    if (entry.botController && prevLite) {
+      const nextLite = aiRuntime.captureStateLite(entry.game);
+      entry.botController.onAfterSimTick(prevLite, nextLite);
+    }
     localTick++;
 
     // Check for newly eliminated lanes
@@ -493,7 +663,11 @@ function startMLGame(roomId, code, io) {
       io.to(roomId).emit("ml_game_over", { winnerLaneIndex: winnerLane, winnerName });
       const snapshots = entry.playerSnapshot.map(p => ({
         ...p,
-        result: winnerLane === null ? "draw" : p.laneIndex === winnerLane ? "win" : "loss",
+        result: winnerLane === null
+          ? "draw"
+          : entry.game.lanes[p.laneIndex]?.team === entry.game.lanes[winnerLane]?.team
+            ? "win"
+            : "loss",
       }));
       const endP = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
       if (ratingService && db && entry.dbMode === '2v2_ranked') {
@@ -524,13 +698,24 @@ function startMLGame(roomId, code, io) {
               }).catch(() => {});
             }
           })
-          .catch(err => console.error('[rating] error:', err.message));
+          .catch(err => log.error('[rating] error:', { err: err.message }));
       }
       stopMLGame(roomId, code);
     }
   }, simMl.TICK_MS);
 
-  gamesByRoomId.set(roomId, { game, tickHandle, mode: "multilane", snapshotEveryNTicks, eliminatedNotified, aiHandles, matchIdPromise, playerSnapshot, dbMode, partyASize: room.partyASize || 1 });
+  gamesByRoomId.set(roomId, {
+    game,
+    tickHandle,
+    mode: "multilane",
+    snapshotEveryNTicks,
+    eliminatedNotified,
+    botController,
+    matchIdPromise,
+    playerSnapshot,
+    dbMode,
+    partyASize: room.partyASize || 1,
+  });
 
   // Issue reconnect tokens to human players
   for (const sid of room.players) {
@@ -541,22 +726,64 @@ function startMLGame(roomId, code, io) {
     sock.emit("reconnect_token", { token: rToken, gracePeriodMs: RECONNECT_GRACE_MS });
   }
 
-  console.log(`[ml-game] started ${roomId}`);
+  log.info(`[ml-game] started ${roomId}`);
 }
 
 function stopMLGame(roomId, code) {
   const entry = gamesByRoomId.get(roomId);
   if (!entry) return;
   clearInterval(entry.tickHandle);
-  for (const h of (entry.aiHandles || [])) aiModule.stopAI(h);
   gamesByRoomId.delete(roomId);
-  console.log(`[ml-game] stopped ${roomId}`);
+  log.info(`[ml-game] stopped ${roomId}`);
   const handle = setTimeout(() => {
     mlRoomsByCode.delete(code);
-    console.log(`[ml-room] cleaned up ${code}`);
+    log.info(`[ml-room] cleaned up ${code}`);
   }, 60_000);
   const room = mlRoomsByCode.get(code);
   if (room) room._cleanupHandle = handle;
+}
+
+// ── Friends helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Returns the friends list for a player as:
+ * [{ playerId, displayName, status: 'accepted'|'pending_sent'|'pending_received', online: bool }]
+ */
+async function getFriendsList(playerId) {
+  if (!db) return [];
+  const { rows } = await db.query(
+    `SELECT
+       CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END AS friend_id,
+       CASE WHEN f.requester_id = $1 THEN pa.display_name ELSE pr.display_name END AS display_name,
+       CASE
+         WHEN f.status = 'accepted' THEN 'accepted'
+         WHEN f.requester_id = $1   THEN 'pending_sent'
+         ELSE 'pending_received'
+       END AS status
+     FROM friends f
+     JOIN players pr ON pr.id = f.requester_id
+     JOIN players pa ON pa.id = f.addressee_id
+     WHERE f.requester_id = $1 OR f.addressee_id = $1`,
+    [playerId]
+  );
+  return rows.map(r => ({
+    playerId: r.friend_id,
+    displayName: r.display_name,
+    status: r.status,
+    online: socketByPlayerId.has(r.friend_id),
+  }));
+}
+
+/**
+ * Push an updated friends_list to a player if they are online.
+ */
+async function pushFriendsList(playerId) {
+  const sid = socketByPlayerId.get(playerId);
+  if (!sid) return;
+  const sock = io.sockets.sockets.get(sid);
+  if (!sock) return;
+  const friends = await getFriendsList(playerId);
+  sock.emit('friends_list', friends);
 }
 
 // ── Party / queue business logic ──────────────────────────────────────────────
@@ -578,7 +805,7 @@ function _leaveParty(socket, partyId) {
     if (party.status === "queued") matchmaker.removeFromQueue(partyId);
     partiesById.delete(partyId);
     partiesByCode.delete(party.code);
-    console.log(`[party] disbanded ${partyId}`);
+    log.info(`[party] disbanded ${partyId}`);
     return;
   }
 
@@ -592,7 +819,7 @@ function _leaveParty(socket, partyId) {
       if (party.status === "queued") matchmaker.removeFromQueue(partyId);
       partiesById.delete(partyId);
       partiesByCode.delete(party.code);
-      console.log(`[party] disbanded ${partyId} (no connected leader candidate)`);
+      log.info(`[party] disbanded ${partyId} (no connected leader candidate)`);
       return;
     }
   }
@@ -610,7 +837,7 @@ function _leaveParty(socket, partyId) {
     const elapsed = Math.floor((Date.now() - party.queueEnteredAt) / 1000);
     io.to("party:" + partyId).emit("queue_status", { status: "queued", mode: party.queueMode, elapsed });
   }
-  console.log(`[party] ${socket.playerId} left ${partyId}`);
+  log.info(`[party] ${socket.playerId} left ${partyId}`);
 }
 
 /**
@@ -618,7 +845,7 @@ function _leaveParty(socket, partyId) {
  * Creates an ML room, auto-joins all members, and emits match_found.
  */
 function onMatchFound(partyA, partyB, mode) {
-  console.log(`[match] found: party ${partyA.id} vs party ${partyB.id} mode=${mode}`);
+  log.info(`[match] found: party ${partyA.id} vs party ${partyB.id} mode=${mode}`);
 
   // Create a 4-player ML room (2 per party)
   const allMembers = [...partyA.members, ...partyB.members];
@@ -634,6 +861,7 @@ function onMatchFound(partyA, partyB, mode) {
 
   // Set host session (createMLRoom does not call sessionBySocketId.set)
   sessionBySocketId.set(hostSocketId, { code, roomId, laneIndex: 0, mode: "multilane" });
+  room.playerTeamsBySocketId.set(hostSocketId, "red");
   const hostSocket = io.sockets.sockets.get(hostSocketId);
   if (hostSocket) hostSocket.join(roomId);
 
@@ -647,6 +875,7 @@ function onMatchFound(partyA, partyB, mode) {
     room.players.push(sid);
     room.laneBySocketId.set(sid, laneIndex);
     room.playerNames.set(sid, sanitizeDisplayName(member.displayName));
+    room.playerTeamsBySocketId.set(sid, i < partyA.members.length ? "red" : "blue");
     sessionBySocketId.set(sid, { code, roomId, laneIndex, mode: "multilane" });
     const memberSocket = io.sockets.sockets.get(sid);
     if (memberSocket) memberSocket.join(roomId);
@@ -718,7 +947,7 @@ function requireAuthSocket(socket, cb) {
 // ── Socket.IO connection ─────────────────────────────────────────────────────
 
 io.on("connection", (socket) => {
-  console.log("connected:", socket.id);
+  log.info('socket connected');
 
   // Assign a stable guest ID for reconnect token issuance (even auth players get one as fallback)
   socket.guestId = crypto.randomUUID();
@@ -726,6 +955,21 @@ io.on("connection", (socket) => {
   // Track authenticated sockets immediately on connect (token via handshake)
   if (socket.playerId) {
     socketByPlayerId.set(socket.playerId, socket.id);
+    // Push friends list + notify accepted friends that this player is online
+    if (db) {
+      getFriendsList(socket.playerId).then(friends => {
+        socket.emit('friends_list', friends);
+        for (const f of friends) {
+          if (f.status === 'accepted') {
+            const fSid = socketByPlayerId.get(f.playerId);
+            if (fSid) {
+              const fSock = io.sockets.sockets.get(fSid);
+              if (fSock) fSock.emit('friend_online', { playerId: socket.playerId, displayName: socket.playerDisplayName });
+            }
+          }
+        }
+      }).catch(() => {});
+    }
   }
 
   // Allows clients to authenticate after the socket is already connected
@@ -740,6 +984,21 @@ io.on("connection", (socket) => {
       socket.playerDisplayName = payload.displayName;
       socketByPlayerId.set(socket.playerId, socket.id);
       socket.emit("authenticated", { playerId: socket.playerId, displayName: socket.playerDisplayName });
+      // Push friends list + notify accepted friends that this player is online
+      if (db) {
+        getFriendsList(socket.playerId).then(friends => {
+          socket.emit('friends_list', friends);
+          for (const f of friends) {
+            if (f.status === 'accepted') {
+              const fSid = socketByPlayerId.get(f.playerId);
+              if (fSid) {
+                const fSock = io.sockets.sockets.get(fSid);
+                if (fSock) fSock.emit('friend_online', { playerId: socket.playerId, displayName: socket.playerDisplayName });
+              }
+            }
+          }
+        }).catch(() => {});
+      }
     } catch {
       socket.emit("auth_error", { message: "Invalid or expired token" });
     }
@@ -790,11 +1049,14 @@ io.on("connection", (socket) => {
           if (io.sockets.sockets.has(sid)) {
             return socket.emit("rejoin_fail", { reason: "seat_taken" });
           }
+          const staleTeam = room.playerTeamsBySocketId?.get(sid);
           room.players = room.players.filter(s => s !== sid);
           room.laneBySocketId.delete(sid);
+          if (room.playerTeamsBySocketId) room.playerTeamsBySocketId.delete(sid);
           room.playerNames.delete(sid);
           room.readySet.delete(sid);
           sessionBySocketId.delete(sid);
+          if (staleTeam && room.playerTeamsBySocketId) room.playerTeamsBySocketId.set(socket.id, staleTeam);
           break;
         }
       }
@@ -806,6 +1068,9 @@ io.on("connection", (socket) => {
 
       if (!room.players.includes(socket.id)) room.players.push(socket.id);
       room.laneBySocketId.set(socket.id, laneIndex);
+      if (room.playerTeamsBySocketId && !room.playerTeamsBySocketId.has(socket.id)) {
+        room.playerTeamsBySocketId.set(socket.id, pickBalancedMlTeam(room));
+      }
       room.playerNames.set(socket.id, playerName);
       socket.join(roomId);
       sessionBySocketId.set(socket.id, { code, roomId, laneIndex, mode: "multilane" });
@@ -814,11 +1079,13 @@ io.on("connection", (socket) => {
         laneIndex: room.laneBySocketId.get(sid),
         displayName: room.playerNames.get(sid) || "Player",
         ready: true, isAI: false,
+        team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
       }));
       const aiPlayers = (room.aiPlayers || []).map(ai => ({
         laneIndex: ai.laneIndex,
         displayName: "CPU (" + capFirst(ai.difficulty) + ")",
         ready: true, isAI: true,
+        team: ai.team === "blue" ? "blue" : "red",
       }));
       const laneAssignments = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
 
@@ -828,7 +1095,7 @@ io.on("connection", (socket) => {
       socket.emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
       socket.emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
       io.to(roomId).emit("player_reconnected", { laneIndex, displayName: playerName, mode: "multilane" });
-      console.log(`[reconnect] ml lane ${laneIndex} in ${roomId}`);
+      log.info(`[reconnect] ml lane ${laneIndex} in ${roomId}`);
 
     } else {
       const room = roomsByCode.get(code);
@@ -864,7 +1131,7 @@ io.on("connection", (socket) => {
       socket.emit("state_snapshot", sim.createSnapshot(entry.game));
       socket.emit("match_config", sim.createPublicConfig(room.settings));
       io.to(roomId).emit("player_reconnected", { side, displayName: playerName, mode: "classic" });
-      console.log(`[reconnect] classic side=${side} in ${roomId}`);
+      log.info(`[reconnect] classic side=${side} in ${roomId}`);
     }
   });
 
@@ -902,7 +1169,7 @@ io.on("connection", (socket) => {
       partyByPlayerId.set(socket.playerId, partyId);
       socket.join("party:" + partyId);
       io.to("party:" + partyId).emit("party_update", { party });
-      console.log(`[party] created ${partyId} code=${code} by ${socket.playerId}`);
+      log.info(`[party] created ${partyId} code=${code} by ${socket.playerId}`);
     });
   });
 
@@ -932,7 +1199,7 @@ io.on("connection", (socket) => {
       partyByPlayerId.set(socket.playerId, party.id);
       socket.join("party:" + party.id);
       io.to("party:" + party.id).emit("party_update", { party });
-      console.log(`[party] ${socket.playerId} joined ${party.id}`);
+      log.info(`[party] ${socket.playerId} joined ${party.id}`);
     });
   });
 
@@ -941,6 +1208,158 @@ io.on("connection", (socket) => {
       const partyId = partyByPlayerId.get(socket.playerId);
       if (!partyId) return;
       _leaveParty(socket, partyId);
+    });
+  });
+
+  // ── Friends events ─────────────────────────────────────────────────────────────
+
+  socket.on("friend:list", () => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return;
+    requireAuthSocket(socket, () => {
+      getFriendsList(socket.playerId).then(friends => {
+        socket.emit('friends_list', friends);
+      }).catch(() => {});
+    });
+  });
+
+  socket.on("friend:add", ({ displayName } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return socket.emit('friend_error', { message: 'Friends require an account.' });
+    if (!displayName || typeof displayName !== 'string') return;
+    const name = displayName.trim().slice(0, 20);
+    if (!name) return;
+    requireAuthSocket(socket, () => {
+      db.query(
+        `SELECT id, display_name FROM players WHERE display_name = $1 AND id <> $2 LIMIT 1`,
+        [name, socket.playerId]
+      ).then(async ({ rows }) => {
+        if (!rows.length) {
+          return socket.emit('friend_error', { message: `No player named "${name}".` });
+        }
+        const target = rows[0];
+        await db.query(
+          `INSERT INTO friends (requester_id, addressee_id)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [socket.playerId, target.id]
+        );
+        // Notify target if online
+        const tSid = socketByPlayerId.get(target.id);
+        if (tSid) {
+          const tSock = io.sockets.sockets.get(tSid);
+          if (tSock) tSock.emit('friend_request', { playerId: socket.playerId, displayName: socket.playerDisplayName });
+          // Refresh their list too
+          pushFriendsList(target.id).catch(() => {});
+        }
+        // Refresh caller's list
+        pushFriendsList(socket.playerId).catch(() => {});
+      }).catch(() => socket.emit('friend_error', { message: 'Could not send request.' }));
+    });
+  });
+
+  socket.on("friend:accept", ({ playerId: requesterId } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return;
+    if (!requesterId || typeof requesterId !== 'string') return;
+    requireAuthSocket(socket, () => {
+      db.query(
+        `UPDATE friends SET status = 'accepted', updated_at = NOW()
+         WHERE requester_id = $1 AND addressee_id = $2 AND status = 'pending'`,
+        [requesterId, socket.playerId]
+      ).then(async () => {
+        // Notify requester if online
+        const rSid = socketByPlayerId.get(requesterId);
+        if (rSid) {
+          const rSock = io.sockets.sockets.get(rSid);
+          if (rSock) rSock.emit('friend_accepted', { playerId: socket.playerId, displayName: socket.playerDisplayName });
+          pushFriendsList(requesterId).catch(() => {});
+        }
+        pushFriendsList(socket.playerId).catch(() => {});
+      }).catch(() => {});
+    });
+  });
+
+  socket.on("friend:decline", ({ playerId: otherId } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return;
+    if (!otherId || typeof otherId !== 'string') return;
+    requireAuthSocket(socket, () => {
+      db.query(
+        `DELETE FROM friends
+         WHERE status = 'pending'
+           AND ((requester_id = $1 AND addressee_id = $2)
+             OR (requester_id = $2 AND addressee_id = $1))`,
+        [socket.playerId, otherId]
+      ).then(() => {
+        pushFriendsList(socket.playerId).catch(() => {});
+        pushFriendsList(otherId).catch(() => {});
+      }).catch(() => {});
+    });
+  });
+
+  socket.on("friend:remove", ({ playerId: otherId } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return;
+    if (!otherId || typeof otherId !== 'string') return;
+    requireAuthSocket(socket, () => {
+      db.query(
+        `DELETE FROM friends
+         WHERE (requester_id = $1 AND addressee_id = $2)
+            OR (requester_id = $2 AND addressee_id = $1)`,
+        [socket.playerId, otherId]
+      ).then(() => {
+        // Notify the removed player
+        const oSid = socketByPlayerId.get(otherId);
+        if (oSid) {
+          const oSock = io.sockets.sockets.get(oSid);
+          if (oSock) oSock.emit('friend_removed', { playerId: socket.playerId });
+          pushFriendsList(otherId).catch(() => {});
+        }
+        pushFriendsList(socket.playerId).catch(() => {});
+      }).catch(() => {});
+    });
+  });
+
+  socket.on("party:invite", ({ targetPlayerId } = {}) => {
+    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!db) return;
+    if (!targetPlayerId || typeof targetPlayerId !== 'string') return;
+    requireAuthSocket(socket, () => {
+      // Must be party leader
+      const partyId = partyByPlayerId.get(socket.playerId);
+      if (!partyId) return socket.emit('error_message', { message: 'You must be in a party to invite.' });
+      const party = partiesById.get(partyId);
+      if (!party || party.leaderId !== socket.playerId) {
+        return socket.emit('error_message', { message: 'Only the party leader can invite.' });
+      }
+      if (party.members.length >= 4) {
+        return socket.emit('error_message', { message: 'Party is full.' });
+      }
+      // Target must be online
+      const tSid = socketByPlayerId.get(targetPlayerId);
+      if (!tSid) return socket.emit('error_message', { message: 'That player is not online.' });
+
+      // Verify they are an accepted friend
+      db.query(
+        `SELECT 1 FROM friends
+         WHERE status = 'accepted'
+           AND ((requester_id = $1 AND addressee_id = $2)
+             OR (requester_id = $2 AND addressee_id = $1))
+         LIMIT 1`,
+        [socket.playerId, targetPlayerId]
+      ).then(({ rows }) => {
+        if (!rows.length) return socket.emit('error_message', { message: 'That player is not your friend.' });
+        const tSock = io.sockets.sockets.get(tSid);
+        if (tSock) {
+          tSock.emit('party_invite', {
+            partyId,
+            partyCode: party.code,
+            fromPlayerId: socket.playerId,
+            fromDisplayName: socket.playerDisplayName,
+          });
+        }
+      }).catch(() => {});
     });
   });
 
@@ -1120,8 +1539,10 @@ io.on("connection", (socket) => {
 
     // Humans always fill the lowest indices; AI slots are bumped above humans.
     const laneIndex = room.players.length;
+    const assignedTeam = pickBalancedMlTeam(room);
     room.players.push(socket.id);
     room.laneBySocketId.set(socket.id, laneIndex);
+    room.playerTeamsBySocketId.set(socket.id, assignedTeam);
     room.playerNames.set(socket.id, sanitizeDisplayName(displayName));
     // Shift any existing AI players above the new human count
     if (room.aiPlayers) {
@@ -1147,6 +1568,10 @@ io.on("connection", (socket) => {
 
     // Auto-start when all human players are ready and total (human + AI) >= 2
     const totalPlayers = room.players.length + (room.aiPlayers || []).length;
+    const teamCheck = validateMlTeamSetup(room);
+    if (!teamCheck.ok) {
+      return socket.emit("error_message", { message: teamCheck.reason });
+    }
     if (totalPlayers >= 2 && room.readySet.size === room.players.length) {
       startMLGame(room.roomId, normalized, io);
     }
@@ -1164,6 +1589,10 @@ io.on("connection", (socket) => {
     const totalPlayers = room.players.length + (room.aiPlayers || []).length;
     if (totalPlayers < 2) {
       return socket.emit("error_message", { message: "Need at least 2 players (add AI or invite another)." });
+    }
+    const teamCheck = validateMlTeamSetup(room);
+    if (!teamCheck.ok) {
+      return socket.emit("error_message", { message: teamCheck.reason });
     }
     if (!gamesByRoomId.has(room.roomId)) {
       startMLGame(room.roomId, normalized, io);
@@ -1213,7 +1642,7 @@ io.on("connection", (socket) => {
     const validDifficulties = ["easy", "medium", "hard"];
     const diff = validDifficulties.includes(String(difficulty)) ? String(difficulty) : "easy";
     if (!room.aiPlayers) room.aiPlayers = [];
-    room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff });
+    room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: pickBalancedMlTeam(room) });
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
@@ -1277,6 +1706,52 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
+  socket.on("set_ml_team", ({ laneIndex, team } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "multilane") return;
+    const room = mlRoomsByCode.get(session.code);
+    if (!room || room.hostSocketId !== socket.id) return;
+    if (gamesByRoomId.has(room.roomId)) return;
+
+    const normalizedTeam = team === "blue" ? "blue" : "red";
+    const targetLane = Number(laneIndex);
+    const total = room.players.length + (room.aiPlayers || []).length;
+    if (!Number.isInteger(targetLane) || targetLane < 0 || targetLane >= total) return;
+
+    let currentTeam = null;
+    let targetSid = null;
+    let targetAi = null;
+    for (const sid of room.players) {
+      if (room.laneBySocketId.get(sid) === targetLane) {
+        targetSid = sid;
+        currentTeam = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
+        break;
+      }
+    }
+    if (!targetSid) {
+      targetAi = (room.aiPlayers || []).find(ai => ai.laneIndex === targetLane) || null;
+      if (targetAi) currentTeam = targetAi.team === "blue" ? "blue" : "red";
+    }
+    if (!currentTeam) return;
+    if (currentTeam === normalizedTeam) return;
+
+    const counts = countMlTeams(room);
+    counts[currentTeam] -= 1;
+    counts[normalizedTeam] += 1;
+    const maxTeamSize = Math.ceil(total / 2);
+    if (counts.red > maxTeamSize || counts.blue > maxTeamSize) {
+      return socket.emit("error_message", { message: `Too many players on one team (max ${maxTeamSize}).` });
+    }
+
+    if (targetSid) {
+      room.playerTeamsBySocketId.set(targetSid, normalizedTeam);
+    } else if (targetAi) {
+      targetAi.team = normalizedTeam;
+    }
+
+    io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
+  });
+
   // ── Player actions (classic path below; ML path branches here) ─────────────
 
   socket.on("player_action", ({ code, side, type, data }) => {
@@ -1300,7 +1775,7 @@ io.on("connection", (socket) => {
       if (!lane) return socket.emit("error_message", { message: "Lane not found" });
       if (lane.eliminated) return socket.emit("error_message", { message: "You have been eliminated." });
 
-      const res = simMl.applyMLAction(entry.game, session.laneIndex, { type, data });
+      const res = applyMultilaneAction(entry, session.laneIndex, { type, data });
       if (!res.ok) return socket.emit("error_message", { message: res.reason || "Action rejected" });
 
       socket.emit("action_applied", {
@@ -1400,12 +1875,99 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("leave_game", () => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session) return;
+
+    if (session.mode === "multilane") {
+      const code = session.code;
+      const room = mlRoomsByCode.get(code);
+      if (!room) return;
+
+      const laneIndex = room.laneBySocketId.get(socket.id);
+      const entry = gamesByRoomId.get(room.roomId);
+      const playerName = room.playerNames.get(socket.id) || socket.playerDisplayName || "Player";
+      if (entry && laneIndex !== undefined && !entry.eliminatedNotified.has(laneIndex)) {
+        entry.eliminatedNotified.add(laneIndex);
+        io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "quit" });
+      }
+
+      const idx = room.players.indexOf(socket.id);
+      if (idx !== -1) room.players.splice(idx, 1);
+      room.laneBySocketId.delete(socket.id);
+      if (room.playerTeamsBySocketId) room.playerTeamsBySocketId.delete(socket.id);
+      room.playerNames.delete(socket.id);
+      room.readySet.delete(socket.id);
+      if (room.rematchVotes) room.rematchVotes.delete(socket.id);
+      sessionBySocketId.delete(socket.id);
+      socket.leave(room.roomId);
+      socket.emit("left_game_ack");
+
+      if (room.players.length === 0) {
+        stopMLGame(room.roomId, code);
+        mlRoomsByCode.delete(code);
+      } else if (!entry) {
+        io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
+      }
+      return;
+    }
+
+    const code = session.code;
+    const room = roomsByCode.get(code);
+    if (!room) return;
+
+    const side = session.side || room.sidesBySocketId.get(socket.id);
+    const entry = gamesByRoomId.get(room.roomId);
+    if (entry && side) {
+      const winner = side === "bottom" ? "top" : "bottom";
+      const winnerLane = winner === "bottom" ? 0 : 1;
+      const snapshots = entry.playerSnapshot.map(p => ({
+        ...p,
+        result: p.laneIndex === winnerLane ? "win" : "loss",
+      }));
+      io.to(room.roomId).emit("game_over", { winner, reason: "quit" });
+      logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
+      stopGame(room.roomId);
+    }
+
+    const idx = room.players.indexOf(socket.id);
+    if (idx !== -1) room.players.splice(idx, 1);
+    room.sidesBySocketId.delete(socket.id);
+    if (room.rematchVotes) room.rematchVotes.delete(socket.id);
+    sessionBySocketId.delete(socket.id);
+    socket.leave(room.roomId);
+    socket.emit("left_game_ack");
+
+    if (room.players.length === 0) {
+      roomsByCode.delete(code);
+    } else if (!entry) {
+      io.to(room.roomId).emit("player_left", { code });
+    }
+  });
+
   socket.on("disconnect", () => {
     rateLimitBySocketId.delete(socket.id);
     sessionBySocketId.delete(socket.id);
 
     // Authenticated player cleanup (party/queue always cleaned up on disconnect)
     if (socket.playerId) {
+      // Notify accepted friends that this player went offline (before deleting from map)
+      if (db) {
+        const offlineId = socket.playerId;
+        const offlineName = socket.playerDisplayName;
+        getFriendsList(offlineId).then(friends => {
+          for (const f of friends) {
+            if (f.status === 'accepted') {
+              const fSid = socketByPlayerId.get(f.playerId);
+              if (fSid) {
+                const fSock = io.sockets.sockets.get(fSid);
+                if (fSock) fSock.emit('friend_offline', { playerId: offlineId, displayName: offlineName });
+              }
+            }
+          }
+        }).catch(() => {});
+      }
+
       socketByPlayerId.delete(socket.playerId);
 
       // Party cleanup: remove from party, disband if empty, cancel queue if needed
@@ -1498,6 +2060,7 @@ io.on("connection", (socket) => {
               const i = r.players.indexOf(socket.id);
               if (i !== -1) r.players.splice(i, 1);
               r.laneBySocketId.delete(socket.id);
+              if (r.playerTeamsBySocketId) r.playerTeamsBySocketId.delete(socket.id);
               r.playerNames.delete(socket.id);
               r.readySet.delete(socket.id);
               if (r.players.length === 0) {
@@ -1515,6 +2078,7 @@ io.on("connection", (socket) => {
         } else {
           room.players.splice(idx, 1);
           room.laneBySocketId.delete(socket.id);
+          if (room.playerTeamsBySocketId) room.playerTeamsBySocketId.delete(socket.id);
           room.playerNames.delete(socket.id);
           room.readySet.delete(socket.id);
           io.to(room.roomId).emit("player_left", { code });
@@ -1531,6 +2095,22 @@ io.on("connection", (socket) => {
 
 app.get("/", (_req, res) => {
   res.sendFile(path.join(clientDir, "index.html"));
+});
+
+app.get("/terms", (_req, res) => {
+  res.sendFile(path.join(clientDir, "terms.html"));
+});
+
+app.get("/privacy", (_req, res) => {
+  res.sendFile(path.join(clientDir, "privacy.html"));
+});
+
+// Alias routes for common legal URL patterns
+app.get("/terms-of-service", (_req, res) => {
+  res.redirect(302, "/terms");
+});
+app.get("/privacy-policy", (_req, res) => {
+  res.redirect(302, "/privacy");
 });
 
 // Lightweight health endpoint for uptime checks.
@@ -1590,12 +2170,9 @@ function gracefulShutdown(signal) {
   // Stop matchmaking loop
   matchmaker.stopMatchmakingLoop();
 
-  // Stop all active game tick loops and AI loops
+  // Stop all active game tick loops.
   for (const [, entry] of gamesByRoomId.entries()) {
     clearInterval(entry.tickHandle);
-    if (Array.isArray(entry.aiHandles)) {
-      entry.aiHandles.forEach(h => clearInterval(h));
-    }
   }
   gamesByRoomId.clear();
 

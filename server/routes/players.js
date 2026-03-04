@@ -1,4 +1,5 @@
 'use strict';
+const log = require('../logger');
 
 const express      = require('express');
 const router       = express.Router();
@@ -21,7 +22,7 @@ router.get('/me', requireAuth, async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('[players] GET /me:', err.message);
+    log.error('[players] GET /me:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -45,7 +46,7 @@ router.get('/:id', async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('[players] GET /:id:', err.message);
+    log.error('[players] GET /:id:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -89,7 +90,7 @@ router.patch('/me', requireAuth, async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('[players] PATCH /me:', err.message);
+    log.error('[players] PATCH /me:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

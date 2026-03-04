@@ -19,9 +19,10 @@ const GOOGLE_CLIENT_ID    = process.env.GOOGLE_CLIENT_ID;
 const JWT_SECRET          = process.env.JWT_SECRET;
 
 if (!JWT_SECRET) {
-  console.warn('[auth] WARNING: JWT_SECRET is not set — signed tokens will be insecure');
-} else if (JWT_SECRET.length < 32) {
-  console.warn('[auth] WARNING: JWT_SECRET is too short (< 32 chars) — use a stronger secret');
+  throw new Error('[auth] FATAL: JWT_SECRET env var is not set — refusing to start');
+}
+if (JWT_SECRET.length < 32) {
+  throw new Error('[auth] FATAL: JWT_SECRET is too short (< 32 chars) — use a stronger secret');
 }
 const ACCESS_TOKEN_TTL    = '15m';
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -160,7 +161,7 @@ async function loginWithPassword(email, password) {
 
 // ── Password reset ────────────────────────────────────────────────────────────
 
-const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 async function createPasswordResetToken(email) {
   const res = await db.query(
@@ -171,7 +172,7 @@ async function createPasswordResetToken(email) {
 
   const playerId = res.rows[0].id;
   const raw  = crypto.randomBytes(32).toString('hex');
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  const hash = crypto.createHmac('sha256', JWT_SECRET).update(raw).digest('hex');
   const exp  = new Date(Date.now() + RESET_TOKEN_TTL_MS);
 
   // Invalidate any existing unused tokens for this player
@@ -191,7 +192,7 @@ async function createPasswordResetToken(email) {
 }
 
 async function consumePasswordResetToken(rawToken, newPassword) {
-  const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const hash = crypto.createHmac('sha256', JWT_SECRET).update(rawToken).digest('hex');
   const res  = await db.query(
     `SELECT prt.player_id, prt.expires_at, prt.used_at, p.status
      FROM password_reset_tokens prt
@@ -228,11 +229,11 @@ async function consumePasswordResetToken(rawToken, newPassword) {
 
 // ── Email verification ────────────────────────────────────────────────────────
 
-const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const VERIFY_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 async function createEmailVerificationToken(playerId) {
   const raw  = crypto.randomBytes(32).toString('hex');
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+  const hash = crypto.createHmac('sha256', JWT_SECRET).update(raw).digest('hex');
   const exp  = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
 
   // Invalidate any existing unused tokens for this player
@@ -252,7 +253,7 @@ async function createEmailVerificationToken(playerId) {
 }
 
 async function consumeEmailVerificationToken(rawToken) {
-  const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const hash = crypto.createHmac('sha256', JWT_SECRET).update(rawToken).digest('hex');
   const res  = await db.query(
     `SELECT evt.player_id, evt.expires_at, evt.used_at,
             p.id, p.display_name, p.region, p.status

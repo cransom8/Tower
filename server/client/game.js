@@ -5,9 +5,9 @@ const SERVER_URL = window.location.hostname === 'localhost'
   : window.location.origin;
 
 const socket = io(SERVER_URL, {
-  autoConnect: true,
+  autoConnect:          true,
   reconnectionAttempts: 5,
-  auth: { token: localStorage.getItem('cd_access') || '' },
+  withCredentials:      true, // send HttpOnly auth cookie automatically
 });
 
 const UNIT_TYPES = ['runner', 'footman', 'ironclad', 'warlock', 'golem'];
@@ -76,6 +76,11 @@ let mlLobbyPlayers = [];
 let mlIsHost = false;
 let mlMyCode = null;
 let isClassicHost = false;
+let _soloMode = false;
+let _soloAiDiff = 'medium';
+let _gameType  = 't2t';   // 't2t' | 'td'
+let _pvpMode   = '1v1';   // '1v1' | 'ffa' | '2v2'
+let _matchType = 'ranked'; // 'ranked' | 'unranked' | 'private' | 'solo'
 const DEFAULT_MATCH_SETTINGS = Object.freeze({ startIncome: 10 });
 
 // ML grid constants (mirrors server/sim-multilane.js)
@@ -246,12 +251,17 @@ const canvasWrap = document.getElementById('game-canvas-wrap');
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const gameUi = document.getElementById('game-ui');
+const leftRail = document.getElementById('left-rail');
+const rightRail = document.getElementById('right-rail');
+const btnLeftRailToggle = document.getElementById('btn-left-rail-toggle');
+const btnRightRailToggle = document.getElementById('btn-right-rail-toggle');
 const hudGold = document.getElementById('hud-gold');
 const hudIncome = document.getElementById('hud-income');
 const hudIncomeTimer = document.getElementById('hud-income-timer');
 const gameOverBanner = document.getElementById('game-over-banner');
 const actionFeedback = document.getElementById('action-feedback');
 const disconnectNotice = document.getElementById('disconnect-notice');
+const btnLeaveGame = document.getElementById('btn-leave-game');
 const towerPopout = document.getElementById('tower-popout');
 const matchupPanel = document.getElementById('matchup-panel');
 const incomeLeaderboardPanel = document.getElementById('income-leaderboard');
@@ -297,6 +307,7 @@ sendButtons.forEach(btn => {
 // ── Multi-lane DOM refs ───────────────────────────────────────────────────────
 const mlLobbyPanel = document.getElementById('ml-lobby-panel');
 const mlPlayerList = document.getElementById('ml-player-list');
+const mlTeamSetupStatus = document.getElementById('ml-team-setup-status');
 const btnCreateMl = document.getElementById('btn-create-ml');
 const btnJoinMl = document.getElementById('btn-join-ml');
 const mlJoinInput = document.getElementById('ml-join-code-input');
@@ -304,10 +315,26 @@ const mlNameInput = document.getElementById('ml-name-input');
 const btnReadyMl = document.getElementById('btn-ready-ml');
 const btnForceStart = document.getElementById('btn-force-start-ml');
 const spectatorBadge = document.getElementById('spectator-badge');
-const lobbyClassicSection = document.getElementById('lobby-classic-section');
-const lobbyMlSection = document.getElementById('lobby-ml-section');
-const btnTabClassic = document.getElementById('btn-tab-classic');
-const btnTabMl = document.getElementById('btn-tab-multilane');
+const lobbyQueueSection    = document.getElementById('lobby-queue-section');
+const lobbyPrivateSection  = document.getElementById('lobby-private-section');
+const lobbySoloSection     = document.getElementById('lobby-solo-section');
+const lobbyMlSection       = document.getElementById('lobby-ml-section');
+const btnTabRanked   = document.getElementById('btn-tab-ranked');
+const btnTabUnranked = document.getElementById('btn-tab-unranked');
+const btnTabPrivate  = document.getElementById('btn-tab-private');
+const btnTabSolo     = document.getElementById('btn-tab-solo');
+const btnGameT2t     = document.getElementById('btn-game-t2t');
+const btnGameTd      = document.getElementById('btn-game-td');
+const pvpModeSeparator = document.getElementById('pvp-mode-separator');
+const pvpModeBar     = document.getElementById('pvp-mode-bar');
+const btnPvpFfa      = document.getElementById('btn-pvp-ffa');
+const btnPvpTwoV2    = document.getElementById('btn-pvp-2v2');
+const queueModeDesc  = document.getElementById('queue-mode-desc');
+const btnQueueFind   = document.getElementById('btn-queue-find');
+const privateTtUI    = document.getElementById('private-t2t-ui');
+const privateTdUI    = document.getElementById('private-td-ui');
+const soloTtUI       = document.getElementById('solo-t2t-ui');
+const soloTdUI       = document.getElementById('solo-td-ui');
 const mlRoomCodeRow = document.getElementById('ml-room-code-row');
 const mlRoomCodeDisplay = document.getElementById('ml-room-code-display');
 const btnCopyMlCode = document.getElementById('btn-copy-ml-code');
@@ -408,6 +435,14 @@ function setLobbyState(state) {
   btnJoin.disabled = inFlight;
   joinInput.disabled = inFlight;
   joinNameInput.disabled = inFlight;
+
+  // Keep top-right account/party controls uncluttered during gameplay.
+  const signedIn = !!Auth.getPlayer();
+  const party = document.getElementById('party-panel');
+  if (party) party.style.display = (signedIn && state !== 'playing') ? '' : 'none';
+
+  const authBtn = document.getElementById('btn-auth-signout');
+  if (authBtn) authBtn.textContent = state === 'playing' ? 'Quit Game' : 'Sign out';
 }
 
 function hideLobby() {
@@ -423,12 +458,75 @@ function showLobby() {
 function showGameUi() {
   canvasWrap.style.display = 'block';
   gameUi.style.display = 'block';
+  refreshSideRailsForViewport(true);
 }
 
 function hideGameUi() {
   canvasWrap.style.display = 'none';
   gameUi.style.display = 'none';
 }
+
+function isCompactSideRailMode() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return (
+    window.matchMedia('(max-width: 760px)').matches
+    || window.matchMedia('(max-height: 760px)').matches
+    || window.matchMedia('(pointer: coarse)').matches
+  );
+}
+
+function syncRailToggleButtons() {
+  if (btnLeftRailToggle && leftRail) {
+    btnLeftRailToggle.innerHTML = leftRail.classList.contains('rail-open') ? '&#x25C0;' : '&#x25B6;';
+  }
+  if (btnRightRailToggle && rightRail) {
+    btnRightRailToggle.innerHTML = rightRail.classList.contains('rail-open') ? '&#x25B6;' : '&#x25C0;';
+  }
+}
+
+function setRailOpen(side, open) {
+  const rail = side === 'left' ? leftRail : rightRail;
+  if (!rail) return;
+  rail.classList.toggle('rail-open', !!open);
+  syncRailToggleButtons();
+}
+
+function refreshSideRailsForViewport(forceCompactDefault) {
+  if (!leftRail || !rightRail) return;
+  const compact = isCompactSideRailMode();
+  if (!compact) {
+    leftRail.classList.add('rail-open');
+    rightRail.classList.add('rail-open');
+  } else if (forceCompactDefault) {
+    leftRail.classList.remove('rail-open');
+    rightRail.classList.remove('rail-open');
+  }
+  syncRailToggleButtons();
+}
+
+if (btnLeftRailToggle) {
+  btnLeftRailToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !(leftRail && leftRail.classList.contains('rail-open'));
+    setRailOpen('left', willOpen);
+    if (willOpen && isCompactSideRailMode()) setRailOpen('right', false);
+  });
+}
+
+if (btnRightRailToggle) {
+  btnRightRailToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !(rightRail && rightRail.classList.contains('rail-open'));
+    setRailOpen('right', willOpen);
+    if (willOpen && isCompactSideRailMode()) setRailOpen('left', false);
+  });
+}
+
+window.addEventListener('resize', () => refreshSideRailsForViewport(false));
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => refreshSideRailsForViewport(false));
+}
+refreshSideRailsForViewport(false);
 
 function initCanvas() {
   function resize() {
@@ -662,12 +760,22 @@ function syncBarracksStatMultipliers(level) {
   return changed;
 }
 
+function shouldUseCompactRightRail() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return (
+    window.matchMedia('(max-width: 760px)').matches
+    || window.matchMedia('(max-height: 760px)').matches
+    || window.matchMedia('(pointer: coarse)').matches
+  );
+}
+
 function updateStatsPanel() {
   const panel = document.getElementById('stats-panel');
   if (!panel) return;
   const isML = (gameMode === 'multilane');
   const wasExpanded = panel.classList.contains('expanded');
   const hadInit = panel.dataset.init === '1';
+  const compactRightRail = shouldUseCompactRightRail();
   let bodyHtml = '';
 
   if (isML) {
@@ -703,13 +811,17 @@ function updateStatsPanel() {
     + '</button>'
     + '<div class="stats-body">' + bodyHtml + '</div>';
 
-  if (!hadInit || wasExpanded) panel.classList.add('expanded');
+  if ((hadInit && wasExpanded) || (!hadInit && !compactRightRail)) panel.classList.add('expanded');
   panel.dataset.init = '1';
 
   const toggleBtn = panel.querySelector('.stats-toggle-btn');
   if (toggleBtn) {
     toggleBtn.addEventListener('click', function (e) {
       e.stopPropagation();
+      const willExpand = !panel.classList.contains('expanded');
+      if (willExpand && shouldUseCompactRightRail() && matchupPanel) {
+        matchupPanel.classList.remove('expanded');
+      }
       panel.classList.toggle('expanded');
     });
   }
@@ -745,6 +857,8 @@ function renderMatchupPanel() {
 
   // Preserve expanded state across re-renders
   const wasExpanded = matchupPanel.classList.contains('expanded');
+  const hadInit = matchupPanel.dataset.init === '1';
+  const compactRightRail = shouldUseCompactRightRail();
 
   // All values come exclusively from DAMAGE_MULTIPLIERS/DAMAGE_TYPES/ARMOR_TYPES constants
   let bodyHtml = '<div class="matchup-title">Damage vs Armor</div>';
@@ -781,13 +895,19 @@ function renderMatchupPanel() {
     + '</button>'
     + '<div class="matchup-body">' + bodyHtml + '</div>';
 
-  if (wasExpanded) matchupPanel.classList.add('expanded');
+  if ((hadInit && wasExpanded) || (!hadInit && !compactRightRail)) matchupPanel.classList.add('expanded');
+  matchupPanel.dataset.init = '1';
 
   // Re-attach toggle click listener after innerHTML replacement
   const toggleBtn = matchupPanel.querySelector('.matchup-toggle-btn');
   if (toggleBtn) {
     toggleBtn.addEventListener('click', function (e) {
       e.stopPropagation();
+      const willExpand = !matchupPanel.classList.contains('expanded');
+      if (willExpand && shouldUseCompactRightRail()) {
+        const statsPanelEl = document.getElementById('stats-panel');
+        if (statsPanelEl) statsPanelEl.classList.remove('expanded');
+      }
       matchupPanel.classList.toggle('expanded');
     });
   }
@@ -2049,11 +2169,13 @@ function resetToLobby(msg) {
   mlIsHost = false;
   mlMyCode = null;
 
-  // Restore classic tab visibility
-  btnTabClassic.classList.add('active');
-  btnTabMl.classList.remove('active');
-  lobbyClassicSection.style.display = '';
-  lobbyMlSection.style.display = 'none';
+  // Restore default tab
+  _soloMode  = false;
+  _gameType  = 't2t';
+  _pvpMode   = '1v1';
+  _matchType = 'ranked';
+  activateGameType('t2t');
+  activateLobbyTab('ranked');
   hideMLLobbyPanel();
   if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'none';
   if (btnForceStart) btnForceStart.style.display = 'none';
@@ -2122,6 +2244,13 @@ function resetToLobby(msg) {
   showLobby();
   setLobbyState('idle');
   setStatus(msg, 'error');
+}
+
+function leaveCurrentGame() {
+  if (lobbyState !== 'playing') return;
+  if (!window.confirm('Are you sure you want to quit?')) return;
+  socket.emit('leave_game');
+  resetToLobby('You left the match.');
 }
 
 function sendAction(type, data) {
@@ -2366,39 +2495,131 @@ applyMlSettingsToUi(DEFAULT_MATCH_SETTINGS);
 setClassicSettingsEditable(true);
 setMlSettingsEditable(false);
 
-// ── Tab event handlers ────────────────────────────────────────────────────────
+// ── Tab helpers and event handlers ────────────────────────────────────────────
 
-btnTabClassic.addEventListener('click', () => {
+function updateLobbyContent() {
+  // Queue description + button label
+  if (_matchType === 'ranked' || _matchType === 'unranked') {
+    const r = _matchType === 'ranked';
+    const modeStr = _gameType === 't2t' ? '1v1' : (_pvpMode === '2v2' ? '2v2' : 'FFA');
+    if (queueModeDesc) queueModeDesc.textContent = r
+      ? `Rated ${modeStr} — requires account.`
+      : `Casual ${modeStr} — no rating at stake.`;
+    if (btnQueueFind) btnQueueFind.textContent = r ? `⚔ Find Ranked ${modeStr}` : `🛡 Find ${modeStr} Match`;
+  }
+  // Private sub-panel
+  if (privateTtUI) privateTtUI.style.display = _gameType === 'td' ? 'none' : '';
+  if (privateTdUI) privateTdUI.style.display = _gameType === 'td' ? '' : 'none';
+  // Solo sub-panel
+  if (soloTtUI) soloTtUI.style.display = _gameType === 'td' ? 'none' : '';
+  if (soloTdUI) soloTdUI.style.display = _gameType === 'td' ? '' : 'none';
+}
+
+function setPvpModeUiVisibility(show) {
+  if (pvpModeBar) pvpModeBar.style.display = show ? '' : 'none';
+  if (pvpModeSeparator) pvpModeSeparator.style.display = show ? '' : 'none';
+}
+
+function activateLobbyTab(tab) {
+  _matchType = tab;
+  // Show/hide pvp bar: visible for TD + not solo
+  setPvpModeUiVisibility(_gameType === 'td' && tab !== 'solo');
+  // Show/hide content sections
+  if (lobbyQueueSection)   lobbyQueueSection.style.display   = (tab === 'ranked' || tab === 'unranked') ? '' : 'none';
+  if (lobbyPrivateSection) lobbyPrivateSection.style.display = tab === 'private' ? '' : 'none';
+  if (lobbySoloSection)    lobbySoloSection.style.display    = tab === 'solo'    ? '' : 'none';
+  // Active tab state
+  [btnTabRanked, btnTabUnranked, btnTabPrivate, btnTabSolo].forEach(b => b && b.classList.remove('active'));
+  const tabEl = { ranked: btnTabRanked, unranked: btnTabUnranked, private: btnTabPrivate, solo: btnTabSolo }[tab];
+  if (tabEl) tabEl.classList.add('active');
+  updateLobbyContent();
+}
+
+function activateGameType(type) {
+  _gameType = type;
+  if (type === 't2t') _pvpMode = '1v1';
+  [btnGameT2t, btnGameTd].forEach(b => b && b.classList.remove('active'));
+  const gameEl = { t2t: btnGameT2t, td: btnGameTd }[type];
+  if (gameEl) gameEl.classList.add('active');
+  setPvpModeUiVisibility(type === 'td' && _matchType !== 'solo');
+  updateLobbyContent();
+}
+
+function activatePvpMode(mode) {
+  _pvpMode = mode;
+  [btnPvpFfa, btnPvpTwoV2].forEach(b => b && b.classList.remove('active'));
+  const pvpEl = { ffa: btnPvpFfa, '2v2': btnPvpTwoV2 }[mode];
+  if (pvpEl) pvpEl.classList.add('active');
+  updateLobbyContent();
+}
+
+if (btnGameT2t) btnGameT2t.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
-  btnTabClassic.classList.add('active');
-  btnTabMl.classList.remove('active');
   gameMode = 'classic';
-  lobbyClassicSection.style.display = '';
-  lobbyMlSection.style.display = 'none';
+  activateGameType('t2t');
   hideMLLobbyPanel();
-  setClassicSettingsEditable(true);
-  setMlSettingsEditable(false);
+});
+
+if (btnGameTd) btnGameTd.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
+  gameMode = 'multilane';
+  activateGameType('td');
+  hideMLLobbyPanel();
+});
+
+if (btnPvpFfa) btnPvpFfa.addEventListener('click', () => {
+  activatePvpMode('ffa');
+});
+
+if (btnPvpTwoV2) btnPvpTwoV2.addEventListener('click', () => {
+  activatePvpMode('2v2');
+});
+
+btnTabRanked.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
+  activateLobbyTab('ranked');
+  hideMLLobbyPanel();
+});
+
+btnTabUnranked.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
+  activateLobbyTab('unranked');
+  hideMLLobbyPanel();
+});
+
+btnTabPrivate.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  setLobbyState('idle');
+  setStatus('', '');
+  gameMode = _gameType === 'td' ? 'multilane' : 'classic';
+  activateLobbyTab('private');
+  hideMLLobbyPanel();
   setClassicSettingsEditable(isClassicHost || myCode === null);
 });
 
-btnTabMl.addEventListener('click', () => {
+btnTabSolo.addEventListener('click', () => {
   if (lobbyState === 'playing') return;
   setLobbyState('idle');
   setStatus('', '');
-  btnTabMl.classList.add('active');
-  btnTabClassic.classList.remove('active');
   gameMode = 'multilane';
-  lobbyMlSection.style.display = '';
-  lobbyClassicSection.style.display = 'none';
+  activateLobbyTab('solo');
   hideMLLobbyPanel();
-  setMlSettingsEditable(false);
 });
+
+// Initialize queue description on page load
+updateLobbyContent();
 
 btnCreateMl.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
-  const name = mlNameInput.value.trim() || 'Player';
+  const name = Auth.getPlayer()?.displayName || mlNameInput.value.trim() || 'Player';
   const settings = readMlSettingsFromUi();
   setLobbyState('creating');
   setStatus('Creating ML room...', 'wait');
@@ -2409,7 +2630,7 @@ btnJoinMl.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
   const code = mlJoinInput.value.trim().toUpperCase();
   if (code.length < 6) return setStatus('Enter the full 6-character room code.', 'error');
-  const name = mlNameInput.value.trim() || 'Player';
+  const name = Auth.getPlayer()?.displayName || mlNameInput.value.trim() || 'Player';
   setLobbyState('joining');
   setStatus('Joining ML room...', 'wait');
   socket.emit('join_ml_room', { code, displayName: name });
@@ -2418,6 +2639,53 @@ btnJoinMl.addEventListener('click', () => {
 mlJoinInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') btnJoinMl.click();
 });
+
+// ── Lobby queue entry button ──────────────────────────────────────────────────
+
+if (btnQueueFind) {
+  btnQueueFind.addEventListener('click', () => {
+    const modeMap = {
+      't2t-ranked':      'ranked_1v1',
+      't2t-unranked':    'casual_1v1',
+      'td-ffa-ranked':   'ranked_ffa',
+      'td-ffa-unranked': 'casual_ffa',
+      'td-2v2-ranked':   'ranked_2v2',
+      'td-2v2-unranked': 'casual_2v2',
+    };
+    const key = _gameType === 't2t'
+      ? `${_gameType}-${_matchType}`
+      : `td-${_pvpMode}-${_matchType}`;
+    socket.emit('queue:enter', { mode: modeMap[key] });
+  });
+}
+
+// ── Solo mode ─────────────────────────────────────────────────────────────────
+
+const btnSoloPlay   = document.getElementById('btn-solo-play');
+const soloNameInput = document.getElementById('solo-name-input');
+
+if (btnLeaveGame) {
+  btnLeaveGame.addEventListener('click', leaveCurrentGame);
+}
+
+document.querySelectorAll('.solo-diff-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.solo-diff-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _soloAiDiff = btn.dataset.diff;
+  });
+});
+
+if (btnSoloPlay) {
+  btnSoloPlay.addEventListener('click', () => {
+    if (lobbyState !== 'idle') return;
+    const name = Auth.getPlayer()?.displayName || (soloNameInput ? soloNameInput.value.trim() : '') || 'Player';
+    _soloMode = true;
+    setLobbyState('creating');
+    setStatus('Setting up solo match\u2026', 'wait');
+    socket.emit('create_ml_room', { displayName: name, settings: readMlSettingsFromUi() });
+  });
+}
 
 btnReadyMl.addEventListener('click', () => {
   if (!mlMyCode) return;
@@ -2478,7 +2746,7 @@ btnJoin.addEventListener('click', () => {
   if (lobbyState !== 'idle') return;
   const code = joinInput.value.trim().toUpperCase();
   if (code.length < 6) return setStatus('Enter the full 6-character room code.', 'error');
-  const displayName = joinNameInput.value.trim() || 'Player';
+  const displayName = Auth.getPlayer()?.displayName || joinNameInput.value.trim() || 'Player';
   setLobbyState('joining');
   setStatus('Joining room...', 'wait');
   socket.emit('join_room', { code, displayName });
@@ -2702,6 +2970,10 @@ socket.on('player_left', () => {
   }
 });
 
+socket.on('left_game_ack', () => {
+  if (lobbyState === 'playing') resetToLobby('You left the match.');
+});
+
 socket.on('state_snapshot', state => {
   const local = localizeState(state);
   if (!local) return;
@@ -2756,11 +3028,9 @@ socket.on('rematch_vote', data => {
     } else {
       const code = mlCode.toUpperCase().slice(0, 6);
       if (code.length !== 6) return setStatus('Invalid invite link.', 'error');
-      // Switch to ML tab visually
-      btnTabClassic.classList.remove('active');
-      btnTabMl.classList.add('active');
-      lobbyClassicSection.style.display = 'none';
-      lobbyMlSection.style.display = '';
+      // Switch to Tower Defence > Private tab
+      activateGameType('td');
+      activateLobbyTab('private');
       mlJoinInput.value = code;
       setStatus("You've been invited! Enter your name, then click Join ML Room.", 'wait');
       mlNameInput.focus();
@@ -2808,6 +3078,7 @@ socket.on('reconnect_token', ({ token } = {}) => {
 
 socket.on('connect', () => {
   console.log('[socket] connected:', socket.id);
+  if (lobbyState !== 'playing') setStatus('', '');
   const token = localStorage.getItem('cd_reconnect');
   if (token) {
     console.log('[reconnect] attempting rejoin…');
@@ -2883,6 +3154,8 @@ socket.on('player_reconnected', ({ displayName, mode: _m } = {}) => {
 
 socket.on('disconnect', reason => {
   console.log('[socket] disconnected:', reason);
+  // Expected during auth cookie refresh / manual reconnect.
+  if (reason === 'io client disconnect') return;
   if (lobbyState === 'playing') {
     if (localStorage.getItem('cd_reconnect')) {
       showDisconnectNotice('Reconnecting…');
@@ -2926,7 +3199,8 @@ function buildMLInterpolatedState(nowMs) {
         hp: lerp(prev.hp, u.hp, alpha),
       });
     });
-    return Object.assign({}, lane, { units });
+    const walls = Array.isArray(lane.walls) ? lane.walls : (Array.isArray(prevLane.walls) ? prevLane.walls : []);
+    return Object.assign({}, lane, { units, walls });
   });
   return result;
 }
@@ -2989,7 +3263,7 @@ function getMLUnitRenderJitter(unitId, tileSize) {
   };
 }
 
-function drawMLGridLane(lane) {
+function drawMLGridLane(lane, local) {
   if (!lane) return;
   const w = canvas.width;
   const h = canvas.height;
@@ -3215,7 +3489,9 @@ function drawMLGridLane(lane) {
     const jitter = getMLUnitRenderJitter(u.id, tileSize);
     const drawX = pos.x + jitter.x;
     const drawY = pos.y + jitter.y;
-    const friendly = (u.ownerLane === myLaneIndex);
+    const myLane = local.lanes && local.lanes[myLaneIndex];
+    const ownerLane = local.lanes && local.lanes[u.ownerLane];
+    const friendly = !!myLane && !!ownerLane && myLane.team === ownerLane.team;
     drawUnitShape({ type: u.type, side: friendly ? 'bottom' : 'top' }, drawX, drawY);
     const hpRatio = Math.max(0, Math.min(1, u.hp / u.maxHp));
     ctx.fillStyle = '#252d38';
@@ -3294,8 +3570,11 @@ function drawMLGridLane(lane) {
 
   // Danger indicator — enemy units near castle
   const pathLen = lane.path ? lane.path.length : ML_GRID_H;
+  const viewedLane = local.lanes && local.lanes[viewingLaneIndex];
   const dangerUnits = (lane.units || []).filter(u =>
-    u.ownerLane !== viewingLaneIndex && u.pathIdx >= pathLen - 7
+    viewedLane && local.lanes && local.lanes[u.ownerLane]
+      ? local.lanes[u.ownerLane].team !== viewedLane.team && u.pathIdx >= pathLen - 7
+      : u.ownerLane !== viewingLaneIndex && u.pathIdx >= pathLen - 7
   );
   if (dangerUnits.length > 0) {
     const pulse = 0.3 + Math.sin(Date.now() * 0.006) * 0.2;
@@ -3415,10 +3694,13 @@ function updateMLInfoBar(myLane, state) {
 function initMLLaneTabs() {
   if (!mlLaneTabs) return;
   mlLaneTabs.innerHTML = '';
+  const myAssign = mlLaneAssignments.find(a => a.laneIndex === myLaneIndex);
+  const myTeam = myAssign && myAssign.team ? myAssign.team : null;
   mlLaneAssignments.forEach(a => {
     const btn = document.createElement('button');
     const isMine = a.laneIndex === myLaneIndex;
-    btn.className = 'lane-tab ' + (isMine ? 'lane-tab-mine' : 'lane-tab-enemy');
+    const isTeammate = !isMine && myTeam && a.team === myTeam;
+    btn.className = 'lane-tab ' + (isMine || isTeammate ? 'lane-tab-mine' : 'lane-tab-enemy');
     btn.dataset.laneIndex = String(a.laneIndex);
     const star = isMine ? '\u2605 ' : '';
     btn.innerHTML = star + a.displayName + ' <span class="lane-tab-lives" id="ltab-lives-' + a.laneIndex + '">\u2665?</span>';
@@ -3442,7 +3724,9 @@ function updateLaneTabs(state) {
 
 function switchViewingLane(index) {
   viewingLaneIndex = index;
-  const isEnemy = index !== myLaneIndex;
+  const myAssign = mlLaneAssignments.find(a => a.laneIndex === myLaneIndex);
+  const viewedAssign = mlLaneAssignments.find(a => a.laneIndex === index);
+  const isEnemy = index !== myLaneIndex && (!myAssign || !viewedAssign || myAssign.team !== viewedAssign.team);
   if (enemyLaneTint) enemyLaneTint.style.display = isEnemy ? 'block' : 'none';
   if (mlSpectateNotice) {
     if (isEnemy) {
@@ -3564,6 +3848,24 @@ function renderMLLobbyPanel(data) {
   if (data && data.settings) applyMlSettingsToUi(data.settings);
   setMlSettingsEditable(mlIsHost && lobbyState !== 'playing');
   mlLobbyPlayers = data.players || [];
+  if (mlTeamSetupStatus) {
+    const redCount = mlLobbyPlayers.filter(p => (p.team || 'red') === 'red').length;
+    const blueCount = mlLobbyPlayers.filter(p => p.team === 'blue').length;
+    const total = mlLobbyPlayers.length;
+    const isFourPlayerReady = total === 4 && redCount === 2 && blueCount === 2;
+    mlTeamSetupStatus.textContent = `Team Setup: Red ${redCount} | Blue ${blueCount}`;
+    mlTeamSetupStatus.classList.remove('ok', 'warn');
+    if (total < 4) {
+      mlTeamSetupStatus.classList.add('warn');
+      mlTeamSetupStatus.textContent += ' (waiting for players)';
+    } else if (isFourPlayerReady) {
+      mlTeamSetupStatus.classList.add('ok');
+      mlTeamSetupStatus.textContent += ' (ready)';
+    } else {
+      mlTeamSetupStatus.classList.add('warn');
+      mlTeamSetupStatus.textContent += ' (need 2v2 split)';
+    }
+  }
   mlPlayerList.innerHTML = '';
   mlLobbyPlayers.forEach(p => {
     const li = document.createElement('li');
@@ -3571,6 +3873,10 @@ function renderMLLobbyPanel(data) {
     const laneSpan = document.createElement('span');
     laneSpan.className = 'player-lane-num';
     laneSpan.textContent = 'L' + p.laneIndex;
+
+    const teamBadge = document.createElement('span');
+    teamBadge.className = 'ml-team-badge ml-team-' + (p.team === 'blue' ? 'blue' : 'red');
+    teamBadge.textContent = p.team === 'blue' ? 'BLUE' : 'RED';
 
     const nameSpan = document.createElement('span');
     nameSpan.style.flex = '1';
@@ -3588,6 +3894,7 @@ function renderMLLobbyPanel(data) {
     badge.textContent = p.ready ? 'READY' : 'WAITING';
 
     li.appendChild(laneSpan);
+    li.appendChild(teamBadge);
     li.appendChild(nameSpan);
     li.appendChild(badge);
 
@@ -3616,6 +3923,16 @@ function renderMLLobbyPanel(data) {
       li.appendChild(upBtn);
       li.appendChild(downBtn);
 
+      const teamBtn = document.createElement('button');
+      teamBtn.className = 'ml-team-toggle ml-team-' + (p.team === 'blue' ? 'blue' : 'red');
+      teamBtn.title = 'Switch team';
+      teamBtn.textContent = p.team === 'blue' ? 'Blue' : 'Red';
+      teamBtn.addEventListener('click', () => {
+        const nextTeam = p.team === 'blue' ? 'red' : 'blue';
+        socket.emit('set_ml_team', { laneIndex: p.laneIndex, team: nextTeam });
+      });
+      li.appendChild(teamBtn);
+
       if (p.isAI) {
         const removeBtn = document.createElement('button');
         removeBtn.className = 'ml-remove-ai-btn';
@@ -3640,7 +3957,7 @@ function renderFrameML() {
   if (viewingLaneIndex === null) viewingLaneIndex = myLaneIndex;
 
   const viewingLane = local.lanes && local.lanes[viewingLaneIndex];
-  if (viewingLane) drawMLGridLane(viewingLane);
+  if (viewingLane) drawMLGridLane(viewingLane, local);
 
   const myLane = local.lanes && local.lanes[myLaneIndex];
   if (myLane) {
@@ -3663,6 +3980,16 @@ socket.on('ml_room_created', data => {
   mlIsHost = true;
   applyMlSettingsToUi(data.settings || readMlSettingsFromUi());
   setMlSettingsEditable(true);
+
+  if (_soloMode) {
+    _soloMode = false;
+    setLobbyState('waiting');
+    setStatus('Starting solo match\u2026', 'wait');
+    socket.emit('add_ai_to_ml_room', { difficulty: _soloAiDiff });
+    socket.emit('ml_force_start', { code: data.code });
+    return;
+  }
+
   setLobbyState('waiting');
   setStatus('Share code \u2014 waiting for players...', 'wait');
   lobbyMlSection.style.display = 'none';
@@ -4628,20 +4955,49 @@ function onAuthStateChange(player) {
     authSigninArea.style.display  = 'none';
     authProfileArea.style.display = 'flex';
     authDisplayName.textContent   = player.displayName;
-    // Re-send token to existing socket so server knows who this is
-    socket.emit('authenticate', { token: Auth.getAccessToken() });
-    // Show party panel when signed in
-    document.getElementById('party-panel').style.display = '';
+    // Reconnect socket so the server picks up the new HttpOnly auth cookie
+    if (socket.connected) socket.disconnect();
+    socket.connect();
+    // Show friends panel when signed in; party panel stays hidden during gameplay.
+    document.getElementById('party-panel').style.display = lobbyState === 'playing' ? 'none' : '';
+    document.getElementById('friends-panel').style.display = '';
+    btnAuthSignout.textContent = lobbyState === 'playing' ? 'Quit Game' : 'Sign out';
     renderPartyPanel(null);
+    renderFriendsPanel([]);
+    // Pre-fill and hide name inputs — username is used automatically
+    [joinNameInput, mlNameInput, soloNameInput].forEach(inp => {
+      if (!inp) return;
+      inp.value = player.displayName;
+      inp.style.display = 'none';
+      const label = document.querySelector(`label[for="${inp.id}"]`);
+      if (label) label.style.display = 'none';
+    });
   } else {
     authSigninArea.style.display  = 'flex';
     authProfileArea.style.display = 'none';
     document.getElementById('party-panel').style.display = 'none';
+    document.getElementById('friends-panel').style.display = 'none';
+    _friendsList = [];
+    _pendingPartyInvite = null;
     _resetPwForm();
+    // Restore name inputs for guests
+    [joinNameInput, mlNameInput, soloNameInput].forEach(inp => {
+      if (!inp) return;
+      inp.value = '';
+      inp.style.display = '';
+      const label = document.querySelector(`label[for="${inp.id}"]`);
+      if (label) label.style.display = '';
+    });
   }
 }
 
-btnAuthSignout.addEventListener('click', () => Auth.logout());
+btnAuthSignout.addEventListener('click', () => {
+  if (lobbyState === 'playing') {
+    leaveCurrentGame();
+    return;
+  }
+  Auth.logout();
+});
 
 // ── Password auth form logic ──────────────────────────────────────────────────
 
@@ -5020,7 +5376,7 @@ window.onGoogleSignIn = async (response) => {
     }
     // Show auth bar when DB is present (password auth) or Google is configured
     if (cfg.passwordAuthEnabled || cfg.googleClientId) {
-      document.getElementById('auth-bar').style.display = '';
+      document.getElementById('auth-bar').style.display = 'block';
     }
   } catch { /* no DB / no Google config — auth bar stays hidden */ }
 
@@ -5034,6 +5390,11 @@ let _queueStatus    = 'idle'; // 'idle' | 'queued' | 'matched'
 let _queueMode      = null;
 let _queueElapsed   = 0;
 let _queueInterval  = null; // local elapsed timer
+
+// ── Friends panel state ────────────────────────────────────────────────────────
+let _friendsList       = [];
+let _pendingPartyInvite = null;
+let _friendsMsgTimer   = null;
 
 const partyPanel        = document.getElementById('party-panel');
 const partyCodeDisplay  = document.getElementById('party-code-display');
@@ -5097,6 +5458,127 @@ function renderPartyPanel(party) {
       queueStatusText.className   = 'matched';
     }
   }
+  // Keep friends panel content in sync with party state changes.
+  renderFriendsPanel(_friendsList);
+}
+
+// ── Friends panel rendering ────────────────────────────────────────────────────
+
+function _showFriendsMsg(msg, durationMs = 4000) {
+  const el = document.getElementById('friends-msg');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.display = '';
+  if (_friendsMsgTimer) clearTimeout(_friendsMsgTimer);
+  _friendsMsgTimer = setTimeout(() => {
+    el.style.display = 'none';
+    _friendsMsgTimer = null;
+  }, durationMs);
+}
+
+function renderFriendsPanel(friends) {
+  _friendsList = friends || [];
+  const panel = document.getElementById('friends-panel');
+  if (!panel || panel.style.display === 'none') return;
+
+  const myPlayerId = Auth.getPlayer()?.id;
+  const myParty    = _currentParty;
+  const amLeader   = myParty && myParty.leaderId === myPlayerId;
+
+  // Invite banner
+  const banner     = document.getElementById('friends-invite-banner');
+  const inviteText = document.getElementById('friends-invite-text');
+  if (_pendingPartyInvite) {
+    inviteText.textContent = `${_pendingPartyInvite.fromDisplayName} invited you to their party!`;
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
+
+  // Online count
+  const onlineCount = document.getElementById('friends-online-count');
+  const acceptedOnline = _friendsList.filter(f => f.status === 'accepted' && f.online).length;
+  const acceptedTotal  = _friendsList.filter(f => f.status === 'accepted').length;
+  onlineCount.textContent = acceptedTotal > 0 ? `${acceptedOnline}/${acceptedTotal} online` : '';
+
+  // Sort: online accepted → offline accepted → pending_received → pending_sent
+  const ORDER = { accepted_online: 0, accepted_offline: 1, pending_received: 2, pending_sent: 3 };
+  const sorted = [..._friendsList].sort((a, b) => {
+    const keyA = a.status === 'accepted' ? (a.online ? 'accepted_online' : 'accepted_offline') : a.status;
+    const keyB = b.status === 'accepted' ? (b.online ? 'accepted_online' : 'accepted_offline') : b.status;
+    return (ORDER[keyA] ?? 9) - (ORDER[keyB] ?? 9);
+  });
+
+  const list = document.getElementById('friends-list');
+  list.innerHTML = '';
+  for (const f of sorted) {
+    const li = document.createElement('li');
+    li.className = 'friends-item';
+
+    const dot = document.createElement('span');
+    dot.className = 'friends-dot ' + (f.online ? 'online' : 'offline');
+    li.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.className = 'friends-name';
+    name.textContent = f.displayName;
+    li.appendChild(name);
+
+    const status = document.createElement('span');
+    status.className = 'friends-status';
+    if (f.status === 'pending_received') status.textContent = 'Pending';
+    else if (f.status === 'pending_sent') status.textContent = 'Sent';
+    li.appendChild(status);
+
+    const actions = document.createElement('span');
+    actions.className = 'friends-actions';
+
+    if (f.status === 'accepted') {
+      if (amLeader && f.online) {
+        const invBtn = document.createElement('button');
+        invBtn.className = 'party-btn small';
+        invBtn.textContent = 'Invite';
+        invBtn.addEventListener('click', () => socket.emit('party:invite', { targetPlayerId: f.playerId }));
+        actions.appendChild(invBtn);
+      }
+      const rmBtn = document.createElement('button');
+      rmBtn.className = 'party-btn small danger';
+      rmBtn.textContent = 'Remove';
+      rmBtn.addEventListener('click', () => socket.emit('friend:remove', { playerId: f.playerId }));
+      actions.appendChild(rmBtn);
+    } else if (f.status === 'pending_received') {
+      const accBtn = document.createElement('button');
+      accBtn.className = 'party-btn small primary';
+      accBtn.textContent = 'Accept';
+      accBtn.addEventListener('click', () => socket.emit('friend:accept', { playerId: f.playerId }));
+      actions.appendChild(accBtn);
+      const decBtn = document.createElement('button');
+      decBtn.className = 'party-btn small danger';
+      decBtn.textContent = 'Decline';
+      decBtn.addEventListener('click', () => socket.emit('friend:decline', { playerId: f.playerId }));
+      actions.appendChild(decBtn);
+    } else if (f.status === 'pending_sent') {
+      const canBtn = document.createElement('button');
+      canBtn.className = 'party-btn small';
+      canBtn.textContent = 'Cancel';
+      canBtn.addEventListener('click', () => socket.emit('friend:decline', { playerId: f.playerId }));
+      actions.appendChild(canBtn);
+    }
+
+    li.appendChild(actions);
+    list.appendChild(li);
+  }
+
+  // Keep friends panel stacked directly below party panel.
+  _repositionFriendsPanel();
+}
+
+function _repositionFriendsPanel() {
+  const pp = document.getElementById('party-panel');
+  const fp = document.getElementById('friends-panel');
+  if (!pp || !fp || fp.style.display === 'none') return;
+  const rect = pp.getBoundingClientRect();
+  fp.style.top = (rect.bottom + 6) + 'px';
 }
 
 function _startElapsedTimer() {
@@ -5199,12 +5681,9 @@ socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents }) => {
   setLobbyState('waiting');
   setStatus('Match found! Joining…', 'ok');
 
-  // Switch UI to ML tab so the lobby panel shows correctly
-  lobbyMlSection.style.display = '';
-  lobbyClassicSection.style.display = 'none';
-  btnTabMl.classList.add('active');
-  btnTabClassic.classList.remove('active');
-  lobbyMlSection.style.display = 'none';
+  // Hide all sections so the ML lobby panel shows correctly
+  activateGameType('td');
+  activateLobbyTab('ranked');
   showMLLobbyPanel();
 
   if (mlRoomCodeRow) { mlRoomCodeRow.style.display = 'block'; }
@@ -5216,6 +5695,82 @@ socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents }) => {
   const tmStr  = teammates.join(', ');
   const oppStr = opponents.join(', ');
   setStatus(`Match found! Team: ${tmStr} | vs: ${oppStr}`, 'ok');
+});
+
+// ── Friends panel events & socket listeners ────────────────────────────────────
+
+window.addEventListener('resize', () => _repositionFriendsPanel());
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => _repositionFriendsPanel());
+}
+
+document.getElementById('btn-friends-add').addEventListener('click', () => {
+  const input = document.getElementById('friends-add-input');
+  const name = (input.value || '').trim();
+  if (!name) return;
+  socket.emit('friend:add', { displayName: name });
+  input.value = '';
+});
+
+document.getElementById('friends-add-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('btn-friends-add').click();
+});
+
+document.getElementById('btn-invite-accept').addEventListener('click', () => {
+  if (!_pendingPartyInvite) return;
+  socket.emit('party:join', { code: _pendingPartyInvite.partyCode });
+  _pendingPartyInvite = null;
+  renderFriendsPanel(_friendsList);
+});
+
+document.getElementById('btn-invite-dismiss').addEventListener('click', () => {
+  _pendingPartyInvite = null;
+  renderFriendsPanel(_friendsList);
+});
+
+socket.on('friends_list', (friends) => {
+  _friendsList = friends || [];
+  renderFriendsPanel(_friendsList);
+});
+
+socket.on('friend_request', ({ playerId, displayName }) => {
+  _friendsList = _friendsList.filter(f => f.playerId !== playerId);
+  _friendsList.push({ playerId, displayName, status: 'pending_received', online: true });
+  renderFriendsPanel(_friendsList);
+  _showFriendsMsg(`${displayName} sent you a friend request.`);
+});
+
+socket.on('friend_accepted', ({ playerId, displayName }) => {
+  const idx = _friendsList.findIndex(f => f.playerId === playerId);
+  if (idx !== -1) _friendsList[idx].status = 'accepted';
+  renderFriendsPanel(_friendsList);
+  _showFriendsMsg(`${displayName} accepted your friend request!`);
+});
+
+socket.on('friend_online', ({ playerId, displayName }) => {
+  const idx = _friendsList.findIndex(f => f.playerId === playerId);
+  if (idx !== -1) _friendsList[idx].online = true;
+  renderFriendsPanel(_friendsList);
+});
+
+socket.on('friend_offline', ({ playerId }) => {
+  const idx = _friendsList.findIndex(f => f.playerId === playerId);
+  if (idx !== -1) _friendsList[idx].online = false;
+  renderFriendsPanel(_friendsList);
+});
+
+socket.on('friend_removed', ({ playerId }) => {
+  _friendsList = _friendsList.filter(f => f.playerId !== playerId);
+  renderFriendsPanel(_friendsList);
+});
+
+socket.on('friend_error', ({ message }) => {
+  _showFriendsMsg(message);
+});
+
+socket.on('party_invite', (invite) => {
+  _pendingPartyInvite = invite;
+  renderFriendsPanel(_friendsList);
 });
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────

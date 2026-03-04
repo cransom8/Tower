@@ -16,14 +16,14 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  console.error('[db] unexpected error on idle client', err.message);
+  log.error('[db] unexpected error on idle client', { err: err.message });
 });
 
 async function query(text, params) {
   const start = Date.now();
   const res = await pool.query(text, params);
   const ms = Date.now() - start;
-  if (ms > 300) console.warn(`[db] slow query (${ms}ms)`);
+  if (ms > 300) log.info(`[db] slow query (${ms}ms)`);
   return res;
 }
 

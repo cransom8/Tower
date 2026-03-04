@@ -1,34 +1,27 @@
 'use strict';
 
-// ── Castle Defender Auth Module ───────────────────────────────────────────────
+// ── Ransom Forge Auth Module ───────────────────────────────────────────────
 // Handles Google Sign-In, password auth, JWT storage, token refresh, and profile state.
 
 const Auth = (() => {
-  const KEY_ACCESS  = 'cd_access';
-  const KEY_REFRESH = 'cd_refresh';
-  const KEY_PLAYER  = 'cd_player';
+  const KEY_PLAYER = 'cd_player'; // Only non-secret player profile stored in localStorage
 
   let _player       = null;
   let _onAuthChange = null;
 
   // ── Storage helpers ──────────────────────────────────────────────────────────
 
-  function getAccessToken()  { return localStorage.getItem(KEY_ACCESS); }
-  function getRefreshToken() { return localStorage.getItem(KEY_REFRESH); }
-  function getPlayer()       { return _player; }
-  function isSignedIn()      { return !!_player; }
+  function getPlayer()  { return _player; }
+  function isSignedIn() { return !!_player; }
 
-  function _store(accessToken, refreshToken, player) {
-    localStorage.setItem(KEY_ACCESS,  accessToken);
-    localStorage.setItem(KEY_REFRESH, refreshToken);
-    localStorage.setItem(KEY_PLAYER,  JSON.stringify(player));
+  function _store(_accessToken, _refreshToken, player) {
+    // Tokens are stored server-side as HttpOnly cookies — not in localStorage
+    localStorage.setItem(KEY_PLAYER, JSON.stringify(player));
     _player = player;
     if (_onAuthChange) _onAuthChange(_player);
   }
 
   function _clear() {
-    localStorage.removeItem(KEY_ACCESS);
-    localStorage.removeItem(KEY_REFRESH);
     localStorage.removeItem(KEY_PLAYER);
     _player = null;
     if (_onAuthChange) _onAuthChange(null);
@@ -37,30 +30,22 @@ const Auth = (() => {
   // ── Token management ─────────────────────────────────────────────────────────
 
   async function _refresh() {
-    const rt = getRefreshToken();
-    if (!rt) throw new Error('No refresh token');
+    // Token is sent automatically via HttpOnly cookie
     const res = await fetch('/auth/refresh', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ refreshToken: rt }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
     });
     if (!res.ok) { _clear(); throw new Error('Session expired — please sign in again'); }
-    const { accessToken, refreshToken } = await res.json();
-    localStorage.setItem(KEY_ACCESS,  accessToken);
-    localStorage.setItem(KEY_REFRESH, refreshToken);
-    return accessToken;
+    return true;
   }
 
-  // Authenticated fetch — auto-refreshes on 401
+  // Authenticated fetch — tokens sent via HttpOnly cookie, auto-refreshes on 401
   async function apiFetch(url, options = {}) {
-    let token = getAccessToken();
-    const go  = (t) => fetch(url, {
-      ...options,
-      headers: { ...options.headers, Authorization: `Bearer ${t}` },
-    });
-    let res = await go(token);
+    const go = () => fetch(url, { ...options, credentials: 'include' });
+    let res = await go();
     if (res.status === 401) {
-      try { token = await _refresh(); res = await go(token); } catch { /* expired */ }
+      try { await _refresh(); res = await go(); } catch { /* expired */ }
     }
     return res;
   }
@@ -69,9 +54,10 @@ const Auth = (() => {
 
   async function handleGoogleCredential(response) {
     const res = await fetch('/auth/google', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ idToken: response.credential }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ idToken: response.credential }),
     });
     if (!res.ok) throw new Error('Sign-in failed — please try again');
     const data = await res.json();
@@ -83,9 +69,10 @@ const Auth = (() => {
 
   async function loginWithPassword(email, password) {
     const res = await fetch('/auth/login', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ email, password }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ email, password }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Login failed');
@@ -96,9 +83,10 @@ const Auth = (() => {
 
   async function loginWithMfa(mfaToken, code) {
     const res = await fetch('/auth/login/mfa', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ mfaToken, code }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ mfaToken, code }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'MFA verification failed');
@@ -108,9 +96,10 @@ const Auth = (() => {
 
   async function register(email, displayName, password) {
     const res = await fetch('/auth/register', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ email, displayName, password }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ email, displayName, password }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Registration failed');
@@ -121,9 +110,10 @@ const Auth = (() => {
 
   async function verifyEmail(token) {
     const res = await fetch('/auth/verify-email', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ token }),
+      method:      'POST',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+      body:        JSON.stringify({ token }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Verification failed');
@@ -174,14 +164,12 @@ const Auth = (() => {
 
   async function logout() {
     try {
-      const rt = getRefreshToken();
-      if (rt) {
-        await fetch('/auth/logout', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ refreshToken: rt }),
-        });
-      }
+      // Token is revoked server-side and cookie is cleared
+      await fetch('/auth/logout', {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+      });
     } catch { /* best-effort */ }
     _clear();
     // Reload to reset socket connection with cleared credentials
@@ -193,14 +181,14 @@ const Auth = (() => {
   async function init(onAuthChange) {
     _onAuthChange = onAuthChange;
 
-    // Restore player from localStorage immediately (optimistic)
+    // Restore player profile from localStorage immediately (optimistic)
     const stored = localStorage.getItem(KEY_PLAYER);
     if (stored) {
       try { _player = JSON.parse(stored); } catch { _clear(); }
     }
 
-    // Silently validate / refresh stored tokens
-    if (getRefreshToken()) {
+    // Silently validate session via cookie — clears local state if session is gone
+    if (_player) {
       try {
         await _refresh();
       } catch {
@@ -223,7 +211,6 @@ const Auth = (() => {
     enable2fa,
     disable2fa,
     logout,
-    getAccessToken,
     getPlayer,
     isSignedIn,
     apiFetch,

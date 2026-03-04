@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Castle Defender — Multiplayer</title>
+  <title>Ransom Forge — Multiplayer</title>
   <link rel="stylesheet" href="styles.css?v=20260303w">
   <!-- Google Sign-In (GSI) — loaded async; only active when GOOGLE_CLIENT_ID is set -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -37,6 +37,29 @@
           <button class="party-btn danger" id="btn-queue-leave" style="display:none">Cancel</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- FRIENDS PANEL — shown when signed in, positioned below party panel by JS -->
+  <div id="friends-panel" style="display:none">
+    <div id="friends-panel-inner">
+      <div id="friends-invite-banner" style="display:none">
+        <span id="friends-invite-text"></span>
+        <div id="friends-invite-actions">
+          <button class="party-btn primary" id="btn-invite-accept">Accept</button>
+          <button class="party-btn"         id="btn-invite-dismiss">Dismiss</button>
+        </div>
+      </div>
+      <div id="friends-header">
+        <span class="party-label">Friends</span>
+        <span id="friends-online-count"></span>
+      </div>
+      <div id="friends-msg" style="display:none"></div>
+      <div id="friends-add-row">
+        <input id="friends-add-input" type="text" maxlength="20" placeholder="Add by name" autocomplete="off">
+        <button class="party-btn" id="btn-friends-add">Add</button>
+      </div>
+      <ul id="friends-list"></ul>
     </div>
   </div>
 
@@ -160,76 +183,127 @@
   <!-- LOBBY OVERLAY — visible until match starts -->
   <div id="lobby">
     <div class="lobby-card">
-      <h1>Castle Defender</h1>
+      <h1>Ransom Forge</h1>
       <p class="subtitle">PvP Tower Defense</p>
 
-      <!-- Mode selector tabs -->
-      <div id="mode-selector">
-        <button class="mode-tab active" id="btn-tab-classic">Classic 2P</button>
-        <button class="mode-tab" id="btn-tab-multilane">Multi-Lane</button>
+      <!-- Row 1: Game -->
+      <div id="game-type-selector">
+        <button class="game-type-btn active" id="btn-game-t2t">Tower to Tower</button>
+        <button class="game-type-btn"        id="btn-game-td">Tower Defence</button>
+        <button class="game-type-btn soon" disabled id="btn-game-survival">Survival</button>
+      </div>
+
+      <!-- Decorative separator (shown with PvP mode row) -->
+      <div id="pvp-mode-separator" class="lobby-separator lobby-separator-compact" style="display:none">&#x2694;</div>
+
+      <!-- Row 2: PvP Mode (Tower Defence only, hidden for Solo) -->
+      <div id="pvp-mode-bar" style="display:none">
+        <button class="pvp-mode-btn active" id="btn-pvp-ffa">FFA</button>
+        <button class="pvp-mode-btn"        id="btn-pvp-2v2">2v2</button>
       </div>
 
       <!-- Decorative separator -->
       <div class="lobby-separator">&#x2694;</div>
 
-      <!-- CLASSIC section -->
-      <div id="lobby-classic-section">
-        <div class="lobby-settings" id="classic-settings-panel">
-          <div class="lobby-settings-title">Match Settings</div>
-          <div class="lobby-settings-row">
-            <label for="classic-start-income">Start Income</label>
-            <input id="classic-start-income" type="number" min="0" max="1000" step="0.5" value="10">
-          </div>
-        </div>
+      <!-- Row 3: Match Type -->
+      <div id="mode-selector">
+        <button class="mode-tab active" id="btn-tab-ranked">Ranked</button>
+        <button class="mode-tab"        id="btn-tab-unranked">Unranked</button>
+        <button class="mode-tab"        id="btn-tab-private">Private Match</button>
+        <button class="mode-tab"        id="btn-tab-solo">Solo</button>
+      </div>
 
-        <!-- CREATE section -->
+      <!-- QUEUE section (Ranked + Unranked) -->
+      <div id="lobby-queue-section">
+        <p class="lobby-mode-desc" id="queue-mode-desc"></p>
         <div class="lobby-section">
-          <button class="lobby-btn primary" id="btn-create">&#x2694; Create Room</button>
-        </div>
-
-        <div class="lobby-divider">OR</div>
-
-        <!-- JOIN section -->
-        <div class="lobby-section">
-          <label for="join-name-input">Your Name</label>
-          <input id="join-name-input" type="text" maxlength="20"
-                 placeholder="Player" autocomplete="off" spellcheck="false">
-          <label for="join-code-input">Room Code</label>
-          <input id="join-code-input" type="text" maxlength="6"
-                 placeholder="XXXXXX" autocomplete="off" spellcheck="false">
-          <button class="lobby-btn secondary" id="btn-join">&#x1F6E1; Join Room</button>
-        </div>
-
-        <!-- Room code display (shown after Create Room) -->
-        <div id="room-code-row" style="display:none">
-          <div id="room-code-display"></div>
-          <button class="lobby-btn secondary small" id="btn-copy-code" type="button">Copy Code</button>
-          <button class="lobby-btn secondary small" id="btn-copy-link" type="button">Copy Link</button>
+          <button class="lobby-btn primary" id="btn-queue-find">&#x2694; Find Match</button>
         </div>
       </div>
 
-      <!-- MULTI-LANE section -->
-      <div id="lobby-ml-section" style="display:none">
-        <div class="lobby-section">
-          <label for="ml-name-input">Your Name</label>
-          <input id="ml-name-input" type="text" maxlength="20"
-                 placeholder="Player" autocomplete="off" spellcheck="false">
+      <!-- PRIVATE MATCH section -->
+      <div id="lobby-private-section" style="display:none">
+        <!-- Tower to Tower: classic create/join -->
+        <div id="private-t2t-ui">
+          <div class="lobby-settings" id="classic-settings-panel">
+            <div class="lobby-settings-title">Match Settings</div>
+            <div class="lobby-settings-row">
+              <label for="classic-start-income">Start Income</label>
+              <input id="classic-start-income" type="number" min="0" max="1000" step="0.5" value="10">
+            </div>
+          </div>
+
+          <div class="lobby-section">
+            <button class="lobby-btn primary" id="btn-create">&#x2694; Private Match</button>
+          </div>
+
+          <div class="lobby-divider">OR</div>
+
+          <div class="lobby-section">
+            <label for="join-name-input">Your Name</label>
+            <input id="join-name-input" type="text" maxlength="20"
+                   placeholder="Player" autocomplete="off" spellcheck="false">
+            <label for="join-code-input">Room Code</label>
+            <input id="join-code-input" type="text" maxlength="6"
+                   placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+            <button class="lobby-btn secondary" id="btn-join">&#x1F6E1; Join Room</button>
+          </div>
+
+          <div id="room-code-row" style="display:none">
+            <div id="room-code-display"></div>
+            <button class="lobby-btn secondary small" id="btn-copy-code" type="button">Copy Code</button>
+            <button class="lobby-btn secondary small" id="btn-copy-link" type="button">Copy Link</button>
+          </div>
         </div>
-        <div class="lobby-section">
-          <button class="lobby-btn primary" id="btn-create-ml">&#x2694; Create ML Room</button>
+
+        <!-- Tower Defence: ML create/join -->
+        <div id="private-td-ui" style="display:none">
+          <div id="lobby-ml-section">
+            <div class="lobby-section">
+              <button class="lobby-btn primary" id="btn-create-ml">&#x2694; Create ML Room</button>
+            </div>
+            <div class="lobby-divider">OR</div>
+            <div class="lobby-section">
+              <label for="ml-name-input">Your Name</label>
+              <input id="ml-name-input" type="text" maxlength="20"
+                     placeholder="Player" autocomplete="off" spellcheck="false">
+              <label for="ml-join-code-input">Room Code</label>
+              <input id="ml-join-code-input" type="text" maxlength="6"
+                     placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+              <button class="lobby-btn secondary" id="btn-join-ml">&#x1F6E1; Join ML Room</button>
+            </div>
+          </div>
         </div>
-        <div class="lobby-divider">OR</div>
-        <div class="lobby-section">
-          <label for="ml-join-code-input">Room Code</label>
-          <input id="ml-join-code-input" type="text" maxlength="6"
-                 placeholder="XXXXXX" autocomplete="off" spellcheck="false">
-          <button class="lobby-btn secondary" id="btn-join-ml">&#x1F6E1; Join ML Room</button>
+      </div>
+
+      <!-- SOLO section -->
+      <div id="lobby-solo-section" style="display:none">
+        <!-- Tower to Tower: coming soon -->
+        <div id="solo-t2t-ui">
+          <p class="lobby-mode-desc">Coming soon.</p>
+        </div>
+        <!-- Tower Defence: name + difficulty + play -->
+        <div id="solo-td-ui" style="display:none">
+          <div class="lobby-section">
+            <label for="solo-name-input">Your Name</label>
+            <input id="solo-name-input" type="text" maxlength="20"
+                   placeholder="Player" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="lobby-section">
+            <div class="solo-diff-row">
+              <button class="solo-diff-btn active" data-diff="easy">Easy</button>
+              <button class="solo-diff-btn" data-diff="medium">Medium</button>
+              <button class="solo-diff-btn" data-diff="hard">Hard</button>
+            </div>
+            <button class="lobby-btn primary" id="btn-solo-play">&#x25BA; Play Solo</button>
+          </div>
         </div>
       </div>
 
       <!-- ML lobby waiting panel (shown after create/join) -->
       <div id="ml-lobby-panel" style="display:none">
         <div class="ml-lobby-title">Waiting for players&hellip;</div>
+        <div id="ml-team-setup-status" class="ml-team-setup-status">Team Setup: Red 1 | Blue 0</div>
         <div class="lobby-settings" id="ml-settings-panel">
           <div class="lobby-settings-title">Match Settings</div>
           <div class="lobby-settings-row">
@@ -267,6 +341,13 @@
       <!-- Leaderboard link -->
       <div class="lobby-leaderboard-row">
         <button class="lobby-lb-link" id="btn-open-leaderboard">&#x1F3C6; Leaderboard</button>
+      </div>
+
+      <!-- Legal links -->
+      <div class="lobby-legal-row">
+        <a class="lobby-legal-link" href="/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+        <span class="lobby-legal-sep">&#8226;</span>
+        <a class="lobby-legal-link" href="/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
       </div>
 
       <!-- Version tag -->
@@ -323,6 +404,7 @@
     <canvas id="game-canvas"></canvas>
     <div id="game-ui">
       <div id="left-rail">
+        <button id="btn-left-rail-toggle" class="rail-toggle-btn" type="button" aria-label="Toggle left rail">&#x25B6;</button>
         <div id="send-bar">
           <div class="bar-label">Units</div>
           <button class="action-btn send-btn" data-unit-type="runner">1 Runner</button>
@@ -354,6 +436,8 @@
       </div>
 
       <div id="right-rail">
+        <button id="btn-right-rail-toggle" class="rail-toggle-btn" type="button" aria-label="Toggle right rail">&#x25C0;</button>
+        <button id="btn-leave-game" class="in-game-leave-btn" type="button">Leave Game</button>
         <div id="hud-bar">
           <span>&#x1FA99; <strong id="hud-gold">0</strong></span>
           <span>&#x2191; <strong id="hud-income">0</strong></span>

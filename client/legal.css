@@ -1,0 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --bg: #07090e;
+  --panel: #121722;
+  --border: #2a3548;
+  --text: #c7d7e8;
+  --muted: #8699ad;
+  --gold: #e8a828;
+  --link: #7fc5ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Rajdhani', sans-serif;
+  background: radial-gradient(circle at 18% 12%, #131c2e 0%, var(--bg) 42%, #04060a 100%);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.legal-wrap {
+  max-width: 920px;
+  margin: 36px auto;
+  padding: 0 16px;
+}
+
+.legal-card {
+  background: linear-gradient(180deg, rgba(20, 28, 42, 0.92), rgba(10, 14, 22, 0.95));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 14px 60px rgba(0, 0, 0, 0.45);
+}
+
+h1 {
+  margin: 0 0 8px;
+  color: var(--gold);
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.04em;
+}
+
+h2 {
+  margin: 22px 0 8px;
+  color: var(--gold);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+}
+
+p, li {
+  line-height: 1.45;
+  font-size: 1.06rem;
+}
+
+ul {
+  margin: 8px 0 8px 18px;
+  padding: 0;
+}
+
+.meta {
+  color: var(--muted);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.88rem;
+  margin-bottom: 18px;
+}
+
+a {
+  color: var(--link);
+}
+
+.legal-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.home-link {
+  color: var(--gold);
+  text-decoration: none;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.88rem;
+}
+
+.home-link:hover {
+  text-decoration: underline;
+}
+
+.mono {
+  font-family: 'Share Tech Mono', monospace;
+}
+
+@media (max-width: 640px) {
+  .legal-wrap {
+    margin: 18px auto;
+  }
+
+  .legal-card {
+    padding: 18px 14px;
+  }
+}

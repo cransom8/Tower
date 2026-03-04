@@ -2,9 +2,15 @@
 
 const { verifyAccessToken } = require('../auth');
 
-function requireAuth(req, res, next) {
+function extractToken(req) {
   const header = req.headers.authorization || '';
-  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (header.startsWith('Bearer ')) return header.slice(7);
+  // Fall back to HttpOnly cookie
+  return req.cookies?.cd_access || null;
+}
+
+function requireAuth(req, res, next) {
+  const token = extractToken(req);
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
     req.player = verifyAccessToken(token);
@@ -15,8 +21,7 @@ function requireAuth(req, res, next) {
 }
 
 function optionalAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = extractToken(req);
   if (token) {
     try { req.player = verifyAccessToken(token); } catch { /* guest */ }
   }

@@ -40,7 +40,7 @@ router.get("/history", async (req, res) => {
     );
     res.json({ matches: result.rows, page: pageNum });
   } catch (err) {
-    console.error("[matches] history error:", err.message);
+    log.error('[matches] history error:', { err: err.message });
     res.status(500).json({ error: "Internal server error" });
   }
 });

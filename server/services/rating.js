@@ -137,7 +137,7 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
     );
     rows = res.rows;
   } catch (err) {
-    console.error('[rating] fetch failed:', err.message);
+    log.error('[rating] fetch failed:', { err: err.message });
     return [];
   }
   const ratingMap = new Map(rows.map(r => [r.player_id, r]));
@@ -221,13 +221,13 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('[rating] transaction failed:', err.message);
+    log.error('[rating] transaction failed:', { err: err.message });
     return [];
   } finally {
     client.release();
   }
 
-  console.log(`[rating] updated ${updates.length} player(s) for match ${matchId} mode=${mode}`);
+  log.info(`[rating] updated ${updates.length} player(s) for match ${matchId} mode=${mode}`);
   return updates.map(u => ({
     playerId:  u.playerId,
     newRating: u.new_rating,

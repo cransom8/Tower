@@ -4,6 +4,7 @@ const express     = require('express');
 const router      = express.Router();
 const authService = require('../auth');
 const db          = process.env.DATABASE_URL ? require('../db') : null;
+const log         = require('../logger');
 
 // Simple in-memory IP rate limiter: max 10 auth attempts per IP per minute.
 const _authAttempts = new Map();
@@ -30,8 +31,25 @@ function isValidEmail(e) {
   return typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
-// ── Helper: issue tokens and return response body ────────────────────────────
-async function issueTokens(player) {
+// ── Cookie helpers ───────────────────────────────────────────────────────────
+const IS_PROD = process.env.NODE_ENV === 'production';
+const ACCESS_COOKIE_TTL  = 15 * 60;              // 15 min in seconds
+const REFRESH_COOKIE_TTL = 30 * 24 * 60 * 60;   // 30 days in seconds
+
+function setAuthCookies(res, accessToken, refreshToken) {
+  const base = { httpOnly: true, secure: IS_PROD, sameSite: 'strict', path: '/' };
+  res.cookie('cd_access',  accessToken,  { ...base, maxAge: ACCESS_COOKIE_TTL  * 1000 });
+  res.cookie('cd_refresh', refreshToken, { ...base, maxAge: REFRESH_COOKIE_TTL * 1000 });
+}
+
+function clearAuthCookies(res) {
+  const base = { httpOnly: true, secure: IS_PROD, sameSite: 'strict', path: '/' };
+  res.clearCookie('cd_access',  base);
+  res.clearCookie('cd_refresh', base);
+}
+
+// ── Helper: issue tokens, set HttpOnly cookies, and return response body ──────
+async function issueTokens(player, res) {
   if (db) {
     await db.query(
       'UPDATE refresh_tokens SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL',
@@ -40,6 +58,7 @@ async function issueTokens(player) {
   }
   const accessToken  = authService.signAccessToken(player);
   const refreshToken = await authService.createRefreshToken(player.id);
+  if (res) setAuthCookies(res, accessToken, refreshToken);
   return {
     accessToken,
     refreshToken,
@@ -70,9 +89,9 @@ router.post('/google', async (req, res) => {
       return res.status(403).json({ error: 'Account suspended' });
     }
 
-    res.json(await issueTokens(player));
+    res.json(await issueTokens(player, res));
   } catch (err) {
-    console.error('[auth] google error:', err.message);
+    log.error('[auth] google error', { err: err.message });
     res.status(401).json({ error: 'Authentication failed' });
   }
 });
@@ -101,7 +120,7 @@ router.post('/register', async (req, res) => {
       const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
       await mailer.sendEmailVerification(email.trim().toLowerCase(), `${baseUrl}/?verify=${raw}`);
     } catch (mailErr) {
-      console.error('[auth] verification email error:', mailErr.message);
+      log.error('[auth] verification email error', { err: mailErr.message });
     }
 
     res.status(201).json({ requiresVerification: true, email: email.trim().toLowerCase() });
@@ -140,7 +159,7 @@ router.post('/login', async (req, res) => {
       return res.json({ requiresMfa: true, mfaToken });
     }
 
-    res.json(await issueTokens(player));
+    res.json(await issueTokens(player, res));
   } catch (err) {
     const known = ['Invalid email or password', 'Account suspended'];
     const msg   = known.includes(err.message) ? err.message : 'Login failed';
@@ -176,7 +195,7 @@ router.post('/login/mfa', async (req, res) => {
     const valid = authenticator.verify({ token: code, secret: player.totp_secret });
     if (!valid) return res.status(401).json({ error: 'Invalid verification code' });
 
-    res.json(await issueTokens(player));
+    res.json(await issueTokens(player, res));
   } catch (err) {
     res.status(401).json({ error: 'MFA verification failed' });
   }
@@ -188,7 +207,7 @@ router.post('/2fa/setup', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'Database not configured' });
   try {
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : (req.cookies?.cd_access || '');
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
     const payload = authService.verifyAccessToken(token);
 
@@ -218,7 +237,7 @@ router.post('/2fa/enable', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'Database not configured' });
   try {
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : (req.cookies?.cd_access || '');
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
     const payload = authService.verifyAccessToken(token);
 
@@ -251,7 +270,7 @@ router.post('/2fa/disable', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'Database not configured' });
   try {
     const authHeader = req.headers.authorization || '';
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : (req.cookies?.cd_access || '');
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
     const payload = authService.verifyAccessToken(token);
 
@@ -301,7 +320,7 @@ router.post('/forgot-password', async (req, res) => {
       await mailer.sendPasswordReset(result.email, resetUrl);
     }
   } catch (err) {
-    console.error('[auth] forgot-password error:', err.message);
+    log.error('[auth] forgot-password error', { err: err.message });
     // Still return 200 — don't reveal internal errors
   }
   res.json({ ok: true });
@@ -338,7 +357,7 @@ router.post('/verify-email', async (req, res) => {
     if (!token) return res.status(400).json({ error: 'token required' });
     const player = await authService.consumeEmailVerificationToken(token);
     if (player.status === 'suspended') return res.status(403).json({ error: 'Account suspended' });
-    res.json(await issueTokens(player));
+    res.json(await issueTokens(player, res));
   } catch (err) {
     const msg = err.message === 'Invalid or expired verification link' ? err.message : 'Verification failed';
     res.status(400).json({ error: msg });
@@ -369,13 +388,13 @@ router.post('/resend-verification', async (req, res) => {
       await mailer.sendEmailVerification(player.email, `${baseUrl}/?verify=${raw}`);
     }
   } catch (err) {
-    console.error('[auth] resend-verification error:', err.message);
+    log.error('[auth] resend-verification error', { err: err.message });
   }
   res.json({ ok: true });
 });
 
 // POST /auth/refresh
-// Body: { refreshToken: string }
+// Reads refreshToken from HttpOnly cookie (preferred) or request body (legacy).
 // Returns: { accessToken, refreshToken }
 router.post('/refresh', async (req, res) => {
   // H-1: rate-limit refresh attempts by IP (shared counter with /google)
@@ -384,12 +403,15 @@ router.post('/refresh', async (req, res) => {
     return res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
   }
   try {
-    const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
+    // Accept token from cookie first, fall back to body for backward compat
+    const refreshToken = req.cookies?.cd_refresh || req.body?.refreshToken;
+    if (!refreshToken) { clearAuthCookies(res); return res.status(400).json({ error: 'refreshToken required' }); }
 
     const result = await authService.rotateRefreshToken(refreshToken);
+    setAuthCookies(res, result.accessToken, result.refreshToken);
     res.json({ accessToken: result.accessToken, refreshToken: result.refreshToken });
   } catch (err) {
+    clearAuthCookies(res);
     // M-4: only forward known error messages; mask internal errors
     const msg = authService.KNOWN_AUTH_ERRORS.has(err.message) ? err.message : 'Token refresh failed';
     res.status(401).json({ error: msg });
@@ -397,12 +419,13 @@ router.post('/refresh', async (req, res) => {
 });
 
 // POST /auth/logout
-// Body: { refreshToken: string }
+// Revokes the refresh token (from cookie or body) and clears auth cookies.
 router.post('/logout', async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken = req.cookies?.cd_refresh || req.body?.refreshToken;
     if (refreshToken) await authService.revokeRefreshToken(refreshToken);
   } catch { /* best-effort */ }
+  clearAuthCookies(res);
   res.json({ ok: true });
 });
 
