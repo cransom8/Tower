@@ -101,6 +101,14 @@ log.info('static dir resolved', { clientDir });
 app.use(express.static(clientDir));
 app.use("/client", express.static(clientDir));
 
+function sendClientFile(res, filename) {
+  const candidate = [clientDir, ...clientDirCandidates]
+    .map((dir) => path.join(dir, filename))
+    .find((filePath) => fs.existsSync(filePath));
+  if (candidate) return res.sendFile(candidate);
+  return res.status(404).json({ error: `${filename} not found` });
+}
+
 const server = http.createServer(app);
 const io = new Server(server, {
   maxHttpBufferSize: 1e4, // fix #8: cap incoming message size at 10 KB
@@ -2094,15 +2102,15 @@ io.on("connection", (socket) => {
 });
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.join(clientDir, "index.html"));
+  sendClientFile(res, "index.html");
 });
 
 app.get("/terms", (_req, res) => {
-  res.sendFile(path.join(clientDir, "terms.html"));
+  sendClientFile(res, "terms.html");
 });
 
 app.get("/privacy", (_req, res) => {
-  res.sendFile(path.join(clientDir, "privacy.html"));
+  sendClientFile(res, "privacy.html");
 });
 
 // Alias routes for common legal URL patterns
