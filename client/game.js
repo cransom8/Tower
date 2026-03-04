@@ -5446,8 +5446,8 @@ window.onGoogleSignIn = async (response) => {
           callback:  window.onGoogleSignIn,
         });
         google.accounts.id.renderButton(
-          document.querySelector('.g_id_signin'),
-          { theme: 'filled_black', size: 'small', shape: 'pill' }
+          document.getElementById('gsi-button-host'),
+          { type: 'standard', theme: 'filled_black', size: 'small', text: 'sign_in_with', shape: 'pill', logo_alignment: 'left' }
         );
       }
       document.getElementById('auth-google-wrap').style.display = '';
@@ -5468,6 +5468,7 @@ let _currentParty   = null; // local party state
 let _queueStatus    = 'idle'; // 'idle' | 'queued' | 'matched'
 let _queueMode      = null;
 let _queueElapsed   = 0;
+let _queueSize      = 0;
 let _queueInterval  = null; // local elapsed timer
 
 // ── Friends panel state ────────────────────────────────────────────────────────
@@ -5519,26 +5520,25 @@ function renderPartyPanel(party) {
   partyJoinRow.style.display     = 'none'; // always reset; show-join toggles it
   btnPartyLeave.style.display    = inParty ? '' : 'none';
 
-  // Queue area: only show when in a party
-  queueArea.style.display = inParty ? '' : 'none';
-  if (inParty) {
-    const isLeader  = _currentParty.leaderId === myPlayerId;
-    const isQueued  = _queueStatus === 'queued';
-    btnQueueRanked.style.display = (!isQueued && isLeader) ? '' : 'none';
-    btnQueueCasual.style.display = (!isQueued && isLeader) ? '' : 'none';
-    btnQueueLeave.style.display  = (isQueued && isLeader) ? '' : 'none';
+  // Queue area: always show when signed in (solo players can queue without a party)
+  queueArea.style.display = '';
+  const isLeader = inParty ? (_currentParty.leaderId === myPlayerId) : true;
+  const isQueued = _queueStatus === 'queued';
+  btnQueueRanked.style.display = (!isQueued && isLeader) ? '' : 'none';
+  btnQueueCasual.style.display = (!isQueued && isLeader) ? '' : 'none';
+  btnQueueLeave.style.display  = (isQueued && isLeader) ? '' : 'none';
 
-    if (_queueStatus === 'idle') {
-      queueStatusText.textContent = isLeader ? 'Ready to queue' : 'Waiting for leader';
-      queueStatusText.className   = '';
-    } else if (_queueStatus === 'queued') {
-      const modeLabel = _queueMode === 'ranked_2v2' ? 'Ranked 2v2' : 'Casual 2v2';
-      queueStatusText.textContent = `Searching ${modeLabel}… ${_queueElapsed}s`;
-      queueStatusText.className   = 'queued';
-    } else if (_queueStatus === 'matched') {
-      queueStatusText.textContent = 'Match found!';
-      queueStatusText.className   = 'matched';
-    }
+  if (_queueStatus === 'idle') {
+    queueStatusText.textContent = (inParty && !isLeader) ? 'Waiting for leader' : 'Ready to queue';
+    queueStatusText.className   = '';
+  } else if (_queueStatus === 'queued') {
+    const modeLabel = _queueMode === 'ranked_2v2' ? 'Ranked 2v2' : 'Casual 2v2';
+    const sizeStr   = _queueSize > 0 ? ` · ${_queueSize} in queue` : '';
+    queueStatusText.textContent = `Searching ${modeLabel}… ${_queueElapsed}s${sizeStr}`;
+    queueStatusText.className   = 'queued';
+  } else if (_queueStatus === 'matched') {
+    queueStatusText.textContent = 'Match found!';
+    queueStatusText.className   = 'matched';
   }
   // Keep friends panel content in sync with party state changes.
   renderFriendsPanel(_friendsList);
@@ -5755,7 +5755,7 @@ socket.on('party_update', ({ party }) => {
   renderPartyPanel(party);
 });
 
-socket.on('queue_status', ({ status, mode, elapsed }) => {
+socket.on('queue_status', ({ status, mode, elapsed, queueSize }) => {
   if (status === 'queued') {
     if (_queueStatus !== 'queued') {
       _queueStatus = 'queued';
@@ -5766,8 +5766,10 @@ socket.on('queue_status', ({ status, mode, elapsed }) => {
       // Sync elapsed from server heartbeat
       if (typeof elapsed === 'number') _queueElapsed = elapsed;
     }
+    if (typeof queueSize === 'number') _queueSize = queueSize;
   } else {
     _queueStatus = 'idle';
+    _queueSize   = 0;
     _stopElapsedTimer();
   }
   renderPartyPanel(_currentParty);

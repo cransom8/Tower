@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Ransom Forge — Multiplayer</title>
-  <link rel="stylesheet" href="styles.css?v=20260303w">
+  <link rel="stylesheet" href="styles.css?v=20260303x">
   <!-- Google Sign-In (GSI) — loaded async; only active when GOOGLE_CLIENT_ID is set -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -74,13 +74,7 @@
              data-callback="onGoogleSignIn"
              data-auto_prompt="false">
         </div>
-        <div class="g_id_signin"
-             data-type="standard"
-             data-size="small"
-             data-theme="filled_black"
-             data-text="sign_in_with"
-             data-shape="pill"
-             data-logo_alignment="left">
+        <div id="gsi-button-host">
         </div>
         <div id="auth-or-divider">or</div>
       </div>
@@ -561,8 +555,8 @@
 
   <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="auth.js?v=20260303w"></script>
-  <script src="game.js?v=20260303w"></script>
+  <script src="auth.js?v=20260303x"></script>
+  <script src="game.js?v=20260303x"></script>
 
 </body>
 </html>
