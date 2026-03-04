@@ -1,6 +1,6 @@
 "use strict";
 
-const simMl = require("../server/sim-multilane");
+const simMl = require("../sim-multilane");
 const { AI_ACTION_TYPE, BOT_DIFFICULTY, DIFFICULTY_KNOBS } = require("./types");
 const { createRng, hashSeed } = require("./rng");
 const { getPersonalityProfile, choosePersonality } = require("./personalities");

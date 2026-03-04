@@ -1,6 +1,6 @@
 "use strict";
 
-const simMl = require("../server/sim-multilane");
+const simMl = require("../sim-multilane");
 const { AI_ACTION_TYPE, COUNT_BUCKETS } = require("./types");
 
 const ACTION_TYPES = new Set(Object.values(AI_ACTION_TYPE));

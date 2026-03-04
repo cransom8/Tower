@@ -1,6 +1,6 @@
 "use strict";
 
-const simMl = require("../server/sim-multilane");
+const simMl = require("../sim-multilane");
 
 const UNIT_TYPES = Object.freeze(Object.keys(simMl.UNIT_DEFS));
 const TOWER_TYPES = Object.freeze(Object.keys(simMl.TOWER_DEFS));

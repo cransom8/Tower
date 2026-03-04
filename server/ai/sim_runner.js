@@ -1,6 +1,6 @@
 "use strict";
 
-const simMl = require("../server/sim-multilane");
+const simMl = require("../sim-multilane");
 const { BotBrain } = require("./bot");
 const { clampCountBucket, createDoNothingAction, translateActionToCommands, validateActionAgainstGame } = require("./actions");
 const { computeReward } = require("./reward");
