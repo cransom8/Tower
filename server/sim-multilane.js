@@ -26,7 +26,7 @@ const SPAWN_YG = 0;
 const CASTLE_X = 5;
 const CASTLE_YG = 27;
 const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 11×28 grid
-const MAX_WALLS = 100;
+const MAX_WALLS = null; // unlimited
 const WALL_COST = 2;
 const SPLASH_RADIUS_TILES = 1.5;
 const AUTOSEND_INTERVAL_TICKS = 1; // instant cadence (every tick)
@@ -56,7 +56,7 @@ const TOWER_DEFS = {
   fighter:  { cost: 12, range: 2.5, dmg: 10.0, atkCdTicks: 10, projectileTicks: 6, damageType: "NORMAL", isSplash: false },
   mage:     { cost: 24, range: 4.0, dmg: 15.0, atkCdTicks: 13, projectileTicks: 7, damageType: "MAGIC",  isSplash: false },
   ballista: { cost: 20, range: 5.0, dmg: 12.1, atkCdTicks: 14, projectileTicks: 8, damageType: "SIEGE",  isSplash: false },
-  cannon:   { cost: 30, range: 3.84, dmg: 13.44, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
+  cannon:   { cost: 30, range: 3.84, dmg: 8, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
 };
 
 const BARRACKS_COST_BASE = 100;
@@ -70,6 +70,8 @@ function getBarracksLevelDef(level) {
       dmgMult: 1,
       speedMult: 1,
       structMult: 1,
+      unitCostMult: 1,
+      unitIncomeMult: 1,
       incomeBonus: 0,
       cost: 0,
       reqIncome: 0,
@@ -80,12 +82,32 @@ function getBarracksLevelDef(level) {
   return {
     hpMult: statMult,
     dmgMult: statMult,
-    speedMult: statMult,
+    speedMult: 1,
     structMult: statMult,
+    unitCostMult: statMult,
+    unitIncomeMult: statMult,
     incomeBonus: 0,
     cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
     reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
   };
+}
+
+function getBarracksSpeedMult(_br) {
+  return 1;
+}
+
+function getBarracksUnitCostMult(br) {
+  if (!br || typeof br !== "object") return 1;
+  if (Number.isFinite(br.unitCostMult)) return Math.max(0, Number(br.unitCostMult));
+  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
+  return 1;
+}
+
+function getBarracksUnitIncomeMult(br) {
+  if (!br || typeof br !== "object") return 1;
+  if (Number.isFinite(br.unitIncomeMult)) return Math.max(0, Number(br.unitIncomeMult));
+  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
+  return 1;
 }
 
 const DAMAGE_MULTIPLIERS = {
@@ -225,9 +247,16 @@ function clampNum(v, min, max, fallback) {
 
 function normalizeGameOptions(options) {
   const src = options && typeof options === "object" ? options : {};
+  const laneTeamsRaw = Array.isArray(src.laneTeams) ? src.laneTeams : [];
+  const laneTeams = laneTeamsRaw.map((team, idx) => {
+    const normalized = String(team || "").trim();
+    if (normalized.length > 0) return normalized.slice(0, 24);
+    return idx % 2 === 0 ? "red" : "blue";
+  });
   return {
     startGold: Math.floor(clampNum(src.startGold, 0, 10000, START_GOLD)),
     startIncome: clampNum(src.startIncome, 0, 1000, START_INCOME),
+    laneTeams,
   };
 }
 
@@ -248,6 +277,7 @@ function createMLGame(playerCount, options) {
     const path = bfsPath(grid); // straight line (4,0)→(4,27)
     lanes.push({
       laneIndex: i,
+      team: opt.laneTeams[i] || (i % 2 === 0 ? "red" : "blue"),
       eliminated: false,
       gold: opt.startGold,
       income: opt.startIncome,
@@ -281,6 +311,42 @@ function createMLGame(playerCount, options) {
   };
 }
 
+function parseBulkTiles(rawTiles) {
+  if (!Array.isArray(rawTiles)) return { ok: false, reason: "Tiles must be an array" };
+  if (rawTiles.length === 0) return { ok: false, reason: "No tiles selected" };
+  if (rawTiles.length > 150) return { ok: false, reason: "Too many tiles selected" };
+
+  const dedup = new Map();
+  for (const raw of rawTiles) {
+    const gx = Number((raw && raw.gridX !== undefined) ? raw.gridX : raw && raw.x);
+    const gy = Number((raw && raw.gridY !== undefined) ? raw.gridY : raw && raw.y);
+    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
+      return { ok: false, reason: "Invalid grid position in tiles list" };
+    }
+    dedup.set(gx + "," + gy, { gx, gy });
+  }
+  return { ok: true, tiles: Array.from(dedup.values()) };
+}
+
+function isOpponentLane(game, sourceLaneIndex, targetLaneIndex) {
+  const sourceLane = game && game.lanes && game.lanes[sourceLaneIndex];
+  const targetLane = game && game.lanes && game.lanes[targetLaneIndex];
+  if (!sourceLane || !targetLane) return false;
+  if (targetLane.eliminated) return false;
+  if (sourceLaneIndex === targetLaneIndex) return false;
+  return sourceLane.team !== targetLane.team;
+}
+
+function findNextActiveOpponentLaneIndex(game, fromLaneIndex) {
+  if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1) return null;
+  const total = Math.min(Number(game.playerCount) || game.lanes.length, game.lanes.length);
+  for (let step = 1; step < total; step++) {
+    const idx = (fromLaneIndex + step) % total;
+    if (isOpponentLane(game, fromLaneIndex, idx)) return idx;
+  }
+  return null;
+}
+
 function applyMLAction(game, laneIndex, action) {
   if (!game || game.phase !== "playing") return { ok: false, reason: "Game not active" };
   if (laneIndex < 0 || laneIndex >= game.lanes.length) return { ok: false, reason: "Bad laneIndex" };
@@ -294,16 +360,22 @@ function applyMLAction(game, laneIndex, action) {
     const unitType = String((data && data.unitType) || "").toLowerCase();
     const def = UNIT_DEFS[unitType];
     if (!def) return { ok: false, reason: "Unknown unitType" };
-    if (lane.gold < def.cost) return { ok: false, reason: "Not enough gold" };
-    // Round-robin: send units to lane on the right
-    const targetLaneIndex = (laneIndex + 1) % game.playerCount;
+    const br = lane.barracks || getBarracksLevelDef(1);
+    const unitCost = Math.ceil(def.cost * getBarracksUnitCostMult(br));
+    const unitIncome = (def.income * getBarracksUnitIncomeMult(br)) + (br.incomeBonus || 0);
+    if (lane.gold < unitCost) return { ok: false, reason: "Not enough gold" };
+    // Route to an explicit opponent target lane when provided; fallback to clockwise opponent.
+    const requestedTargetLane = Number((data && data.targetLaneIndex));
+    const hasExplicitTarget = Number.isInteger(requestedTargetLane) && requestedTargetLane >= 0 && requestedTargetLane < game.lanes.length;
+    const targetLaneIndex = hasExplicitTarget && isOpponentLane(game, laneIndex, requestedTargetLane)
+      ? requestedTargetLane
+      : findNextActiveOpponentLaneIndex(game, laneIndex);
+    if (targetLaneIndex === null) return { ok: false, reason: "No opponents remaining" };
     const targetLane = game.lanes[targetLaneIndex];
     if (targetLane.spawnQueue.length >= MAX_UNITS_PER_LANE) return { ok: false, reason: "Spawn queue full" };
 
-    lane.gold -= def.cost;
-    lane.income += def.income + (lane.barracks.incomeBonus || 0);
-
-    const br = lane.barracks;
+    lane.gold -= unitCost;
+    lane.income += unitIncome;
     const newUnit = {
       id: `u${game.nextUnitId++}`,
       ownerLane: laneIndex,
@@ -312,7 +384,7 @@ function applyMLAction(game, laneIndex, action) {
       hp: Math.ceil(def.hp * br.hpMult),
       maxHp: Math.ceil(def.hp * br.hpMult),
       baseDmg: def.dmg * br.dmgMult,
-      baseSpeed: def.pathSpeed * br.speedMult,
+      baseSpeed: def.pathSpeed * getBarracksSpeedMult(br),
       atkCd: 0,
     };
     if (def.warlockDebuff) newUnit.warlockCd = WARLOCK_DEBUFF_CD;
@@ -330,7 +402,6 @@ function applyMLAction(game, laneIndex, action) {
     if (gx === CASTLE_X && gy === CASTLE_YG) return { ok: false, reason: "Cannot wall castle tile" };
     const tile = lane.grid[gx][gy];
     if (tile.type !== "empty") return { ok: false, reason: "Tile not empty" };
-    if (lane.wallCount >= MAX_WALLS) return { ok: false, reason: "Wall limit reached" };
     if (lane.gold < WALL_COST) return { ok: false, reason: "Not enough gold" };
 
     tile.type = "wall";
@@ -383,6 +454,53 @@ function applyMLAction(game, laneIndex, action) {
     return { ok: true };
   }
 
+  if (type === "bulk_convert_walls") {
+    const towerType = String((data && data.towerType) || "").toLowerCase();
+    if (!TOWER_DEFS[towerType]) return { ok: false, reason: "Unknown towerType" };
+    const parsed = parseBulkTiles(data && data.tiles);
+    if (!parsed.ok) return { ok: false, reason: parsed.reason };
+
+    for (const pos of parsed.tiles) {
+      const tile = lane.grid[pos.gx][pos.gy];
+      if (tile.type !== "wall") return { ok: false, reason: "One or more selected tiles are not walls" };
+    }
+
+    const totalCost = parsed.tiles.length * TOWER_DEFS[towerType].cost;
+    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold" };
+
+    for (const pos of parsed.tiles) {
+      const tile = lane.grid[pos.gx][pos.gy];
+      tile.type = "tower";
+      tile.towerType = towerType;
+      tile.towerLevel = 1;
+      tile.atkCd = 0;
+      tile.targetMode = "first";
+      tile.debuffEndTick = 0;
+      tile.debuffMult = 1.0;
+      lane.wallCount -= 1;
+    }
+
+    const newPath = bfsPath(lane.grid);
+    if (!newPath) {
+      for (const pos of parsed.tiles) {
+        const tile = lane.grid[pos.gx][pos.gy];
+        tile.type = "wall";
+        tile.towerType = null;
+        tile.towerLevel = 0;
+        tile.atkCd = 0;
+        tile.targetMode = "first";
+        tile.debuffEndTick = 0;
+        tile.debuffMult = 1.0;
+        lane.wallCount += 1;
+      }
+      return { ok: false, reason: "Would block path" };
+    }
+
+    lane.gold -= totalCost;
+    lane.path = newPath;
+    return { ok: true };
+  }
+
   if (type === "remove_wall") {
     const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
     const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
@@ -417,6 +535,39 @@ function applyMLAction(game, laneIndex, action) {
     if (tile.atkCd > stats.atkCdTicks) tile.atkCd = stats.atkCdTicks;
     return { ok: true };
   }
+
+  if (type === "bulk_upgrade_towers") {
+    const parsed = parseBulkTiles(data && data.tiles);
+    if (!parsed.ok) return { ok: false, reason: parsed.reason };
+
+    let selectedType = null;
+    const upgradable = [];
+    for (const pos of parsed.tiles) {
+      const tile = lane.grid[pos.gx][pos.gy];
+      if (tile.type !== "tower" || !tile.towerType) {
+        return { ok: false, reason: "One or more selected tiles are not towers" };
+      }
+      if (!selectedType) selectedType = tile.towerType;
+      if (tile.towerType !== selectedType) return { ok: false, reason: "Selected towers must be the same type" };
+      upgradable.push(tile);
+    }
+    if (upgradable.length === 0) return { ok: false, reason: "No towers selected" };
+
+    let upgradedCount = 0;
+    for (const tile of upgradable) {
+      if (tile.towerLevel >= TOWER_MAX_LEVEL) continue;
+      const nextLevel = tile.towerLevel + 1;
+      const cost = getTowerUpgradeCost(tile.towerType, nextLevel);
+      if (lane.gold < cost) continue;
+      lane.gold -= cost;
+      tile.towerLevel = nextLevel;
+      const stats = getTowerStats(tile.towerType, nextLevel);
+      if (tile.atkCd > stats.atkCdTicks) tile.atkCd = stats.atkCdTicks;
+      upgradedCount += 1;
+    }
+    if (upgradedCount === 0) return { ok: false, reason: "Not enough gold" };
+    return { ok: true };
+  }
   
   if (type === "set_tower_target") {
     const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
@@ -446,6 +597,8 @@ function applyMLAction(game, laneIndex, action) {
       dmgMult: nextDef.dmgMult,
       speedMult: nextDef.speedMult,
       structMult: nextDef.structMult,
+      unitCostMult: nextDef.unitCostMult,
+      unitIncomeMult: nextDef.unitIncomeMult,
       incomeBonus: nextDef.incomeBonus || 0,
     };
     return { ok: true };
@@ -500,7 +653,8 @@ function runLaneAutosendBurst(game, lane) {
   const enabledUnits = as.enabledUnits || {};
   const priority = AUTOSEND_PRIORITY.filter((ut) => !!enabledUnits[ut]);
   if (priority.length === 0) return 0;
-  const targetLaneIndex = (lane.laneIndex + 1) % game.playerCount;
+  const targetLaneIndex = findNextActiveOpponentLaneIndex(game, lane.laneIndex);
+  if (targetLaneIndex === null) return 0;
   const targetLane = game.lanes[targetLaneIndex];
   if (!targetLane) return 0;
 
@@ -510,12 +664,13 @@ function runLaneAutosendBurst(game, lane) {
     for (const ut of priority) {
       const def = UNIT_DEFS[ut];
       if (!def) continue;
-      if (lane.gold < def.cost) continue;
+      const br = lane.barracks || getBarracksLevelDef(1);
+      const unitCost = Math.ceil(def.cost * getBarracksUnitCostMult(br));
+      const unitIncome = (def.income * getBarracksUnitIncomeMult(br)) + (br.incomeBonus || 0);
+      if (lane.gold < unitCost) continue;
 
-      lane.gold -= def.cost;
-      lane.income += def.income + (lane.barracks.incomeBonus || 0);
-
-      const br = lane.barracks;
+      lane.gold -= unitCost;
+      lane.income += unitIncome;
       const autoUnit = {
         id: `u${game.nextUnitId++}`,
         ownerLane: lane.laneIndex,
@@ -524,7 +679,7 @@ function runLaneAutosendBurst(game, lane) {
         hp: Math.ceil(def.hp * br.hpMult),
         maxHp: Math.ceil(def.hp * br.hpMult),
         baseDmg: def.dmg * br.dmgMult,
-        baseSpeed: def.pathSpeed * br.speedMult,
+        baseSpeed: def.pathSpeed * getBarracksSpeedMult(br),
         atkCd: 0,
       };
       if (def.warlockDebuff) autoUnit.warlockCd = WARLOCK_DEBUFF_CD;
@@ -669,7 +824,7 @@ function mlTick(game) {
         if (lane.lives <= 0) {
           lane.lives = 0;
           lane.eliminated = true;
-          if (u.ownerLane !== lane.laneIndex) {
+          if (isOpponentLane(game, lane.laneIndex, u.ownerLane)) {
             const ownerLane = game.lanes[u.ownerLane];
             if (ownerLane) ownerLane.gold += GATE_KILL_BOUNTY;
           }
@@ -760,12 +915,15 @@ function mlTick(game) {
 
   // Win condition
   const activeLanes = game.lanes.filter(l => !l.eliminated);
-  if (activeLanes.length === 1) {
-    game.phase = "ended";
-    game.winner = activeLanes[0].laneIndex;
-  } else if (activeLanes.length === 0) {
+  if (activeLanes.length === 0) {
     game.phase = "ended";
     game.winner = null;
+  } else {
+    const aliveTeams = new Set(activeLanes.map(l => l.team));
+    if (aliveTeams.size === 1) {
+      game.phase = "ended";
+      game.winner = activeLanes[0].laneIndex;
+    }
   }
 }
 
@@ -804,6 +962,7 @@ function createMLSnapshot(game) {
 
       return {
         laneIndex: lane.laneIndex,
+        team: lane.team || "red",
         eliminated: lane.eliminated,
         gold: lane.gold,
         income: lane.income,
@@ -856,7 +1015,7 @@ function createMLPublicConfig(options) {
     gridW: GRID_W,
     gridH: GRID_H,
     wallCost: WALL_COST,
-    maxWalls: MAX_WALLS,
+    maxWalls: null,
     maxPathLen: MAX_PATH_LEN,
     unitDefs: UNIT_DEFS,
     towerDefs: TOWER_DEFS,
@@ -872,6 +1031,7 @@ function createMLPublicConfig(options) {
 module.exports = {
   TICK_HZ,
   TICK_MS,
+  INCOME_INTERVAL_TICKS,
   UNIT_DEFS,
   TOWER_DEFS,
   getBarracksLevelDef,

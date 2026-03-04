@@ -62,6 +62,7 @@ const DIFFICULTY_PROFILE = {
     mazeIntervalTicks: 40,
     actionsPerTick: 1,
     useAutosend: false,
+    serpentineEnabled: false,
   },
   medium: {
     reserveGold: 10,
@@ -75,6 +76,11 @@ const DIFFICULTY_PROFILE = {
     mazeIntervalTicks: 18,
     actionsPerTick: 2,
     useAutosend: false,
+    serpentineEnabled: true,
+    serpentineStartY: 3,
+    serpentineRowSpacing: 4,
+    serpentineMaxRows: 6,
+    serpentineIntervalTicks: 12,
   },
   hard: {
     reserveGold: 6,
@@ -86,8 +92,14 @@ const DIFFICULTY_PROFILE = {
     mazeEnabled: true,
     mazeMinGain: 1,
     mazeIntervalTicks: 10,
-    actionsPerTick: 3,
+    actionsPerTick: 4,
     useAutosend: true,
+    serpentineEnabled: true,
+    serpentineStartY: 2,
+    serpentineRowSpacing: 2,
+    serpentineMaxRows: 10,
+    serpentineIntervalTicks: 2,
+    mazeCoreWallsTarget: 28,
   },
 };
 
@@ -252,6 +264,96 @@ function getAdjacentObstacleCount(grid, x, y) {
   return count;
 }
 
+function getTowerPlanRowSet(plan) {
+  const rowSet = new Set();
+  if (!Array.isArray(plan)) return rowSet;
+  for (const step of plan) rowSet.add(step.y);
+  return rowSet;
+}
+
+function getSerpentineRows(plan, profile) {
+  const rows = [];
+  if (!profile.serpentineEnabled) return rows;
+  const usedByTowerPlan = getTowerPlanRowSet(plan);
+  const startY = Math.max(2, Number(profile.serpentineStartY) || 3);
+  const spacing = Math.max(2, Number(profile.serpentineRowSpacing) || 4);
+  const maxRows = Math.max(1, Number(profile.serpentineMaxRows) || 6);
+  for (let y = startY; y < simMl.GRID_H - 2; y += spacing) {
+    if (usedByTowerPlan.has(y)) continue;
+    rows.push(y);
+    if (rows.length >= maxRows) break;
+  }
+  return rows;
+}
+
+function getSerpentineGapX(rowIdx, laneIndex) {
+  const leftGap = 1;
+  const rightGap = simMl.GRID_W - 2;
+  return ((rowIdx + laneIndex) % 2 === 0) ? leftGap : rightGap;
+}
+
+function countBuiltPlanTowers(lane, plan) {
+  if (!lane || !Array.isArray(plan)) return 0;
+  let count = 0;
+  for (const step of plan) {
+    const tile = lane.grid[step.x] && lane.grid[step.x][step.y];
+    if (tile && tile.type === "tower") count += 1;
+  }
+  return count;
+}
+
+function countSerpentineOccupiedCells(lane, plan, profile, laneIndex) {
+  if (!lane) return 0;
+  const rows = getSerpentineRows(plan, profile);
+  let occupied = 0;
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const y = rows[rowIdx];
+    const gapX = getSerpentineGapX(rowIdx, laneIndex);
+    for (let x = 0; x < simMl.GRID_W; x++) {
+      if (x === gapX) continue;
+      const tile = lane.grid[x] && lane.grid[x][y];
+      if (!tile) continue;
+      if (tile.type === "wall" || tile.type === "tower") occupied += 1;
+    }
+  }
+  return occupied;
+}
+
+function tryBuildSerpentineMazeWall(game, laneIndex, profile, plan) {
+  const lane = game.lanes[laneIndex];
+  if (!lane || !profile.serpentineEnabled) return false;
+  const nowTick = Number(game.tick) || 0;
+  if ((lane.__aiNextSerpentineTick || 0) > nowTick) return false;
+  if (lane.wallCount >= 95) return false;
+
+  const towerReserve = getTowerBuildReserve(lane, plan);
+  const minGold = WALL_COST + (profile.reserveGold || 0) + towerReserve;
+  if (lane.gold < minGold) return false;
+
+  const rows = getSerpentineRows(plan, profile);
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const y = rows[rowIdx];
+    const gapX = getSerpentineGapX(rowIdx, laneIndex);
+    for (let x = 0; x < simMl.GRID_W; x++) {
+      if (x === gapX) continue;
+      if ((x === SPAWN_X && y === SPAWN_Y) || (x === CASTLE_X && y === CASTLE_Y)) continue;
+      const tile = lane.grid[x] && lane.grid[x][y];
+      if (!tile || tile.type !== "empty") continue;
+      const res = simMl.applyMLAction(game, laneIndex, {
+        type: "place_wall",
+        data: { gridX: x, gridY: y },
+      });
+      if (res.ok) {
+        lane.__aiNextSerpentineTick = nowTick + Math.max(4, Number(profile.serpentineIntervalTicks) || 8);
+        return true;
+      }
+    }
+  }
+
+  lane.__aiNextSerpentineTick = nowTick + Math.max(4, Number(profile.serpentineIntervalTicks) || 8);
+  return false;
+}
+
 function tryBuildMazeWall(game, laneIndex, profile, danger, plan) {
   const lane = game.lanes[laneIndex];
   if (!lane || !profile.mazeEnabled) return false;
@@ -260,6 +362,9 @@ function tryBuildMazeWall(game, laneIndex, profile, danger, plan) {
   if (lane.gold < WALL_COST + (profile.reserveGold || 0) + towerReserve) return false;
   if (lane.wallCount >= 95) return false;
   if (!lane.path || lane.path.length < 2) return false;
+
+  // Build deliberate back-and-forth maze bands before free-form wall scoring.
+  if (tryBuildSerpentineMazeWall(game, laneIndex, profile, plan)) return true;
 
   const nowTick = Number(game.tick) || 0;
   if ((lane.__aiNextMazeTick || 0) > nowTick) return false;
@@ -501,9 +606,18 @@ function aiDecide(game, laneIndex, difficulty) {
     const danger = isDangerous(lane);
     const towerReserve = getTowerBuildReserve(lane, plan);
     const pendingTowerPlan = towerReserve > 0;
+    const builtPlanTowers = countBuiltPlanTowers(lane, plan);
+    const serpentineProgress = countSerpentineOccupiedCells(lane, plan, profile, laneIndex);
+    const mazeCoreTarget = Math.max(0, Number(profile.mazeCoreWallsTarget) || 0);
+    const forceMazeCore = (
+      difficulty === "hard" &&
+      builtPlanTowers >= 2 &&
+      serpentineProgress < mazeCoreTarget &&
+      lane.lives > 8
+    );
 
-    // 0. Keep hard AI autosend configured, but pause it while tower plan is pending.
-    if (ensureAutosend(game, laneIndex, difficulty, profile, !pendingTowerPlan)) {
+    // 0. Keep hard AI autosend configured, but pause it while tower plan or maze core is pending.
+    if (ensureAutosend(game, laneIndex, difficulty, profile, !pendingTowerPlan && !forceMazeCore)) {
       actions += 1;
       continue;
     }
@@ -543,19 +657,40 @@ function aiDecide(game, laneIndex, difficulty) {
       }
     }
 
-    // 2. Build tower plan early so AI does not starve tower construction.
-    if (tryBuildFromPlan(game, laneIndex, plan, difficulty)) {
-      actions += 1;
-      continue;
+    if (forceMazeCore) {
+      if (tryBuildSerpentineMazeWall(game, laneIndex, profile, plan)) {
+        actions += 1;
+        continue;
+      }
+      if (tryBuildMazeWall(game, laneIndex, profile, danger, plan)) {
+        actions += 1;
+        continue;
+      }
     }
 
-    // 3. Maze building (medium/hard): place walls that maximize path detours.
-    if (tryBuildMazeWall(game, laneIndex, profile, danger, plan)) {
-      actions += 1;
-      continue;
+    // 2. Hard prioritizes maze after first towers; others prioritize tower plan first.
+    if (difficulty === "hard" && builtPlanTowers >= 2) {
+      if (tryBuildMazeWall(game, laneIndex, profile, danger, plan)) {
+        actions += 1;
+        continue;
+      }
+      if (tryBuildFromPlan(game, laneIndex, plan, difficulty)) {
+        actions += 1;
+        continue;
+      }
+    } else {
+      if (tryBuildFromPlan(game, laneIndex, plan, difficulty)) {
+        actions += 1;
+        continue;
+      }
+      if (tryBuildMazeWall(game, laneIndex, profile, danger, plan)) {
+        actions += 1;
+        continue;
+      }
     }
 
     // 4. Economy / pressure
+    if (forceMazeCore) break;
     const sendChance = danger ? profile.dangerSpawnChance : profile.baseSpawnChance;
     if (Math.random() < sendChance) {
       if (trySpawnBurst(game, laneIndex, difficulty, profile)) {

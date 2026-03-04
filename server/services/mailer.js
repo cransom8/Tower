@@ -26,9 +26,9 @@ function getTransporter() {
 async function sendPasswordReset(toEmail, resetUrl) {
   const transport = getTransporter();
   await transport.sendMail({
-    from:    `"Castle Defender" <${SMTP_FROM}>`,
+    from:    `"Ransom Forge" <${SMTP_FROM}>`,
     to:      toEmail,
-    subject: 'Reset your Castle Defender password',
+    subject: 'Reset your Ransom Forge password',
     text:
       `You requested a password reset.\n\n` +
       `Click the link below to set a new password. It expires in 1 hour.\n\n` +
@@ -36,7 +36,7 @@ async function sendPasswordReset(toEmail, resetUrl) {
       `If you did not request this, you can safely ignore this email.`,
     html:
       `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">` +
-      `<h2 style="color:#e8a828">Castle Defender</h2>` +
+      `<h2 style="color:#e8a828">Ransom Forge</h2>` +
       `<p>You requested a password reset.</p>` +
       `<p style="margin:24px 0">` +
       `<a href="${resetUrl}" style="background:#e8a828;color:#000;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Reset Password</a>` +
@@ -49,17 +49,17 @@ async function sendPasswordReset(toEmail, resetUrl) {
 async function sendEmailVerification(toEmail, verifyUrl) {
   const transport = getTransporter();
   await transport.sendMail({
-    from:    `"Castle Defender" <${SMTP_FROM}>`,
+    from:    `"Ransom Forge" <${SMTP_FROM}>`,
     to:      toEmail,
-    subject: 'Verify your Castle Defender email',
+    subject: 'Verify your Ransom Forge email',
     text:
-      `Welcome to Castle Defender!\n\n` +
+      `Welcome to Ransom Forge!\n\n` +
       `Click the link below to verify your email address. It expires in 24 hours.\n\n` +
       `${verifyUrl}\n\n` +
       `If you did not create an account, you can safely ignore this email.`,
     html:
       `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">` +
-      `<h2 style="color:#e8a828">Castle Defender</h2>` +
+      `<h2 style="color:#e8a828">Ransom Forge</h2>` +
       `<p>Welcome! Please verify your email address to activate your account.</p>` +
       `<p style="margin:24px 0">` +
       `<a href="${verifyUrl}" style="background:#e8a828;color:#000;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Verify Email</a>` +

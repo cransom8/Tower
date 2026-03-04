@@ -55,7 +55,7 @@ const AUTOSEND_PRIORITY = Object.keys(UNIT_DEFS).sort((a, b) => UNIT_DEFS[b].cos
 const TOWER_DEFS = {
   archer: { cost: 10, range: 0.36, dmg: 6.6, atkCdTicks: 12, projectileTicks: 7, damageType: "PIERCE" },
   fighter: { cost: 12, range: 0.22, dmg: 8.8, atkCdTicks: 11, projectileTicks: 6, damageType: "NORMAL" },
-  cannon: { cost: 30, range: 0.32, dmg: 13.44, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH" },
+  cannon: { cost: 30, range: 0.32, dmg: 8, atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH" },
   ballista: { cost: 20, range: 0.40, dmg: 12.1, atkCdTicks: 14, projectileTicks: 8, damageType: "SIEGE" },
   mage: { cost: 24, range: 0.35, dmg: 13.2, atkCdTicks: 13, projectileTicks: 7, damageType: "MAGIC" },
 };
@@ -129,6 +129,8 @@ function getBarracksLevelDef(level) {
       hpMult: 1,
       dmgMult: 1,
       speedMult: 1,
+      unitCostMult: 1,
+      unitIncomeMult: 1,
       incomeBonus: 0,
       cost: 0,
       reqIncome: 0,
@@ -139,11 +141,31 @@ function getBarracksLevelDef(level) {
   return {
     hpMult: statMult,
     dmgMult: statMult,
-    speedMult: statMult,
+    speedMult: 1,
+    unitCostMult: statMult,
+    unitIncomeMult: statMult,
     incomeBonus: 0,
     cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
     reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
   };
+}
+
+function getBarracksSpeedMult(_br) {
+  return 1;
+}
+
+function getBarracksUnitCostMult(br) {
+  if (!br || typeof br !== "object") return 1;
+  if (Number.isFinite(br.unitCostMult)) return Math.max(0, Number(br.unitCostMult));
+  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
+  return 1;
+}
+
+function getBarracksUnitIncomeMult(br) {
+  if (!br || typeof br !== "object") return 1;
+  if (Number.isFinite(br.unitIncomeMult)) return Math.max(0, Number(br.unitIncomeMult));
+  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
+  return 1;
 }
 
 function clampNum(v, min, max, fallback) {
@@ -210,7 +232,15 @@ function createGame(options) {
         incomeRemainder: 0,
         lives: LIVES_START,
         towers: makeTowerSlots(),
-        barracks: { level: 1, hpMult: baseBarracks.hpMult, dmgMult: baseBarracks.dmgMult, speedMult: baseBarracks.speedMult, incomeBonus: baseBarracks.incomeBonus },
+        barracks: {
+          level: 1,
+          hpMult: baseBarracks.hpMult,
+          dmgMult: baseBarracks.dmgMult,
+          speedMult: baseBarracks.speedMult,
+          unitCostMult: baseBarracks.unitCostMult,
+          unitIncomeMult: baseBarracks.unitIncomeMult,
+          incomeBonus: baseBarracks.incomeBonus,
+        },
         autosend: createAutosend(),
       },
       top: {
@@ -219,7 +249,15 @@ function createGame(options) {
         incomeRemainder: 0,
         lives: LIVES_START,
         towers: makeTowerSlots(),
-        barracks: { level: 1, hpMult: baseBarracks.hpMult, dmgMult: baseBarracks.dmgMult, speedMult: baseBarracks.speedMult, incomeBonus: baseBarracks.incomeBonus },
+        barracks: {
+          level: 1,
+          hpMult: baseBarracks.hpMult,
+          dmgMult: baseBarracks.dmgMult,
+          speedMult: baseBarracks.speedMult,
+          unitCostMult: baseBarracks.unitCostMult,
+          unitIncomeMult: baseBarracks.unitIncomeMult,
+          incomeBonus: baseBarracks.incomeBonus,
+        },
         autosend: createAutosend(),
       },
     },
@@ -234,11 +272,13 @@ function spawnUnitForSide(game, side, unitType) {
   const p = game.players[side];
   const def = UNIT_DEFS[unitType];
   if (!p || !def) return { ok: false, reason: "Unknown unitType" };
-  if (p.gold < def.cost) return { ok: false, reason: "Not enough gold" };
-
   const br = p.barracks || getBarracksLevelDef(1);
-  p.gold -= def.cost;
-  p.income += def.income + (br.incomeBonus || 0);
+  const unitCost = Math.ceil(def.cost * getBarracksUnitCostMult(br));
+  const unitIncome = (def.income * getBarracksUnitIncomeMult(br)) + (br.incomeBonus || 0);
+  if (p.gold < unitCost) return { ok: false, reason: "Not enough gold" };
+
+  p.gold -= unitCost;
+  p.income += unitIncome;
 
   game.units.push({
     id: `u${game.nextUnitId++}`,
@@ -248,7 +288,7 @@ function spawnUnitForSide(game, side, unitType) {
     hp: Math.ceil(def.hp * (br.hpMult || 1)),
     maxHp: Math.ceil(def.hp * (br.hpMult || 1)),
     baseDmg: def.dmg * (br.dmgMult || 1),
-    baseSpeed: def.speedPerTick * (br.speedMult || 1),
+    baseSpeed: def.speedPerTick * getBarracksSpeedMult(br),
     atkCd: 0,
   });
   return { ok: true };
@@ -266,7 +306,9 @@ function runAutosendBurst(game, side) {
     for (const ut of priority) {
       const def = UNIT_DEFS[ut];
       if (!def) continue;
-      if (p.gold < def.cost) continue;
+      const br = p.barracks || getBarracksLevelDef(1);
+      const unitCost = Math.ceil(def.cost * getBarracksUnitCostMult(br));
+      if (p.gold < unitCost) continue;
       const res = spawnUnitForSide(game, side, ut);
       if (!res.ok) continue;
       purchases += 1;
@@ -347,6 +389,8 @@ function applyAction(game, side, action) {
       hpMult: nextDef.hpMult,
       dmgMult: nextDef.dmgMult,
       speedMult: nextDef.speedMult,
+      unitCostMult: nextDef.unitCostMult,
+      unitIncomeMult: nextDef.unitIncomeMult,
       incomeBonus: nextDef.incomeBonus || 0,
     };
     return { ok: true };
