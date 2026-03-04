@@ -8,7 +8,9 @@
       "Bash(xargs grep:*)",
       "Bash(curl:*)",
       "Bash(ls:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(C:/Users/Crans/castle-defender/client/styles.css:*)",
+      "Bash(~/.claude/projects/C--Users-Crans-castle-defender/memory/MEMORY.md:*)"
     ]
   }
 }

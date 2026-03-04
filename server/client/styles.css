@@ -22,7 +22,7 @@
   --text:    #bcd0e0;
   --muted:   #445868;
   --muted2:  #252d38;
-  --side-rail-w: clamp(132px, 18vw, 248px);
+  --side-rail-w: clamp(156px, 21vw, 280px);
   --side-rail-right: 8px;
   --right-panel-main-ratio: 1;
   --right-panel-bottom-ratio: 0.72;
@@ -2220,7 +2220,7 @@ html, body {
 #left-rail #send-bar,
 #left-rail #autosend-bar,
 #left-rail #ml-barracks-hud,
-#right-rail #btn-leave-game,
+#right-rail #auth-bar,
 #right-rail #hud-bar,
 #right-rail #ml-info-bar,
 #right-rail #defense-bar,
@@ -2246,27 +2246,6 @@ html, body {
 
 #left-rail #ml-barracks-hud {
   flex: 0 0 auto;
-}
-
-#right-rail #btn-leave-game {
-  align-self: flex-end;
-  width: auto;
-  padding: 7px 12px;
-  border: 1px solid rgba(255, 82, 82, 0.7);
-  border-radius: 6px;
-  background: rgba(28, 8, 8, 0.84);
-  color: #ffadad;
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 0.62rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: opacity 0.15s ease, transform 0.1s ease;
-}
-
-#right-rail #btn-leave-game:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
 }
 
 #left-rail #send-bar {
@@ -2490,6 +2469,10 @@ html, body {
   min-height: 0;
 }
 
+#right-rail #auth-bar {
+  align-self: stretch;
+}
+
 #right-rail #income-leaderboard,
 #right-rail #stat-leaderboard {
   flex: var(--right-panel-bottom-ratio) 1 0;
@@ -2534,6 +2517,11 @@ html, body {
   max-height: none;
 }
 
+#right-rail #friends-panel.friends-in-rail {
+  width: 100%;
+  max-width: none;
+}
+
 #right-rail #friends-panel-inner {
   height: 100%;
   min-height: 0;
@@ -2563,7 +2551,7 @@ html, body {
 #ml-mid-next {
   position: absolute;
   top: 50%;
-  right: calc(clamp(184px, 20vw, 248px) + 14px);
+  right: calc(var(--side-rail-w) + 14px);
   transform: translateY(-50%);
   width: 34px;
   height: 58px;
@@ -2603,11 +2591,11 @@ html, body {
 }
 
 #btn-ml-prev-lane {
-  left: calc(clamp(184px, 20vw, 248px) + 14px);
+  left: calc(var(--side-rail-w) + 14px);
 }
 
 #btn-ml-next-lane {
-  right: calc(clamp(184px, 20vw, 248px) + 14px);
+  right: calc(var(--side-rail-w) + 14px);
 }
 
 .ml-side-nav-btn:hover {
@@ -2625,12 +2613,12 @@ html, body {
 
 @media (max-width: 960px) {
   :root {
-    --side-rail-w: clamp(132px, 19vw, 172px);
+    --side-rail-w: clamp(148px, 21vw, 196px);
   }
 
   #left-rail,
   #right-rail {
-    width: clamp(132px, 19vw, 172px);
+    width: var(--side-rail-w);
     gap: 6px;
   }
 
@@ -2650,17 +2638,17 @@ html, body {
   }
 
   #ml-mid-next {
-    right: calc(clamp(132px, 19vw, 172px) + 10px);
+    right: calc(var(--side-rail-w) + 10px);
     width: 30px;
     height: 52px;
   }
 
   #btn-ml-prev-lane {
-    left: calc(clamp(132px, 19vw, 172px) + 10px);
+    left: calc(var(--side-rail-w) + 10px);
   }
 
   #btn-ml-next-lane {
-    right: calc(clamp(132px, 19vw, 172px) + 10px);
+    right: calc(var(--side-rail-w) + 10px);
   }
 
   .ml-side-nav-btn {
@@ -2787,12 +2775,12 @@ html, body {
 
 @media (max-height: 900px) {
   :root {
-    --side-rail-w: clamp(120px, 16vw, 200px);
+    --side-rail-w: clamp(136px, 18vw, 224px);
   }
 
   #left-rail,
   #right-rail {
-    width: clamp(120px, 16vw, 200px);
+    width: var(--side-rail-w);
     gap: 5px;
   }
   #left-rail .action-btn,
@@ -2980,6 +2968,19 @@ html, body {
   max-width: calc(100vw - (var(--side-rail-right) * 2));
   z-index: 9000;
   display: none; /* shown by JS when DB or Google auth is configured */
+}
+
+#auth-bar.auth-in-rail {
+  position: static;
+  top: auto;
+  right: auto;
+  width: 100%;
+  max-width: none;
+  z-index: auto;
+}
+
+#auth-bar.auth-in-rail #auth-signin-area {
+  max-height: min(42dvh, 340px);
 }
 
 #auth-profile-area {

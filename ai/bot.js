@@ -106,6 +106,41 @@ function hasPathWithCandidateWall(lane, wallX, wallY) {
   return false;
 }
 
+function getPathLengthWithCandidateWall(lane, wallX, wallY) {
+  if (!lane || !lane.grid) return null;
+  if (wallX === SPAWN_X && wallY === SPAWN_Y) return null;
+  if (wallX === CASTLE_X && wallY === CASTLE_Y) return null;
+  const tile = lane.grid[wallX] && lane.grid[wallX][wallY];
+  if (!tile || tile.type !== "empty") return null;
+
+  const visited = Array.from({ length: GRID_W }, () => new Array(GRID_H).fill(false));
+  const dist = Array.from({ length: GRID_W }, () => new Array(GRID_H).fill(-1));
+  const q = [[SPAWN_X, SPAWN_Y]];
+  visited[SPAWN_X][SPAWN_Y] = true;
+  dist[SPAWN_X][SPAWN_Y] = 0;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let head = 0;
+
+  while (head < q.length) {
+    const [x, y] = q[head++];
+    if (x === CASTLE_X && y === CASTLE_Y) return dist[x][y] + 1;
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+      if (visited[nx][ny]) continue;
+      if (nx === wallX && ny === wallY) continue;
+      const nt = lane.grid[nx] && lane.grid[nx][ny];
+      if (!nt) continue;
+      if (nt.type === "wall" || nt.type === "tower") continue;
+      visited[nx][ny] = true;
+      dist[nx][ny] = dist[x][y] + 1;
+      q.push([nx, ny]);
+    }
+  }
+  return null;
+}
+
 function estimateActionCost(game, laneIndex, action) {
   const lane = getLane(game, laneIndex);
   if (!lane) return 0;
@@ -175,6 +210,7 @@ class BotBrain {
       lastTargetSwitchTick: -1,
       lastSendByTarget: {},
       observationDim: 0,
+      nextPressureTick: 0,
     };
   }
 
@@ -220,6 +256,7 @@ class BotBrain {
 
   findBuildTowerAction(game, lane, targetLaneIndex, danger) {
     const towerType = this.chooseTowerType(game, lane, targetLaneIndex, danger);
+    const basePathLen = (lane.path && lane.path.length) || 0;
 
     // First convert a valid existing wall.
     const wallCandidates = [];
@@ -247,11 +284,14 @@ class BotBrain {
         const tile = lane.grid[x][y];
         if (!tile || tile.type !== "empty") continue;
         if (!hasPathWithCandidateWall(lane, x, y)) continue;
+        const candidatePathLen = getPathLengthWithCandidateWall(lane, x, y);
+        const pathGain = (candidatePathLen && basePathLen) ? Math.max(0, candidatePathLen - basePathLen) : 0;
 
         const castleDist = Math.abs(CASTLE_Y - y);
         const centerBias = 1 - Math.abs(x - CASTLE_X) / CASTLE_X;
         let score = danger ? (GRID_H - castleDist) : (14 - Math.abs(14 - y));
         score += centerBias * 0.6;
+        score += pathGain * (danger ? 0.8 : 1.5);
         candidates.push({ x, y, score });
       }
     }
@@ -350,7 +390,7 @@ class BotBrain {
   findSendAction(game, lane, targetLaneIndex, danger, spikePlan) {
     if (!isInteger(targetLaneIndex)) return null;
     const unitType = this.chooseSendUnitType(game, targetLaneIndex, danger);
-    const reserveGold = danger ? 26 : 10;
+    const reserveGold = danger ? 18 : 6;
     const countBucket = this.chooseSendBucket(lane, unitType, reserveGold, spikePlan);
     if (!countBucket) return null;
     const action = {
@@ -440,12 +480,13 @@ class BotBrain {
 
     const obs = buildObservation(game, this.laneIndex, runtime);
     const leakPressure = obs.named ? obs.named.myLeaksLast3Waves : 0;
+    const forcePressure = currentTick >= (this.memory.nextPressureTick || 0);
 
     const candidates = [];
     if (defenseAction) {
       candidates.push({
         action: defenseAction,
-        score: this.personalityProfile.defenseWeight * (1.0 + (danger ? 1.2 : 0.3) + leakPressure * 0.8),
+        score: this.personalityProfile.defenseWeight * (1.0 + (danger ? 1.2 : 0.15) + leakPressure * 0.8),
       });
     }
     if (ecoAction) {
@@ -461,7 +502,7 @@ class BotBrain {
       const depthBonus = 0.05 * this.planningDepth;
       candidates.push({
         action: sendAction,
-        score: pressureBase + spikeBonus + depthBonus,
+        score: pressureBase + spikeBonus + depthBonus + (forcePressure ? 0.9 : 0),
       });
     }
     candidates.push({
@@ -490,6 +531,15 @@ class BotBrain {
 
     this.memory.invalidStreak = 0;
     this.memory.lastActionTick = currentTick;
+    if (legal.normalized.type === AI_ACTION_TYPE.SEND_UNITS) {
+      let minTicks = 26;
+      let maxTicks = 44;
+      if (this.difficulty === BOT_DIFFICULTY.EASY) { minTicks = 42; maxTicks = 72; }
+      else if (this.difficulty === BOT_DIFFICULTY.HARD) { minTicks = 16; maxTicks = 30; }
+      this.memory.nextPressureTick = currentTick + this.rng.nextInt(minTicks, maxTicks);
+    } else if (!Number.isFinite(this.memory.nextPressureTick) || this.memory.nextPressureTick <= 0) {
+      this.memory.nextPressureTick = currentTick + this.rng.nextInt(18, 34);
+    }
     return legal.normalized;
   }
 }
@@ -497,4 +547,3 @@ class BotBrain {
 module.exports = {
   BotBrain,
 };
-

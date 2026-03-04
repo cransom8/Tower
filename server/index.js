@@ -14,7 +14,7 @@ const crypto = require("crypto");
 
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
-const aiRuntime = require("./ai/sim_runner");
+const aiRuntime = require("../ai/sim_runner");
 const authService = require("./auth");
 const matchmaker = require("./services/matchmaker");
 const log = require("./logger");
@@ -590,7 +590,7 @@ function startMLGame(roomId, code, io) {
   }
   const game = simMl.createMLGame(playerCount, { ...room.settings, laneTeams });
 
-  io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments });
+  io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments, aiEngine: "new_bot_controller_v1" });
   io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
   const botController = aiList.length > 0
     ? aiRuntime.createBotController({
@@ -605,6 +605,14 @@ function startMLGame(roomId, code, io) {
       })),
     })
     : null;
+  if (aiList.length > 0) {
+    log.info("ml ai engine active", {
+      roomId,
+      code,
+      aiEngine: "new_bot_controller_v1",
+      botCount: botController ? botController.getBotCount() : 0,
+    });
+  }
 
   // Snapshot authenticated players for DB logging
   const playerSnapshot = room.players
@@ -1382,8 +1390,27 @@ io.on("connection", (socket) => {
       const queueMode = validModes.includes(mode) ? mode : "casual_2v2";
       const dbMode = queueMode === "ranked_2v2" ? "2v2_ranked" : "2v2_casual";
 
-      const partyId = partyByPlayerId.get(socket.playerId);
-      if (!partyId) return socket.emit("error_message", { message: "You must be in a party to queue." });
+      // Auto-create a solo party if the player isn't already in one
+      let partyId = partyByPlayerId.get(socket.playerId);
+      if (!partyId) {
+        let code;
+        do { code = generatePartyCode(); } while (partiesByCode.has(code));
+        partyId = crypto.randomUUID();
+        const soloParty = {
+          id: partyId,
+          code,
+          leaderId: socket.playerId,
+          members: [{ playerId: socket.playerId, displayName: socket.playerDisplayName || "Player", socketId: socket.id }],
+          status: "idle",
+          queueMode: null,
+          queueEnteredAt: null,
+          region: "global",
+        };
+        partiesById.set(partyId, soloParty);
+        partiesByCode.set(code, partyId);
+        partyByPlayerId.set(socket.playerId, partyId);
+        socket.join("party:" + partyId);
+      }
       const party = partiesById.get(partyId);
       if (!party) return socket.emit("error_message", { message: "Party not found." });
       if (party.leaderId !== socket.playerId) {
