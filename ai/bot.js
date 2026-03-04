@@ -141,6 +141,52 @@ function getPathLengthWithCandidateWall(lane, wallX, wallY) {
   return null;
 }
 
+function getSerpentineConfig(difficulty) {
+  if (difficulty === BOT_DIFFICULTY.HARD) {
+    return { startY: 4, rowSpacing: 3, maxRows: 8 };
+  }
+  if (difficulty === BOT_DIFFICULTY.MEDIUM) {
+    return { startY: 5, rowSpacing: 4, maxRows: 5 };
+  }
+  return null;
+}
+
+function getSerpentineRows(difficulty) {
+  const cfg = getSerpentineConfig(difficulty);
+  if (!cfg) return [];
+  const rows = [];
+  for (let y = cfg.startY; y < GRID_H - 3; y += cfg.rowSpacing) {
+    rows.push(y);
+    if (rows.length >= cfg.maxRows) break;
+  }
+  return rows;
+}
+
+function getSerpentineGapX(rowIdx, laneIndex) {
+  const leftGap = 1;
+  const rightGap = GRID_W - 2;
+  return ((rowIdx + laneIndex) % 2 === 0) ? leftGap : rightGap;
+}
+
+function getSerpentineRowIndex(difficulty, y) {
+  const rows = getSerpentineRows(difficulty);
+  return rows.indexOf(y);
+}
+
+function isSerpentineWallCell(difficulty, laneIndex, x, y) {
+  const rowIdx = getSerpentineRowIndex(difficulty, y);
+  if (rowIdx < 0) return false;
+  const gapX = getSerpentineGapX(rowIdx, laneIndex);
+  return x !== gapX;
+}
+
+function isSerpentineAnchorCell(difficulty, laneIndex, x, y) {
+  const rowIdx = getSerpentineRowIndex(difficulty, y);
+  if (rowIdx < 0) return false;
+  const gapX = getSerpentineGapX(rowIdx, laneIndex);
+  return x === Math.max(0, gapX - 1) || x === Math.min(GRID_W - 1, gapX + 1);
+}
+
 function estimateActionCost(game, laneIndex, action) {
   const lane = getLane(game, laneIndex);
   if (!lane) return 0;
@@ -264,6 +310,11 @@ class BotBrain {
       for (let y = 1; y < GRID_H - 1; y++) {
         const tile = lane.grid[x][y];
         if (tile.type !== "wall") continue;
+        if (isSerpentineWallCell(this.difficulty, this.laneIndex, x, y) &&
+            !isSerpentineAnchorCell(this.difficulty, this.laneIndex, x, y)) {
+          // Keep maze band walls intact; only convert near turning gaps.
+          continue;
+        }
         let score = danger ? y : Math.abs(14 - y);
         if (x === 0 || x === GRID_W - 1) score += 0.5;
         wallCandidates.push({ x, y, score });
@@ -277,6 +328,33 @@ class BotBrain {
     }
 
     // Else place a wall at a path-safe tile (conversion will happen on a future tick).
+    const serpRows = getSerpentineRows(this.difficulty);
+    if (serpRows.length > 0) {
+      let bestSerp = null;
+      for (let rowIdx = 0; rowIdx < serpRows.length; rowIdx++) {
+        const y = serpRows[rowIdx];
+        const gapX = getSerpentineGapX(rowIdx, this.laneIndex);
+        for (let x = 0; x < GRID_W; x++) {
+          if (x === gapX) continue;
+          if ((x === SPAWN_X && y === SPAWN_Y) || (x === CASTLE_X && y === CASTLE_Y)) continue;
+          const tile = lane.grid[x] && lane.grid[x][y];
+          if (!tile || tile.type !== "empty") continue;
+          if (!hasPathWithCandidateWall(lane, x, y)) continue;
+          const candidatePathLen = getPathLengthWithCandidateWall(lane, x, y);
+          const pathGain = (candidatePathLen && basePathLen) ? Math.max(0, candidatePathLen - basePathLen) : 0;
+          const nearGap = Math.min(Math.abs(x - (gapX - 1)), Math.abs(x - (gapX + 1))) <= 1;
+          let score = 100 + rowIdx * 4 + pathGain * 2.0;
+          if (nearGap) score += 1.2;
+          if (!bestSerp || score > bestSerp.score) bestSerp = { x, y, score };
+        }
+      }
+      if (bestSerp) {
+        const action = { type: AI_ACTION_TYPE.BUILD_TOWER, towerType, tileId: makeTileId(bestSerp.x, bestSerp.y) };
+        const legal = validateActionAgainstGame(game, this.laneIndex, action);
+        if (legal.ok) return legal.normalized;
+      }
+    }
+
     const candidates = [];
     for (let x = 0; x < GRID_W; x++) {
       for (let y = 1; y < GRID_H - 1; y++) {
