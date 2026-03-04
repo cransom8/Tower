@@ -14,7 +14,7 @@ const crypto = require("crypto");
 
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
-const aiRuntime = require("../ai/sim_runner");
+const aiRuntime = require("./ai/sim_runner");
 const authService = require("./auth");
 const matchmaker = require("./services/matchmaker");
 const log = require("./logger");
