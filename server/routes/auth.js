@@ -377,11 +377,14 @@ router.post('/resend-verification', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'Email required' });
   try {
     const playerRow = await db.query(
-      'SELECT id, email FROM players WHERE lower(email) = lower($1) AND email_verified = false',
+      'SELECT id, email, email_verified FROM players WHERE lower(email) = lower($1)',
       [email.trim()]
     );
     if (playerRow.rows.length) {
       const player = playerRow.rows[0];
+      if (player.email_verified) {
+        return res.json({ ok: true, alreadyVerified: true });
+      }
       const { raw } = await authService.createEmailVerificationToken(player.id);
       const mailer  = require('../services/mailer');
       const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;

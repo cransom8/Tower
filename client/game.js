@@ -255,17 +255,19 @@ const leftRail = document.getElementById('left-rail');
 const rightRail = document.getElementById('right-rail');
 const btnLeftRailToggle = document.getElementById('btn-left-rail-toggle');
 const btnRightRailToggle = document.getElementById('btn-right-rail-toggle');
+const authBar = document.getElementById('auth-bar');
 const hudGold = document.getElementById('hud-gold');
 const hudIncome = document.getElementById('hud-income');
 const hudIncomeTimer = document.getElementById('hud-income-timer');
 const gameOverBanner = document.getElementById('game-over-banner');
 const actionFeedback = document.getElementById('action-feedback');
 const disconnectNotice = document.getElementById('disconnect-notice');
-const btnLeaveGame = document.getElementById('btn-leave-game');
 const towerPopout = document.getElementById('tower-popout');
 const matchupPanel = document.getElementById('matchup-panel');
 const incomeLeaderboardPanel = document.getElementById('income-leaderboard');
 const statLeaderboardPanel = document.getElementById('stat-leaderboard');
+const authBarHomeParent = authBar ? authBar.parentElement : null;
+const authBarHomeNextSibling = authBar ? authBar.nextSibling : null;
 const sendButtons = Array.from(document.querySelectorAll('.send-btn'));
 const defenseButtons = Array.from(document.querySelectorAll('.defense-btn[data-tower-type]'));
 const towerSlots = Array.from(document.querySelectorAll('.tower-slot'));
@@ -443,6 +445,8 @@ function setLobbyState(state) {
 
   const authBtn = document.getElementById('btn-auth-signout');
   if (authBtn) authBtn.textContent = state === 'playing' ? 'Quit Game' : 'Sign out';
+  syncAuthBarPlacement();
+  syncFriendsPanelPlacement();
 }
 
 function hideLobby() {
@@ -464,6 +468,27 @@ function showGameUi() {
 function hideGameUi() {
   canvasWrap.style.display = 'none';
   gameUi.style.display = 'none';
+}
+
+function syncAuthBarPlacement() {
+  if (!authBar) return;
+  const shouldDockInRail = lobbyState === 'playing' && !!rightRail;
+  if (shouldDockInRail) {
+    if (authBar.parentElement !== rightRail) {
+      if (hudBar && hudBar.parentElement === rightRail) rightRail.insertBefore(authBar, hudBar);
+      else rightRail.appendChild(authBar);
+    }
+    authBar.classList.add('auth-in-rail');
+    return;
+  }
+
+  authBar.classList.remove('auth-in-rail');
+  if (!authBarHomeParent || authBar.parentElement === authBarHomeParent) return;
+  if (authBarHomeNextSibling && authBarHomeNextSibling.parentNode === authBarHomeParent) {
+    authBarHomeParent.insertBefore(authBar, authBarHomeNextSibling);
+  } else {
+    authBarHomeParent.appendChild(authBar);
+  }
 }
 
 function isCompactSideRailMode() {
@@ -527,6 +552,7 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', () => refreshSideRailsForViewport(false));
 }
 refreshSideRailsForViewport(false);
+syncAuthBarPlacement();
 
 function initCanvas() {
   function resize() {
@@ -1556,142 +1582,194 @@ function drawUnitHp(u, x, y) {
   ctx.fillRect(x - 9, y - 12, 18 * ratio, 3);
 }
 
+function drawUnitFireAura(u, front) {
+  const now = Date.now() * 0.006;
+  const unitSeed = (u && u.id != null) ? Number(String(u.id).length) : 0;
+  const flicker = 1 + Math.sin(now + unitSeed) * 0.08;
+  const auraW = 15 * flicker;
+  const auraH = 20 * flicker;
+
+  const aura = ctx.createRadialGradient(0, -2, 1, 0, -2, auraH);
+  aura.addColorStop(0, 'rgba(255,245,190,0.34)');
+  aura.addColorStop(0.35, 'rgba(255,170,60,0.28)');
+  aura.addColorStop(0.7, 'rgba(255,88,20,0.16)');
+  aura.addColorStop(1, 'rgba(255,40,0,0)');
+  ctx.fillStyle = aura;
+  ctx.beginPath();
+  ctx.ellipse(0, -2, auraW, auraH, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Flame tongue above the unit silhouette.
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = 'rgba(255,130,30,0.36)';
+  ctx.beginPath();
+  ctx.moveTo(-3.5, -9);
+  ctx.quadraticCurveTo(-5.5, -14, -2, -19);
+  ctx.quadraticCurveTo(0.5, -16, 2, -20);
+  ctx.quadraticCurveTo(5.5, -14, 3.5, -8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Small trailing embers.
+  for (let i = 0; i < 3; i++) {
+    const phase = now * (1.25 + i * 0.18) + (unitSeed * 0.17) + i * 1.8;
+    const ex = Math.sin(phase * 1.3) * (5 + i * 1.6);
+    const ey = front * (4 + i * 2.2) + Math.cos(phase) * 1.5;
+    const er = 0.9 + (Math.sin(phase * 1.9) + 1) * 0.45;
+    ctx.fillStyle = i === 0 ? 'rgba(255,245,170,0.85)' : 'rgba(255,130,30,0.75)';
+    ctx.beginPath();
+    ctx.arc(ex, ey, er, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function drawUnitShape(u, x, y) {
   const friendly = u.side === 'bottom';
-  const teamCol = friendly ? '#28c0b0' : '#ff3a3a';
-  const hi = '#f4f7fb';
-  const shd = friendly ? '#0d5548' : '#6b1010';
+  const teamCol = friendly ? '#ff9b2f' : '#ff5f2e';
+  const hi = '#ffe8bb';
+  const shd = '#4a140b';
   const front = friendly ? -1 : 1; // -1=upward advance, +1=downward advance
+  const t = Date.now() * 0.01;
+  const pulse = 0.5 + Math.sin(t + ((u && u.id) ? String(u.id).length : 0)) * 0.5;
   ctx.save();
   ctx.translate(x, y);
+  drawUnitFireAura(u, front);
+  ctx.fillStyle = 'rgba(6,2,1,0.45)';
+  ctx.beginPath();
+  ctx.ellipse(0, 10, 8.5, 2.8, 0, 0, Math.PI * 2);
+  ctx.fill();
 
   if (u.type === 'footman') {
-    // Broad shield silhouette + spear: defensive profile.
-    ctx.fillStyle = '#2f6fcb';
-    roundRect(-6, -3, 12, 11, 2); ctx.fill();
-    ctx.fillStyle = teamCol;
-    roundRect(-4, -2, 8, 9, 2); ctx.fill();
-    ctx.strokeStyle = hi; ctx.lineWidth = 1;
+    // Knight with red shield + sword.
+    ctx.fillStyle = '#616b78';
+    roundRect(-8, -3, 16, 14, 3); ctx.fill();
+    ctx.fillStyle = '#7f8998';
+    roundRect(-6, -13, 12, 9, 3); ctx.fill();
+    ctx.fillStyle = 'rgba(255,130,70,0.9)';
+    ctx.fillRect(-2.2, -10.2, 4.4, 1.4);
+    ctx.fillStyle = 'rgba(255,235,180,0.8)';
+    ctx.fillRect(-0.8, -9.8, 1.6, 0.8);
+    ctx.fillStyle = '#aeb7c5';
+    ctx.fillRect(4.5, -1, 2.2, 10);
+    ctx.strokeStyle = '#d4dce7'; ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.moveTo(0, -1); ctx.lineTo(0, 6);
-    ctx.moveTo(-3, 2); ctx.lineTo(3, 2);
+    ctx.moveTo(5.6, -8); ctx.lineTo(5.6, 3); ctx.stroke();
+    ctx.fillStyle = '#d4dce7';
+    ctx.beginPath(); ctx.moveTo(4.3, -8); ctx.lineTo(6.9, -8); ctx.lineTo(5.6, -11); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#862020';
+    ctx.beginPath();
+    ctx.moveTo(-9, -7); ctx.lineTo(-2.5, -9); ctx.lineTo(-1.5, 6); ctx.lineTo(-9, 8);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#ba4a4a'; ctx.lineWidth = 1;
     ctx.stroke();
-    ctx.fillStyle = teamCol;
-    roundRect(-5, -11, 10, 7, 2); ctx.fill();
-    ctx.fillStyle = hi;
-    ctx.fillRect(-3, -9, 6, 2);
-    ctx.strokeStyle = '#d9c38b'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-7, 8); ctx.lineTo(-10, front * 9); ctx.stroke();
-    ctx.fillStyle = '#d9c38b';
-    ctx.beginPath();
-    ctx.moveTo(-10, front * 9);
-    ctx.lineTo(-12, front * 11);
-    ctx.lineTo(-8, front * 11);
-    ctx.closePath();
-    ctx.fill();
+    ctx.strokeStyle = '#e1e6ee'; ctx.lineWidth = 0.9;
+    ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(-3, -1.5); ctx.stroke();
 
   } else if (u.type === 'golem') {
-    // Huge frame + crystal core: instantly reads as siege bruiser.
-    ctx.fillStyle = '#7d858d';
-    roundRect(-10, -4, 20, 17, 4); ctx.fill();
-    ctx.fillStyle = teamCol;
-    roundRect(-7, -2, 14, 13, 3); ctx.fill();
-    ctx.strokeStyle = shd; ctx.lineWidth = 1;
+    // Crystal-rock golem.
+    ctx.fillStyle = '#5a5047';
     ctx.beginPath();
-    ctx.moveTo(-8, 3); ctx.lineTo(8, 3);
-    ctx.moveTo(-3, -3); ctx.lineTo(-3, 12);
-    ctx.moveTo(3, -3); ctx.lineTo(3, 12);
-    ctx.stroke();
-    ctx.fillStyle = '#9fa7af';
-    roundRect(-8, -14, 16, 10, 3); ctx.fill();
-    // Crystal core
-    ctx.fillStyle = '#ff9a3a';
-    ctx.beginPath();
-    ctx.moveTo(0, -1); ctx.lineTo(4, 4); ctx.lineTo(0, 9); ctx.lineTo(-4, 4);
-    ctx.closePath();
-    ctx.fill();
-    // Horns
-    ctx.fillStyle = '#cfd6dc';
-    ctx.beginPath(); ctx.moveTo(-6, -12); ctx.lineTo(-10, -16); ctx.lineTo(-6, -9); ctx.closePath(); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(6, -12); ctx.lineTo(10, -16); ctx.lineTo(6, -9); ctx.closePath(); ctx.fill();
-    // Fist
-    ctx.fillStyle = '#6d757d';
-    ctx.beginPath(); ctx.arc(12, 4, 4.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(-2.5, -9, 1.2, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(2.5, -9, 1.2, 0, Math.PI * 2); ctx.fill();
+    ctx.moveTo(-10, 10); ctx.lineTo(-12, -1); ctx.lineTo(-6, -7); ctx.lineTo(0, -9);
+    ctx.lineTo(7, -6); ctx.lineTo(12, -1); ctx.lineTo(10, 10); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#6f6459';
+    ctx.beginPath(); ctx.moveTo(-11, -2); ctx.lineTo(-16, 2); ctx.lineTo(-13, 9); ctx.lineTo(-8, 6); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(11, -2); ctx.lineTo(16, 2); ctx.lineTo(13, 9); ctx.lineTo(8, 6); ctx.closePath(); ctx.fill();
+    const core = ctx.createRadialGradient(0, 1, 0, 0, 1, 6.5);
+    core.addColorStop(0, 'rgba(180,245,255,0.95)');
+    core.addColorStop(0.45, 'rgba(60,190,255,0.9)');
+    core.addColorStop(1, 'rgba(10,80,120,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(0, 1, 6.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#84e9ff';
+    ctx.beginPath(); ctx.arc(-2.8, -5, 1.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(2.8, -5, 1.1, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.5 + pulse * 0.25;
+    ctx.strokeStyle = '#7ce8ff'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-4, 3); ctx.lineTo(4, 1); ctx.stroke();
+    ctx.globalAlpha = 1;
 
   } else if (u.type === 'ironclad') {
-    // Thick armor silhouette + hammer crest.
-    ctx.fillStyle = '#5f6672';
-    roundRect(-9, -2, 18, 13, 3); ctx.fill();
-    ctx.fillStyle = teamCol;
-    roundRect(-7, -1, 14, 11, 2); ctx.fill();
-    ctx.fillStyle = '#8c94a3';
-    ctx.fillRect(-11, -3, 5, 6);
-    ctx.fillRect(6, -3, 5, 6);
-    ctx.fillStyle = teamCol;
-    roundRect(-6, -12, 12, 8, 2); ctx.fill();
-    ctx.fillStyle = shd;
-    ctx.fillRect(-4, -10, 8, 2);
-    ctx.fillStyle = '#c8ad55';
-    ctx.fillRect(-1, -16, 2, 4);
-    ctx.fillRect(-4, -14, 8, 2);
-    ctx.strokeStyle = shd; ctx.lineWidth = 1;
+    // Heavy molten knight with axe.
+    ctx.fillStyle = '#505764';
+    roundRect(-9, -3, 18, 14, 3); ctx.fill();
+    ctx.fillStyle = '#3f4651';
+    roundRect(-7, -14, 14, 10, 3); ctx.fill();
+    ctx.fillStyle = '#353b46';
+    roundRect(-12, -5, 6, 9, 2); ctx.fill();
+    roundRect(6, -5, 6, 9, 2); ctx.fill();
+    ctx.fillStyle = '#ff822d';
+    ctx.fillRect(-3.6, -10.2, 7.2, 1.5);
+    ctx.fillStyle = '#ffd697';
+    ctx.fillRect(-1.5, -9.9, 3, 0.9);
+    ctx.strokeStyle = '#7a4b2d'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(7, 8); ctx.lineTo(13, -2); ctx.stroke();
+    ctx.fillStyle = '#c9d0d9';
     ctx.beginPath();
-    ctx.moveTo(-6, 2); ctx.lineTo(6, 2);
-    ctx.moveTo(-6, 6); ctx.lineTo(6, 6);
+    ctx.moveTo(10, -7); ctx.lineTo(15.5, -2); ctx.lineTo(11, 3); ctx.lineTo(6.5, -1);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#6e7681'; ctx.lineWidth = 1;
     ctx.stroke();
 
   } else if (u.type === 'runner') {
-    // Lean silhouette + scarf trail.
-    ctx.strokeStyle = teamCol; ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
-    for (let i = 1; i <= 3; i++) {
-      ctx.beginPath();
-      ctx.moveTo(-4, i * 2 - 5);
-      ctx.lineTo(-7 - i * 3, i * 2 - 6);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-    ctx.save();
-    ctx.rotate(-0.3 * front);
-    ctx.fillStyle = teamCol;
-    ctx.beginPath(); ctx.ellipse(0, 2, 3.8, 7, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(0, -5, 2.8, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#ffd74f';
-    ctx.fillRect(-1, -7, 2, 2);
-    ctx.restore();
-    ctx.fillStyle = '#ffd74f';
+    // Hooded rogue with twin daggers.
+    ctx.fillStyle = '#353230';
     ctx.beginPath();
-    ctx.moveTo(2, -3); ctx.lineTo(8, -1); ctx.lineTo(2, 1);
+    ctx.moveTo(-8, 8); ctx.lineTo(-5, -2); ctx.lineTo(0, -10); ctx.lineTo(6, -1); ctx.lineTo(8, 8);
     ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#4d4a46';
+    ctx.beginPath();
+    ctx.moveTo(-6, -2); ctx.lineTo(0, -14); ctx.lineTo(6, -2); ctx.lineTo(2, 1); ctx.lineTo(-2, 1);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#3a2b20';
+    ctx.beginPath(); ctx.arc(0, -5, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffcb8c';
+    ctx.fillRect(-1.8, -5.8, 3.6, 0.9);
+    ctx.strokeStyle = '#d8dde5'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(-13, -4 * front); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6, 1); ctx.lineTo(13, -2 * front); ctx.stroke();
+    ctx.fillStyle = '#d8dde5';
+    ctx.beginPath(); ctx.moveTo(-13, -4 * front); ctx.lineTo(-15, -5 * front); ctx.lineTo(-12, -6 * front); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(13, -2 * front); ctx.lineTo(15, -3 * front); ctx.lineTo(12, -4 * front); ctx.closePath(); ctx.fill();
 
   } else if (u.type === 'warlock') {
-    // Hood + runic staff + orbiting motes.
+    // Purple mage with skull staff.
     ctx.strokeStyle = '#d9d2ff'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(7, 8); ctx.lineTo(7, -8); ctx.stroke();
-    const og = ctx.createRadialGradient(7, -9, 0, 7, -9, 3.5);
-    og.addColorStop(0, '#ffffff'); og.addColorStop(0.55, '#b98bff'); og.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = og;
-    ctx.beginPath(); ctx.arc(7, -9, 3.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#6b49b8';
+    ctx.beginPath(); ctx.moveTo(8, 8); ctx.lineTo(8, -10); ctx.stroke();
+    const orb = ctx.createRadialGradient(8, -11, 0, 8, -11, 4.5);
+    orb.addColorStop(0, '#f2dbff');
+    orb.addColorStop(0.45, '#b66dff');
+    orb.addColorStop(1, 'rgba(120,40,180,0)');
+    ctx.fillStyle = orb;
+    ctx.beginPath(); ctx.arc(8, -11, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#d6b8ff';
+    ctx.beginPath(); ctx.arc(8, -11.5, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#352044';
     ctx.beginPath();
-    ctx.moveTo(-2, -10); ctx.lineTo(-8, 8); ctx.lineTo(8, 8); ctx.lineTo(2, -10);
+    ctx.moveTo(-7, 8); ctx.lineTo(-5, -2); ctx.lineTo(0, -11); ctx.lineTo(5, -2); ctx.lineTo(7, 8);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = teamCol;
+    ctx.fillStyle = '#6d3fb3';
     ctx.beginPath();
-    ctx.moveTo(-1, -8); ctx.lineTo(-5, 8); ctx.lineTo(5, 8); ctx.lineTo(1, -8);
+    ctx.moveTo(-5, 8); ctx.lineTo(-3, 0); ctx.lineTo(0, -8); ctx.lineTo(3, 0); ctx.lineTo(5, 8);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = shd; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-6, 4); ctx.lineTo(6, 4); ctx.stroke();
-    ctx.fillStyle = hi;
-    ctx.beginPath(); ctx.arc(0, -1, 2.3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#b98bff';
-    ctx.beginPath(); ctx.arc(-6, -2, 1.1, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(-3, -6, 0.9, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(0, -8, 0.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffddb8';
+    ctx.beginPath(); ctx.arc(0, -2, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#c18cff';
+    for (let i = 0; i < 3; i++) {
+      const a = t * 0.3 + i * 2.1;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * (5 + i), -6 + Math.sin(a) * 2, 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
+
+  // Charred silhouette pass to pull units away from "clean soldier" look.
+  ctx.globalAlpha = 0.2;
+  ctx.fillStyle = '#160702';
+  ctx.beginPath();
+  ctx.ellipse(0, 1, 7.5, 10.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
 
   ctx.restore();
 }
@@ -2663,10 +2741,6 @@ if (btnQueueFind) {
 
 const btnSoloPlay   = document.getElementById('btn-solo-play');
 const soloNameInput = document.getElementById('solo-name-input');
-
-if (btnLeaveGame) {
-  btnLeaveGame.addEventListener('click', leaveCurrentGame);
-}
 
 document.querySelectorAll('.solo-diff-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -4961,6 +5035,7 @@ function onAuthStateChange(player) {
     // Show friends panel when signed in; party panel stays hidden during gameplay.
     document.getElementById('party-panel').style.display = lobbyState === 'playing' ? 'none' : '';
     document.getElementById('friends-panel').style.display = '';
+    syncFriendsPanelPlacement();
     btnAuthSignout.textContent = lobbyState === 'playing' ? 'Quit Game' : 'Sign out';
     renderPartyPanel(null);
     renderFriendsPanel([]);
@@ -4977,6 +5052,7 @@ function onAuthStateChange(player) {
     authProfileArea.style.display = 'none';
     document.getElementById('party-panel').style.display = 'none';
     document.getElementById('friends-panel').style.display = 'none';
+    syncFriendsPanelPlacement();
     _friendsList = [];
     _pendingPartyInvite = null;
     _resetPwForm();
@@ -4989,6 +5065,7 @@ function onAuthStateChange(player) {
       if (label) label.style.display = '';
     });
   }
+  syncAuthBarPlacement();
 }
 
 btnAuthSignout.addEventListener('click', () => {
@@ -5377,6 +5454,7 @@ window.onGoogleSignIn = async (response) => {
     // Show auth bar when DB is present (password auth) or Google is configured
     if (cfg.passwordAuthEnabled || cfg.googleClientId) {
       document.getElementById('auth-bar').style.display = 'block';
+      syncAuthBarPlacement();
     }
   } catch { /* no DB / no Google config — auth bar stays hidden */ }
 
@@ -5397,6 +5475,9 @@ let _pendingPartyInvite = null;
 let _friendsMsgTimer   = null;
 
 const partyPanel        = document.getElementById('party-panel');
+const friendsPanel      = document.getElementById('friends-panel');
+const friendsPanelHomeParent = friendsPanel ? friendsPanel.parentElement : null;
+const friendsPanelHomeNextSibling = friendsPanel ? friendsPanel.nextSibling : null;
 const partyCodeDisplay  = document.getElementById('party-code-display');
 const partyMemberList   = document.getElementById('party-member-list');
 const partyActions      = document.getElementById('party-actions');
@@ -5573,10 +5654,39 @@ function renderFriendsPanel(friends) {
   _repositionFriendsPanel();
 }
 
+function syncFriendsPanelPlacement() {
+  if (!friendsPanel) return;
+  const shouldDockInRail = lobbyState === 'playing' && !!rightRail;
+  if (shouldDockInRail) {
+    if (friendsPanel.parentElement !== rightRail) {
+      const anchor = (authBar && authBar.parentElement === rightRail) ? authBar : null;
+      if (anchor && anchor.nextSibling) rightRail.insertBefore(friendsPanel, anchor.nextSibling);
+      else if (anchor) rightRail.appendChild(friendsPanel);
+      else rightRail.appendChild(friendsPanel);
+    }
+    friendsPanel.classList.add('friends-in-rail');
+    friendsPanel.style.top = '';
+    return;
+  }
+
+  friendsPanel.classList.remove('friends-in-rail');
+  if (!friendsPanelHomeParent || friendsPanel.parentElement === friendsPanelHomeParent) return;
+  if (friendsPanelHomeNextSibling && friendsPanelHomeNextSibling.parentNode === friendsPanelHomeParent) {
+    friendsPanelHomeParent.insertBefore(friendsPanel, friendsPanelHomeNextSibling);
+  } else {
+    friendsPanelHomeParent.appendChild(friendsPanel);
+  }
+  _repositionFriendsPanel();
+}
+
 function _repositionFriendsPanel() {
   const pp = document.getElementById('party-panel');
   const fp = document.getElementById('friends-panel');
   if (!pp || !fp || fp.style.display === 'none') return;
+  if (fp.parentElement === rightRail || lobbyState === 'playing') {
+    fp.style.top = '';
+    return;
+  }
   const rect = pp.getBoundingClientRect();
   fp.style.top = (rect.bottom + 6) + 'px';
 }
