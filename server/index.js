@@ -14,7 +14,52 @@ const crypto = require("crypto");
 
 const sim = require("./sim");
 const simMl = require("./sim-multilane");
-const aiRuntime = require("../ai/sim_runner");
+let aiRuntime;
+try {
+  // Monorepo layout: server/index.js + ../ai/*
+  aiRuntime = require("../ai/sim_runner");
+} catch (_err) {
+  try {
+    // Server-only deploy layout if ai/ is bundled alongside index.js
+    aiRuntime = require("./ai/sim_runner");
+  } catch (_err2) {
+    // Fallback adapter to legacy AI engine so server can still boot.
+    const legacyAi = require("./ai");
+    aiRuntime = {
+      __engine: "legacy_ai_adapter_v1",
+      createBotController(config) {
+        const cfg = config && typeof config === "object" ? config : {};
+        const game = cfg.game;
+        const botConfigs = Array.isArray(cfg.botConfigs) ? cfg.botConfigs : [];
+        const handles = botConfigs.map((b) => legacyAi.startAI(game, b.laneIndex, b.difficulty));
+        return {
+          runtimeTracker: null,
+          getBotCount() { return handles.length; },
+          onBeforeSimTick() {},
+          onAfterSimTick() {},
+          drainActionLog() { return []; },
+          stop() { handles.forEach((h) => legacyAi.stopAI(h)); },
+        };
+      },
+      captureStateLite(game) {
+        return {
+          tick: Number(game && game.tick) || 0,
+          phase: game && game.phase,
+          winner: game && game.winner,
+          lanes: (game && game.lanes ? game.lanes : []).map((lane) => ({
+            laneIndex: lane.laneIndex,
+            team: lane.team,
+            eliminated: !!lane.eliminated,
+            gold: Number(lane.gold) || 0,
+            income: Number(lane.income) || 0,
+            lives: Number(lane.lives) || 0,
+          })),
+        };
+      },
+    };
+    console.warn("[ai] new ai runtime module not found; using legacy adapter fallback");
+  }
+}
 const authService = require("./auth");
 const matchmaker = require("./services/matchmaker");
 const log = require("./logger");
@@ -127,6 +172,9 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
   const entry = gamesByRoomId.get(roomId);
   if (!entry) return false;
   clearInterval(entry.tickHandle);
+  if (entry.botController && typeof entry.botController.stop === "function") {
+    try { entry.botController.stop(); } catch { /* ignore */ }
+  }
   gamesByRoomId.delete(roomId);
   // Notify all sockets in the room
   io.to(roomId).emit('game_over',    { winner: null, reason: 'admin_terminated' });
@@ -609,7 +657,7 @@ function startMLGame(roomId, code, io) {
     log.info("ml ai engine active", {
       roomId,
       code,
-      aiEngine: "new_bot_controller_v1",
+      aiEngine: aiRuntime.__engine || "new_bot_controller_v1",
       botCount: botController ? botController.getBotCount() : 0,
     });
   }
@@ -749,6 +797,9 @@ function stopMLGame(roomId, code) {
   const entry = gamesByRoomId.get(roomId);
   if (!entry) return;
   clearInterval(entry.tickHandle);
+  if (entry.botController && typeof entry.botController.stop === "function") {
+    try { entry.botController.stop(); } catch { /* ignore */ }
+  }
   gamesByRoomId.delete(roomId);
   log.info(`[ml-game] stopped ${roomId}`);
   const handle = setTimeout(() => {
@@ -1468,7 +1519,8 @@ io.on("connection", (socket) => {
           isPlacement,
         });
 
-        io.to("party:" + partyId).emit("queue_status", { status: "queued", mode: queueMode, elapsed: 0 });
+        const queueSize = matchmaker.getQueuePlayerCount(queueMode, partiesById);
+        io.to("party:" + partyId).emit("queue_status", { status: "queued", mode: queueMode, elapsed: 0, queueSize });
         log.info("queue entered", { partyId, mode: queueMode, isPlacement });
       });
     });
@@ -2208,6 +2260,9 @@ function gracefulShutdown(signal) {
   // Stop all active game tick loops.
   for (const [, entry] of gamesByRoomId.entries()) {
     clearInterval(entry.tickHandle);
+    if (entry.botController && typeof entry.botController.stop === "function") {
+      try { entry.botController.stop(); } catch { /* ignore */ }
+    }
   }
   gamesByRoomId.clear();
 
