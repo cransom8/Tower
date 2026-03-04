@@ -134,6 +134,239 @@ let mlDragAxis = null;          // 'x' (horizontal) or 'y' (vertical)
 let mlPrevLives = -1;
 let mlPrevBarracksLevel = 1;
 let _lastMibGold = -1;
+const SFX_ENABLED = true;
+
+const SFX_UNIT_PATCHES = Object.freeze({
+  runner: { wave: 'square', startHz: 900, endHz: 620, duration: 0.08, gain: 0.040 },
+  footman: { wave: 'triangle', startHz: 520, endHz: 360, duration: 0.10, gain: 0.045 },
+  ironclad: { wave: 'sawtooth', startHz: 260, endHz: 180, duration: 0.14, gain: 0.055 },
+  warlock: { wave: 'sine', startHz: 760, endHz: 430, duration: 0.16, gain: 0.050 },
+  golem: { wave: 'triangle', startHz: 180, endHz: 110, duration: 0.18, gain: 0.060 },
+});
+
+const SFX_TOWER_PATCHES = Object.freeze({
+  archer: { wave: 'square', startHz: 1020, endHz: 560, duration: 0.07, gain: 0.040 },
+  fighter: { wave: 'triangle', startHz: 500, endHz: 250, duration: 0.09, gain: 0.045 },
+  ballista: { wave: 'sawtooth', startHz: 310, endHz: 150, duration: 0.11, gain: 0.055 },
+  cannon: { wave: 'triangle', startHz: 150, endHz: 90, duration: 0.13, gain: 0.065 },
+  mage: { wave: 'sine', startHz: 860, endHz: 390, duration: 0.12, gain: 0.050 },
+});
+
+let sfxAudioCtx = null;
+let sfxMasterGain = null;
+let sfxUnlocked = false;
+let sfxUnlockHandlersBound = false;
+const sfxLastPlayedAt = new Map();
+const sfxSpawnSuppressUntil = new Map();
+
+function ensureSfxNodes() {
+  if (!SFX_ENABLED) return false;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return false;
+  if (!sfxAudioCtx) sfxAudioCtx = new AudioCtx();
+  if (!sfxMasterGain) {
+    sfxMasterGain = sfxAudioCtx.createGain();
+    sfxMasterGain.gain.value = 0.35;
+    sfxMasterGain.connect(sfxAudioCtx.destination);
+  }
+  return true;
+}
+
+function bindSfxUnlockHandlers() {
+  if (sfxUnlockHandlersBound) return;
+  sfxUnlockHandlersBound = true;
+  const unlock = () => unlockSfx();
+  window.addEventListener('pointerdown', unlock, { passive: true });
+  window.addEventListener('keydown', unlock, { passive: true });
+  window.addEventListener('touchstart', unlock, { passive: true });
+}
+
+function unlockSfx() {
+  if (!ensureSfxNodes()) return;
+  if (sfxAudioCtx.state === 'suspended') {
+    sfxAudioCtx.resume().catch(() => {});
+  }
+  sfxUnlocked = (sfxAudioCtx.state === 'running');
+}
+
+function canPlaySfx(key, cooldownMs) {
+  const now = performance.now();
+  const last = sfxLastPlayedAt.get(key) || 0;
+  if ((now - last) < cooldownMs) return false;
+  sfxLastPlayedAt.set(key, now);
+  return true;
+}
+
+function playSfxPatch(patch, volumeScale = 1, pan = 0) {
+  if (!sfxUnlocked || !sfxAudioCtx || !sfxMasterGain || !patch) return false;
+  const ctxA = sfxAudioCtx;
+  const now = ctxA.currentTime;
+  const duration = Math.max(0.04, Number(patch.duration) || 0.09);
+  const attack = Math.max(0.002, Math.min(duration * 0.4, 0.01));
+  const startHz = Math.max(40, Number(patch.startHz) || 440);
+  const endHz = Math.max(40, Number.isFinite(patch.endHz) ? Number(patch.endHz) : startHz);
+  const peak = Math.max(0.0001, (Number(patch.gain) || 0.045) * Math.max(0.1, volumeScale));
+
+  const osc = ctxA.createOscillator();
+  osc.type = patch.wave || 'triangle';
+  osc.frequency.setValueAtTime(startHz, now);
+  osc.frequency.exponentialRampToValueAtTime(endHz, now + duration);
+
+  const gainNode = ctxA.createGain();
+  gainNode.gain.setValueAtTime(0.0001, now);
+  gainNode.gain.exponentialRampToValueAtTime(peak, now + attack);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  let outNode = gainNode;
+  if (typeof ctxA.createStereoPanner === 'function') {
+    const panner = ctxA.createStereoPanner();
+    panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), now);
+    gainNode.connect(panner);
+    outNode = panner;
+  }
+  outNode.connect(sfxMasterGain);
+  osc.connect(gainNode);
+  osc.start(now);
+  osc.stop(now + duration + 0.02);
+  return true;
+}
+
+function unitSpawnVolume(side) {
+  return side === 'bottom' ? 1.0 : 0.72;
+}
+
+function projectilePanClassic(projectileSide) {
+  return projectileSide === 'bottom' ? -0.15 : 0.15;
+}
+
+function projectilePanMl(p) {
+  if (!p || !Number.isFinite(p.fromX)) return 0;
+  const mid = (ML_GRID_W - 1) * 0.5;
+  return Math.max(-0.55, Math.min(0.55, (p.fromX - mid) / Math.max(1, mid)));
+}
+
+function playUnitSpawnSfx(unitType, side) {
+  const patch = SFX_UNIT_PATCHES[unitType];
+  if (!patch) return false;
+  const key = 'unit-spawn-' + unitType + '-' + side;
+  if (!canPlaySfx(key, 90)) return false;
+  return playSfxPatch(patch, unitSpawnVolume(side), side === 'bottom' ? -0.1 : 0.1);
+}
+
+function markLocalUnitSpawn(unitType) {
+  sfxSpawnSuppressUntil.set(unitType, performance.now() + 360);
+}
+
+function shouldSuppressSpawnSfx(unitType, side) {
+  if (side !== 'bottom') return false;
+  const until = sfxSpawnSuppressUntil.get(unitType) || 0;
+  if (performance.now() <= until) {
+    sfxSpawnSuppressUntil.delete(unitType);
+    return true;
+  }
+  return false;
+}
+
+function playTowerBuildSfx(towerType) {
+  const patch = SFX_TOWER_PATCHES[towerType];
+  if (!patch) return false;
+  const key = 'tower-build-' + towerType;
+  if (!canPlaySfx(key, 120)) return false;
+  return playSfxPatch(
+    Object.assign({}, patch, {
+      startHz: patch.startHz * 0.68,
+      endHz: patch.endHz * 0.62,
+      duration: Math.max(0.06, patch.duration * 0.8),
+      gain: patch.gain * 0.95,
+    }),
+    1,
+    0
+  );
+}
+
+function playTowerUpgradeSfx(towerType) {
+  const patch = SFX_TOWER_PATCHES[towerType];
+  if (!patch) return false;
+  const key = 'tower-upgrade-' + towerType;
+  if (!canPlaySfx(key, 140)) return false;
+  return playSfxPatch(
+    Object.assign({}, patch, {
+      startHz: patch.endHz * 1.15,
+      endHz: patch.startHz * 0.95,
+      duration: Math.max(0.07, patch.duration * 0.95),
+      gain: patch.gain * 1.05,
+    }),
+    1,
+    0
+  );
+}
+
+function playAttackSfx(projectileType, sourceKind, side, pan) {
+  const patch = sourceKind === 'tower'
+    ? SFX_TOWER_PATCHES[projectileType]
+    : SFX_UNIT_PATCHES[projectileType];
+  if (!patch) return false;
+  const kind = sourceKind || 'unknown';
+  const key = 'atk-' + kind + '-' + projectileType + '-' + side;
+  if (!canPlaySfx(key, 55)) return false;
+  const v = side === 'bottom' ? 1.0 : 0.75;
+  return playSfxPatch(patch, v, Number.isFinite(pan) ? pan : 0);
+}
+
+function handleClassicSnapshotSfx(prevLocal, nextLocal) {
+  if (!prevLocal || !nextLocal) return;
+  let budget = 8;
+  const prevUnitIds = new Set((prevLocal.units || []).map(u => u.id));
+  for (const u of (nextLocal.units || [])) {
+    if (budget <= 0) break;
+    if (prevUnitIds.has(u.id)) continue;
+    if (shouldSuppressSpawnSfx(u.type, u.side)) continue;
+    if (playUnitSpawnSfx(u.type, u.side)) budget -= 1;
+  }
+
+  const prevProjIds = new Set((prevLocal.projectiles || []).map(p => p.id));
+  for (const p of (nextLocal.projectiles || [])) {
+    if (budget <= 0) break;
+    if (prevProjIds.has(p.id)) continue;
+    if (playAttackSfx(p.projectileType, p.sourceKind, p.side, projectilePanClassic(p.side))) budget -= 1;
+  }
+}
+
+function handleMlSnapshotSfx(prevState, nextState) {
+  if (!prevState || !nextState || !Array.isArray(nextState.lanes)) return;
+  let budget = 10;
+  const prevUnits = new Set();
+  const prevProjectiles = new Set();
+  (prevState.lanes || []).forEach(lane => {
+    (lane.units || []).forEach(u => prevUnits.add(u.id));
+    (lane.projectiles || []).forEach(p => prevProjectiles.add(p.id));
+  });
+
+  for (const lane of nextState.lanes) {
+    if (budget <= 0) break;
+    const teamByLane = new Map(nextState.lanes.map(l => [l.laneIndex, l.team]));
+    const myLane = nextState.lanes[myLaneIndex];
+    const myTeam = myLane ? myLane.team : null;
+
+    for (const u of (lane.units || [])) {
+      if (budget <= 0) break;
+      if (prevUnits.has(u.id)) continue;
+      const ownerTeam = teamByLane.get(u.ownerLane);
+      const side = (myTeam && ownerTeam === myTeam) ? 'bottom' : 'top';
+      if (shouldSuppressSpawnSfx(u.type, side)) continue;
+      if (playUnitSpawnSfx(u.type, side)) budget -= 1;
+    }
+
+    for (const p of (lane.projectiles || [])) {
+      if (budget <= 0) break;
+      if (prevProjectiles.has(p.id)) continue;
+      const side = (myLane && Number(p.ownerLane) === Number(myLane.laneIndex)) ? 'bottom' : 'top';
+      if (playAttackSfx(p.projectileType, p.sourceKind || 'tower', side, projectilePanMl(p))) budget -= 1;
+    }
+  }
+}
+
+bindSfxUnlockHandlers();
 
 function canPreviewWallAt(lane, gx, gy) {
   if (!lane) return false;
@@ -2173,16 +2406,23 @@ function refreshClassicOpenTowerPopout(local) {
 
 function trySpawn(type) {
   sendAction('spawn_unit', { unitType: type });
+  markLocalUnitSpawn(type);
+  playUnitSpawnSfx(type, 'bottom');
 }
 
 function tryBuildTower(type, slot) {
   if (!slot) return;
   sendAction('build_tower', { towerType: type, slot: slot });
+  playTowerBuildSfx(type);
 }
 
 function tryUpgradeTower(slot) {
   if (!slot) return;
   sendAction('upgrade_tower', { slot: slot });
+  const tower = currentState && currentState.me && currentState.me.towers
+    ? currentState.me.towers[slot]
+    : null;
+  if (tower && tower.type) playTowerUpgradeSfx(tower.type);
 }
 
 function trySetTowerTarget(slot, targetMode) {
@@ -2333,6 +2573,7 @@ function leaveCurrentGame() {
 
 function sendAction(type, data) {
   if (lobbyState !== 'playing') return;
+  unlockSfx();
   if (gameMode === 'multilane') {
     if (!mlMyCode || myLaneIndex === null) return;
     socket.emit('player_action', { code: mlMyCode, laneIndex: myLaneIndex, type, data: data || {} });
@@ -2435,42 +2676,33 @@ function buildMLLeaderboardEntries(local) {
 
 function renderLeaderboardPanels(entries) {
   if (!incomeLeaderboardPanel || !statLeaderboardPanel) return;
+  statLeaderboardPanel.style.display = 'none';
   if (!entries || entries.length === 0) {
     incomeLeaderboardPanel.innerHTML = '';
     statLeaderboardPanel.innerHTML = '';
     return;
   }
 
-  const incomeRows = entries
-    .slice()
-    .sort((a, b) => (b.income - a.income) || (b.gold - a.gold) || (b.lives - a.lives));
-  const statRows = entries
+  const matchRows = entries
     .map(e => Object.assign({}, e, { score: calcPowerScore(e) }))
     .sort((a, b) => (b.score - a.score) || (b.income - a.income) || (b.gold - a.gold));
 
-  let incomeHtml = '<div class="lb-title">Income Leaderboard</div>';
-  incomeRows.forEach((r, i) => {
-    incomeHtml += '<div class="lb-row">'
-      + '<span class="lb-rank">' + (i + 1) + '</span>'
-      + '<span class="lb-name' + (r.eliminated ? ' lb-elim' : '') + '">' + escHtml(r.name) + '</span>'
-      + '<span class="lb-main">+' + (Number.isInteger(r.income) ? r.income : r.income.toFixed(1)) + '</span>'
-      + '<span class="lb-sub">' + r.gold + 'g</span>'
-      + '</div>';
-  });
-  incomeLeaderboardPanel.innerHTML = incomeHtml;
-
-  let statHtml = '<div class="lb-title">Stat Leaderboard</div>'
+  let incomeHtml = '<div class="lb-title">Match Leaderboard</div>'
     + '<div class="lb-eqn">Score = income*20 + gold + lives*25 + army*8 + towers*14 + barracks*30 + walls</div>';
-  statRows.forEach((r, i) => {
-    const sub = r.army + 'u/' + r.towers + 't';
-    statHtml += '<div class="lb-row">'
+  matchRows.forEach((r, i) => {
+    const hpVal = Math.max(0, Math.floor(Number(r.lives) || 0));
+    const barracksVal = Math.max(1, Math.floor(Number(r.barracks) || 1));
+    const incomeVal = Number.isInteger(r.income) ? r.income : r.income.toFixed(1);
+    const sub = '+' + incomeVal + ' inc | ' + r.gold + 'g | ' + r.army + 'u/' + r.towers + 't | HP ' + hpVal + ' | B' + barracksVal;
+    incomeHtml += '<div class="lb-row">'
       + '<span class="lb-rank">' + (i + 1) + '</span>'
       + '<span class="lb-name' + (r.eliminated ? ' lb-elim' : '') + '">' + escHtml(r.name) + '</span>'
       + '<span class="lb-main">' + r.score + '</span>'
       + '<span class="lb-sub">' + sub + '</span>'
       + '</div>';
   });
-  statLeaderboardPanel.innerHTML = statHtml;
+  incomeLeaderboardPanel.innerHTML = incomeHtml;
+  statLeaderboardPanel.innerHTML = '';
 }
 
 function updateLeaderboards(classicLocal, mlLocal) {
@@ -2701,7 +2933,7 @@ btnCreateMl.addEventListener('click', () => {
   const settings = readMlSettingsFromUi();
   setLobbyState('creating');
   setStatus('Creating ML room...', 'wait');
-  socket.emit('create_ml_room', { displayName: name, settings });
+  socket.emit('create_ml_room', { displayName: name, settings, pvpMode: _pvpMode });
 });
 
 btnJoinMl.addEventListener('click', () => {
@@ -3051,6 +3283,7 @@ socket.on('left_game_ack', () => {
 socket.on('state_snapshot', state => {
   const local = localizeState(state);
   if (!local) return;
+  if (currentState) handleClassicSnapshotSfx(currentState, local);
   hasFirstSnapshot = true;
   previousState = currentState || local;
   currentState = local;
@@ -3922,22 +4155,29 @@ function renderMLLobbyPanel(data) {
   if (data && data.settings) applyMlSettingsToUi(data.settings);
   setMlSettingsEditable(mlIsHost && lobbyState !== 'playing');
   mlLobbyPlayers = data.players || [];
+  const isFfa = data.pvpMode === 'ffa';
   if (mlTeamSetupStatus) {
-    const redCount = mlLobbyPlayers.filter(p => (p.team || 'red') === 'red').length;
-    const blueCount = mlLobbyPlayers.filter(p => p.team === 'blue').length;
-    const total = mlLobbyPlayers.length;
-    const isFourPlayerReady = total === 4 && redCount === 2 && blueCount === 2;
-    mlTeamSetupStatus.textContent = `Team Setup: Red ${redCount} | Blue ${blueCount}`;
     mlTeamSetupStatus.classList.remove('ok', 'warn');
-    if (total < 4) {
-      mlTeamSetupStatus.classList.add('warn');
-      mlTeamSetupStatus.textContent += ' (waiting for players)';
-    } else if (isFourPlayerReady) {
-      mlTeamSetupStatus.classList.add('ok');
-      mlTeamSetupStatus.textContent += ' (ready)';
+    if (isFfa) {
+      const total = mlLobbyPlayers.length;
+      mlTeamSetupStatus.textContent = `FFA — ${total} player${total !== 1 ? 's' : ''}`;
+      mlTeamSetupStatus.classList.add(total >= 2 ? 'ok' : 'warn');
     } else {
-      mlTeamSetupStatus.classList.add('warn');
-      mlTeamSetupStatus.textContent += ' (need 2v2 split)';
+      const redCount = mlLobbyPlayers.filter(p => (p.team || 'red') === 'red').length;
+      const blueCount = mlLobbyPlayers.filter(p => p.team === 'blue').length;
+      const total = mlLobbyPlayers.length;
+      const isFourPlayerReady = total === 4 && redCount === 2 && blueCount === 2;
+      mlTeamSetupStatus.textContent = `Team Setup: Red ${redCount} | Blue ${blueCount}`;
+      if (total < 4) {
+        mlTeamSetupStatus.classList.add('warn');
+        mlTeamSetupStatus.textContent += ' (waiting for players)';
+      } else if (isFourPlayerReady) {
+        mlTeamSetupStatus.classList.add('ok');
+        mlTeamSetupStatus.textContent += ' (ready)';
+      } else {
+        mlTeamSetupStatus.classList.add('warn');
+        mlTeamSetupStatus.textContent += ' (need 2v2 split)';
+      }
     }
   }
   mlPlayerList.innerHTML = '';
@@ -3949,8 +4189,9 @@ function renderMLLobbyPanel(data) {
     laneSpan.textContent = 'L' + p.laneIndex;
 
     const teamBadge = document.createElement('span');
-    teamBadge.className = 'ml-team-badge ml-team-' + (p.team === 'blue' ? 'blue' : 'red');
-    teamBadge.textContent = p.team === 'blue' ? 'BLUE' : 'RED';
+    const teamKey = p.team || 'red';
+    teamBadge.className = 'ml-team-badge ml-team-' + teamKey;
+    teamBadge.textContent = teamKey.toUpperCase();
 
     const nameSpan = document.createElement('span');
     nameSpan.style.flex = '1';
@@ -3997,15 +4238,18 @@ function renderMLLobbyPanel(data) {
       li.appendChild(upBtn);
       li.appendChild(downBtn);
 
-      const teamBtn = document.createElement('button');
-      teamBtn.className = 'ml-team-toggle ml-team-' + (p.team === 'blue' ? 'blue' : 'red');
-      teamBtn.title = 'Switch team';
-      teamBtn.textContent = p.team === 'blue' ? 'Blue' : 'Red';
-      teamBtn.addEventListener('click', () => {
-        const nextTeam = p.team === 'blue' ? 'red' : 'blue';
-        socket.emit('set_ml_team', { laneIndex: p.laneIndex, team: nextTeam });
-      });
-      li.appendChild(teamBtn);
+      // Team toggle only shown in 2v2 mode; FFA teams are fixed per lane
+      if (!isFfa) {
+        const teamBtn = document.createElement('button');
+        teamBtn.className = 'ml-team-toggle ml-team-' + (p.team === 'blue' ? 'blue' : 'red');
+        teamBtn.title = 'Switch team';
+        teamBtn.textContent = p.team === 'blue' ? 'Blue' : 'Red';
+        teamBtn.addEventListener('click', () => {
+          const nextTeam = p.team === 'blue' ? 'red' : 'blue';
+          socket.emit('set_ml_team', { laneIndex: p.laneIndex, team: nextTeam });
+        });
+        li.appendChild(teamBtn);
+      }
 
       if (p.isAI) {
         const removeBtn = document.createElement('button');
@@ -4164,6 +4408,7 @@ socket.on('ml_match_config', config => applyMatchConfig(config));
 
 socket.on('ml_state_snapshot', state => {
   if (!state) return;
+  if (mlCurrentState) handleMlSnapshotSfx(mlCurrentState, state);
   mlHasFirstSnapshot = true;
   mlPreviousState = mlCurrentState || state;
   mlCurrentState = state;
@@ -4549,8 +4794,10 @@ function showMLWallConvertMenu(gx, gy) {
           towerType,
           tiles: selectedWalls.map(t => ({ gridX: t.x, gridY: t.y })),
         });
+        playTowerBuildSfx(towerType);
       } else {
         sendAction('convert_wall', { gridX: gx, gridY: gy, towerType });
+        playTowerBuildSfx(towerType);
       }
       closeMLTileMenu();
     });
@@ -4639,6 +4886,7 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
       const bx = Number(upgradeBtn.getAttribute('data-gx'));
       const by = Number(upgradeBtn.getAttribute('data-gy'));
       sendAction('upgrade_tower', { gridX: bx, gridY: by });
+      playTowerUpgradeSfx(towerType);
       upgradeBtn.disabled = true;
       upgradeBtn.textContent = 'Upgrading...';
       showMLTowerUpgradeMenu(bx, by, towerType, activeLevel + 1, activeMode);
@@ -4654,6 +4902,7 @@ function showMLTowerUpgradeMenu(gx, gy, towerType, level, targetMode) {
       sendAction('bulk_upgrade_towers', {
         tiles: selectedTowers.map(t => ({ gridX: t.x, gridY: t.y })),
       });
+      playTowerUpgradeSfx(towerType);
     });
   }
 
@@ -5884,6 +6133,9 @@ socket.on('friend_error', ({ message }) => {
 socket.on('party_invite', (invite) => {
   _pendingPartyInvite = invite;
   renderFriendsPanel(_friendsList);
+});
+socket.on('party_invite_sent', ({ displayName }) => {
+  _showFriendsMsg(`Party invite sent to ${displayName || 'player'}.`);
 });
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────

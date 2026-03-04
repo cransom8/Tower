@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Ransom Forge — Multiplayer</title>
+  <title>Ransom Forge â€” Multiplayer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=20260303x">
-  <!-- Google Sign-In (GSI) — loaded async; only active when GOOGLE_CLIENT_ID is set -->
+  <!-- Google Sign-In (GSI) â€” loaded async; only active when GOOGLE_CLIENT_ID is set -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
-  <!-- PARTY PANEL — shown when signed in -->
+  <!-- PARTY PANEL â€” shown when signed in -->
   <div id="party-panel" style="display:none">
     <div id="party-panel-inner">
       <div id="party-header">
@@ -40,7 +41,7 @@
     </div>
   </div>
 
-  <!-- FRIENDS PANEL — shown when signed in, positioned below party panel by JS -->
+  <!-- FRIENDS PANEL â€” shown when signed in, positioned below party panel by JS -->
   <div id="friends-panel" style="display:none">
     <div id="friends-panel-inner">
       <div id="friends-invite-banner" style="display:none">
@@ -63,7 +64,7 @@
     </div>
   </div>
 
-  <!-- AUTH BAR — fixed top-right, always visible -->
+  <!-- AUTH BAR â€” fixed top-right, always visible -->
   <div id="auth-bar">
     <!-- Shown when signed out -->
     <div id="auth-signin-area" style="display:none">
@@ -150,7 +151,7 @@
     </div>
   </div>
 
-  <!-- RESET PASSWORD MODAL — shown when ?reset=token is in the URL -->
+  <!-- RESET PASSWORD MODAL â€” shown when ?reset=token is in the URL -->
   <div id="reset-modal" style="display:none">
     <div id="reset-panel">
       <div id="reset-header">Reset Password</div>
@@ -162,7 +163,7 @@
     </div>
   </div>
 
-  <!-- EMAIL VERIFICATION MODAL — shown after registration or when email_not_verified -->
+  <!-- EMAIL VERIFICATION MODAL â€” shown after registration or when email_not_verified -->
   <div id="verify-modal" style="display:none">
     <div id="verify-panel">
       <div id="verify-header">Check Your Email</div>
@@ -174,7 +175,7 @@
     </div>
   </div>
 
-  <!-- LOBBY OVERLAY — visible until match starts -->
+  <!-- LOBBY OVERLAY â€” visible until match starts -->
   <div id="lobby">
     <div class="lobby-card">
       <h1>Ransom Forge</h1>
@@ -393,7 +394,7 @@
     </div>
   </div>
 
-  <!-- GAME CANVAS — hidden until match_ready -->
+  <!-- GAME CANVAS â€” hidden until match_ready -->
   <div id="game-canvas-wrap">
     <canvas id="game-canvas"></canvas>
     <div id="game-ui">
@@ -553,7 +554,7 @@
     </div>
   </div>
 
-  <!-- Socket.IO client — version pinned to match server/package.json socket.io@4.8.3 -->
+  <!-- Socket.IO client â€” version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="auth.js?v=20260303x"></script>
   <script src="game.js?v=20260303x"></script>

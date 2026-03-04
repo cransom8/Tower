@@ -527,7 +527,14 @@ function pickBalancedMlTeam(room) {
   return counts.red <= counts.blue ? "red" : "blue";
 }
 
+const FFA_TEAMS = ['red', 'blue', 'green', 'purple'];
+
+function ffaTeamForLane(laneIndex) {
+  return FFA_TEAMS[laneIndex] || `p${laneIndex}`;
+}
+
 function validateMlTeamSetup(room) {
+  if (room.pvpMode === 'ffa') return { ok: true };
   const total = (room.players?.length || 0) + (room.aiPlayers?.length || 0);
   if (total !== 4) return { ok: true };
   const counts = countMlTeams(room);
@@ -543,7 +550,7 @@ function mlLobbyUpdatePayload(code, room) {
     displayName: room.playerNames.get(sid) || "Player",
     ready: room.readySet.has(sid),
     isAI: false,
-    team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
+    team: room.playerTeamsBySocketId?.get(sid) || "red",
   }));
   const aiPlayers = (room.aiPlayers || []).map(ai => ({
     laneIndex: ai.laneIndex,
@@ -551,10 +558,10 @@ function mlLobbyUpdatePayload(code, room) {
     ready: true,
     isAI: true,
     difficulty: ai.difficulty,
-    team: ai.team === "blue" ? "blue" : "red",
+    team: ai.team || "red",
   }));
   const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
-  return { code, players, hostLaneIndex: 0, settings: normalizeMatchSettings(room.settings) };
+  return { code, players, hostLaneIndex: 0, settings: normalizeMatchSettings(room.settings), pvpMode: room.pvpMode || '2v2' };
 }
 
 function capFirst(s) {
@@ -621,13 +628,13 @@ function startMLGame(roomId, code, io) {
       laneIndex: room.laneBySocketId.get(sid),
       displayName: room.playerNames.get(sid) || "Player",
       isAI: false,
-      team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
+      team: room.playerTeamsBySocketId?.get(sid) || "red",
     })),
     ...aiList.map(ai => ({
       laneIndex: ai.laneIndex,
       displayName: "CPU (" + capFirst(ai.difficulty) + ")",
       isAI: true,
-      team: ai.team === "blue" ? "blue" : "red",
+      team: ai.team || "red",
     })),
   ];
   const laneTeams = new Array(playerCount).fill("red");
@@ -1146,13 +1153,13 @@ io.on("connection", (socket) => {
         laneIndex: room.laneBySocketId.get(sid),
         displayName: room.playerNames.get(sid) || "Player",
         ready: true, isAI: false,
-        team: room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red",
+        team: room.playerTeamsBySocketId?.get(sid) || "red",
       }));
       const aiPlayers = (room.aiPlayers || []).map(ai => ({
         laneIndex: ai.laneIndex,
         displayName: "CPU (" + capFirst(ai.difficulty) + ")",
         ready: true, isAI: true,
-        team: ai.team === "blue" ? "blue" : "red",
+        team: ai.team || "red",
       }));
       const laneAssignments = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
 
@@ -1400,8 +1407,14 @@ io.on("connection", (socket) => {
       if (!party || party.leaderId !== socket.playerId) {
         return socket.emit('error_message', { message: 'Only the party leader can invite.' });
       }
+      if (party.status !== 'idle') {
+        return socket.emit('error_message', { message: 'Party must be idle to send invites.' });
+      }
       if (party.members.length >= 4) {
         return socket.emit('error_message', { message: 'Party is full.' });
+      }
+      if (party.members.some(m => m.playerId === targetPlayerId)) {
+        return socket.emit('error_message', { message: 'That player is already in your party.' });
       }
       // Target must be online
       const tSid = socketByPlayerId.get(targetPlayerId);
@@ -1418,14 +1431,17 @@ io.on("connection", (socket) => {
       ).then(({ rows }) => {
         if (!rows.length) return socket.emit('error_message', { message: 'That player is not your friend.' });
         const tSock = io.sockets.sockets.get(tSid);
-        if (tSock) {
-          tSock.emit('party_invite', {
-            partyId,
-            partyCode: party.code,
-            fromPlayerId: socket.playerId,
-            fromDisplayName: socket.playerDisplayName,
-          });
-        }
+        if (!tSock) return socket.emit('error_message', { message: 'That player is not online.' });
+        tSock.emit('party_invite', {
+          partyId,
+          partyCode: party.code,
+          fromPlayerId: socket.playerId,
+          fromDisplayName: socket.playerDisplayName,
+        });
+        socket.emit('party_invite_sent', {
+          playerId: targetPlayerId,
+          displayName: tSock.playerDisplayName || 'Player',
+        });
       }).catch(() => {});
     });
   });
@@ -1594,7 +1610,7 @@ io.on("connection", (socket) => {
 
   // ── Multi-Lane lobby events ────────────────────────────────────────────────
 
-  socket.on("create_ml_room", ({ displayName, settings } = {}) => {
+  socket.on("create_ml_room", ({ displayName, settings, pvpMode } = {}) => {
     if (!checkLobbyRateLimit(socket.id)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
@@ -1603,6 +1619,8 @@ io.on("connection", (socket) => {
     sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
     socket.join(roomId);
     const room = mlRoomsByCode.get(code);
+    room.pvpMode = pvpMode === 'ffa' ? 'ffa' : '2v2';
+    // For FFA, host (lane 0) gets 'red'; createMLRoom already set that so no change needed.
     socket.emit("ml_room_created", {
       code,
       laneIndex: 0,
@@ -1626,7 +1644,7 @@ io.on("connection", (socket) => {
 
     // Humans always fill the lowest indices; AI slots are bumped above humans.
     const laneIndex = room.players.length;
-    const assignedTeam = pickBalancedMlTeam(room);
+    const assignedTeam = room.pvpMode === 'ffa' ? ffaTeamForLane(laneIndex) : pickBalancedMlTeam(room);
     room.players.push(socket.id);
     room.laneBySocketId.set(socket.id, laneIndex);
     room.playerTeamsBySocketId.set(socket.id, assignedTeam);
@@ -1729,7 +1747,8 @@ io.on("connection", (socket) => {
     const validDifficulties = ["easy", "medium", "hard"];
     const diff = validDifficulties.includes(String(difficulty)) ? String(difficulty) : "easy";
     if (!room.aiPlayers) room.aiPlayers = [];
-    room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: pickBalancedMlTeam(room) });
+    const aiTeam = room.pvpMode === 'ffa' ? ffaTeamForLane(totalPlayers) : pickBalancedMlTeam(room);
+    room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: aiTeam });
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
@@ -1799,6 +1818,7 @@ io.on("connection", (socket) => {
     const room = mlRoomsByCode.get(session.code);
     if (!room || room.hostSocketId !== socket.id) return;
     if (gamesByRoomId.has(room.roomId)) return;
+    if (room.pvpMode === 'ffa') return; // teams are fixed per-lane in FFA
 
     const normalizedTeam = team === "blue" ? "blue" : "red";
     const targetLane = Number(laneIndex);
