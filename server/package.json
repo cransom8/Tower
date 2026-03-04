@@ -1,9 +1,7 @@
 {
   "name": "ransom-forge",
   "version": "1.0.0",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "scripts": {},
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
