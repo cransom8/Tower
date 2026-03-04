@@ -122,13 +122,11 @@ const Auth = (() => {
   }
 
   async function resendVerification(email) {
-    const res  = await fetch('/auth/resend-verification', {
+    await fetch('/auth/resend-verification', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ email }),
     });
-    const data = await res.json().catch(() => ({}));
-    return data;
   }
 
   // ── 2FA management (called from settings panel) ───────────────────────────

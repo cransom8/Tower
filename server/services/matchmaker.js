@@ -109,14 +109,21 @@ function startMatchmakingLoop(io, partiesById, socketByPlayerId, onMatchFound) {
     }
 
     // Push queue_status heartbeat to all still-queued parties
-    for (const [, q] of queues) {
+    for (const [mode, q] of queues) {
+      // Total players in this mode's queue
+      const queueSize = q.reduce((n, e) => {
+        const p = partiesById.get(e.partyId);
+        return n + (p ? p.members.length : 1);
+      }, 0);
       for (const entry of q) {
         const party = partiesById.get(entry.partyId);
         if (!party) continue;
         const elapsed = Math.floor((Date.now() - entry.queueEnteredAt) / 1000);
         _emitToParty(io, party, socketByPlayerId, 'queue_status', {
           status: 'queued',
+          mode,
           elapsed,
+          queueSize,
         });
       }
     }
@@ -137,10 +144,19 @@ function emitToParty(io, party, socketByPlayerId, event, payload) {
   _emitToParty(io, party, socketByPlayerId, event, payload);
 }
 
+function getQueuePlayerCount(mode, partiesById) {
+  const q = _getQueue(mode);
+  return q.reduce((n, e) => {
+    const p = partiesById ? partiesById.get(e.partyId) : null;
+    return n + (p ? p.members.length : 1);
+  }, 0);
+}
+
 module.exports = {
   addToQueue,
   removeFromQueue,
   getQueueEntry,
+  getQueuePlayerCount,
   startMatchmakingLoop,
   stopMatchmakingLoop,
   emitToParty,
