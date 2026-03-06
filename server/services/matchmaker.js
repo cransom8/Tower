@@ -2,9 +2,15 @@
 
 // ── In-memory matchmaker ──────────────────────────────────────────────────────
 // Queue entry shape:
-//   { partyId, mode, rating, queueEnteredAt, region }
+//   { partyId, mode, rating, queueEnteredAt, region, isPlacement, filters }
 //
-// Queues are keyed by mode ('ranked_2v2' | 'casual_2v2').
+// `filters` is an opaque object forwarded from queue:enter for future use
+// (e.g. botConfigs, privateCode, pvpMode). The matchmaker itself only uses
+// rating + region for ranked/casual; all other modes are resolved directly
+// in the queue:enter handler in index.js before reaching addToQueue.
+//
+// Active queued modes: 'ranked_2v2' | 'casual_2v2'
+// Handled inline (no matchmaker loop): 'solo_td' | 'solo_t2t' | 'private_td' | 'private_t2t'
 
 const queues = new Map(); // mode -> [ entry, ... ]
 
@@ -152,11 +158,35 @@ function getQueuePlayerCount(mode, partiesById) {
   }, 0);
 }
 
+/**
+ * Returns a snapshot of all queues for admin visibility.
+ * @param {Map} partiesById
+ * @returns {{ ranked_2v2: QueueStat, casual_2v2: QueueStat }}
+ *   QueueStat = { entries: number, players: number, oldest: number|null (ms since entered) }
+ */
+function getQueueStats(partiesById) {
+  const result = {};
+  for (const [mode, q] of queues) {
+    const now = Date.now();
+    let players = 0;
+    let oldest = null;
+    for (const entry of q) {
+      const p = partiesById ? partiesById.get(entry.partyId) : null;
+      players += p ? p.members.length : 1;
+      const elapsed = now - entry.queueEnteredAt;
+      if (oldest === null || elapsed > oldest) oldest = elapsed;
+    }
+    result[mode] = { entries: q.length, players, oldestMs: oldest };
+  }
+  return result;
+}
+
 module.exports = {
   addToQueue,
   removeFromQueue,
   getQueueEntry,
   getQueuePlayerCount,
+  getQueueStats,
   startMatchmakingLoop,
   stopMatchmakingLoop,
   emitToParty,

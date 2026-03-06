@@ -11,12 +11,14 @@ const S = {
   adminRole:        sessionStorage.getItem('adminRole') || '',
   adminEmail:       sessionStorage.getItem('adminEmail') || '',
   adminDisplayName: sessionStorage.getItem('adminDisplayName') || '',
+  adminResetToken:  '',
   // Navigation
   tab:        'dashboard',
   // Tab sub-state
   players:    { q: '', offset: 0, total: 0, rows: [] },
   matches:    { tab: 'history', status: '', mode: '', offset: 0, total: 0, rows: [], live: [] },
   audit:      { offset: 0, total: 0, rows: [] },
+  units:      { view: 'list', displayFields: [] },
   liveHandle: null,
 };
 
@@ -73,6 +75,7 @@ function openModal(title, bodyHtml, footerHtml = '') {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHtml;
   document.getElementById('modal-footer').innerHTML = footerHtml;
+  applyFieldDescriptions(document.getElementById('modal-body'));
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
 function closeModal(e) {
@@ -126,20 +129,45 @@ async function handleAdminGoogleCredential(response) {
   const errEl = document.getElementById('login-err');
   errEl.textContent = '';
   try {
+    if (!response?.credential) {
+      errEl.textContent = 'Google did not return a credential. Please try again.';
+      return;
+    }
+
     const res = await fetch('/admin/auth/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ credential: response.credential }),
       credentials: 'include',
     });
-    const d = await res.json();
-    if (!res.ok) { errEl.textContent = d.error || 'Google login failed.'; return; }
+    const raw = await res.text();
+    let d = {};
+    try { d = raw ? JSON.parse(raw) : {}; } catch { d = {}; }
+    if (!res.ok) {
+      const msg = d.error || raw || 'Google login failed.';
+      errEl.textContent = msg;
+      console.error('[admin] Google SSO failed', { status: res.status, body: raw });
+      return;
+    }
     if (d.twoFaRequired) {
       S._pendingTicket = d.ticket;
       show2faStep();
       return;
     }
-    finishLogin(d);
+
+    // Normal success path
+    if (d.role || d.email) {
+      finishLogin(d);
+      return;
+    }
+
+    // Fallback: cookie was set but response body was empty/partial.
+    const me = await api('GET', '/admin/me');
+    finishLogin({
+      role: me?.user?.role || 'viewer',
+      email: me?.user?.email || '',
+      displayName: me?.user?.display_name || me?.user?.email || 'Admin',
+    });
   } catch (err) {
     errEl.textContent = err.message || 'Google login failed.';
   }
@@ -148,17 +176,16 @@ window.handleAdminGoogleCredential = handleAdminGoogleCredential;
 
 // ── 2FA step helpers ───────────────────────────────────────────────────────
 function show2faStep() {
-  document.getElementById('login-pass-section')?.classList.add('hidden');
-  document.getElementById('login-2fa-section')?.classList.remove('hidden');
+  setLoginSection('2fa');
   document.getElementById('login-2fa-code')?.focus();
 }
 
 function cancelLogin2fa() {
   S._pendingTicket = null;
-  document.getElementById('login-pass-section')?.classList.remove('hidden');
-  document.getElementById('login-2fa-section')?.classList.add('hidden');
+  setLoginSection('password');
   document.getElementById('login-2fa-code').value = '';
   document.getElementById('login-err').textContent = '';
+  document.getElementById('login-msg').textContent = '';
 }
 window.cancelLogin2fa = cancelLogin2fa;
 
@@ -182,6 +209,97 @@ async function doLogin2fa() {
   }
 }
 window.doLogin2fa = doLogin2fa;
+
+function setLoginSection(section) {
+  const ids = ['login-pass-section', 'login-2fa-section', 'login-forgot-section', 'login-reset-section'];
+  ids.forEach(id => document.getElementById(id)?.classList.add('hidden'));
+  if (section === '2fa') document.getElementById('login-2fa-section')?.classList.remove('hidden');
+  else if (section === 'forgot') document.getElementById('login-forgot-section')?.classList.remove('hidden');
+  else if (section === 'reset') document.getElementById('login-reset-section')?.classList.remove('hidden');
+  else document.getElementById('login-pass-section')?.classList.remove('hidden');
+}
+
+function showForgotPassword() {
+  document.getElementById('login-err').textContent = '';
+  document.getElementById('login-msg').textContent = '';
+  document.getElementById('forgot-email').value = document.getElementById('login-email')?.value.trim() || '';
+  setLoginSection('forgot');
+  document.getElementById('forgot-email')?.focus();
+}
+window.showForgotPassword = showForgotPassword;
+
+function backToLogin() {
+  document.getElementById('login-err').textContent = '';
+  document.getElementById('login-msg').textContent = '';
+  setLoginSection('password');
+}
+window.backToLogin = backToLogin;
+
+async function submitForgotPassword() {
+  const errEl = document.getElementById('login-err');
+  const msgEl = document.getElementById('login-msg');
+  errEl.textContent = '';
+  msgEl.textContent = '';
+  const email = document.getElementById('forgot-email')?.value.trim();
+  if (!email) { errEl.textContent = 'Enter your admin email.'; return; }
+  try {
+    const res = await fetch('/admin/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      errEl.textContent = d.error || 'Could not send reset link.';
+      return;
+    }
+    msgEl.textContent = 'If this email exists, a reset link has been sent.';
+  } catch (err) {
+    errEl.textContent = err.message || 'Could not send reset link.';
+  }
+}
+window.submitForgotPassword = submitForgotPassword;
+
+async function submitResetPassword() {
+  const errEl = document.getElementById('login-err');
+  const msgEl = document.getElementById('login-msg');
+  errEl.textContent = '';
+  msgEl.textContent = '';
+  if (!S.adminResetToken) { errEl.textContent = 'Missing reset token.'; return; }
+
+  const password = document.getElementById('reset-password')?.value || '';
+  const confirm  = document.getElementById('reset-password-confirm')?.value || '';
+  if (!password || password.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; return; }
+  if (password !== confirm) { errEl.textContent = 'Passwords do not match.'; return; }
+
+  try {
+    const res = await fetch('/admin/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: S.adminResetToken, password }),
+      credentials: 'include',
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      errEl.textContent = d.error || 'Password reset failed.';
+      return;
+    }
+
+    S.adminResetToken = '';
+    const url = new URL(window.location.href);
+    url.searchParams.delete('admin_reset');
+    url.searchParams.delete('reset');
+    window.history.replaceState({}, '', url.pathname + (url.search || ''));
+    document.getElementById('reset-password').value = '';
+    document.getElementById('reset-password-confirm').value = '';
+    msgEl.textContent = 'Password reset complete. You can sign in now.';
+    setLoginSection('password');
+  } catch (err) {
+    errEl.textContent = err.message || 'Password reset failed.';
+  }
+}
+window.submitResetPassword = submitResetPassword;
 
 function finishLogin(d) {
   S.adminRole        = d.role;
@@ -250,9 +368,11 @@ function doLogout() {
     .forEach(k => sessionStorage.removeItem(k));
   S.adminRole = S.adminEmail = S.adminDisplayName = '';
   S.authMode = 'jwt';
+  S.adminResetToken = '';
   stopLivePoll();
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login-screen').style.display = '';
+  setLoginSection('password');
 }
 window.doLogout = doLogout;
 
@@ -289,6 +409,9 @@ function loadTab(tab) {
     ops:       loadOps,
     audit:     loadAudit,
     team:      loadTeam,
+    survival:  loadSurvival,
+    units:     loadUnits,
+    assets:    loadAssets,
   };
   (m[tab] || loadDashboard)();
 }
@@ -296,6 +419,97 @@ function loadTab(tab) {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function setContent(html) {
   document.getElementById('main-content').innerHTML = html;
+  applyFieldDescriptions(document.getElementById('main-content'));
+}
+
+const FIELD_HELP_BY_ID = {
+  'login-email': 'Use the email assigned to your admin account.',
+  'login-password': 'Enter your current admin password.',
+  'forgot-email': 'We send a reset link only if this admin email exists.',
+  'reset-password': 'Use at least 8 characters. Prefer a unique passphrase.',
+  'reset-password-confirm': 'Re-enter the new password to confirm.',
+  'login-2fa-code': 'Enter the 6-digit code currently shown in your authenticator app.',
+};
+
+function fieldHelpFromLabel(labelText, control) {
+  const l = (labelText || '').toLowerCase();
+  if (l.includes('email')) return 'Use a valid email address for this admin account.';
+  if (l.includes('password')) return 'Use a strong password and keep it private.';
+  if (l.includes('2fa') || l.includes('two-factor') || l.includes('confirmation code')) return 'Enter the current one-time code from your authenticator app.';
+  if (l.includes('display name')) return 'Friendly name shown in admin activity and account views.';
+  if (l === 'role' || l.includes(' role')) return 'Controls which admin permissions this user has.';
+  if (l.includes('status') || l.includes('enabled')) return 'Toggle whether this item is active and usable.';
+  if (l.includes('key')) return 'Stable identifier used by the game/config APIs.';
+  if (l === 'name' || l.includes('name *')) return 'Human-readable name shown in admin and UI lists.';
+  if (l.includes('description')) return 'Short summary of purpose or behavior.';
+  if (l.includes('notes')) return 'Internal notes for operators and future edits.';
+  if (l.includes('id')) return 'Internal identifier (read-only unless creating new data).';
+  if (l.includes('url')) return 'Absolute or app-served URL to the asset/file to use.';
+  if (l.includes('icon')) return 'Small image used in cards, selectors, and summaries.';
+  if (l.includes('sprite')) return 'Static image used for this unit/tower orientation.';
+  if (l.includes('animation')) return 'Sprite sheet or animated image used during movement/attacks.';
+  if (l.includes('damage')) return 'Base damage dealt when an attack connects.';
+  if (l.includes('speed')) return 'Higher values increase action or movement rate.';
+  if (l.includes('range')) return 'Effective attack distance in game units.';
+  if (l.includes('cost')) return 'Resource cost required for this action or upgrade.';
+  if (l.includes('income')) return 'Income granted when this unit/action is used.';
+  if (l.includes('hp')) return 'Base health points before modifiers are applied.';
+  if (l.includes('multiplier')) return 'Scaling factor applied to base values.';
+  if (l.includes('wave')) return 'Wave index or range this setting applies to.';
+  if (l.includes('gold')) return 'Starting or bonus gold for this mode/config.';
+  if (l.includes('lives')) return 'Starting lives for the wave set.';
+  if (l.includes('duration')) return 'Duration in milliseconds; leave blank for no expiry when supported.';
+  if (l.includes('type')) return 'Select the category/type used for game logic.';
+  if (l.includes('behavior mode')) return 'Controls whether this unit moves, stays fixed, or supports both.';
+
+  if (control.type === 'checkbox') return 'Enable this option to turn the setting on.';
+  if (control.type === 'file') return 'Upload a file to populate or replace this asset field.';
+  if (control.type === 'number') return 'Numeric value used by game balance/config.';
+  if (control.tagName === 'SELECT') return 'Choose one value from the available options.';
+  return 'Update this field to control how the related admin setting behaves.';
+}
+
+function getLabelTextForControl(root, control) {
+  if (control.id) {
+    const forLabel = root.querySelector(`label[for="${control.id}"]`);
+    if (forLabel) return forLabel.textContent.replace(/\s+/g, ' ').trim();
+  }
+  const wrappedLabel = control.closest('label');
+  if (!wrappedLabel) return '';
+  const copy = wrappedLabel.cloneNode(true);
+  copy.querySelectorAll('input,select,textarea,button').forEach(el => el.remove());
+  return copy.textContent.replace(/\s+/g, ' ').trim();
+}
+
+function findHelpContainer(control) {
+  const group = control.closest('.form-group');
+  if (group) return group;
+  const label = control.closest('label');
+  if (label?.parentElement) return label.parentElement;
+  return control.parentElement;
+}
+
+function applyFieldDescriptions(root = document) {
+  if (!root) return;
+  const controls = root.querySelectorAll('input:not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea');
+  controls.forEach(control => {
+    const id = control.id || '';
+    const container = findHelpContainer(control);
+    if (!container) return;
+    if (control.dataset.helpApplied === '1') return;
+    if (id && container.querySelector(`.field-help[data-help-for="${id}"]`)) return;
+
+    const labelText = getLabelTextForControl(root, control);
+    const text = FIELD_HELP_BY_ID[id] || fieldHelpFromLabel(labelText, control);
+    if (!text) return;
+
+    const help = document.createElement('div');
+    help.className = 'field-help text-muted';
+    if (id) help.dataset.helpFor = id;
+    help.textContent = text;
+    container.appendChild(help);
+    control.dataset.helpApplied = '1';
+  });
 }
 function fmt(n) { return Number(n || 0).toLocaleString(); }
 function dur(secs) {
@@ -312,7 +526,14 @@ function reltime(ts) {
   return new Date(ts).toLocaleDateString();
 }
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  // Escape all HTML special chars including single-quote to prevent XSS in
+  // both innerHTML contexts and JS onclick="...esc(userValue)..." attributes.
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 function statusBadge(status) {
   const map = {
@@ -330,13 +551,38 @@ function statusBadge(status) {
 // ═══════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════
+function fmtWait(ms) {
+  if (!ms) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
 async function loadDashboard() {
   setContent('<p class="load">Loading…</p>');
   try {
-    const [live, daily] = await Promise.all([
+    const [live, daily, queueData] = await Promise.all([
       api('GET', '/admin/stats/live'),
       api('GET', '/admin/stats/daily'),
+      api('GET', '/admin/queue').catch(() => ({ queues: {}, privateLobbies: [], soloGames: [] })),
     ]);
+
+    const q = queueData.queues || {};
+    const ranked  = q['ranked_2v2']  || { entries: 0, players: 0, oldestMs: null };
+    const casual  = q['casual_2v2']  || { entries: 0, players: 0, oldestMs: null };
+    const privates = queueData.privateLobbies || [];
+    const soloGames = queueData.soloGames || [];
+
+    const privateRows = privates.length
+      ? privates.map(p => `
+          <tr>
+            <td><code>${esc(p.code)}</code></td>
+            <td>${fmt(p.playerCount)} human · ${fmt(p.aiCount)} AI</td>
+            <td>${esc(p.pvpMode)}</td>
+            <td>${fmtWait(p.waitMs)}</td>
+          </tr>`).join('')
+      : '<tr><td colspan="4" class="load">No private lobbies waiting</td></tr>';
+
     setContent(`
       <h2>Dashboard</h2>
       <div class="kpi-grid">
@@ -348,12 +594,22 @@ async function loadDashboard() {
         <div class="kpi-card green">
           <div class="label">Active Matches</div>
           <div class="value">${fmt(live.activeGames)}</div>
-          <div class="sub">${fmt(live.classicGames)} classic · ${fmt(live.mlGames)} multilane</div>
+          <div class="sub">${fmt(live.classicGames)} classic · ${fmt(live.mlGames - live.soloGames)} pvp · ${fmt(live.soloGames)} solo</div>
         </div>
         <div class="kpi-card amber">
           <div class="label">Lobby Rooms</div>
           <div class="value">${fmt(live.lobbyRooms)}</div>
-          <div class="sub">waiting for players</div>
+          <div class="sub">${fmt(live.privateLobbies)} private waiting</div>
+        </div>
+        <div class="kpi-card blue">
+          <div class="label">Ranked Queue</div>
+          <div class="value">${fmt(ranked.players)}</div>
+          <div class="sub">${fmt(ranked.entries)} parties · longest ${fmtWait(ranked.oldestMs)}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="label">Casual Queue</div>
+          <div class="value">${fmt(casual.players)}</div>
+          <div class="sub">${fmt(casual.entries)} parties · longest ${fmtWait(casual.oldestMs)}</div>
         </div>
         <div class="kpi-card">
           <div class="label">Total Players</div>
@@ -378,15 +634,57 @@ async function loadDashboard() {
       </div>
 
       <div class="section">
+        <div class="section-header">
+          <h3>Live Queues</h3>
+          <button onclick="loadDashboard()">Refresh</button>
+        </div>
+        <div class="section-body">
+          <table>
+            <thead><tr><th>Queue</th><th>Players</th><th>Parties</th><th>Longest Wait</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>Ranked 2v2</strong></td>
+                <td>${fmt(ranked.players)}</td>
+                <td>${fmt(ranked.entries)}</td>
+                <td>${fmtWait(ranked.oldestMs)}</td>
+              </tr>
+              <tr>
+                <td><strong>Casual 2v2</strong></td>
+                <td>${fmt(casual.players)}</td>
+                <td>${fmt(casual.entries)}</td>
+                <td>${fmtWait(casual.oldestMs)}</td>
+              </tr>
+              <tr>
+                <td><strong>Solo (active)</strong></td>
+                <td>${fmt(soloGames.length)}</td>
+                <td>—</td>
+                <td>—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header"><h3>Private Lobbies Waiting</h3></div>
+        <div class="section-body">
+          <table>
+            <thead><tr><th>Code</th><th>Players</th><th>Mode</th><th>Waiting</th></tr></thead>
+            <tbody>${privateRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
         <div class="section-header"><h3>Quick Actions</h3></div>
         <div class="section-body">
           <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button onclick="navigate('ops')">⚙ Feature Flags</button>
-            <button onclick="navigate('players')">👤 Player Search</button>
-            <button onclick="navigate('matches')">⚔ Live Matches</button>
-            <button onclick="navigate('analytics')">📈 Analytics</button>
-            <button onclick="navigate('anticheat')">🛡 Anti-cheat</button>
-            <button onclick="navigate('audit')">📋 Audit Log</button>
+            <button onclick="navigate('ops')">&#x2699; Feature Flags</button>
+            <button onclick="navigate('players')">&#x1F464; Player Search</button>
+            <button onclick="navigate('matches')">&#x2694; Live Matches</button>
+            <button onclick="navigate('analytics')">&#x1F4C8; Analytics</button>
+            <button onclick="navigate('anticheat')">&#x1F6E1; Anti-cheat</button>
+            <button onclick="navigate('audit')">&#x1F4CB; Audit Log</button>
           </div>
         </div>
       </div>
@@ -1679,13 +1977,14 @@ const CATEGORY_LABELS = {
   damage: 'Damage', slow_control: 'Slow / Control',
   aura_support: 'Aura / Support', economy: 'Economy', special: 'Special',
 };
+const TOWER_KANBAN_TYPES = ['NORMAL', 'SIEGE', 'SPLASH', 'PIERCE', 'MAGIC'];
 const DTYPE_COLORS = {
   NORMAL: '#aaa', PIERCE: '#4fc3f7', SPLASH: '#ff7043',
   SIEGE:  '#ab47bc', MAGIC: '#7e57c2', PHYSICAL: '#ff8a65', TRUE: '#ef5350',
 };
 
 async function loadTowers() {
-  setContent('<p class="load">Loading towers…</p>');
+  setContent('<p class="load">Loading mobs…</p>');
   try {
     const d = await api('GET', '/admin/towers');
     const towers = d.towers || [];
@@ -1697,21 +1996,53 @@ async function loadTowers() {
 
 function renderTowerList(towers) {
   const canEdit = can('config.write');
-  const cards = towers.map(t => towerCard(t, canEdit)).join('');
+  const byType = new Map(TOWER_KANBAN_TYPES.map((k) => [k, []]));
+  const other = [];
+  for (const t of towers) {
+    const key = String(t.damage_type || '').toUpperCase();
+    if (byType.has(key)) byType.get(key).push(t);
+    else other.push(t);
+  }
+  const columns = TOWER_KANBAN_TYPES.map((dtype) => {
+    const list = byType.get(dtype) || [];
+    const cards = list.map((t) => towerCard(t, canEdit)).join('');
+    return `
+      <section class="tower-kanban-col">
+        <header class="tower-kanban-col-head">
+          <span class="tower-dtype-badge" style="background:${(DTYPE_COLORS[dtype] || '#aaa')}22;color:${DTYPE_COLORS[dtype] || '#aaa'};border:1px solid ${(DTYPE_COLORS[dtype] || '#aaa')}44">
+            ${dtype}
+          </span>
+          <span class="text-muted" style="font-size:11px">${list.length}</span>
+        </header>
+        <div class="tower-kanban-col-body">
+          ${cards || '<div class="text-muted" style="font-size:12px">No towers</div>'}
+        </div>
+      </section>
+    `;
+  }).join('');
+  const otherCol = other.length
+    ? `<section class="tower-kanban-col">
+         <header class="tower-kanban-col-head">
+           <span class="tower-dtype-badge" style="background:#8882;color:#bbb;border:1px solid #6664">OTHER</span>
+           <span class="text-muted" style="font-size:11px">${other.length}</span>
+         </header>
+         <div class="tower-kanban-col-body">${other.map((t) => towerCard(t, canEdit)).join('')}</div>
+       </section>`
+    : '';
   setContent(`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
       <div>
-        <h2 style="margin:0">Towers</h2>
+        <h2 style="margin:0">Mobs</h2>
         <p class="text-muted" style="font-size:12px;margin:4px 0 0">
-          ${towers.length} tower${towers.length !== 1 ? 's' : ''} — data-driven, no deployment required
+          ${towers.length} mob${towers.length !== 1 ? 's' : ''} — data-driven, no deployment required
         </p>
       </div>
-      ${canEdit ? '<button class="btn-success" onclick="openCreateTowerModal()">+ New Tower</button>' : ''}
+      ${canEdit ? '<button class="btn-success" onclick="openCreateTowerModal()">+ New Mob</button>' : ''}
     </div>
 
     ${towers.length === 0
-      ? '<div class="section"><div class="section-body" style="padding:32px;text-align:center;color:var(--muted)">No towers yet. Click <strong>+ New Tower</strong> to create one.</div></div>'
-      : `<div class="tower-grid">${cards}</div>`}
+      ? '<div class="section"><div class="section-body" style="padding:32px;text-align:center;color:var(--muted)">No mobs yet. Click <strong>+ New Mob</strong> to create one.</div></div>'
+      : `<div class="tower-kanban">${columns}${otherCol}</div>`}
   `);
 }
 
@@ -1727,7 +2058,8 @@ function towerCard(t, canEdit) {
   ).join('') || '<span class="text-muted" style="font-size:11px">No abilities</span>';
 
   return `
-    <div class="tower-card ${t.enabled ? '' : 'tower-card--disabled'}">
+    <div class="tower-card ${t.enabled ? '' : 'tower-card--disabled'}" onclick="openTowerDetailModal(${t.id})">
+      ${t.sprite_url || t.icon_url ? `<img src="${esc(t.sprite_url || t.icon_url)}" alt="${esc(t.name)}" class="tower-card-preview">` : ''}
       <div class="tower-card-header">
         ${icon}
         <div class="tower-card-title">
@@ -1756,16 +2088,78 @@ function towerCard(t, canEdit) {
 
       <div class="tower-card-actions">
         ${canEdit ? `
-          <button class="btn-sm btn-primary" onclick="openEditTowerModal(${t.id})">Edit</button>
-          <button class="btn-sm" onclick="openAbilityModal(${t.id},'${esc(t.name)}')">Abilities</button>
-          <button class="btn-sm" onclick="toggleTower(${t.id},${!t.enabled})" style="${t.enabled ? 'background:#c62828' : ''}">
+          <button class="btn-sm btn-primary" onclick="event.stopPropagation();openEditTowerModal(${t.id})">Edit</button>
+          <button class="btn-sm" onclick="event.stopPropagation();openAbilityModal(${t.id},'${esc(t.name)}')">Abilities</button>
+          <button class="btn-sm" onclick="event.stopPropagation();toggleTower(${t.id},${!t.enabled})" style="${t.enabled ? 'background:#c62828' : ''}">
             ${t.enabled ? 'Disable' : 'Enable'}
           </button>
-          <button class="btn-sm" style="background:#b71c1c" onclick="deleteTower(${t.id},'${esc(t.name)}')">Delete</button>
+          <button class="btn-sm" style="background:#b71c1c" onclick="event.stopPropagation();deleteTower(${t.id},'${esc(t.name)}')">Delete</button>
         ` : ''}
       </div>
     </div>`;
 }
+
+async function openTowerDetailModal(id) {
+  try {
+    const d = await api('GET', `/admin/towers/${id}`);
+    const t = d.tower;
+    const canEdit = can('config.write');
+    const abilities = (t.abilities || [])
+      .map(a => `<span class="ability-badge">${esc(a.ability_key.replace(/_/g, ' '))}</span>`)
+      .join('') || '<span class="text-muted" style="font-size:12px">No abilities</span>';
+    const icon = t.icon_url
+      ? `<img src="${esc(t.icon_url)}" alt="${esc(t.name)}" class="tower-card-icon">`
+      : `<div class="tower-card-icon-placeholder">${esc(t.name[0] || '?')}</div>`;
+    openModal(
+      `Mob Details: ${t.name}`,
+      `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          ${icon}
+          <div>
+            <div><strong>${esc(t.name)}</strong></div>
+            <div class="text-muted" style="font-size:12px">${esc(t.description || '—')}</div>
+          </div>
+        </div>
+        ${t.sprite_url || t.icon_url ? `<div style="margin-bottom:10px"><img src="${esc(t.sprite_url || t.icon_url)}" alt="${esc(t.name)}" style="width:100%;max-height:180px;object-fit:contain;background:#111;border:1px solid var(--border);border-radius:6px"></div>` : ''}
+        <div class="tower-stat-grid" style="margin-bottom:10px">
+          <div class="tower-stat"><span class="tower-stat-label">Type</span><span class="tower-stat-val">${esc(t.damage_type)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Category</span><span class="tower-stat-val">${esc(CATEGORY_LABELS[t.category] || t.category)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Status</span><span class="tower-stat-val">${t.enabled ? 'Enabled' : 'Disabled'}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Damage</span><span class="tower-stat-val">${(+t.attack_damage).toFixed(1)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Atk Speed</span><span class="tower-stat-val">${(+t.attack_speed).toFixed(2)}/s</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Range</span><span class="tower-stat-val">${(+t.range).toFixed(3)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Cost</span><span class="tower-stat-val">${t.base_cost}g</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Projectile Speed</span><span class="tower-stat-val">${t.projectile_speed == null ? '—' : (+t.projectile_speed).toFixed(3)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Splash Radius</span><span class="tower-stat-val">${t.splash_radius == null ? '—' : (+t.splash_radius).toFixed(3)}</span></div>
+        </div>
+        <div class="tower-stat-grid" style="margin-bottom:10px">
+          <div class="tower-stat"><span class="tower-stat-label">Upgrade Cost Mult</span><span class="tower-stat-val">${(+t.upgrade_cost_mult).toFixed(2)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Damage Scaling</span><span class="tower-stat-val">${(+t.damage_scaling).toFixed(3)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Range Scaling</span><span class="tower-stat-val">${(+t.range_scaling).toFixed(3)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Atk Speed Scaling</span><span class="tower-stat-val">${(+t.attack_speed_scaling).toFixed(3)}</span></div>
+          <div class="tower-stat"><span class="tower-stat-label">Targeting</span><span class="tower-stat-val">${esc(t.targeting_options || 'first')}</span></div>
+        </div>
+        <div style="margin:8px 0 10px">
+          <div class="text-muted" style="font-size:11px">Assets</div>
+          <div style="font-size:12px;line-height:1.5">
+            <div>Icon: ${t.icon_url ? esc(t.icon_url) : '—'}</div>
+            <div>Sprite: ${t.sprite_url ? esc(t.sprite_url) : '—'}</div>
+            <div>Projectile: ${t.projectile_url ? esc(t.projectile_url) : '—'}</div>
+            <div>Animation: ${t.animation_url ? esc(t.animation_url) : '—'}</div>
+          </div>
+        </div>
+        <div>${abilities}</div>
+      `,
+      `
+        ${canEdit ? `<button class="btn-primary" onclick="closeModal();openEditTowerModal(${t.id})">Edit Mob</button>` : ''}
+        <button onclick="closeModal()">Close</button>
+      `
+    );
+  } catch (err) {
+    toast(`Load failed: ${err.message}`, 'err');
+  }
+}
+window.openTowerDetailModal = openTowerDetailModal;
 
 // ── Tower create/edit modal ──────────────────────────────────────────────────
 
@@ -1774,7 +2168,7 @@ function towerFormHtml(t) {
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="form-group" style="grid-column:1/-1">
-        <label>Tower Name *</label>
+        <label>Mob Name *</label>
         <input type="text" id="tf-name" value="${esc(t.name || '')}" placeholder="e.g. Ice Archer">
       </div>
       <div class="form-group" style="grid-column:1/-1">
@@ -1855,26 +2249,32 @@ function towerFormHtml(t) {
             <input type="checkbox" class="tf-target" value="${o}" ${targeting.includes(o)?'checked':''}> ${o}
           </label>`).join('')}
       </div>
-    </details>
-
-    <details style="margin:12px 0">
-      <summary style="cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:8px">Visual Assets (URL)</summary>
+    </details>    <details style="margin:12px 0">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:8px">Visual Assets (File Upload)</summary>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 0">
         <div class="form-group">
-          <label style="font-size:11px">Icon URL</label>
-          <input type="url" id="tf-icon" value="${esc(t.icon_url||'')}" placeholder="https://…">
+          <label style="font-size:11px">Icon Image</label>
+          <input type="file" id="tf-icon-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+          <input type="text" id="tf-icon" value="${esc(t.icon_url||'')}" placeholder="No icon uploaded" readonly style="margin-top:6px">
+          <button class="btn-sm" type="button" style="margin-top:6px" onclick="clearTowerAssetUrl('tf-icon','tf-icon-file')">Clear</button>
         </div>
         <div class="form-group">
-          <label style="font-size:11px">Sprite URL</label>
-          <input type="url" id="tf-sprite" value="${esc(t.sprite_url||'')}" placeholder="https://…">
+          <label style="font-size:11px">Sprite Image</label>
+          <input type="file" id="tf-sprite-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+          <input type="text" id="tf-sprite" value="${esc(t.sprite_url||'')}" placeholder="No sprite uploaded" readonly style="margin-top:6px">
+          <button class="btn-sm" type="button" style="margin-top:6px" onclick="clearTowerAssetUrl('tf-sprite','tf-sprite-file')">Clear</button>
         </div>
         <div class="form-group">
-          <label style="font-size:11px">Projectile URL</label>
-          <input type="url" id="tf-proj" value="${esc(t.projectile_url||'')}" placeholder="https://…">
+          <label style="font-size:11px">Projectile Image</label>
+          <input type="file" id="tf-proj-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+          <input type="text" id="tf-proj" value="${esc(t.projectile_url||'')}" placeholder="No projectile image uploaded" readonly style="margin-top:6px">
+          <button class="btn-sm" type="button" style="margin-top:6px" onclick="clearTowerAssetUrl('tf-proj','tf-proj-file')">Clear</button>
         </div>
         <div class="form-group">
-          <label style="font-size:11px">Animation URL</label>
-          <input type="url" id="tf-anim" value="${esc(t.animation_url||'')}" placeholder="https://…">
+          <label style="font-size:11px">Animation Image</label>
+          <input type="file" id="tf-anim-file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml">
+          <input type="text" id="tf-anim" value="${esc(t.animation_url||'')}" placeholder="No animation image uploaded" readonly style="margin-top:6px">
+          <button class="btn-sm" type="button" style="margin-top:6px" onclick="clearTowerAssetUrl('tf-anim','tf-anim-file')">Clear</button>
         </div>
       </div>
     </details>
@@ -1913,23 +2313,81 @@ function gatherTowerForm() {
   };
 }
 
+function clearTowerAssetUrl(urlInputId, fileInputId) {
+  const urlEl = document.getElementById(urlInputId);
+  const fileEl = document.getElementById(fileInputId);
+  if (urlEl) urlEl.value = '';
+  if (fileEl) fileEl.value = '';
+}
+window.clearTowerAssetUrl = clearTowerAssetUrl;
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadTowerAssetFile(file) {
+  const dataBase64 = await fileToDataUrl(file);
+  const res = await fetch('/admin/assets/upload-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileName: file.name,
+      mimeType: file.type,
+      dataBase64,
+    }),
+    credentials: 'include',
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Asset upload failed');
+  if (!body.url) throw new Error('Asset upload did not return a URL');
+  return body.url;
+}
+
+async function uploadSelectedTowerAssets() {
+  const assetFields = [
+    { fileId: 'tf-icon-file', urlId: 'tf-icon', label: 'icon' },
+    { fileId: 'tf-sprite-file', urlId: 'tf-sprite', label: 'sprite' },
+    { fileId: 'tf-proj-file', urlId: 'tf-proj', label: 'projectile' },
+    { fileId: 'tf-anim-file', urlId: 'tf-anim', label: 'animation' },
+  ];
+
+  const uploaded = [];
+  for (const asset of assetFields) {
+    const input = document.getElementById(asset.fileId);
+    const file = input?.files?.[0];
+    if (!file) continue;
+    const url = await uploadTowerAssetFile(file);
+    const urlEl = document.getElementById(asset.urlId);
+    if (urlEl) urlEl.value = url;
+    uploaded.push(asset.label);
+  }
+  return uploaded;
+}
+
 function openCreateTowerModal() {
-  openModal('New Tower', towerFormHtml({}), `
-    <button class="btn-primary" onclick="submitCreateTower()">Create Tower</button>
+  openModal('New Mob', towerFormHtml({}), `
+    <button class="btn-primary" onclick="submitCreateTower()">Create Mob</button>
     <button onclick="closeModal()">Cancel</button>
   `);
 }
 window.openCreateTowerModal = openCreateTowerModal;
 
 async function submitCreateTower() {
-  const data = gatherTowerForm();
-  if (!data.name) { toast('Tower Name is required', 'err'); return; }
-  if (!data.attack_damage || data.attack_damage <= 0) { toast('Attack Damage must be > 0', 'err'); return; }
-  if (!data.range || data.range <= 0) { toast('Range must be > 0', 'err'); return; }
-  if (!data.base_cost || data.base_cost <= 0) { toast('Base Cost must be > 0', 'err'); return; }
   try {
+    const uploaded = await uploadSelectedTowerAssets();
+    const data = gatherTowerForm();
+    if (!data.name) { toast('Mob Name is required', 'err'); return; }
+    if (!data.attack_damage || data.attack_damage <= 0) { toast('Attack Damage must be > 0', 'err'); return; }
+    if (!data.range || data.range <= 0) { toast('Range must be > 0', 'err'); return; }
+    if (!data.base_cost || data.base_cost <= 0) { toast('Base Cost must be > 0', 'err'); return; }
     await api('POST', '/admin/towers', data);
-    toast(`Tower "${data.name}" created`, 'ok');
+    if (uploaded.length) toast(`Uploaded: ${uploaded.join(', ')}`, 'ok');
+    toast(`Mob "${data.name}" created`, 'ok');
     closeModal();
     loadTowers();
   } catch (err) { toast(`Create failed: ${err.message}`, 'err'); }
@@ -1940,7 +2398,7 @@ async function openEditTowerModal(id) {
   try {
     const d = await api('GET', `/admin/towers/${id}`);
     const t = d.tower;
-    openModal(`Edit Tower: ${t.name}`, towerFormHtml(t), `
+    openModal(`Edit Mob: ${t.name}`, towerFormHtml(t), `
       <button class="btn-primary" onclick="submitEditTower(${id})">Save Changes</button>
       <button onclick="closeModal()">Cancel</button>
     `);
@@ -1949,11 +2407,13 @@ async function openEditTowerModal(id) {
 window.openEditTowerModal = openEditTowerModal;
 
 async function submitEditTower(id) {
-  const data = gatherTowerForm();
-  if (!data.name) { toast('Tower Name is required', 'err'); return; }
   try {
+    const uploaded = await uploadSelectedTowerAssets();
+    const data = gatherTowerForm();
+    if (!data.name) { toast('Mob Name is required', 'err'); return; }
     await api('PATCH', `/admin/towers/${id}`, data);
-    toast('Tower updated', 'ok');
+    if (uploaded.length) toast(`Uploaded: ${uploaded.join(', ')}`, 'ok');
+    toast('Mob updated', 'ok');
     closeModal();
     loadTowers();
   } catch (err) { toast(`Update failed: ${err.message}`, 'err'); }
@@ -1963,17 +2423,17 @@ window.submitEditTower = submitEditTower;
 async function toggleTower(id, enable) {
   try {
     await api('PATCH', `/admin/towers/${id}`, { enabled: enable });
-    toast(`Tower ${enable ? 'enabled' : 'disabled'}`, 'ok');
+    toast(`Mob ${enable ? 'enabled' : 'disabled'}`, 'ok');
     loadTowers();
   } catch (err) { toast(`Failed: ${err.message}`, 'err'); }
 }
 window.toggleTower = toggleTower;
 
 async function deleteTower(id, name) {
-  if (!confirm(`Delete tower "${name}"? This cannot be undone.`)) return;
+  if (!confirm(`Delete mob "${name}"? This cannot be undone.`)) return;
   try {
     await api('DELETE', `/admin/towers/${id}`);
-    toast(`Tower "${name}" deleted`, 'ok');
+    toast(`Mob "${name}" deleted`, 'ok');
     loadTowers();
   } catch (err) { toast(`Delete failed: ${err.message}`, 'err'); }
 }
@@ -2075,9 +2535,1068 @@ function saveAbilityParam(towerId, abilityKey) {
 window.saveAbilityParam = saveAbilityParam;
 
 // ═══════════════════════════════════════════════════════════════════════
+// SURVIVAL TAB
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── State ──────────────────────────────────────────────────────────────
+const survivalState = {
+  sets: [],
+  builderSetId: null,
+  builderWaves: [],
+  selectedWaveNum: null,
+};
+
+async function loadSurvival() {
+  setContent('<p class="load">Loading wave sets…</p>');
+  try {
+    const data = await api('GET', '/admin/survival/wave-sets');
+    survivalState.sets = data.waveSets || [];
+    renderWaveSetsPage();
+  } catch (err) {
+    setContent(`<p class="err">Failed to load: ${err.message}</p>`);
+  }
+}
+
+function renderWaveSetsPage() {
+  const canWrite = can('config.write');
+  const sets = survivalState.sets;
+  const cards = sets.map(s => `
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>${esc(s.name)}</strong>
+          ${s.is_active ? '<span style="color:#4ade80;font-size:12px;margin-left:6px">[ACTIVE]</span>' : ''}
+          ${!s.enabled   ? '<span style="color:#f87171;font-size:12px;margin-left:6px">[DISABLED]</span>' : ''}
+          <br><small style="color:#94a3b8">${esc(s.description || '')} &nbsp;·&nbsp; ${s.wave_count || 0} waves &nbsp;·&nbsp; Lives: ${s.starting_lives} &nbsp;·&nbsp; Gold: ${s.starting_gold}</small>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${canWrite ? `<button onclick="openWaveBuilder(${s.id})">Edit</button>` : ''}
+          ${canWrite && !s.is_active ? `<button onclick="activateWaveSet(${s.id})">Activate</button>` : ''}
+          ${canWrite ? `<button onclick="duplicateWaveSet(${s.id})">Duplicate</button>` : ''}
+          ${canWrite ? `<button style="background:#ef4444" onclick="deleteWaveSet(${s.id})">Delete</button>` : ''}
+        </div>
+      </div>
+    </div>`).join('');
+
+  setContent(`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">Survival Wave Sets</h2>
+      ${canWrite ? `<button onclick="openCreateWaveSet()">+ New Wave Set</button>` : ''}
+    </div>
+    ${sets.length ? cards : '<p style="color:#94a3b8">No wave sets yet. Create one to get started.</p>'}
+  `);
+}
+
+async function openCreateWaveSet() {
+  openModal('New Wave Set', `
+    <label>Name<br><input id="sv-ws-name" class="inp" style="width:100%" placeholder="Wave Set Name"></label>
+    <label style="margin-top:8px;display:block">Description<br><input id="sv-ws-desc" class="inp" style="width:100%" placeholder="Optional description"></label>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <label>Starting Gold<br><input id="sv-ws-gold" type="number" class="inp" value="150" min="0" style="width:80px"></label>
+      <label>Starting Lives<br><input id="sv-ws-lives" type="number" class="inp" value="20" min="1" style="width:80px"></label>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:8px">
+      <input type="checkbox" id="sv-ws-autoscale" checked> Auto-scale waves past last configured
+    </label>
+  `, `
+    <button onclick="submitCreateWaveSet()">Create</button>
+    <button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
+  `);
+}
+window.openCreateWaveSet = openCreateWaveSet;
+
+async function submitCreateWaveSet() {
+  const name = document.getElementById('sv-ws-name')?.value?.trim();
+  if (!name) return toast('Name is required', 'err');
+  try {
+    await api('POST', '/admin/survival/wave-sets', {
+      name,
+      description: document.getElementById('sv-ws-desc')?.value?.trim() || '',
+      starting_gold: Number(document.getElementById('sv-ws-gold')?.value) || 150,
+      starting_lives: Number(document.getElementById('sv-ws-lives')?.value) || 20,
+      auto_scale: document.getElementById('sv-ws-autoscale')?.checked ?? true,
+    });
+    document.getElementById('modal-overlay').classList.add('hidden');
+    toast('Wave set created');
+    loadSurvival();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.submitCreateWaveSet = submitCreateWaveSet;
+
+async function activateWaveSet(id) {
+  try {
+    await api('POST', `/admin/survival/wave-sets/${id}/activate`);
+    toast('Wave set activated');
+    loadSurvival();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.activateWaveSet = activateWaveSet;
+
+async function duplicateWaveSet(id) {
+  try {
+    await api('POST', `/admin/survival/wave-sets/${id}/duplicate`);
+    toast('Wave set duplicated');
+    loadSurvival();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.duplicateWaveSet = duplicateWaveSet;
+
+async function deleteWaveSet(id) {
+  if (!confirm('Delete this wave set and all its waves?')) return;
+  try {
+    await api('DELETE', `/admin/survival/wave-sets/${id}`);
+    toast('Wave set deleted');
+    loadSurvival();
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.deleteWaveSet = deleteWaveSet;
+
+// ── Wave Builder (full-screen modal-like section) ──────────────────────
+async function openWaveBuilder(setId) {
+  try {
+    const data = await api('GET', `/admin/survival/wave-sets/${setId}`);
+    survivalState.builderSetId = setId;
+    survivalState.builderWaves = data.waveSet.waves || [];
+    survivalState.selectedWaveNum = survivalState.builderWaves[0]?.wave_number ?? null;
+    survivalState.builderSetMeta = data.waveSet;
+    renderWaveBuilder();
+  } catch (err) {
+    toast(`Error loading wave set: ${err.message}`, 'err');
+  }
+}
+window.openWaveBuilder = openWaveBuilder;
+
+function renderWaveBuilder() {
+  const canWrite = can('config.write');
+  const meta = survivalState.builderSetMeta || {};
+  const waves = survivalState.builderWaves;
+  const selNum = survivalState.selectedWaveNum;
+  const selWave = waves.find(w => w.wave_number === selNum);
+
+  const waveList = waves.map(w => `
+    <div onclick="selectWave(${w.wave_number})" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:4px;background:${w.wave_number === selNum ? '#334155' : '#1e293b'};display:flex;justify-content:space-between;align-items:center">
+      <span>
+        <strong>W${w.wave_number}</strong>
+        ${w.is_boss  ? ' <span style="color:#f97316">BOSS</span>'  : ''}
+        ${w.is_rush  ? ' <span style="color:#facc15">RUSH</span>'  : ''}
+        ${w.is_elite ? ' <span style="color:#c084fc">ELITE</span>' : ''}
+        <span style="color:#64748b;font-size:11px"> +${w.gold_bonus}g</span>
+      </span>
+      ${canWrite ? `<button style="font-size:10px;padding:2px 6px;background:#ef4444" onclick="event.stopPropagation();deleteWave(${survivalState.builderSetId},${w.wave_number})">×</button>` : ''}
+    </div>`).join('');
+
+  const spawnGroupsHtml = selWave ? renderSpawnGroups(selWave, canWrite) : '<p style="color:#64748b">Select a wave</p>';
+  const waveDetailHtml  = selWave ? renderWaveDetail(selWave, canWrite) : '';
+
+  setContent(`
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button onclick="loadSurvival()">← Wave Sets</button>
+      <h2 style="margin:0">${esc(meta.name || 'Wave Builder')}</h2>
+      <small style="color:#94a3b8">Lives: ${meta.starting_lives} &nbsp;·&nbsp; Gold: ${meta.starting_gold} &nbsp;·&nbsp; Auto-scale: ${meta.auto_scale ? 'yes' : 'no'}</small>
+    </div>
+    <div style="display:flex;gap:12px">
+      <!-- Left: wave list -->
+      <div style="width:200px;flex-shrink:0">
+        ${waveList}
+        ${canWrite ? `<button style="width:100%;margin-top:6px" onclick="addWave(${survivalState.builderSetId})">+ Add Wave</button>` : ''}
+        ${canWrite ? `<button style="width:100%;margin-top:6px" onclick="openBulkScale(${survivalState.builderSetId})">Bulk Scale</button>` : ''}
+      </div>
+      <!-- Right: wave detail -->
+      <div style="flex:1;min-width:0">
+        ${waveDetailHtml}
+        ${spawnGroupsHtml}
+      </div>
+    </div>
+  `);
+}
+
+function renderWaveDetail(wave, canWrite) {
+  return `
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+        <label>Gold Bonus<br>
+          <input id="wd-gold" type="number" class="inp" value="${wave.gold_bonus}" min="0" style="width:80px">
+        </label>
+        <label>Duration (ms, blank=until cleared)<br>
+          <input id="wd-duration" type="number" class="inp" value="${wave.duration_ms || ''}" min="0" style="width:100px" placeholder="–">
+        </label>
+        <label>Notes<br>
+          <input id="wd-notes" class="inp" value="${esc(wave.notes || '')}" style="width:160px">
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+          <input type="checkbox" id="wd-boss"  ${wave.is_boss  ? 'checked' : ''}> Boss
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+          <input type="checkbox" id="wd-rush"  ${wave.is_rush  ? 'checked' : ''}> Rush
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+          <input type="checkbox" id="wd-elite" ${wave.is_elite ? 'checked' : ''}> Elite
+        </label>
+        ${canWrite ? `<button onclick="saveWaveDetail(${survivalState.builderSetId},${wave.wave_number})">Save Wave</button>` : ''}
+        ${canWrite ? `<button onclick="copyGroupsFromPrev(${survivalState.builderSetId},${wave.wave_number})">Copy from prev</button>` : ''}
+        <button onclick="previewWave(${survivalState.builderSetId})">Preview</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSpawnGroups(wave, canWrite) {
+  const groups = wave.spawn_groups || [];
+  const UNIT_TYPES = ['runner','footman','ironclad','warlock','golem'];
+  const rows = groups.map(g => `
+    <tr>
+      <td>
+        ${canWrite
+          ? `<select onchange="updateGroupField(${g.id},'unit_type',this.value)">${UNIT_TYPES.map(t => `<option ${t===g.unit_type?'selected':''}>${t}</option>`).join('')}</select>`
+          : g.unit_type}
+      </td>
+      <td><input type="number" value="${g.count}" min="1" style="width:60px" ${canWrite ? `onchange="updateGroupField(${g.id},'count',this.value)"` : 'disabled'}></td>
+      <td><input type="number" value="${g.spawn_interval_ms}" min="100" style="width:80px" ${canWrite ? `onchange="updateGroupField(${g.id},'spawn_interval_ms',this.value)"` : 'disabled'}></td>
+      <td><input type="number" value="${g.start_delay_ms}" min="0" style="width:70px" ${canWrite ? `onchange="updateGroupField(${g.id},'start_delay_ms',this.value)"` : 'disabled'}></td>
+      <td><input type="number" value="${g.randomize_pct}" min="0" max="100" style="width:60px" ${canWrite ? `onchange="updateGroupField(${g.id},'randomize_pct',this.value)"` : 'disabled'}></td>
+      <td>${canWrite ? `<button style="padding:2px 8px;background:#ef4444" onclick="deleteSpawnGroup(${g.id})">×</button>` : ''}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Spawn Groups — Wave ${wave.wave_number}</strong>
+        ${canWrite ? `<button onclick="addSpawnGroup(${wave.id})">+ Add Group</button>` : ''}
+      </div>
+      ${groups.length ? `
+        <table style="width:100%;font-size:13px">
+          <thead><tr><th>Unit</th><th>Count</th><th>Interval(ms)</th><th>Delay(ms)</th><th>Jitter%</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : '<p style="color:#64748b">No spawn groups yet.</p>'}
+    </div>
+  `;
+}
+
+function selectWave(waveNum) {
+  survivalState.selectedWaveNum = waveNum;
+  renderWaveBuilder();
+}
+window.selectWave = selectWave;
+
+async function addWave(setId) {
+  const waves = survivalState.builderWaves;
+  const nextNum = waves.length ? (Math.max(...waves.map(w => w.wave_number)) + 1) : 1;
+  try {
+    await api('POST', `/admin/survival/wave-sets/${setId}/waves`, { wave_number: nextNum });
+    toast(`Wave ${nextNum} added`);
+    await openWaveBuilder(setId);
+    selectWave(nextNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.addWave = addWave;
+
+async function deleteWave(setId, waveNum) {
+  if (!confirm(`Delete wave ${waveNum}?`)) return;
+  try {
+    await api('DELETE', `/admin/survival/wave-sets/${setId}/waves/${waveNum}`);
+    toast(`Wave ${waveNum} deleted`);
+    if (survivalState.selectedWaveNum === waveNum) survivalState.selectedWaveNum = null;
+    await openWaveBuilder(setId);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.deleteWave = deleteWave;
+
+async function saveWaveDetail(setId, waveNum) {
+  try {
+    await api('PATCH', `/admin/survival/wave-sets/${setId}/waves/${waveNum}`, {
+      gold_bonus:  Number(document.getElementById('wd-gold')?.value) || 0,
+      duration_ms: document.getElementById('wd-duration')?.value ? Number(document.getElementById('wd-duration').value) : null,
+      notes:       document.getElementById('wd-notes')?.value?.trim() || '',
+      is_boss:     document.getElementById('wd-boss')?.checked || false,
+      is_rush:     document.getElementById('wd-rush')?.checked || false,
+      is_elite:    document.getElementById('wd-elite')?.checked || false,
+    });
+    toast('Wave saved');
+    await openWaveBuilder(setId);
+    selectWave(waveNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.saveWaveDetail = saveWaveDetail;
+
+async function addSpawnGroup(waveId) {
+  try {
+    await api('POST', `/admin/survival/waves/${waveId}/spawn-groups`, {
+      unit_type: 'runner', count: 5, spawn_interval_ms: 1000, start_delay_ms: 0, randomize_pct: 0,
+    });
+    toast('Spawn group added');
+    await openWaveBuilder(survivalState.builderSetId);
+    selectWave(survivalState.selectedWaveNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.addSpawnGroup = addSpawnGroup;
+
+// Debounced patch for inline spawn group edits
+const _sgPatchQueue = {};
+function updateGroupField(groupId, field, value) {
+  if (!_sgPatchQueue[groupId]) _sgPatchQueue[groupId] = {};
+  _sgPatchQueue[groupId][field] = field === 'unit_type' ? value : Number(value);
+  clearTimeout(_sgPatchQueue[groupId]._timer);
+  _sgPatchQueue[groupId]._timer = setTimeout(async () => {
+    const updates = { ..._sgPatchQueue[groupId] };
+    delete updates._timer;
+    delete _sgPatchQueue[groupId];
+    try {
+      await api('PATCH', `/admin/survival/spawn-groups/${groupId}`, updates);
+    } catch (err) {
+      toast(`Save failed: ${err.message}`, 'err');
+    }
+  }, 600);
+}
+window.updateGroupField = updateGroupField;
+
+async function deleteSpawnGroup(groupId) {
+  try {
+    await api('DELETE', `/admin/survival/spawn-groups/${groupId}`);
+    toast('Spawn group deleted');
+    await openWaveBuilder(survivalState.builderSetId);
+    selectWave(survivalState.selectedWaveNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.deleteSpawnGroup = deleteSpawnGroup;
+
+async function copyGroupsFromPrev(setId, waveNum) {
+  const waves = survivalState.builderWaves;
+  const prevWave = waves.slice().sort((a,b) => a.wave_number - b.wave_number)
+    .reverse().find(w => w.wave_number < waveNum);
+  if (!prevWave) return toast('No previous wave to copy from', 'err');
+  const groups = prevWave.spawn_groups || [];
+  if (!groups.length) return toast('Previous wave has no spawn groups', 'err');
+  const currentWave = waves.find(w => w.wave_number === waveNum);
+  if (!currentWave) return;
+  try {
+    for (const g of groups) {
+      await api('POST', `/admin/survival/waves/${currentWave.id}/spawn-groups`, {
+        unit_type: g.unit_type, count: g.count,
+        spawn_interval_ms: g.spawn_interval_ms,
+        start_delay_ms: g.start_delay_ms,
+        randomize_pct: g.randomize_pct,
+      });
+    }
+    toast(`Copied ${groups.length} groups from wave ${prevWave.wave_number}`);
+    await openWaveBuilder(setId);
+    selectWave(waveNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.copyGroupsFromPrev = copyGroupsFromPrev;
+
+async function previewWave(setId) {
+  try {
+    const data = await api('GET', `/admin/survival/wave-sets/${setId}/preview`);
+    const waves = data.waves || [];
+    const rows = waves.map(w =>
+      `<tr><td>${w.waveNum}</td><td>${w.totalUnits}</td><td>${fmt(w.totalHp)}</td><td>${fmt(w.goldValue)}</td></tr>`
+    ).join('');
+    openModal('Wave Preview', `
+      <table style="width:100%;font-size:13px">
+        <thead><tr><th>Wave</th><th>Total Units</th><th>Est. HP</th><th>Gold Value</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4">No waves</td></tr>'}</tbody>
+      </table>
+    `, `<button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Close</button>`);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.previewWave = previewWave;
+
+function openBulkScale(setId) {
+  openModal('Bulk Scale Waves', `
+    <p>Multiply enemy counts in a wave range by a percentage.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label>From Wave<br><input id="bs-from" type="number" class="inp" value="1" min="1" style="width:70px"></label>
+      <label>To Wave<br><input id="bs-to" type="number" class="inp" value="5" min="1" style="width:70px"></label>
+      <label>Scale % (e.g. 20 = +20%)<br><input id="bs-pct" type="number" class="inp" value="20" style="width:80px"></label>
+    </div>
+  `, `
+    <button onclick="submitBulkScale(${setId})">Apply</button>
+    <button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
+  `);
+}
+window.openBulkScale = openBulkScale;
+
+async function submitBulkScale(setId) {
+  try {
+    const res = await api('POST', `/admin/survival/wave-sets/${setId}/waves/bulk-scale`, {
+      fromWave: Number(document.getElementById('bs-from')?.value),
+      toWave:   Number(document.getElementById('bs-to')?.value),
+      scalePct: Number(document.getElementById('bs-pct')?.value),
+    });
+    document.getElementById('modal-overlay').classList.add('hidden');
+    toast(`Scaled ${res.wavesUpdated} waves`);
+    await openWaveBuilder(setId);
+    selectWave(survivalState.selectedWaveNum);
+  } catch (err) {
+    toast(`Error: ${err.message}`, 'err');
+  }
+}
+window.submitBulkScale = submitBulkScale;
+
+// ═══════════════════════════════════════════════════════════════════════
+// UNITS TAB (Phase A — Core Reuse Architecture)
+// ═══════════════════════════════════════════════════════════════════════
+
+const BEHAVIOR_BADGE_COLOR = { moving: '#42a5f5', fixed: '#66bb6a', both: '#ffa726' };
+const UNIT_DTYPE_COLORS = {
+  NORMAL: '#90a4ae', PIERCE: '#42a5f5', SPLASH: '#ffa726',
+  SIEGE: '#ab47bc',  MAGIC:  '#7e57c2', PHYSICAL: '#ff8a65', TRUE: '#ef5350',
+};
+const UNIT_ARMOR_COLORS = {
+  UNARMORED: '#90a4ae', LIGHT: '#42a5f5', MEDIUM: '#ffa726', HEAVY: '#ef5350', MAGIC: '#7e57c2',
+};
+
+async function loadUnits() {
+  setContent('<p class="load">Loading unit types…</p>');
+  try {
+    const [utRes, dfRes] = await Promise.all([
+      api('GET', '/admin/unit-types'),
+      api('GET', '/admin/unit-display-fields').catch(() => ({ fields: [] })),
+    ]);
+    S.units.displayFields = dfRes.fields || [];
+    renderUnitsTab(utRes.unitTypes || [], S.units.displayFields);
+  } catch (err) {
+    setContent(`<p class="load text-danger">Error: ${esc(err.message)}</p>`);
+  }
+}
+window.loadUnits = loadUnits;
+
+function switchUnitsView(view) {
+  S.units.view = view;
+  document.getElementById('units-view-list')?.classList.toggle('active', view === 'list');
+  document.getElementById('units-view-kanban')?.classList.toggle('active', view === 'kanban');
+  document.getElementById('units-list-wrap')  && (document.getElementById('units-list-wrap').style.display   = view === 'list'   ? '' : 'none');
+  document.getElementById('units-kanban-wrap') && (document.getElementById('units-kanban-wrap').style.display = view === 'kanban' ? '' : 'none');
+}
+window.switchUnitsView = switchUnitsView;
+
+function _utBadge(label, color) {
+  return `<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44">${label}</span>`;
+}
+
+function _utIconHtml(ut, size = 60, cssClass = 'ukc-icon') {
+  if (ut.icon_url) return `<img src="${esc(ut.icon_url)}" class="${cssClass}" style="width:${size}px;height:${size}px" alt="${esc(ut.name)}">`;
+  const emoji = { moving: '⚔', fixed: '🏰', both: '🛡' }[ut.behavior_mode] || '?';
+  return `<div class="ukc-icon-placeholder" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.45)}px">${emoji}</div>`;
+}
+
+function renderUnitsTab(unitTypes, displayFields) {
+  const canWrite = can('config.write');
+
+  // ── List view rows
+  const listRows = unitTypes.map(ut => {
+    const bColor = BEHAVIOR_BADGE_COLOR[ut.behavior_mode] || '#aaa';
+    const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
+    const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
+    return `<tr>
+      <td><code style="font-size:11px">${esc(ut.key)}</code></td>
+      <td>${esc(ut.name)}</td>
+      <td>${_utBadge(ut.behavior_mode, bColor)}</td>
+      <td>${_utBadge(ut.damage_type, dColor)}</td>
+      <td>${_utBadge(ut.armor_type, aColor)}</td>
+      <td class="text-right">${ut.hp}</td>
+      <td class="text-right">${ut.send_cost}</td>
+      <td class="text-right">${ut.build_cost}</td>
+      <td>${ut.enabled ? '<span style="color:#66bb6a;font-size:11px">on</span>' : '<span style="color:#ef5350;font-size:11px">off</span>'}</td>
+      <td>
+        <span title="${ut.display_to_players ? 'Shown to players' : 'Hidden from players'}"
+          style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ut.display_to_players ? '#66bb6a' : '#ef5350'};margin-right:4px"></span>
+        ${canWrite ? `
+          <button class="btn-sm" onclick="openUnitTypeModal(${ut.id})">Edit</button>
+          <button class="btn-sm" onclick="toggleUnitTypeEnabled(${ut.id},${ut.enabled})">${ut.enabled ? 'Disable' : 'Enable'}</button>
+          <button class="btn-sm" onclick="toggleUnitDisplayToPlayers(${ut.id},${ut.display_to_players})">${ut.display_to_players ? 'Hide' : 'Show'} Players</button>
+          <button class="btn-sm" style="color:#ef5350" onclick="deleteUnitType(${ut.id},'${esc(ut.key)}')">Del</button>
+        ` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  // ── Kanban cards
+  const kanbanCards = unitTypes.map(ut => {
+    const bColor = BEHAVIOR_BADGE_COLOR[ut.behavior_mode] || '#aaa';
+    const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
+    const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
+    return `<div class="unit-kanban-card${ut.enabled ? '' : ' ukc-disabled'}" onclick="openUnitTypeModal(${ut.id})">
+      <span class="ukc-display-dot ${ut.display_to_players ? 'on' : 'off'}"
+        title="${ut.display_to_players ? 'Shown to players' : 'Hidden from players'}"></span>
+      ${_utIconHtml(ut, 60)}
+      <div class="ukc-name">${esc(ut.name)}</div>
+      <div class="ukc-desc">${esc(ut.description || '')}</div>
+      <div class="ukc-badges">
+        ${_utBadge(ut.behavior_mode, bColor)}
+        ${_utBadge(ut.damage_type, dColor)}
+        ${_utBadge(ut.armor_type, aColor)}
+      </div>
+      <div class="ukc-stats">
+        <span class="ukc-stat-label">HP</span><span class="ukc-stat-val">${ut.hp}</span>
+        <span class="ukc-stat-label">ATK</span><span class="ukc-stat-val">${ut.attack_damage}</span>
+        <span class="ukc-stat-label">Send$</span><span class="ukc-stat-val">${ut.send_cost}</span>
+        <span class="ukc-stat-label">Build$</span><span class="ukc-stat-val">${ut.build_cost}</span>
+      </div>
+      ${canWrite ? `<div class="ukc-actions" onclick="event.stopPropagation()">
+        <button class="btn-sm" onclick="toggleUnitTypeEnabled(${ut.id},${ut.enabled})">${ut.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="btn-sm" onclick="toggleUnitDisplayToPlayers(${ut.id},${ut.display_to_players})">${ut.display_to_players ? 'Hide' : 'Show'}</button>
+        <button class="btn-sm" style="color:#ef5350" onclick="deleteUnitType(${ut.id},'${esc(ut.key)}')">Del</button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  setContent(`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <h2 style="margin:0">Unit Types <span style="font-size:14px;color:var(--muted)">${unitTypes.length}</span></h2>
+        <p class="text-muted" style="font-size:12px;margin:4px 0 0">
+          Attackers (moving), Defenders (fixed), and Special units. Green dot = shown to players.
+        </p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="units-view-toggle">
+          <button class="units-view-btn ${S.units.view === 'list' ? 'active' : ''}" id="units-view-list" onclick="switchUnitsView('list')">≡ List</button>
+          <button class="units-view-btn ${S.units.view === 'kanban' ? 'active' : ''}" id="units-view-kanban" onclick="switchUnitsView('kanban')">⊞ Kanban</button>
+        </div>
+        ${canWrite ? `
+          <button class="btn-sm" onclick="reloadUnitTypeCache()">↻ Reload Cache</button>
+          <button class="btn-success" onclick="openUnitTypeModal(null)">+ New Unit Type</button>
+        ` : ''}
+      </div>
+    </div>
+
+    <div id="units-list-wrap" class="section" style="${S.units.view === 'list' ? '' : 'display:none'};overflow-x:auto">
+      <table style="width:100%">
+        <thead><tr>
+          <th>Key</th><th>Name</th><th>Mode</th><th>Dmg Type</th>
+          <th>Armor</th><th>HP</th><th>Send$</th><th>Build$</th><th>On</th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody>
+          ${listRows || '<tr><td colspan="10" class="text-muted" style="padding:20px;text-align:center">No unit types found.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+
+    <div id="units-kanban-wrap" style="${S.units.view === 'kanban' ? '' : 'display:none'}">
+      <div class="unit-kanban-grid">
+        ${kanbanCards || '<p class="text-muted" style="padding:20px">No unit types found.</p>'}
+      </div>
+    </div>
+
+    <div class="display-settings-section">
+      <h3 style="margin:0 0 4px">Display Settings</h3>
+      <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+        Control which stat fields appear on player-facing unit cards. The green/red dot on each unit overrides visibility for that unit only.
+      </p>
+      <div id="display-settings-wrap"></div>
+    </div>
+
+    <div style="margin-top:32px">
+      <h3 style="margin:0 0 12px">Barracks Levels</h3>
+      <div id="barracks-levels-section"><p class="load">Loading…</p></div>
+    </div>
+  `);
+
+  renderDisplaySettings(displayFields, unitTypes);
+  loadBarracksLevels();
+}
+
+async function toggleUnitDisplayToPlayers(id, current) {
+  try {
+    await api('PATCH', `/admin/unit-types/${id}`, { display_to_players: !current });
+    toast(`Unit ${current ? 'hidden from' : 'shown to'} players`);
+    loadUnits();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.toggleUnitDisplayToPlayers = toggleUnitDisplayToPlayers;
+
+function renderDisplaySettings(displayFields, unitTypes) {
+  const canWrite = can('config.write');
+  const wrap = document.getElementById('display-settings-wrap');
+  if (!wrap) return;
+
+  const fieldRows = (displayFields.length ? displayFields : []).map(f => `
+    <div class="display-field-row">
+      <input type="checkbox" id="df-${esc(f.field_key)}"
+        ${f.visible_to_players ? 'checked' : ''}
+        ${canWrite ? `onchange="saveDisplayFieldVisibility('${esc(f.field_key)}', this.checked)"` : 'disabled'}>
+      <label for="df-${esc(f.field_key)}">${esc(f.label)}</label>
+    </div>
+  `).join('');
+
+  const unitOpts = (unitTypes || []).map(ut =>
+    `<option value="${ut.id}">${esc(ut.name)}</option>`
+  ).join('');
+
+  wrap.innerHTML = `
+    <div class="display-fields-grid">${fieldRows || '<p class="text-muted">No display fields configured (run migration 026).</p>'}</div>
+    ${displayFields.length ? `
+      <div class="display-preview-wrap">
+        <div>
+          <label style="font-size:12px;color:var(--muted)">Preview unit:</label><br>
+          <select id="display-preview-unit" style="margin-top:4px;padding:4px 8px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:12px"
+            onchange="refreshDisplayPreview()">
+            ${unitOpts}
+          </select>
+        </div>
+        <div id="display-preview-card-wrap"></div>
+      </div>
+    ` : ''}
+  `;
+
+  refreshDisplayPreview();
+}
+
+function refreshDisplayPreview() {
+  const sel = document.getElementById('display-preview-unit');
+  const wrap = document.getElementById('display-preview-card-wrap');
+  if (!sel || !wrap) return;
+  const unitId = parseInt(sel.value, 10);
+  // Find unit from current tab data — stored in S.units implicitly via the rendered list
+  // We'll re-fetch from a quick pass of the displayed cards
+  const cardEl = document.querySelector(`.unit-kanban-card[onclick*="openUnitTypeModal(${unitId})"]`);
+  if (!cardEl) { wrap.innerHTML = ''; return; }
+
+  const dFields = S.units.displayFields;
+  if (!dFields.length) { wrap.innerHTML = ''; return; }
+
+  // Reconstruct stats from the card's data (use DOM to find relevant info),
+  // but simpler: just show a mock card using the checked fields
+  const visibleFields = dFields.filter(f => {
+    const cb = document.getElementById(`df-${f.field_key}`);
+    return cb ? cb.checked : f.visible_to_players;
+  });
+
+  const namEl = cardEl.querySelector('.ukc-name');
+  const name  = namEl ? namEl.textContent : 'Unit';
+  const iconEl = cardEl.querySelector('.ukc-icon, .ukc-icon-placeholder');
+  const iconHtml = iconEl ? iconEl.outerHTML : '';
+
+  const statsHtml = visibleFields.map(f => {
+    // We can read existing stat labels from the card's ukc-stats
+    return `<span class="ukc-stat-label">${esc(f.label)}</span><span class="ukc-stat-val">—</span>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div class="display-preview-card">
+      ${iconHtml}
+      <div class="ukc-name">${esc(name)}</div>
+      <div class="ukc-stats">${statsHtml || '<span class="text-muted" style="grid-column:1/-1">No fields visible</span>'}</div>
+    </div>
+    <p class="display-preview-label">Player card preview<br><span style="color:var(--muted)">${visibleFields.length} field${visibleFields.length !== 1 ? 's' : ''} visible</span></p>
+  `;
+}
+window.refreshDisplayPreview = refreshDisplayPreview;
+
+async function saveDisplayFieldVisibility(fieldKey, visible) {
+  try {
+    await api('PUT', `/admin/unit-display-fields/${fieldKey}`, { visible_to_players: visible });
+    toast('Display setting saved');
+    const f = S.units.displayFields.find(df => df.field_key === fieldKey);
+    if (f) f.visible_to_players = visible;
+    refreshDisplayPreview();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.saveDisplayFieldVisibility = saveDisplayFieldVisibility;
+
+async function toggleUnitTypeEnabled(id, currentEnabled) {
+  try {
+    await api('PATCH', `/admin/unit-types/${id}`, { enabled: !currentEnabled });
+    toast(`Unit type ${currentEnabled ? 'disabled' : 'enabled'}`);
+    loadUnits();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.toggleUnitTypeEnabled = toggleUnitTypeEnabled;
+
+async function deleteUnitType(id, key) {
+  if (!confirm(`Delete unit type "${key}"? This cannot be undone.`)) return;
+  try {
+    await api('DELETE', `/admin/unit-types/${id}`);
+    toast('Unit type deleted');
+    loadUnits();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.deleteUnitType = deleteUnitType;
+
+async function reloadUnitTypeCache() {
+  try {
+    const r = await api('POST', '/admin/unit-types/reload');
+    toast(`Cache reloaded — ${r.count} unit types`);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.reloadUnitTypeCache = reloadUnitTypeCache;
+
+// ── Unit Type modal (create + edit) ────────────────────────────────────────────
+
+async function openUnitTypeModal(id) {
+  let ut = null;
+  let abilities = [];
+  if (id != null) {
+    try {
+      const d = await api('GET', `/admin/unit-types/${id}`);
+      ut = d.unitType;
+      abilities = ut.abilities || [];
+    } catch (err) {
+      toast(err.message, 'err');
+      return;
+    }
+  }
+
+  const v = (f, def = '') => ut ? (ut[f] ?? def) : def;
+  const chk = (f) => ut ? (ut[f] ? 'checked' : '') : '';
+
+  const sel = (f, opts) => `<select id="ut-${f}" style="width:100%">${
+    opts.map(o => `<option value="${o}" ${v(f) === o ? 'selected' : ''}>${o}</option>`).join('')
+  }</select>`;
+
+  const inp = (f, type = 'text', step = '') =>
+    `<input id="ut-${f}" type="${type}" ${step ? `step="${step}"` : ''} value="${esc(String(v(f)))}" style="width:100%">`;
+
+  const abilityRows = abilities.map(a =>
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+       <code style="font-size:11px;flex:1">${esc(a.ability_key)}</code>
+       ${can('config.write') && id != null
+         ? `<button class="btn-sm" style="color:#ef5350" onclick="detachUnitAbility(${id},'${esc(a.ability_key)}')">✕</button>`
+         : ''}
+     </div>`
+  ).join('') || '<p class="text-muted" style="font-size:12px">No abilities attached.</p>';
+
+  const attachSection = can('config.write') && id != null ? `
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <input id="ut-new-ability-key" type="text" placeholder="ability_key" style="flex:1">
+      <button class="btn-sm" onclick="attachUnitAbility(${id})">Attach</button>
+    </div>
+  ` : '';
+
+  openModal(id != null ? `Edit Unit Type: ${esc(ut.key)}` : 'New Unit Type', `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="grid-column:1/2">
+        <label>Key</label>${inp('key')}
+      </div>
+      <div class="form-group" style="grid-column:2/3">
+        <label>Name</label>${inp('name')}
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Description</label><input id="ut-description" type="text" value="${esc(String(v('description')))}" style="width:100%">
+      </div>
+      <div class="form-group">
+        <label>Behavior Mode</label>${sel('behavior_mode', ['moving','fixed','both'])}
+      </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:8px;padding-top:20px">
+        <input type="checkbox" id="ut-enabled" ${chk('enabled') || (!ut ? 'checked' : '')}>
+        <label for="ut-enabled" style="margin:0">Enabled</label>
+      </div>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Combat Stats</h4>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div class="form-group"><label>HP</label>${inp('hp','number','0.01')}</div>
+      <div class="form-group"><label>Attack Damage</label>${inp('attack_damage','number','0.01')}</div>
+      <div class="form-group"><label>Attack Speed</label>${inp('attack_speed','number','0.01')}</div>
+      <div class="form-group"><label>Range</label>${inp('range','number','0.001')}</div>
+      <div class="form-group"><label>Path Speed</label>${inp('path_speed','number','0.001')}</div>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Damage &amp; Armor</h4>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div class="form-group"><label>Damage Type</label>${sel('damage_type',['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'])}</div>
+      <div class="form-group"><label>Armor Type</label>${sel('armor_type',['UNARMORED','LIGHT','MEDIUM','HEAVY','MAGIC'])}</div>
+      <div class="form-group"><label>Dmg Reduction % (0–80)</label>${inp('damage_reduction_pct','number','1')}</div>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Economy</h4>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <div class="form-group"><label>Send Cost</label>${inp('send_cost','number','1')}</div>
+      <div class="form-group"><label>Build Cost</label>${inp('build_cost','number','1')}</div>
+      <div class="form-group"><label>Income</label>${inp('income','number','1')}</div>
+      <div class="form-group"><label>Refund % (0–100)</label>${inp('refund_pct','number','1')}</div>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Barracks Scaling</h4>
+    <div style="display:flex;gap:24px">
+      <label><input type="checkbox" id="ut-barracks_scales_hp" ${chk('barracks_scales_hp')}> Scale HP</label>
+      <label><input type="checkbox" id="ut-barracks_scales_dmg" ${chk('barracks_scales_dmg')}> Scale Damage</label>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Assets</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="form-group"><label>Icon URL</label>${inp('icon_url')}</div>
+      <div class="form-group"><label>Sprite URL (Legacy/Fallback)</label>${inp('sprite_url')}</div>
+      <div class="form-group"><label>Animation URL (Legacy/Fallback)</label>${inp('animation_url')}</div>
+      <div class="form-group">
+        <label>Front Sprite (moving down screen)</label>
+        <input id="ut-sprite_url_front-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('sprite_url_front')}
+      </div>
+      <div class="form-group">
+        <label>Back Sprite (moving up screen)</label>
+        <input id="ut-sprite_url_back-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('sprite_url_back')}
+      </div>
+      <div class="form-group">
+        <label>Front Animation Sheet (moving down)</label>
+        <input id="ut-animation_url_front-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('animation_url_front')}
+      </div>
+      <div class="form-group">
+        <label>Back Animation Sheet (moving up)</label>
+        <input id="ut-animation_url_back-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('animation_url_back')}
+      </div>
+      <div class="form-group">
+        <label>Idle Sprite (Legacy/Fallback)</label>
+        <input id="ut-idle_sprite_url-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('idle_sprite_url')}
+      </div>
+      <div class="form-group">
+        <label>Front Idle Sprite (moving down)</label>
+        <input id="ut-idle_sprite_url_front-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('idle_sprite_url_front')}
+      </div>
+      <div class="form-group">
+        <label>Back Idle Sprite (moving up)</label>
+        <input id="ut-idle_sprite_url_back-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('idle_sprite_url_back')}
+      </div>
+    </div>
+
+    <h4 style="margin:16px 0 8px">Sound Cues</h4>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <div class="form-group"><label>Spawn</label>${inp('sound_spawn')}</div>
+      <div class="form-group"><label>Attack</label>${inp('sound_attack')}</div>
+      <div class="form-group"><label>Hit</label>${inp('sound_hit')}</div>
+      <div class="form-group"><label>Death</label>${inp('sound_death')}</div>
+    </div>
+
+    ${id != null ? `
+      <h4 style="margin:16px 0 8px">Abilities</h4>
+      <div>${abilityRows}</div>
+      ${attachSection}
+    ` : ''}
+  `, can('config.write') ? `<button class="btn-primary" onclick="saveUnitType(${id ?? 'null'})">Save</button>` : '');
+}
+window.openUnitTypeModal = openUnitTypeModal;
+
+function readUnitTypeForm() {
+  const g = (id) => document.getElementById(id);
+  const num = (id) => { const v = parseFloat(g(id)?.value); return Number.isFinite(v) ? v : 0; };
+  const int = (id) => { const v = parseInt(g(id)?.value, 10); return Number.isFinite(v) ? v : 0; };
+  return {
+    key:                  g('ut-key')?.value.trim(),
+    name:                 g('ut-name')?.value.trim(),
+    description:          g('ut-description')?.value.trim(),
+    behavior_mode:        g('ut-behavior_mode')?.value,
+    enabled:              g('ut-enabled')?.checked ?? true,
+    hp:                   num('ut-hp'),
+    attack_damage:        num('ut-attack_damage'),
+    attack_speed:         num('ut-attack_speed'),
+    range:                num('ut-range'),
+    path_speed:           num('ut-path_speed'),
+    damage_type:          g('ut-damage_type')?.value,
+    armor_type:           g('ut-armor_type')?.value,
+    damage_reduction_pct: int('ut-damage_reduction_pct'),
+    send_cost:            int('ut-send_cost'),
+    build_cost:           int('ut-build_cost'),
+    income:               int('ut-income'),
+    refund_pct:           int('ut-refund_pct'),
+    barracks_scales_hp:   g('ut-barracks_scales_hp')?.checked ?? false,
+    barracks_scales_dmg:  g('ut-barracks_scales_dmg')?.checked ?? false,
+    icon_url:             g('ut-icon_url')?.value.trim() || null,
+    sprite_url:           g('ut-sprite_url')?.value.trim() || null,
+    animation_url:        g('ut-animation_url')?.value.trim() || null,
+    sprite_url_front:     g('ut-sprite_url_front')?.value.trim() || null,
+    sprite_url_back:      g('ut-sprite_url_back')?.value.trim() || null,
+    animation_url_front:  g('ut-animation_url_front')?.value.trim() || null,
+    animation_url_back:   g('ut-animation_url_back')?.value.trim() || null,
+    idle_sprite_url:      g('ut-idle_sprite_url')?.value.trim() || null,
+    idle_sprite_url_front:g('ut-idle_sprite_url_front')?.value.trim() || null,
+    idle_sprite_url_back: g('ut-idle_sprite_url_back')?.value.trim() || null,
+    sound_spawn:          g('ut-sound_spawn')?.value.trim() || null,
+    sound_attack:         g('ut-sound_attack')?.value.trim() || null,
+    sound_hit:            g('ut-sound_hit')?.value.trim() || null,
+    sound_death:          g('ut-sound_death')?.value.trim() || null,
+  };
+}
+
+async function uploadSelectedUnitAssets() {
+  const assetFields = [
+    { fileId: 'ut-sprite_url_front-file', urlId: 'ut-sprite_url_front' },
+    { fileId: 'ut-sprite_url_back-file', urlId: 'ut-sprite_url_back' },
+    { fileId: 'ut-animation_url_front-file', urlId: 'ut-animation_url_front' },
+    { fileId: 'ut-animation_url_back-file', urlId: 'ut-animation_url_back' },
+    { fileId: 'ut-idle_sprite_url-file', urlId: 'ut-idle_sprite_url' },
+    { fileId: 'ut-idle_sprite_url_front-file', urlId: 'ut-idle_sprite_url_front' },
+    { fileId: 'ut-idle_sprite_url_back-file', urlId: 'ut-idle_sprite_url_back' },
+  ];
+  for (const asset of assetFields) {
+    const input = document.getElementById(asset.fileId);
+    const file = input?.files?.[0];
+    if (!file) continue;
+    const url = await uploadTowerAssetFile(file);
+    const urlEl = document.getElementById(asset.urlId);
+    if (urlEl) urlEl.value = url;
+  }
+}
+
+async function saveUnitType(id) {
+  try {
+    await uploadSelectedUnitAssets();
+    const body = readUnitTypeForm();
+    if (id != null) {
+      await api('PATCH', `/admin/unit-types/${id}`, body);
+      toast('Unit type updated');
+    } else {
+      await api('POST', '/admin/unit-types', body);
+      toast('Unit type created');
+    }
+    document.getElementById('modal-overlay').classList.add('hidden');
+    loadUnits();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.saveUnitType = saveUnitType;
+
+async function attachUnitAbility(unitTypeId) {
+  const key = document.getElementById('ut-new-ability-key')?.value.trim();
+  if (!key) { toast('Enter an ability key', 'err'); return; }
+  try {
+    await api('POST', `/admin/unit-types/${unitTypeId}/abilities`, { ability_key: key });
+    toast('Ability attached');
+    openUnitTypeModal(unitTypeId);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.attachUnitAbility = attachUnitAbility;
+
+async function detachUnitAbility(unitTypeId, abilityKey) {
+  if (!confirm(`Remove ability "${abilityKey}" from this unit type?`)) return;
+  try {
+    await api('DELETE', `/admin/unit-types/${unitTypeId}/abilities/${encodeURIComponent(abilityKey)}`);
+    toast('Ability removed');
+    openUnitTypeModal(unitTypeId);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.detachUnitAbility = detachUnitAbility;
+
+// ── Barracks Levels ────────────────────────────────────────────────────────────
+
+async function loadBarracksLevels() {
+  const el = document.getElementById('barracks-levels-section');
+  if (!el) return;
+  try {
+    const { levels } = await api('GET', '/admin/barracks-levels');
+    renderBarracksLevels(levels || []);
+  } catch (err) {
+    el.innerHTML = `<p class="text-danger">${esc(err.message)}</p>`;
+  }
+}
+window.loadBarracksLevels = loadBarracksLevels;
+
+function renderBarracksLevels(levels) {
+  const el = document.getElementById('barracks-levels-section');
+  if (!el) return;
+  const canWrite = can('config.write');
+
+  const rows = levels.map(lv => `<tr>
+    <td>${lv.level}</td>
+    <td>${parseFloat(lv.multiplier).toFixed(2)}×</td>
+    <td>${lv.upgrade_cost}</td>
+    <td>${esc(lv.notes)}</td>
+    <td>${canWrite ? `<button class="btn-sm" onclick="openBarracksLevelModal(${lv.level},${lv.multiplier},${lv.upgrade_cost},'${esc(lv.notes)}')">Edit</button>` : ''}</td>
+  </tr>`).join('');
+
+  el.innerHTML = `
+    <div class="section" style="overflow-x:auto">
+      <table style="width:100%">
+        <thead><tr><th>Level</th><th>Multiplier</th><th>Upgrade Cost</th><th>Notes</th>${canWrite ? '<th></th>' : ''}</tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="text-muted" style="padding:16px">No levels configured.</td></tr>'}</tbody>
+      </table>
+      ${canWrite ? '<button class="btn-sm" style="margin-top:8px" onclick="openBarracksLevelModal(null,1.0,0,\'\')">+ Add Level</button>' : ''}
+    </div>
+  `;
+}
+
+function openBarracksLevelModal(level, multiplier, upgradeCost, notes) {
+  const isNew = level == null;
+  openModal(isNew ? 'Add Barracks Level' : `Edit Barracks Level ${level}`, `
+    <div class="form-group">
+      <label>Level (1–99)</label>
+      <input id="bl-level" type="number" min="1" max="99" value="${isNew ? '' : level}" style="width:100%" ${isNew ? '' : 'readonly'}>
+    </div>
+    <div class="form-group">
+      <label>Multiplier</label>
+      <input id="bl-multiplier" type="number" step="0.01" min="0.1" max="100" value="${multiplier}" style="width:100%">
+    </div>
+    <div class="form-group">
+      <label>Upgrade Cost</label>
+      <input id="bl-upgrade_cost" type="number" min="0" value="${upgradeCost}" style="width:100%">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <input id="bl-notes" type="text" value="${esc(notes)}" style="width:100%">
+    </div>
+  `, `<button class="btn-primary" onclick="saveBarracksLevel()">Save</button>`);
+}
+window.openBarracksLevelModal = openBarracksLevelModal;
+
+async function saveBarracksLevel() {
+  const level = parseInt(document.getElementById('bl-level')?.value, 10);
+  const multiplier = parseFloat(document.getElementById('bl-multiplier')?.value);
+  const upgrade_cost = parseInt(document.getElementById('bl-upgrade_cost')?.value, 10) || 0;
+  const notes = document.getElementById('bl-notes')?.value.trim() || '';
+  if (!Number.isFinite(level) || level < 1) { toast('Invalid level', 'err'); return; }
+  if (!Number.isFinite(multiplier)) { toast('Invalid multiplier', 'err'); return; }
+  try {
+    await api('PUT', `/admin/barracks-levels/${level}`, { multiplier, upgrade_cost, notes });
+    toast('Barracks level saved');
+    document.getElementById('modal-overlay').classList.add('hidden');
+    loadBarracksLevels();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.saveBarracksLevel = saveBarracksLevel;
+
+// ═══════════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════════
 async function init() {
+  applyFieldDescriptions(document.getElementById('login-screen'));
+
   // Fetch public config (Google client ID etc.)
   try {
     const cfg = await fetch('/config').then(r => r.json());
@@ -2087,6 +3606,15 @@ async function init() {
   // Render Google button (GSI may not be loaded yet)
   if (typeof google !== 'undefined') renderGoogleBtn();
   else window.addEventListener('load', renderGoogleBtn, { once: true });
+
+  const params = new URLSearchParams(window.location.search);
+  const resetToken = params.get('admin_reset') || params.get('reset');
+  if (resetToken) {
+    S.adminResetToken = resetToken;
+    setLoginSection('reset');
+    document.getElementById('reset-password')?.focus();
+    return;
+  }
 
   if (S.authMode !== 'jwt') return;
 
@@ -2099,3 +3627,157 @@ async function init() {
 }
 
 init();
+
+// ═══════════════════════════════════════════════════════════════════════
+// ASSET PACKS  (Phase H)
+// ═══════════════════════════════════════════════════════════════════════
+async function loadAssets() {
+  setContent('<p class="load">Loading asset packs…</p>');
+  try {
+    const packs = await api('GET', '/admin/asset-packs');
+    renderAssetPackList(packs);
+  } catch (err) {
+    setContent(`<p class="error">Error: ${esc(err.message)}</p>`);
+  }
+}
+
+function renderAssetPackList(packs) {
+  const canWrite = can('config.write');
+  const rows = packs.map(p => `
+    <tr>
+      <td>${esc(p.key)}</td>
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.description)}</td>
+      <td><span class="badge ${p.enabled ? 'badge-green' : 'badge-red'}">${p.enabled ? 'enabled' : 'disabled'}</span></td>
+      <td>${(p.items || []).length}</td>
+      <td>
+        <button onclick="openAssetPackItems(${p.id},${JSON.stringify(esc(p.name))})">Items</button>
+        ${canWrite ? `
+        <button onclick="editAssetPack(${p.id},${JSON.stringify(esc(p.key))},${JSON.stringify(esc(p.name))},${JSON.stringify(esc(p.description))},${p.enabled})">Edit</button>
+        <button class="danger" onclick="deleteAssetPack(${p.id})">Delete</button>` : ''}
+      </td>
+    </tr>`).join('');
+
+  setContent(`
+    <div class="section-header">
+      <h2>Asset Packs</h2>
+      ${canWrite ? '<button onclick="createAssetPackModal()">+ New Pack</button>' : ''}
+    </div>
+    <table>
+      <thead><tr><th>Key</th><th>Name</th><th>Description</th><th>Status</th><th>Items</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">No asset packs yet.</td></tr>'}</tbody>
+    </table>`);
+}
+
+window.createAssetPackModal = function () {
+  openModal('New Asset Pack', `
+    <div class="form-group"><label>Key (unique slug)</label><input id="ap-key" placeholder="e.g. fantasy_reskin"></div>
+    <div class="form-group"><label>Name</label><input id="ap-name" placeholder="Fantasy Reskin"></div>
+    <div class="form-group"><label>Description</label><input id="ap-desc"></div>
+    <div class="form-group"><label><input type="checkbox" id="ap-enabled" checked> Enabled</label></div>`,
+    `<button onclick="submitCreateAssetPack()">Create</button>`);
+};
+
+window.submitCreateAssetPack = async function () {
+  const key = document.getElementById('ap-key')?.value.trim();
+  const name = document.getElementById('ap-name')?.value.trim();
+  const description = document.getElementById('ap-desc')?.value.trim();
+  const enabled = document.getElementById('ap-enabled')?.checked ?? true;
+  if (!key || !name) return toast('Key and name required', 'err');
+  try {
+    await api('POST', '/admin/asset-packs', { key, name, description, enabled });
+    toast('Asset pack created');
+    closeModal();
+    loadAssets();
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+window.editAssetPack = function (id, key, name, desc, enabled) {
+  openModal(`Edit Pack: ${key}`, `
+    <div class="form-group"><label>Name</label><input id="ep-name" value="${esc(name)}"></div>
+    <div class="form-group"><label>Description</label><input id="ep-desc" value="${esc(desc)}"></div>
+    <div class="form-group"><label><input type="checkbox" id="ep-enabled" ${enabled ? 'checked' : ''}> Enabled</label></div>`,
+    `<button onclick="submitEditAssetPack(${id})">Save</button>`);
+};
+
+window.submitEditAssetPack = async function (id) {
+  const name = document.getElementById('ep-name')?.value.trim();
+  const description = document.getElementById('ep-desc')?.value.trim();
+  const enabled = document.getElementById('ep-enabled')?.checked ?? true;
+  try {
+    await api('PATCH', `/admin/asset-packs/${id}`, { name, description, enabled });
+    toast('Saved');
+    closeModal();
+    loadAssets();
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+window.deleteAssetPack = async function (id) {
+  if (!confirm('Delete this asset pack? This removes all its items.')) return;
+  try {
+    await api('DELETE', `/admin/asset-packs/${id}`);
+    toast('Deleted');
+    loadAssets();
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+window.openAssetPackItems = function (packId, packName) {
+  api('GET', '/admin/asset-packs').then(packs => {
+    const pack = packs.find(p => p.id === packId);
+    if (!pack) return toast('Pack not found', 'err');
+    renderAssetPackItemsModal(pack);
+  });
+};
+
+function renderAssetPackItemsModal(pack) {
+  const canWrite = can('config.write');
+  const rows = (pack.items || []).map(item => `
+    <tr>
+      <td>${esc(item.unit_type_key)}</td>
+      <td>${esc(item.asset_slot)}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis" title="${esc(item.url)}">${esc(item.url)}</td>
+      <td>${canWrite ? `<button class="danger" onclick="deletePackItem(${pack.id},${item.id})">Remove</button>` : ''}</td>
+    </tr>`).join('');
+
+  const addForm = canWrite ? `
+    <hr>
+    <h4>Add / Update Item</h4>
+    <div class="form-row">
+      <input id="pi-key" placeholder="unit_type_key e.g. runner">
+      <select id="pi-slot"><option value="icon">icon</option><option value="sprite">sprite</option><option value="animation">animation</option></select>
+      <input id="pi-url" placeholder="https://…/runner_override.png" style="flex:2">
+      <button onclick="submitAddPackItem(${pack.id})">Add</button>
+    </div>` : '';
+
+  openModal(`Items — ${esc(pack.name)}`, `
+    <table>
+      <thead><tr><th>Unit Type</th><th>Slot</th><th>URL</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4">No items.</td></tr>'}</tbody>
+    </table>
+    ${addForm}`);
+}
+
+window.submitAddPackItem = async function (packId) {
+  const unit_type_key = document.getElementById('pi-key')?.value.trim();
+  const asset_slot = document.getElementById('pi-slot')?.value;
+  const url = document.getElementById('pi-url')?.value.trim();
+  if (!unit_type_key || !url) return toast('unit_type_key and url required', 'err');
+  try {
+    await api('POST', `/admin/asset-packs/${packId}/items`, { unit_type_key, asset_slot, url });
+    toast('Item saved');
+    // Refresh modal
+    const packs = await api('GET', '/admin/asset-packs');
+    const pack = packs.find(p => p.id === packId);
+    if (pack) renderAssetPackItemsModal(pack);
+  } catch (err) { toast(err.message, 'err'); }
+};
+
+window.deletePackItem = async function (packId, itemId) {
+  try {
+    await api('DELETE', `/admin/asset-packs/${packId}/items/${itemId}`);
+    toast('Removed');
+    const packs = await api('GET', '/admin/asset-packs');
+    const pack = packs.find(p => p.id === packId);
+    if (pack) renderAssetPackItemsModal(pack);
+  } catch (err) { toast(err.message, 'err'); }
+};

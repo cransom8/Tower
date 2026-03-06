@@ -1,17 +1,17 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Ransom Forge â€” Multiplayer</title>
+  <title>Ransom Forge Ã¢â‚¬â€ Multiplayer</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=20260303x">
-  <!-- Google Sign-In (GSI) â€” loaded async; only active when GOOGLE_CLIENT_ID is set -->
+  <!-- Google Sign-In (GSI) Ã¢â‚¬â€ loaded async; only active when GOOGLE_CLIENT_ID is set -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
-  <!-- PARTY PANEL â€” shown when signed in -->
+  <!-- PARTY PANEL Ã¢â‚¬â€ shown when signed in -->
   <div id="party-panel" style="display:none">
     <div id="party-panel-inner">
       <div id="party-header">
@@ -37,11 +37,10 @@
           <button class="party-btn" id="btn-queue-enter-casual">Casual 2v2</button>
           <button class="party-btn danger" id="btn-queue-leave" style="display:none">Cancel</button>
         </div>
-      </div>
-    </div>
+      </div>      </div>
   </div>
 
-  <!-- FRIENDS PANEL â€” shown when signed in, positioned below party panel by JS -->
+  <!-- FRIENDS PANEL Ã¢â‚¬â€ shown when signed in, positioned below party panel by JS -->
   <div id="friends-panel" style="display:none">
     <div id="friends-panel-inner">
       <div id="friends-invite-banner" style="display:none">
@@ -64,7 +63,7 @@
     </div>
   </div>
 
-  <!-- AUTH BAR â€” fixed top-right, always visible -->
+  <!-- AUTH BAR Ã¢â‚¬â€ fixed top-right, always visible -->
   <div id="auth-bar">
     <!-- Shown when signed out -->
     <div id="auth-signin-area" style="display:none">
@@ -106,14 +105,26 @@
         <div id="auth-forgot-error" class="auth-pw-error" style="display:none"></div>
         <div id="auth-forgot-success" class="auth-forgot-success" style="display:none">Check your inbox for a reset link.</div>
         <button id="btn-forgot-submit" class="auth-submit-btn">Send Reset Link</button>
-      </div>
-    </div>
+      </div>      </div>
 
     <!-- Shown when signed in -->
     <div id="auth-profile-area" style="display:none">
       <span id="auth-display-name"></span>
       <button id="btn-auth-2fa" class="auth-action-btn" title="Two-Factor Authentication">2FA</button>
       <button id="btn-auth-signout" class="auth-signout-btn">Sign out</button>
+    </div>
+    <div id="loadout-picker-section" style="display:none">
+        <div class="lp-header">
+          <span class="lp-title">Loadout</span>
+          <span class="lp-hint">Double-click a slot to edit</span>
+        </div>
+        <div class="lp-slots">
+          <button class="lp-slot-btn lp-slot-active" data-slot="0">Slot 1</button>
+          <button class="lp-slot-btn" data-slot="1">Slot 2</button>
+          <button class="lp-slot-btn" data-slot="2">Slot 3</button>
+          <button class="lp-slot-btn" data-slot="3">Slot 4</button>
+        </div>
+        <div id="lp-preview" class="lp-preview">Guest: default loadout</div>
     </div>
   </div>
 
@@ -147,11 +158,10 @@
           <div id="tfa-disable-error" class="auth-pw-error" style="display:none"></div>
           <button class="tfa-btn danger" id="btn-tfa-confirm-disable">Disable 2FA</button>
         </div>
-      </div>
-    </div>
+      </div>      </div>
   </div>
 
-  <!-- RESET PASSWORD MODAL â€” shown when ?reset=token is in the URL -->
+  <!-- RESET PASSWORD MODAL Ã¢â‚¬â€ shown when ?reset=token is in the URL -->
   <div id="reset-modal" style="display:none">
     <div id="reset-panel">
       <div id="reset-header">Reset Password</div>
@@ -163,7 +173,47 @@
     </div>
   </div>
 
-  <!-- EMAIL VERIFICATION MODAL â€” shown after registration or when email_not_verified -->
+  <!-- LOADOUT BUILDER MODAL (Kanban) -->
+  <div id=”loadout-builder-modal” style=”display:none”>
+    <div id=”loadout-builder-panel”>
+      <div class=”lb-header”>
+        <span id=”lp-builder-slot-label”>Loadout Builder</span>
+        <button id=”lp-builder-close” class=”lb-close-btn”>&times;</button>
+      </div>
+      <div class=”lb-body”>
+        <div class=”lb-row”>
+          <label class=”lb-label”>Name</label>
+          <input id=”lp-builder-name” type=”text” maxlength=”40” placeholder=”My Loadout” class=”lb-name-input”>
+        </div>
+        <!-- Slot selector tabs -->
+        <div class=”lbk-slot-tabs” id=”lbk-slot-tabs”>
+          <button class=”lbk-slot-btn active” data-slot=”0”><span class=”lbk-slot-num”>1</span><span class=”lbk-slot-unit” id=”lbk-su-0”>&#x2014;</span></button>
+          <button class=”lbk-slot-btn” data-slot=”1”><span class=”lbk-slot-num”>2</span><span class=”lbk-slot-unit” id=”lbk-su-1”>&#x2014;</span></button>
+          <button class=”lbk-slot-btn” data-slot=”2”><span class=”lbk-slot-num”>3</span><span class=”lbk-slot-unit” id=”lbk-su-2”>&#x2014;</span></button>
+          <button class=”lbk-slot-btn” data-slot=”3”><span class=”lbk-slot-num”>4</span><span class=”lbk-slot-unit” id=”lbk-su-3”>&#x2014;</span></button>
+          <button class=”lbk-slot-btn” data-slot=”4”><span class=”lbk-slot-num”>5</span><span class=”lbk-slot-unit” id=”lbk-su-4”>&#x2014;</span></button>
+        </div>
+        <!-- Toolbar: picking label + view toggle -->
+        <div class=”lbk-toolbar”>
+          <span class=”lbk-picking-label” id=”lbk-picking-label”>Pick unit for slot 1</span>
+          <div class=”lbk-view-toggle”>
+            <button class=”lbk-view-btn active” id=”lbk-view-kanban-btn”>&#x229E; Kanban</button>
+            <button class=”lbk-view-btn” id=”lbk-view-list-btn”>&#x2630; List</button>
+          </div>
+        </div>
+        <!-- Unit picker -->
+        <div id=”lbk-unit-picker” class=”lbk-unit-picker”></div>
+        <!-- Unit detail overlay -->
+        <div id=”lbk-detail” class=”lbk-detail” style=”display:none”></div>
+      </div>
+      <div class=”lb-footer”>
+        <button id=”lp-builder-save” class=”lobby-btn primary”>Save Loadout</button>
+        <button id=”lp-builder-close-btn” class=”lobby-btn” onclick=”document.getElementById('loadout-builder-modal').style.display='none'”>Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMAIL VERIFICATION MODAL Ã¢â‚¬â€ shown after registration or when email_not_verified -->
   <div id="verify-modal" style="display:none">
     <div id="verify-panel">
       <div id="verify-header">Check Your Email</div>
@@ -175,7 +225,7 @@
     </div>
   </div>
 
-  <!-- LOBBY OVERLAY â€” visible until match starts -->
+  <!-- LOBBY OVERLAY Ã¢â‚¬â€ visible until match starts -->
   <div id="lobby">
     <div class="lobby-card">
       <h1>Ransom Forge</h1>
@@ -242,7 +292,7 @@
               <div class="game-card-sub">2&ndash;4 players &middot; Multi-lane</div>
             </div>
           </div>
-          <div class="game-card disabled" data-game="survival" tabindex="-1">
+          <div class="game-card" data-game="survival" tabindex="0">
             <div class="game-card-art">
               <svg viewBox="0 0 100 52" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect x="38" y="10" width="24" height="34" fill="#13151b" stroke="#e8a828" stroke-width="1.5"/>
@@ -260,11 +310,9 @@
             </div>
             <div class="game-card-info">
               <div class="game-card-label">Survival</div>
-              <div class="game-card-sub">Endless waves</div>
+              <div class="game-card-sub">Defend endless waves</div>
             </div>
-            <div class="game-card-soon-badge">Soon</div>
-          </div>
-        </div>
+          </div>          </div>
       </div>
 
       <!-- STEP 2: Pick Mode -->
@@ -292,8 +340,7 @@
               <div class="mc-label">Solo</div>
               <div class="mc-desc">vs AI &middot; practice</div>
             </div>
-          </div>
-        </div>
+          </div>          </div>
         <!-- TD: pick team format -->
         <div id="ws2-td" style="display:none">
           <div class="mode-cards mode-cards-2col">
@@ -307,12 +354,13 @@
               <div class="mc-label">Free-for-All</div>
               <div class="mc-desc">Every player for themselves</div>
             </div>
-          </div>
-        </div>
+          </div>          </div>
       </div>
 
       <!-- STEP 3: Match Setup -->
       <div id="ws-3" class="wizard-pane" style="display:none">
+        <div id="ws3-layout">
+          <div id="ws3-main-column">
         <!-- TD match type tabs (shown for TD only) -->
         <div id="ws3-td-tabs" style="display:none">
           <div class="setup-tabs">
@@ -320,49 +368,19 @@
             <button class="stab" data-matchtype="unranked">Unranked</button>
             <button class="stab" data-matchtype="private">Private</button>
             <button class="stab" data-matchtype="solo">Solo</button>
-          </div>
-        </div>
+          </div>          </div>
 
         <!-- QUEUE section (Ranked + Unranked) -->
         <div id="lobby-queue-section">
           <p class="lobby-mode-desc" id="queue-mode-desc"></p>
           <div class="lobby-section">
             <button class="lobby-btn primary" id="btn-queue-find">&#x2694; Find Match</button>
-          </div>
-        </div>
+          </div>          </div>
 
         <!-- PRIVATE MATCH section -->
         <div id="lobby-private-section" style="display:none">
-          <!-- Tower to Tower: classic create/join -->
-          <div id="private-t2t-ui">
-            <div class="lobby-settings" id="classic-settings-panel">
-              <div class="lobby-settings-title">Match Settings</div>
-              <div class="lobby-settings-row">
-                <label for="classic-start-income">Start Income</label>
-                <input id="classic-start-income" type="number" min="0" max="1000" step="0.5" value="10">
-              </div>
-            </div>
-            <div class="lobby-section">
-              <button class="lobby-btn primary" id="btn-create">&#x2694; Private Match</button>
-            </div>
-            <div class="lobby-divider">OR</div>
-            <div class="lobby-section">
-              <label for="join-name-input">Your Name</label>
-              <input id="join-name-input" type="text" maxlength="20"
-                     placeholder="Player" autocomplete="off" spellcheck="false">
-              <label for="join-code-input">Room Code</label>
-              <input id="join-code-input" type="text" maxlength="6"
-                     placeholder="XXXXXX" autocomplete="off" spellcheck="false">
-              <button class="lobby-btn secondary" id="btn-join">&#x1F6E1; Join Room</button>
-            </div>
-            <div id="room-code-row" style="display:none">
-              <div id="room-code-display"></div>
-              <button class="lobby-btn secondary small" id="btn-copy-code" type="button">Copy Code</button>
-              <button class="lobby-btn secondary small" id="btn-copy-link" type="button">Copy Link</button>
-            </div>
-          </div>
-          <!-- Tower Defence: ML create/join -->
-          <div id="private-td-ui" style="display:none">
+          <!-- Private match UI (ML-based for all game types) -->
+          <div id="private-td-ui">
             <div id="lobby-ml-section">
               <div class="lobby-section">
                 <button class="lobby-btn primary" id="btn-create-ml">&#x2694; Create ML Room</button>
@@ -384,8 +402,7 @@
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+          </div>          </div>
 
         <!-- SOLO section -->
         <div id="lobby-solo-section" style="display:none">
@@ -403,8 +420,54 @@
               </div>
               <button class="lobby-btn primary" id="btn-solo-play">&#x25BA; Play Solo</button>
             </div>
+          </div>          </div>
+
+        <!-- SURVIVAL lobby section -->
+        <div id="survival-lobby-section" style="display:none">
+          <!-- Step A: pick solo vs co-op -->
+          <div id="survival-mode-pick">
+            <div class="mode-cards mode-cards-2col">
+              <div class="mode-card" id="sv-solo-card" tabindex="0">
+                <div class="mc-icon">&#x1F9D9;</div>
+                <div class="mc-label">Solo</div>
+                <div class="mc-desc">Defend alone</div>
+              </div>
+              <div class="mode-card" id="sv-coop-card" tabindex="0">
+                <div class="mc-icon">&#x1F91D;</div>
+                <div class="mc-label">2P Co-op</div>
+                <div class="mc-desc">Share a room code</div>
+              </div>
+            </div>
           </div>
-        </div>
+          <!-- Step B: room setup + waiting -->
+          <div id="survival-room-panel" style="display:none">
+            <div class="lobby-section">
+              <label for="sv-name-input">Your Name</label>
+              <input id="sv-name-input" type="text" maxlength="20" placeholder="Player" autocomplete="off">
+            </div>
+            <!-- Co-op join row -->
+            <div id="sv-coop-join-row" style="display:none">
+              <div class="lobby-section">
+                <label for="sv-join-code">Room Code (leave blank to create)</label>
+                <input id="sv-join-code" type="text" maxlength="6" placeholder="XXXXXX" autocomplete="off" style="text-transform:uppercase">
+              </div>
+            </div>
+            <div class="lobby-section">
+              <button class="lobby-btn primary" id="btn-sv-start">&#x25BA; Start</button>
+            </div>
+            <!-- Waiting panel (shown after room created) -->
+            <div id="sv-waiting-panel" style="display:none">
+              <div class="ml-lobby-title" id="sv-waiting-title">Waiting&hellip;</div>
+              <ul id="sv-player-list"></ul>
+              <div id="sv-room-code-row" style="display:none">
+                <span id="sv-room-code-display"></span>
+                <button class="lobby-btn secondary small" id="btn-copy-sv-code">Copy Code</button>
+              </div>
+              <div class="lobby-section" style="margin-top:10px">
+                <button class="lobby-btn primary" id="btn-sv-ready">&#x2714; Ready</button>
+              </div>
+            </div>
+          </div>          </div>
 
         <!-- ML lobby waiting panel (shown after create/join) -->
         <div id="ml-lobby-panel" style="display:none">
@@ -436,9 +499,8 @@
             <div id="ml-room-code-display"></div>
             <button class="lobby-btn secondary small" id="btn-copy-ml-code" type="button">Copy Code</button>
             <button class="lobby-btn secondary small" id="btn-copy-ml-link" type="button">Copy Link</button>
-          </div>
-        </div>
-      </div>
+          </div>          </div>
+        </div>      </div>
 
       <!-- Wizard Navigation -->
       <div id="wizard-nav">
@@ -461,8 +523,7 @@
       </div>
 
       <!-- Version tag -->
-      <div class="lobby-version">v1.0</div>
-    </div>
+      <div class="lobby-version">v1.0</div>      </div>
   </div>
 
   <!-- LEADERBOARD OVERLAY -->
@@ -505,11 +566,10 @@
         <button class="lb-page-btn" id="lb-prev-btn" disabled>&#x25C4; Prev</button>
         <span id="lb-page-info">Page 1</span>
         <button class="lb-page-btn" id="lb-next-btn" disabled>Next &#x25BA;</button>
-      </div>
-    </div>
+      </div>      </div>
   </div>
 
-  <!-- GAME CANVAS â€” hidden until match_ready -->
+  <!-- GAME CANVAS Ã¢â‚¬â€ hidden until match_ready -->
   <div id="game-canvas-wrap">
     <canvas id="game-canvas"></canvas>
     <div id="game-ui">
@@ -591,6 +651,38 @@
       <div id="tower-popout" style="display:none"></div>
       <div id="action-feedback"></div>
       <div id="game-over-banner" style="display:none"></div>
+
+      <!-- SURVIVAL HUD (shown only in survival mode) -->
+      <div id="survival-hud" style="display:none;position:absolute;top:6px;left:50%;transform:translateX(-50%);display:none;flex-direction:row;gap:14px;align-items:center;background:rgba(15,20,30,0.88);border:1px solid #334155;border-radius:8px;padding:6px 14px;z-index:90;font-size:14px;font-weight:600;pointer-events:none">
+        <span id="sv-hud-wave" style="color:#e8a828">Wave <span id="sv-wave-num">â€”</span></span>
+        <span style="color:#64748b">|</span>
+        <span id="sv-hud-lives" style="color:#f87171">&#x2764; <span id="sv-lives">20</span> / <span id="sv-max-lives">20</span></span>
+        <span style="color:#64748b">|</span>
+        <span id="sv-hud-gold" style="color:#4ade80">&#x1FA99; <span id="sv-gold">0</span></span>
+        <span style="color:#64748b">|</span>
+        <span id="sv-hud-phase" style="color:#94a3b8"><span id="sv-phase-text">Get Ready</span></span>
+      </div>
+
+      <!-- SURVIVAL BOSS WARNING banner -->
+      <div id="sv-boss-banner" style="display:none;position:absolute;top:50px;left:50%;transform:translateX(-50%);background:#ef4444;color:#fff;font-weight:700;font-size:18px;padding:8px 24px;border-radius:8px;z-index:91;animation:svBossFlash 0.6s infinite alternate">
+        &#x26A0; BOSS WAVE &#x26A0;
+      </div>
+
+      <!-- SURVIVAL END-OF-RUN SUMMARY -->
+      <div id="sv-end-screen" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(10,14,22,0.92);z-index:200;display:none;flex-direction:column;align-items:center;justify-content:center">
+        <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:32px 40px;min-width:320px;max-width:480px;text-align:center">
+          <h2 id="sv-end-title" style="margin:0 0 16px;color:#e8a828">Run Complete!</h2>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+            <tr><td style="padding:6px 0;color:#94a3b8;text-align:left">Waves Cleared</td><td id="sv-end-waves" style="text-align:right;font-weight:700">â€”</td></tr>
+            <tr><td style="padding:6px 0;color:#94a3b8;text-align:left">Units Killed</td><td id="sv-end-kills" style="text-align:right;font-weight:700">â€”</td></tr>
+            <tr><td style="padding:6px 0;color:#94a3b8;text-align:left">Time Survived</td><td id="sv-end-time" style="text-align:right;font-weight:700">â€”</td></tr>
+            <tr><td style="padding:6px 0;color:#94a3b8;text-align:left">Gold Earned</td><td id="sv-end-gold" style="text-align:right;font-weight:700">â€”</td></tr>
+          </table>
+          <div style="display:flex;gap:12px;justify-content:center">
+            <button id="btn-sv-play-again" class="lobby-btn primary">&#x25BA; Play Again</button>
+            <button id="btn-sv-back-lobby" class="lobby-btn secondary">&#x2190; Lobby</button>
+          </div>          </div>
+      </div>
       <div id="disconnect-notice" style="display:none"></div>
       <div id="spectator-badge" style="display:none">SPECTATING</div>
 
@@ -621,6 +713,7 @@
             <span class="cub-name">Runner</span>
             <span class="cub-cost" id="cub-cost-runner">8g</span>
             <span class="cub-income" id="cub-income-runner">+0.5</span>
+            <span class="cub-queue" id="cub-queue-runner" style="display:none"></span>
           </button>
           <button class="cmd-unit-btn" data-unit-type="footman" id="cmd-unit-footman">
             <span class="cub-auto" data-unit-type="footman" id="cub-auto-footman">A</span>
@@ -628,6 +721,7 @@
             <span class="cub-name">Footman</span>
             <span class="cub-cost" id="cub-cost-footman">10g</span>
             <span class="cub-income" id="cub-income-footman">+1</span>
+            <span class="cub-queue" id="cub-queue-footman" style="display:none"></span>
           </button>
           <button class="cmd-unit-btn" data-unit-type="ironclad" id="cmd-unit-ironclad">
             <span class="cub-auto" data-unit-type="ironclad" id="cub-auto-ironclad">A</span>
@@ -635,6 +729,7 @@
             <span class="cub-name">Ironclad</span>
             <span class="cub-cost" id="cub-cost-ironclad">16g</span>
             <span class="cub-income" id="cub-income-ironclad">+2</span>
+            <span class="cub-queue" id="cub-queue-ironclad" style="display:none"></span>
           </button>
           <button class="cmd-unit-btn" data-unit-type="warlock" id="cmd-unit-warlock">
             <span class="cub-auto" data-unit-type="warlock" id="cub-auto-warlock">A</span>
@@ -642,6 +737,7 @@
             <span class="cub-name">Warlock</span>
             <span class="cub-cost" id="cub-cost-warlock">18g</span>
             <span class="cub-income" id="cub-income-warlock">+2</span>
+            <span class="cub-queue" id="cub-queue-warlock" style="display:none"></span>
           </button>
           <button class="cmd-unit-btn" data-unit-type="golem" id="cmd-unit-golem">
             <span class="cub-auto" data-unit-type="golem" id="cub-auto-golem">A</span>
@@ -649,6 +745,7 @@
             <span class="cub-name">Golem</span>
             <span class="cub-cost" id="cub-cost-golem">25g</span>
             <span class="cub-income" id="cub-income-golem">+3</span>
+            <span class="cub-queue" id="cub-queue-golem" style="display:none"></span>
           </button>
         </div>
         <div class="cmd-ctrl-zone">
@@ -657,24 +754,28 @@
             <button class="cmd-rate-btn" data-rate="slow">S</button>
             <button class="cmd-rate-btn cmd-rate-on" data-rate="normal">N</button>
             <button class="cmd-rate-btn" data-rate="fast">F</button>
-          </div>
-        </div>
+          </div>          </div>
+        <div id="queue-drain-bar-wrap" title="Send queue drain progress"><div id="queue-drain-bar"></div></div>
       </div>
 
       <!-- Enemy lane tint overlay (shown when viewing enemy lane) -->
       <div id="enemy-lane-tint" style="display:none"></div>
 
       <!-- ML spectate notice (shown when viewing enemy lane) -->
-      <div id="ml-spectate-notice" style="display:none">Viewing: <span id="ml-spectate-name">Player</span></div>
-    </div>
+      <div id="ml-spectate-notice" style="display:none">Viewing: <span id="ml-spectate-name">Player</span></div>      </div>
   </div>
 
-  <!-- Socket.IO client â€” version pinned to match server/package.json socket.io@4.8.3 -->
+  <!-- Socket.IO client Ã¢â‚¬â€ version pinned to match server/package.json socket.io@4.8.3 -->
   <script src="https://cdn.socket.io/4.8.3/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="auth.js?v=20260304b"></script>
-  <script src="render/assets.js?v=20260304b"></script>
+  <script src="render/assets.js?v=20260304g"></script>
   <script src="render/sprites.js?v=20260304b"></script>
-  <script src="game.js?v=20260304b"></script>
+  <script src="game.js?v=20260304g"></script>
 
 </body>
 </html>
+
+
+
+
+

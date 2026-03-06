@@ -4,6 +4,10 @@ const express  = require('express');
 const router   = express.Router();
 const jwt      = require('jsonwebtoken');
 const bcrypt   = require('bcryptjs');
+const crypto   = require('crypto');
+const fs       = require('fs');
+const fsp      = fs.promises;
+const path     = require('path');
 const log      = require('../logger');
 
 const UUID_RE      = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,7 +15,17 @@ const FLAG_NAME_RE = /^[a-z_]{1,64}$/;
 const EMAIL_RE     = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const BCRYPT_ROUNDS = 13;
 const ADMIN_JWT_TTL = '1h';
+const ADMIN_RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const VALID_ROLES   = ['viewer', 'support', 'moderator', 'editor', 'engineer', 'owner'];
+const MAX_ASSET_UPLOAD_BYTES = 2 * 1024 * 1024; // 2MB
+
+const IMAGE_MIME_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/svg+xml': '.svg',
+};
 
 // ── RBAC permission map ───────────────────────────────────────────────────────
 // Permissions accumulate up the role hierarchy
@@ -135,6 +149,60 @@ function checkAdminLoginRateLimit(ip) {
   return r.count <= 5;
 }
 
+async function createAdminPasswordResetToken(email) {
+  const db = require('../db');
+  const result = await db.query(
+    `SELECT id, email
+     FROM admin_users
+     WHERE lower(email) = lower($1) AND active = true AND password_hash IS NOT NULL
+     LIMIT 1`,
+    [email]
+  );
+  if (!result.rows.length) return null;
+
+  const adminUser = result.rows[0];
+  const raw  = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.createHmac('sha256', getAdminJwtSecret()).update(raw).digest('hex');
+  const exp  = new Date(Date.now() + ADMIN_RESET_TOKEN_TTL_MS);
+
+  await db.query(
+    `UPDATE admin_password_reset_tokens
+     SET used_at = NOW()
+     WHERE admin_user_id = $1 AND used_at IS NULL`,
+    [adminUser.id]
+  );
+  await db.query(
+    `INSERT INTO admin_password_reset_tokens (admin_user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
+    [adminUser.id, hash, exp]
+  );
+
+  return { raw, email: String(adminUser.email).toLowerCase() };
+}
+
+async function consumeAdminPasswordResetToken(rawToken, newPassword) {
+  const db = require('../db');
+  const hash = crypto.createHmac('sha256', getAdminJwtSecret()).update(rawToken).digest('hex');
+  const result = await db.query(
+    `SELECT aprt.admin_user_id, aprt.expires_at, aprt.used_at, au.active
+     FROM admin_password_reset_tokens aprt
+     JOIN admin_users au ON au.id = aprt.admin_user_id
+     WHERE aprt.token_hash = $1`,
+    [hash]
+  );
+  if (!result.rows.length) throw new Error('Invalid or expired reset link');
+
+  const row = result.rows[0];
+  if (row.used_at) throw new Error('Reset link already used');
+  if (new Date(row.expires_at) < new Date()) throw new Error('Invalid or expired reset link');
+  if (!row.active) throw new Error('Account is inactive');
+
+  const newHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  await db.query(`UPDATE admin_password_reset_tokens SET used_at = NOW() WHERE token_hash = $1`, [hash]);
+  await db.query(`UPDATE admin_users SET password_hash = $1 WHERE id = $2`, [newHash, row.admin_user_id]);
+  return { adminUserId: row.admin_user_id };
+}
+
 // ── Admin login (email + password) ───────────────────────────────────────────
 
 // POST /admin/login
@@ -219,6 +287,60 @@ router.post('/login/2fa', async (req, res) => {
   }
 });
 
+// POST /admin/forgot-password
+// Body: { email }
+// Always returns 200 to avoid account enumeration.
+router.post('/forgot-password', async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (!checkAdminLoginRateLimit(ip)) {
+    return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  }
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  try {
+    if (EMAIL_RE.test(String(email).trim())) {
+      const tokenResult = await createAdminPasswordResetToken(String(email).trim());
+      if (tokenResult) {
+        const mailer  = require('../services/mailer');
+        const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+        const resetUrl = `${baseUrl}/admin?admin_reset=${encodeURIComponent(tokenResult.raw)}`;
+        await mailer.sendAdminPasswordReset(tokenResult.email, resetUrl);
+      }
+    }
+  } catch (err) {
+    log.error('[admin] POST /forgot-password failed', { err: err.message });
+  }
+
+  res.json({ ok: true });
+});
+
+// POST /admin/reset-password
+// Body: { token, password }
+router.post('/reset-password', async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (!checkAdminLoginRateLimit(ip)) {
+    return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  }
+  try {
+    const { token, password } = req.body || {};
+    if (!token) return res.status(400).json({ error: 'Token required' });
+    if (!password || String(password).length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 chars' });
+    }
+    const result = await consumeAdminPasswordResetToken(String(token), String(password));
+    clearAdminCookie(res);
+    await audit(require('../db'), 'reset_password', 'admin_user', result.adminUserId, {}, null, req.ip);
+    res.json({ ok: true });
+  } catch (err) {
+    const known = ['Invalid or expired reset link', 'Reset link already used', 'Account is inactive'];
+    const msg = known.includes(err.message) ? err.message : 'Password reset failed';
+    res.status(400).json({ error: msg });
+  }
+});
+
 // POST /admin/auth/google — Google SSO login for admin (must already have account)
 router.post('/auth/google', async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
@@ -276,8 +398,34 @@ router.post('/auth/google', async (req, res) => {
     setAdminCookie(res, token);
     res.json({ token, role: user.role, displayName: user.display_name, email: user.email });
   } catch (err) {
-    log.error('[admin] POST /auth/google failed', { err: err.message });
-    res.status(401).json({ error: 'Google authentication failed' });
+    const msg = String(err?.message || '');
+    let userMessage = 'Google authentication failed';
+    if (/wrong recipient|audience/i.test(msg)) {
+      userMessage = 'Google client configuration mismatch (audience/client ID).';
+    } else if (/expired|too late|used too early|not yet valid/i.test(msg)) {
+      userMessage = 'Google token timing validation failed. Try signing in again.';
+    }
+    log.error('[admin] POST /auth/google failed', { err: msg });
+    if (process.env.NODE_ENV !== 'production') {
+      let decoded = null;
+      try {
+        const parts = String(credential || '').split('.');
+        if (parts.length >= 2) {
+          decoded = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+        }
+      } catch { /* best effort */ }
+      return res.status(401).json({
+        error: userMessage,
+        debug: {
+          verifyError: msg,
+          expectedAudience: googleClientId,
+          tokenAud: decoded?.aud || null,
+          tokenAzp: decoded?.azp || null,
+          tokenIss: decoded?.iss || null,
+        },
+      });
+    }
+    res.status(401).json({ error: userMessage });
   }
 });
 
@@ -416,7 +564,14 @@ router.post('/me/2fa/disable', requireAdmin, async (req, res) => {
 router.post('/setup', async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const secret = process.env.ADMIN_SECRET;
-  if (!secret || req.headers['x-admin-secret'] !== secret) {
+  const provided = req.get('x-admin-secret') || '';
+  // Use timingSafeEqual to prevent timing-based brute-force of the bootstrap secret.
+  // Buffers must be equal length for timingSafeEqual, so pad to secret length.
+  const secretBuf   = Buffer.from(secret || '');
+  const providedBuf = Buffer.from(provided);
+  const lengthMatch = secret && providedBuf.length === secretBuf.length;
+  const valueMatch  = lengthMatch && crypto.timingSafeEqual(providedBuf, secretBuf);
+  if (!valueMatch) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const db = require('../db');
@@ -536,25 +691,72 @@ router.patch('/users/:id', requireAdmin, async (req, res) => {
 
 router.get('/stats/live', requireAdmin, (req, res) => {
   const gamesByRoomId = req.app.locals.gamesByRoomId || new Map();
-  const roomsByCode   = req.app.locals.roomsByCode   || new Map();
   const mlRoomsByCode = req.app.locals.mlRoomsByCode || new Map();
+  const partiesById   = req.app.locals.partiesById   || new Map();
   const io            = req.app.locals.io;
+  const matchmaker    = require('../services/matchmaker');
 
-  let classicGames = 0, mlGames = 0;
-  for (const [roomId] of gamesByRoomId) {
-    if (roomId.startsWith('mlroom_')) mlGames++; else classicGames++;
+  let mlGames = 0, soloGames = 0;
+  for (const [, entry] of gamesByRoomId) {
+    mlGames++;
+    if (entry && entry.botController) soloGames++;
   }
   const lobbyRooms =
-    [...roomsByCode.values()].filter(r => !gamesByRoomId.has(r.roomId)).length +
     [...mlRoomsByCode.values()].filter(r => !gamesByRoomId.has(r.roomId)).length;
+
+  const privateLobbies = [...mlRoomsByCode.values()].filter(r =>
+    !gamesByRoomId.has(r.roomId) && r.players && r.players.length > 0
+  ).length;
+
+  const queueStats = matchmaker.getQueueStats(partiesById);
 
   res.json({
     connectedSockets: io ? io.sockets.sockets.size : 0,
     activeGames: gamesByRoomId.size,
-    classicGames,
     mlGames,
+    soloGames,
     lobbyRooms,
+    privateLobbies,
+    queues: queueStats,
     adminRole: req.adminRole,
+  });
+});
+
+// GET /admin/queue — detailed queue snapshot (entries per mode + private lobbies)
+router.get('/queue', requireAdmin, (req, res) => {
+  const gamesByRoomId = req.app.locals.gamesByRoomId || new Map();
+  const mlRoomsByCode = req.app.locals.mlRoomsByCode || new Map();
+  const partiesById   = req.app.locals.partiesById   || new Map();
+  const matchmaker    = require('../services/matchmaker');
+
+  const queueStats = matchmaker.getQueueStats(partiesById);
+
+  // Private lobbies: ML rooms not yet in a game, with at least one human player
+  const privateLobbies = [...mlRoomsByCode.entries()]
+    .filter(([, r]) => !gamesByRoomId.has(r.roomId) && r.players && r.players.length > 0)
+    .map(([code, r]) => ({
+      code,
+      playerCount:  r.players.length,
+      aiCount:      (r.aiPlayers || []).length,
+      pvpMode:      r.pvpMode || '2v2',
+      createdAt:    r.createdAt || null,
+      waitMs:       r.createdAt ? Date.now() - r.createdAt : null,
+    }));
+
+  // Active solo games: ML rooms in a game that have bot controllers
+  const soloGames = [...gamesByRoomId.entries()]
+    .filter(([roomId, entry]) => roomId.startsWith('mlroom_') && entry && entry.botController)
+    .map(([roomId, entry]) => ({
+      roomId,
+      botCount: entry.botController ? entry.botController.getBotCount() : 0,
+      tick: entry.game ? entry.game.tick : 0,
+    }));
+
+  res.json({
+    queues: queueStats,
+    privateLobbies,
+    soloGames,
+    timestamp: Date.now(),
   });
 });
 
@@ -716,32 +918,20 @@ router.get('/matches', requireAdmin, async (req, res) => {
 // GET /admin/matches/live — must come before /matches/:id
 router.get('/matches/live', requireAdmin, (req, res) => {
   const gamesByRoomId = req.app.locals.gamesByRoomId || new Map();
-  const roomsByCode   = req.app.locals.roomsByCode   || new Map();
   const mlRoomsByCode = req.app.locals.mlRoomsByCode || new Map();
-  const io            = req.app.locals.io;
 
   const live = [];
   for (const [roomId, entry] of gamesByRoomId) {
-    const isML    = roomId.startsWith('mlroom_');
-    const codeMap = isML ? mlRoomsByCode : roomsByCode;
     let code = null, playerNames = [], playerCount = 0;
-    for (const [c, room] of codeMap) {
+    for (const [c, room] of mlRoomsByCode) {
       if (room.roomId !== roomId) continue;
       code = c;
-      playerCount = room.players ? room.players.length : 0;
-      if (isML) {
-        playerNames = (room.players || []).map(sid => room.playerNames?.get(sid) || 'Player');
-        playerCount += (room.aiPlayers || []).length;
-        playerNames.push(...(room.aiPlayers || []).map(a => `CPU(${a.difficulty})`));
-      } else {
-        playerNames = (room.players || []).map(sid => {
-          const sock = io?.sockets.sockets.get(sid);
-          return sock?.playerDisplayName || 'Guest';
-        });
-      }
+      playerNames = (room.players || []).map(sid => room.playerNames?.get(sid) || 'Player');
+      playerCount = (room.players || []).length + (room.aiPlayers || []).length;
+      playerNames.push(...(room.aiPlayers || []).map(a => `CPU(${a.difficulty})`));
       break;
     }
-    live.push({ roomId, code, mode: isML ? 'multilane' : 'classic', playerCount, playerNames, phase: entry.game?.phase || 'unknown' });
+    live.push({ roomId, code, mode: 'multilane', playerCount, playerNames, phase: entry.game?.phase || 'unknown' });
   }
   res.json({ live });
 });
@@ -940,6 +1130,8 @@ router.post('/players/:id/ban', requireAdmin, requirePermission('player.ban'), a
       [reason, req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
+    // Invalidate ban cache so next socket connect sees the new status immediately
+    req.app.locals.playerBanCache?.delete(req.params.id);
     await audit(db, 'ban_player', 'player', req.params.id, { reason }, req.adminEmail, req.ip);
     res.json({ player: result.rows[0] });
   } catch (err) {
@@ -959,6 +1151,7 @@ router.delete('/players/:id/ban', requireAdmin, requirePermission('player.ban'),
       [req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
+    req.app.locals.playerBanCache?.delete(req.params.id);
     await audit(db, 'unban_player', 'player', req.params.id, null, req.adminEmail, req.ip);
     res.json({ player: result.rows[0] });
   } catch (err) {
@@ -1172,6 +1365,52 @@ router.post('/game-config/:id/activate', requireAdmin, requirePermission('config
 });
 
 // ── Tower Management ──────────────────────────────────────────────────────────
+
+// POST /admin/assets/upload-image
+// Body: { fileName, mimeType, dataBase64 } where dataBase64 can be raw base64 or a data URL.
+router.post('/assets/upload-image', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const { fileName, mimeType, dataBase64 } = req.body || {};
+  const ext = IMAGE_MIME_EXT[String(mimeType || '').toLowerCase()];
+  if (!ext) {
+    return res.status(400).json({ error: 'Unsupported image type. Use PNG, JPG, WebP, GIF, or SVG.' });
+  }
+  if (!dataBase64 || typeof dataBase64 !== 'string') {
+    return res.status(400).json({ error: 'Image payload required' });
+  }
+
+  try {
+    const match = String(dataBase64).match(/^data:[^;]+;base64,(.+)$/);
+    const rawB64 = match ? match[1] : dataBase64;
+    const bytes = Buffer.from(rawB64, 'base64');
+    if (!bytes.length) return res.status(400).json({ error: 'Invalid image payload' });
+    if (bytes.length > MAX_ASSET_UPLOAD_BYTES) {
+      return res.status(400).json({ error: 'Image too large. Max size is 2MB.' });
+    }
+
+    const rootCandidates = [
+      path.join(__dirname, '..', '..', 'client'),
+      path.join(__dirname, '..', 'client'),
+    ];
+    const clientRoot =
+      rootCandidates.find((p) => fs.existsSync(path.join(p, 'index.html'))) || rootCandidates[0];
+    const uploadDir = path.join(clientRoot, 'assets', 'uploads', 'towers');
+    await fsp.mkdir(uploadDir, { recursive: true });
+
+    const safeBase = path
+      .basename(String(fileName || 'tower_asset'))
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 48) || 'tower_asset';
+    const finalName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${safeBase}${ext}`;
+    const filePath = path.join(uploadDir, finalName);
+
+    await fsp.writeFile(filePath, bytes);
+    return res.status(201).json({ url: `/assets/uploads/towers/${finalName}`, size: bytes.length });
+  } catch (err) {
+    log.error('[admin] POST /assets/upload-image error', { err: err.message });
+    return res.status(500).json({ error: 'Image upload failed' });
+  }
+});
 
 // GET /admin/towers — list all towers (with ability count)
 router.get('/towers', requireAdmin, async (req, res) => {
@@ -1421,6 +1660,745 @@ router.delete('/towers/:id/abilities/:abilityKey', requireAdmin, requirePermissi
   }
 });
 
+// ── Survival Wave Builder ─────────────────────────────────────────────────────
+
+const VALID_UNIT_TYPES_ADMIN = new Set(['runner','footman','ironclad','warlock','golem']);
+
+function validateWaveSetBody(body) {
+  const errors = [];
+  if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) errors.push('name is required');
+  if (body.starting_gold !== undefined && (Number(body.starting_gold) < 0 || !Number.isFinite(Number(body.starting_gold)))) errors.push('starting_gold must be >= 0');
+  if (body.starting_lives !== undefined && (Number(body.starting_lives) < 1 || !Number.isFinite(Number(body.starting_lives)))) errors.push('starting_lives must be >= 1');
+  return errors;
+}
+
+function validateSpawnGroupBody(body) {
+  const errors = [];
+  if (!VALID_UNIT_TYPES_ADMIN.has(body.unit_type)) errors.push('invalid unit_type');
+  if (body.count !== undefined && (Number(body.count) < 1 || !Number.isInteger(Number(body.count)))) errors.push('count must be integer >= 1');
+  if (body.spawn_interval_ms !== undefined && Number(body.spawn_interval_ms) < 100) errors.push('spawn_interval_ms must be >= 100');
+  if (body.start_delay_ms !== undefined && Number(body.start_delay_ms) < 0) errors.push('start_delay_ms must be >= 0');
+  if (body.randomize_pct !== undefined) {
+    const p = Number(body.randomize_pct);
+    if (p < 0 || p > 100) errors.push('randomize_pct must be 0-100');
+  }
+  return errors;
+}
+
+// GET /admin/survival/wave-sets
+router.get('/survival/wave-sets', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ waveSets: [] });
+  const db = require('../db');
+  try {
+    const r = await db.query(`
+      SELECT ws.*,
+        COUNT(DISTINCT w.id)::int  AS wave_count,
+        COUNT(DISTINCT sg.id)::int AS spawn_group_count
+      FROM survival_wave_sets ws
+      LEFT JOIN survival_waves w ON w.wave_set_id = ws.id
+      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
+      GROUP BY ws.id
+      ORDER BY ws.id DESC`
+    );
+    res.json({ waveSets: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /survival/wave-sets error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/survival/wave-sets/:id
+router.get('/survival/wave-sets/:id', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const setRes = await db.query(`SELECT * FROM survival_wave_sets WHERE id=$1`, [id]);
+    if (!setRes.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
+    const waveSet = setRes.rows[0];
+    const wavesRes = await db.query(`
+      SELECT w.*,
+        COALESCE(json_agg(sg ORDER BY sg.start_delay_ms, sg.id) FILTER (WHERE sg.id IS NOT NULL), '[]') AS spawn_groups
+      FROM survival_waves w
+      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
+      WHERE w.wave_set_id = $1
+      GROUP BY w.id
+      ORDER BY w.wave_number`, [id]);
+    waveSet.waves = wavesRes.rows;
+    res.json({ waveSet });
+  } catch (err) {
+    log.error('[admin] GET /survival/wave-sets/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/wave-sets
+router.post('/survival/wave-sets', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const { name, description='', enabled=true, auto_scale=true, starting_gold=150, starting_lives=20 } = req.body;
+  const errs = validateWaveSetBody({ name, starting_gold, starting_lives });
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  try {
+    const adminRes = await db.query(`SELECT id FROM admin_users WHERE email=$1 LIMIT 1`, [req.adminEmail]);
+    const adminId = adminRes.rows[0]?.id || null;
+    const r = await db.query(
+      `INSERT INTO survival_wave_sets (name,description,enabled,auto_scale,starting_gold,starting_lives,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [name.trim(), description, !!enabled, !!auto_scale, Number(starting_gold), Number(starting_lives), adminId]
+    );
+    await audit(db, 'create_wave_set', 'wave_set', r.rows[0].id, { name }, req.adminEmail, req.ip);
+    res.status(201).json({ waveSet: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] POST /survival/wave-sets error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/survival/wave-sets/:id
+router.patch('/survival/wave-sets/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  const allowed = ['name','description','enabled','auto_scale','starting_gold','starting_lives'];
+  const updates = {};
+  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+  const errs = validateWaveSetBody(updates);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  try {
+    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+2}`).join(', ');
+    const vals = [id, ...Object.values(updates)];
+    const r = await db.query(
+      `UPDATE survival_wave_sets SET ${setClauses}, updated_at=NOW() WHERE id=$1 RETURNING *`, vals
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
+    await audit(db, 'update_wave_set', 'wave_set', id, updates, req.adminEmail, req.ip);
+    res.json({ waveSet: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PATCH /survival/wave-sets/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/survival/wave-sets/:id
+router.delete('/survival/wave-sets/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const r = await db.query(`DELETE FROM survival_wave_sets WHERE id=$1 RETURNING id`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
+    await audit(db, 'delete_wave_set', 'wave_set', id, {}, req.adminEmail, req.ip);
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /survival/wave-sets/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/wave-sets/:id/activate
+router.post('/survival/wave-sets/:id/activate', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    // Clear all active flags, then set this one
+    await db.query(`UPDATE survival_wave_sets SET is_active=false, updated_at=NOW()`);
+    const r = await db.query(
+      `UPDATE survival_wave_sets SET is_active=true, updated_at=NOW() WHERE id=$1 RETURNING *`, [id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
+    await audit(db, 'activate_wave_set', 'wave_set', id, {}, req.adminEmail, req.ip);
+    res.json({ waveSet: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] POST /survival/wave-sets/:id/activate error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/wave-sets/:id/duplicate
+router.post('/survival/wave-sets/:id/duplicate', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const srcRes = await db.query(`SELECT * FROM survival_wave_sets WHERE id=$1`, [id]);
+    if (!srcRes.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
+    const src = srcRes.rows[0];
+
+    const newSet = await db.query(
+      `INSERT INTO survival_wave_sets (name,description,enabled,auto_scale,starting_gold,starting_lives)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [`${src.name} (Copy)`, src.description, src.enabled, src.auto_scale, src.starting_gold, src.starting_lives]
+    );
+    const newId = newSet.rows[0].id;
+
+    const waves = await db.query(
+      `SELECT * FROM survival_waves WHERE wave_set_id=$1 ORDER BY wave_number`, [id]
+    );
+    for (const w of waves.rows) {
+      const newWave = await db.query(
+        `INSERT INTO survival_waves (wave_set_id,wave_number,duration_ms,gold_bonus,is_boss,is_rush,is_elite,notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [newId, w.wave_number, w.duration_ms, w.gold_bonus, w.is_boss, w.is_rush, w.is_elite, w.notes]
+      );
+      const newWaveId = newWave.rows[0].id;
+      const groups = await db.query(`SELECT * FROM survival_spawn_groups WHERE wave_id=$1`, [w.id]);
+      for (const g of groups.rows) {
+        await db.query(
+          `INSERT INTO survival_spawn_groups (wave_id,unit_type,count,spawn_interval_ms,start_delay_ms,randomize_pct)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [newWaveId, g.unit_type, g.count, g.spawn_interval_ms, g.start_delay_ms, g.randomize_pct]
+        );
+      }
+    }
+    await audit(db, 'duplicate_wave_set', 'wave_set', newId, { source_id: id }, req.adminEmail, req.ip);
+    res.status(201).json({ waveSet: newSet.rows[0] });
+  } catch (err) {
+    log.error('[admin] POST /survival/wave-sets/:id/duplicate error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/wave-sets/:id/waves
+router.post('/survival/wave-sets/:id/waves', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const waveSetId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(waveSetId)) return res.status(400).json({ error: 'Invalid wave set id' });
+  const { wave_number, duration_ms=null, gold_bonus=0, is_boss=false, is_rush=false, is_elite=false, notes='' } = req.body;
+  if (!Number.isInteger(Number(wave_number)) || Number(wave_number) < 1) {
+    return res.status(400).json({ error: 'wave_number must be integer >= 1' });
+  }
+  if (Number(gold_bonus) < 0) return res.status(400).json({ error: 'gold_bonus must be >= 0' });
+  try {
+    const r = await db.query(
+      `INSERT INTO survival_waves (wave_set_id,wave_number,duration_ms,gold_bonus,is_boss,is_rush,is_elite,notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [waveSetId, Number(wave_number), duration_ms ? Number(duration_ms) : null,
+       Number(gold_bonus), !!is_boss, !!is_rush, !!is_elite, String(notes)]
+    );
+    await audit(db, 'create_wave', 'wave', r.rows[0].id, { wave_set_id: waveSetId, wave_number }, req.adminEmail, req.ip);
+    res.status(201).json({ wave: { ...r.rows[0], spawn_groups: [] } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: `Wave ${wave_number} already exists in this set` });
+    log.error('[admin] POST /survival/wave-sets/:id/waves error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/survival/wave-sets/:id/waves/:waveNum
+router.patch('/survival/wave-sets/:id/waves/:waveNum', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const waveSetId = parseInt(req.params.id, 10);
+  const waveNum   = parseInt(req.params.waveNum, 10);
+  if (!Number.isFinite(waveSetId) || !Number.isFinite(waveNum)) return res.status(400).json({ error: 'Invalid params' });
+  const allowed = ['duration_ms','gold_bonus','is_boss','is_rush','is_elite','notes'];
+  const updates = {};
+  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  try {
+    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+3}`).join(', ');
+    const vals = [waveSetId, waveNum, ...Object.values(updates)];
+    const r = await db.query(
+      `UPDATE survival_waves SET ${setClauses} WHERE wave_set_id=$1 AND wave_number=$2 RETURNING *`, vals
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Wave not found' });
+    await audit(db, 'update_wave', 'wave', r.rows[0].id, updates, req.adminEmail, req.ip);
+    res.json({ wave: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PATCH /survival/wave-sets/:id/waves/:waveNum error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/survival/wave-sets/:id/waves/:waveNum
+router.delete('/survival/wave-sets/:id/waves/:waveNum', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const waveSetId = parseInt(req.params.id, 10);
+  const waveNum   = parseInt(req.params.waveNum, 10);
+  if (!Number.isFinite(waveSetId) || !Number.isFinite(waveNum)) return res.status(400).json({ error: 'Invalid params' });
+  try {
+    const r = await db.query(
+      `DELETE FROM survival_waves WHERE wave_set_id=$1 AND wave_number=$2 RETURNING id`, [waveSetId, waveNum]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Wave not found' });
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /survival/wave-sets/:id/waves/:waveNum error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/wave-sets/:id/waves/bulk-scale
+router.post('/survival/wave-sets/:id/waves/bulk-scale', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const waveSetId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(waveSetId)) return res.status(400).json({ error: 'Invalid wave set id' });
+  const fromWave = parseInt(req.body.fromWave, 10);
+  const toWave   = parseInt(req.body.toWave, 10);
+  const scalePct = Number(req.body.scalePct);
+  if (!Number.isFinite(fromWave) || !Number.isFinite(toWave) || fromWave > toWave) {
+    return res.status(400).json({ error: 'fromWave and toWave must be valid integers with fromWave <= toWave' });
+  }
+  if (!Number.isFinite(scalePct) || scalePct < -90 || scalePct > 1000) {
+    return res.status(400).json({ error: 'scalePct must be between -90 and 1000' });
+  }
+  const mult = 1 + scalePct / 100;
+  try {
+    const waves = await db.query(
+      `SELECT w.id FROM survival_waves w WHERE w.wave_set_id=$1 AND w.wave_number BETWEEN $2 AND $3`,
+      [waveSetId, fromWave, toWave]
+    );
+    if (waves.rows.length === 0) return res.status(404).json({ error: 'No waves found in that range' });
+    for (const w of waves.rows) {
+      await db.query(
+        `UPDATE survival_spawn_groups SET count=GREATEST(1, CEIL(count * $1::numeric)::int) WHERE wave_id=$2`,
+        [mult, w.id]
+      );
+    }
+    await audit(db, 'bulk_scale_waves', 'wave_set', waveSetId, { fromWave, toWave, scalePct }, req.adminEmail, req.ip);
+    res.json({ ok: true, wavesUpdated: waves.rows.length });
+  } catch (err) {
+    log.error('[admin] POST /survival/wave-sets/:id/waves/bulk-scale error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/survival/waves/:waveId/spawn-groups
+router.post('/survival/waves/:waveId/spawn-groups', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const waveId = parseInt(req.params.waveId, 10);
+  if (!Number.isFinite(waveId)) return res.status(400).json({ error: 'Invalid wave id' });
+  const { unit_type, count=1, spawn_interval_ms=1000, start_delay_ms=0, randomize_pct=0 } = req.body;
+  const errs = validateSpawnGroupBody({ unit_type, count, spawn_interval_ms, start_delay_ms, randomize_pct });
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  try {
+    const r = await db.query(
+      `INSERT INTO survival_spawn_groups (wave_id,unit_type,count,spawn_interval_ms,start_delay_ms,randomize_pct)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [waveId, unit_type, Number(count), Number(spawn_interval_ms), Number(start_delay_ms), Number(randomize_pct)]
+    );
+    await audit(db, 'create_spawn_group', 'spawn_group', r.rows[0].id, { waveId, unit_type }, req.adminEmail, req.ip);
+    res.status(201).json({ spawnGroup: r.rows[0] });
+  } catch (err) {
+    if (err.code === '23503') return res.status(404).json({ error: 'Wave not found' });
+    log.error('[admin] POST /survival/waves/:waveId/spawn-groups error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/survival/spawn-groups/:groupId
+router.patch('/survival/spawn-groups/:groupId', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const groupId = parseInt(req.params.groupId, 10);
+  if (!Number.isFinite(groupId)) return res.status(400).json({ error: 'Invalid group id' });
+  const allowed = ['unit_type','count','spawn_interval_ms','start_delay_ms','randomize_pct'];
+  const updates = {};
+  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  const errs = validateSpawnGroupBody(updates);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  try {
+    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+2}`).join(', ');
+    const vals = [groupId, ...Object.values(updates)];
+    const r = await db.query(
+      `UPDATE survival_spawn_groups SET ${setClauses} WHERE id=$1 RETURNING *`, vals
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Spawn group not found' });
+    await audit(db, 'update_spawn_group', 'spawn_group', groupId, updates, req.adminEmail, req.ip);
+    res.json({ spawnGroup: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PATCH /survival/spawn-groups/:groupId error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/survival/spawn-groups/:groupId
+router.delete('/survival/spawn-groups/:groupId', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const groupId = parseInt(req.params.groupId, 10);
+  if (!Number.isFinite(groupId)) return res.status(400).json({ error: 'Invalid group id' });
+  try {
+    const r = await db.query(`DELETE FROM survival_spawn_groups WHERE id=$1 RETURNING id`, [groupId]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Spawn group not found' });
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /survival/spawn-groups/:groupId error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/survival/wave-sets/:id/preview
+router.get('/survival/wave-sets/:id/preview', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ waves: [] });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const UNIT_HP = { runner: 60, footman: 90, ironclad: 160, warlock: 80, golem: 240 };
+  const UNIT_BOUNTY = { runner: 2, footman: 3, ironclad: 4, warlock: 5, golem: 6 };
+
+  try {
+    const wavesRes = await db.query(`
+      SELECT w.wave_number, w.is_boss, w.gold_bonus,
+        COALESCE(json_agg(sg ORDER BY sg.start_delay_ms, sg.id) FILTER (WHERE sg.id IS NOT NULL), '[]') AS spawn_groups
+      FROM survival_waves w
+      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
+      WHERE w.wave_set_id=$1
+      GROUP BY w.id
+      ORDER BY w.wave_number`, [id]);
+
+    const preview = wavesRes.rows.map(w => {
+      let totalUnits = 0, totalHp = 0, goldValue = w.gold_bonus || 0;
+      for (const g of (w.spawn_groups || [])) {
+        const n = Number(g.count) || 0;
+        const hp = UNIT_HP[g.unit_type] || 60;
+        const hpMult = w.is_boss ? 2 : 1;
+        const bounty = UNIT_BOUNTY[g.unit_type] || 2;
+        totalUnits += n;
+        totalHp    += n * hp * hpMult;
+        goldValue  += n * bounty;
+      }
+      return { waveNum: w.wave_number, totalUnits, totalHp: Math.round(totalHp), goldValue };
+    });
+    res.json({ waves: preview });
+  } catch (err) {
+    log.error('[admin] GET /survival/wave-sets/:id/preview error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Unit Types CRUD ────────────────────────────────────────────────────────────
+
+const UNIT_TYPE_FIELDS = [
+  'key','name','description','behavior_mode','enabled','display_to_players',
+  'hp','attack_damage','attack_speed','range','path_speed',
+  'damage_type','armor_type','damage_reduction_pct',
+  'send_cost','build_cost','income','refund_pct',
+  'barracks_scales_hp','barracks_scales_dmg',
+  'icon_url','sprite_url','animation_url',
+  'sprite_url_front','sprite_url_back',
+  'animation_url_front','animation_url_back',
+  'idle_sprite_url','idle_sprite_url_front','idle_sprite_url_back',
+  'sound_spawn','sound_attack','sound_hit','sound_death',
+];
+const UNIT_KEY_RE       = /^[a-z_][a-z0-9_]{0,63}$/;
+const VALID_BEHAVIOR    = ['fixed','moving','both'];
+const VALID_DAMAGE_TYPES = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
+const VALID_ARMOR_TYPES  = ['UNARMORED','LIGHT','MEDIUM','HEAVY','MAGIC'];
+
+function validateUnitTypeBody(body) {
+  const errs = [];
+  if (body.key !== undefined && !UNIT_KEY_RE.test(body.key))
+    errs.push('key must be lowercase letters/numbers/underscores, 1–64 chars');
+  if (body.behavior_mode !== undefined && !VALID_BEHAVIOR.includes(body.behavior_mode))
+    errs.push('invalid behavior_mode');
+  if (body.damage_type !== undefined && !VALID_DAMAGE_TYPES.includes(body.damage_type))
+    errs.push('invalid damage_type');
+  if (body.armor_type !== undefined && !VALID_ARMOR_TYPES.includes(body.armor_type))
+    errs.push('invalid armor_type');
+  if (body.damage_reduction_pct !== undefined) {
+    const v = Number(body.damage_reduction_pct);
+    if (!Number.isFinite(v) || v < 0 || v > 80) errs.push('damage_reduction_pct must be 0–80');
+  }
+  if (body.refund_pct !== undefined) {
+    const v = Number(body.refund_pct);
+    if (!Number.isFinite(v) || v < 0 || v > 100) errs.push('refund_pct must be 0–100');
+  }
+  return errs;
+}
+
+function unitTypeQuery(db, whereClause, vals) {
+  return db.query(`
+    SELECT u.*,
+      COALESCE(json_agg(
+        json_build_object('ability_key', a.ability_key, 'params', a.params)
+        ORDER BY a.id
+      ) FILTER (WHERE a.id IS NOT NULL), '[]') AS abilities
+    FROM unit_types u
+    LEFT JOIN unit_type_ability_assignments a ON a.unit_type_id = u.id
+    ${whereClause || ''}
+    GROUP BY u.id
+    ORDER BY u.id
+  `, vals);
+}
+
+// GET /admin/unit-types
+router.get('/unit-types', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ unitTypes: [] });
+  const db = require('../db');
+  try {
+    const r = await unitTypeQuery(db, '', []);
+    res.json({ unitTypes: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /unit-types error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/unit-types/:id
+router.get('/unit-types/:id', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(404).json({ error: 'Not found' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const r = await unitTypeQuery(db, 'WHERE u.id=$1', [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json({ unitType: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] GET /unit-types/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/unit-types/reload  (must be before :id route to avoid ambiguity)
+router.post('/unit-types/reload', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  try {
+    const unitTypesModule = require('../unitTypes');
+    await unitTypesModule.reloadUnitTypes();
+    res.json({ ok: true, count: unitTypesModule.getAllUnitTypes().length });
+  } catch (err) {
+    log.error('[admin] POST /unit-types/reload error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/unit-types
+router.post('/unit-types', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  if (!req.body.key || !req.body.name) return res.status(400).json({ error: 'key and name required' });
+  const errs = validateUnitTypeBody(req.body);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  try {
+    const cols = UNIT_TYPE_FIELDS.filter(f => req.body[f] !== undefined);
+    const vals = cols.map(f => req.body[f]);
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+    const r = await db.query(
+      `INSERT INTO unit_types (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`, vals
+    );
+    const ut = { ...r.rows[0], abilities: [] };
+    await audit(db, 'create_unit_type', 'unit_type', ut.id, { key: ut.key }, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    res.status(201).json({ unitType: ut });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'A unit type with that key already exists' });
+    log.error('[admin] POST /unit-types error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /admin/unit-types/:id
+router.patch('/unit-types/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  const errs = validateUnitTypeBody(req.body);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  const updates = {};
+  for (const f of UNIT_TYPE_FIELDS) if (req.body[f] !== undefined) updates[f] = req.body[f];
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  try {
+    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i + 2}`).join(', ');
+    const r = await db.query(
+      `UPDATE unit_types SET ${setClauses}, updated_at=NOW() WHERE id=$1 RETURNING *`,
+      [id, ...Object.values(updates)]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    await audit(db, 'update_unit_type', 'unit_type', id, updates, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    res.json({ unitType: r.rows[0] });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'A unit type with that key already exists' });
+    log.error('[admin] PATCH /unit-types/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/unit-types/:id
+router.delete('/unit-types/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const r = await db.query(`DELETE FROM unit_types WHERE id=$1 RETURNING id, key`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    await audit(db, 'delete_unit_type', 'unit_type', id, { key: r.rows[0].key }, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /unit-types/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/unit-types/:id/abilities
+router.post('/unit-types/:id/abilities', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  const { ability_key, params = {} } = req.body;
+  if (!ability_key) return res.status(400).json({ error: 'ability_key required' });
+  try {
+    const r = await db.query(
+      `INSERT INTO unit_type_ability_assignments (unit_type_id, ability_key, params)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [id, ability_key, JSON.stringify(params)]
+    );
+    await audit(db, 'attach_unit_ability', 'unit_type', id, { ability_key }, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    res.status(201).json({ assignment: r.rows[0] });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Ability already attached' });
+    if (err.code === '23503') return res.status(404).json({ error: 'Unit type or ability not found' });
+    log.error('[admin] POST /unit-types/:id/abilities error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/unit-types/:id/abilities/:key
+router.delete('/unit-types/:id/abilities/:key', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  const abilityKey = req.params.key;
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const r = await db.query(
+      `DELETE FROM unit_type_ability_assignments WHERE unit_type_id=$1 AND ability_key=$2 RETURNING id`,
+      [id, abilityKey]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Assignment not found' });
+    await audit(db, 'detach_unit_ability', 'unit_type', id, { ability_key: abilityKey }, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /unit-types/:id/abilities/:key error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Unit Display Fields ────────────────────────────────────────────────────────
+
+// GET /admin/unit-display-fields
+router.get('/unit-display-fields', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ fields: [] });
+  const db = require('../db');
+  try {
+    const r = await db.query('SELECT * FROM unit_display_fields ORDER BY sort_order');
+    res.json({ fields: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /unit-display-fields error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /admin/unit-display-fields/:fieldKey
+router.put('/unit-display-fields/:fieldKey', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const { fieldKey } = req.params;
+  const { visible_to_players } = req.body;
+  if (typeof visible_to_players !== 'boolean') {
+    return res.status(400).json({ error: 'visible_to_players must be boolean' });
+  }
+  try {
+    const r = await db.query(
+      `UPDATE unit_display_fields SET visible_to_players=$1 WHERE field_key=$2 RETURNING *`,
+      [visible_to_players, fieldKey]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Field not found' });
+    await audit(db, 'update_unit_display_field', 'unit_display_field', fieldKey,
+      { visible_to_players }, req.adminEmail, req.ip);
+    res.json({ field: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PUT /unit-display-fields/:fieldKey error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Barracks Levels CRUD ───────────────────────────────────────────────────────
+
+// GET /admin/barracks-levels
+router.get('/barracks-levels', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ levels: [] });
+  const db = require('../db');
+  try {
+    const r = await db.query(`SELECT * FROM barracks_levels ORDER BY level`);
+    res.json({ levels: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /barracks-levels error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /admin/barracks-levels/:level
+router.put('/barracks-levels/:level', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const level = parseInt(req.params.level, 10);
+  if (!Number.isFinite(level) || level < 1 || level > 99)
+    return res.status(400).json({ error: 'level must be 1–99' });
+  const { multiplier, upgrade_cost = 0, notes = '' } = req.body;
+  if (multiplier === undefined) return res.status(400).json({ error: 'multiplier required' });
+  const mult = Number(multiplier);
+  if (!Number.isFinite(mult) || mult < 0.1 || mult > 100)
+    return res.status(400).json({ error: 'multiplier must be 0.1–100' });
+  try {
+    const r = await db.query(
+      `INSERT INTO barracks_levels (level, multiplier, upgrade_cost, notes)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (level) DO UPDATE SET
+         multiplier   = EXCLUDED.multiplier,
+         upgrade_cost = EXCLUDED.upgrade_cost,
+         notes        = EXCLUDED.notes,
+         updated_at   = NOW()
+       RETURNING *`,
+      [level, mult, Number(upgrade_cost), String(notes)]
+    );
+    await audit(db, 'upsert_barracks_level', 'barracks_level', level, { multiplier: mult }, req.adminEmail, req.ip);
+    require('../barracksLevels').reloadBarracksLevels().catch(() => {});
+    res.json({ level: r.rows[0] });
+  } catch (err) {
+    log.error('[admin] PUT /barracks-levels/:level error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /admin/barracks-levels/:level
+router.delete('/barracks-levels/:level', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const level = parseInt(req.params.level, 10);
+  if (!Number.isFinite(level)) return res.status(400).json({ error: 'Invalid level' });
+  try {
+    const r = await db.query(`DELETE FROM barracks_levels WHERE level=$1 RETURNING level`, [level]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Level not found' });
+    require('../barracksLevels').reloadBarracksLevels().catch(() => {});
+    res.json({ deleted: true });
+  } catch (err) {
+    log.error('[admin] DELETE /barracks-levels/:level error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 router.get('/audit-log', requireAdmin, async (req, res) => {
@@ -1440,6 +2418,125 @@ router.get('/audit-log', requireAdmin, async (req, res) => {
     res.json({ entries: rows.rows, total: parseInt(total.rows[0].cnt, 10) });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Phase H: Asset Packs CRUD ─────────────────────────────────────────────────
+
+router.get('/asset-packs', requireAdmin, async (req, res) => {
+  const db = req.app.locals.db;
+  try {
+    const packs = await db.query(
+      `SELECT ap.*,
+              COALESCE(json_agg(api ORDER BY api.id) FILTER (WHERE api.id IS NOT NULL), '[]') AS items
+         FROM asset_packs ap
+         LEFT JOIN asset_pack_items api ON api.pack_id = ap.id
+        GROUP BY ap.id
+        ORDER BY ap.id`
+    );
+    res.json(packs.rows);
+  } catch (err) {
+    log.error('[admin] asset-packs list error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/asset-packs', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const db = req.app.locals.db;
+  const { key, name, description = '', enabled = true } = req.body;
+  if (!key || !name) return res.status(400).json({ error: 'key and name required' });
+  try {
+    const r = await db.query(
+      `INSERT INTO asset_packs (key, name, description, enabled)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [key.trim(), name.trim(), description.trim(), !!enabled]
+    );
+    res.json(r.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'key already exists' });
+    log.error('[admin] asset-packs create error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.patch('/asset-packs/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const db = req.app.locals.db;
+  const { name, description, enabled } = req.body;
+  try {
+    const r = await db.query(
+      `UPDATE asset_packs
+          SET name        = COALESCE($1, name),
+              description = COALESCE($2, description),
+              enabled     = COALESCE($3, enabled)
+        WHERE id = $4 RETURNING *`,
+      [name || null, description != null ? description : null, enabled != null ? !!enabled : null, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch (err) {
+    log.error('[admin] asset-packs patch error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/asset-packs/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const db = req.app.locals.db;
+  try {
+    await db.query(`DELETE FROM asset_packs WHERE id = $1`, [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('[admin] asset-packs delete error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Asset Pack Items
+router.post('/asset-packs/:id/items', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const db = req.app.locals.db;
+  const { unit_type_key, asset_slot, url } = req.body;
+  if (!unit_type_key || !asset_slot || !url) return res.status(400).json({ error: 'unit_type_key, asset_slot, url required' });
+  if (!['icon', 'sprite', 'animation'].includes(asset_slot)) return res.status(400).json({ error: 'invalid asset_slot' });
+  try {
+    const r = await db.query(
+      `INSERT INTO asset_pack_items (pack_id, unit_type_key, asset_slot, url)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (pack_id, unit_type_key, asset_slot) DO UPDATE SET url = EXCLUDED.url
+       RETURNING *`,
+      [req.params.id, unit_type_key.trim(), asset_slot, url.trim()]
+    );
+    res.json(r.rows[0]);
+  } catch (err) {
+    log.error('[admin] asset-pack-items upsert error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/asset-packs/:id/items/:itemId', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  const db = req.app.locals.db;
+  try {
+    await db.query(`DELETE FROM asset_pack_items WHERE id = $1 AND pack_id = $2`, [req.params.itemId, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('[admin] asset-pack-items delete error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Public endpoint: resolved asset pack items for a given pack key
+router.get('/asset-packs/:key/resolve', async (req, res) => {
+  const db = req.app.locals.db;
+  try {
+    const r = await db.query(
+      `SELECT api.unit_type_key, api.asset_slot, api.url
+         FROM asset_pack_items api
+         JOIN asset_packs ap ON ap.id = api.pack_id
+        WHERE ap.key = $1 AND ap.enabled = TRUE`,
+      [req.params.key]
+    );
+    res.json(r.rows);
+  } catch (err) {
+    log.error('[admin] asset-pack resolve error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

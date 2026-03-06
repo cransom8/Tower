@@ -53,18 +53,25 @@ const Auth = (() => {
   // ── Google Sign-In ───────────────────────────────────────────────────────────
 
   async function handleGoogleCredential(response) {
+    if (!response?.credential) {
+      throw new Error('Google did not return a credential. Confirm this origin is allowed for your Google client ID.');
+    }
     const res = await fetch('/auth/google', {
       method:      'POST',
       credentials: 'include',
       headers:     { 'Content-Type': 'application/json' },
       body:        JSON.stringify({ idToken: response.credential }),
     });
-    if (!res.ok) throw new Error('Sign-in failed — please try again');
-    const data = await res.json();
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+    if (!res.ok) {
+      const detail = data?.debug?.verifyError ? ` (${data.debug.verifyError})` : '';
+      throw new Error((data.error || raw || 'Sign-in failed. Please try again.') + detail);
+    }
     _store(data.accessToken, data.refreshToken, data.player);
     return data.player;
   }
-
   // ── Password auth ────────────────────────────────────────────────────────────
 
   async function loginWithPassword(email, password) {

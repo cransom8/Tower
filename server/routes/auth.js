@@ -91,8 +91,32 @@ router.post('/google', async (req, res) => {
 
     res.json(await issueTokens(player, res));
   } catch (err) {
-    log.error('[auth] google error', { err: err.message });
-    res.status(401).json({ error: 'Authentication failed' });
+    const msg = String(err?.message || '');
+    let userMessage = 'Google authentication failed';
+    if (/wrong recipient|audience/i.test(msg)) {
+      userMessage = 'Google client configuration mismatch (audience/client ID).';
+    } else if (/expired|too late|used too early|not yet valid/i.test(msg)) {
+      userMessage = 'Google token timing validation failed. Try signing in again.';
+    }
+    log.error('[auth] google error', { err: msg });
+    if (process.env.NODE_ENV !== 'production') {
+      let decoded = null;
+      try {
+        const parts = String(req.body?.idToken || '').split('.');
+        if (parts.length >= 2) {
+          decoded = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+        }
+      } catch { /* best effort */ }
+      return res.status(401).json({
+        error: userMessage,
+        debug: {
+          verifyError: msg,
+          tokenAud: decoded?.aud || null,
+          tokenIss: decoded?.iss || null,
+        },
+      });
+    }
+    res.status(401).json({ error: userMessage });
   }
 });
 

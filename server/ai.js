@@ -7,6 +7,7 @@
  */
 
 const simMl = require("./sim-multilane");
+const { DAMAGE_MULTIPLIERS } = require("./sim-core");
 
 const TICK_INTERVALS = { easy: 800, medium: 380, hard: 180 };
 
@@ -101,14 +102,6 @@ const DIFFICULTY_PROFILE = {
     serpentineIntervalTicks: 2,
     mazeCoreWallsTarget: 28,
   },
-};
-
-const DAMAGE_MULTIPLIERS = {
-  PIERCE: { UNARMORED: 1.35, LIGHT: 1.20, MEDIUM: 1.00, HEAVY: 0.75, MAGIC: 0.85 },
-  NORMAL: { UNARMORED: 1.10, LIGHT: 1.00, MEDIUM: 1.00, HEAVY: 0.95, MAGIC: 0.90 },
-  SPLASH: { UNARMORED: 1.10, LIGHT: 1.25, MEDIUM: 1.20, HEAVY: 0.80, MAGIC: 0.85 },
-  SIEGE: { UNARMORED: 0.90, LIGHT: 0.90, MEDIUM: 1.00, HEAVY: 1.35, MAGIC: 0.80 },
-  MAGIC: { UNARMORED: 1.00, LIGHT: 1.05, MEDIUM: 1.00, HEAVY: 0.95, MAGIC: 1.40 },
 };
 
 function getDamageMultiplier(damageType, armorType) {

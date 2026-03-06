@@ -10,7 +10,10 @@
       "Bash(ls:*)",
       "Bash(python3:*)",
       "Bash(C:/Users/Crans/castle-defender/client/styles.css:*)",
-      "Bash(~/.claude/projects/C--Users-Crans-castle-defender/memory/MEMORY.md:*)"
+      "Bash(~/.claude/projects/C--Users-Crans-castle-defender/memory/MEMORY.md:*)",
+      "Bash(wc:*)",
+      "Bash(pkill:*)",
+      "Bash(grep:*)"
     ]
   }
 }

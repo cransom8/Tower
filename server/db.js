@@ -1,17 +1,18 @@
 'use strict';
 
 const { Pool } = require('pg');
+const log = require('./logger');
 
-// SSL: Railway requires rejectUnauthorized:false by default.
-// Set DATABASE_SSL_REJECT_UNAUTHORIZED=true to enforce cert validation in environments
-// that provide a trusted CA (e.g. self-managed Postgres with a real cert).
+// SSL: In production, cert validation is enforced by default (rejectUnauthorized: true).
+// Set DATABASE_SSL_REJECT_UNAUTHORIZED=false only in staging/dev environments that use
+// self-signed certs. Never disable in production.
 const isLocal = (process.env.DATABASE_URL || '').includes('localhost') ||
                 (process.env.DATABASE_URL || '').includes('127.0.0.1');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL && !isLocal
-    ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' }
+    ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
     : false,
 });
 

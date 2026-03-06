@@ -23,7 +23,7 @@ function requireAuth(req, res, next) {
 function optionalAuth(req, res, next) {
   const token = extractToken(req);
   if (token) {
-    try { req.player = verifyAccessToken(token); } catch { /* guest */ }
+    try { req.player = verifyAccessToken(token); } catch { /* ignore */ }
   }
   next();
 }

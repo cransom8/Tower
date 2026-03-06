@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db     = require('./db');
 
-const BCRYPT_ROUNDS = 12;
+const BCRYPT_ROUNDS = 13;
 
 const KNOWN_AUTH_ERRORS = new Set([
   'Invalid refresh token',
@@ -172,7 +172,10 @@ async function createPasswordResetToken(email) {
 
   const playerId = res.rows[0].id;
   const raw  = crypto.randomBytes(32).toString('hex');
-  const hash = crypto.createHmac('sha256', JWT_SECRET).update(raw).digest('hex');
+  // H3: use SHA-256 (not HMAC keyed with JWT_SECRET) so token security is
+  // independent of the signing secret; 32 random bytes give sufficient entropy
+  // to make preimage attacks infeasible without a keyed function.
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
   const exp  = new Date(Date.now() + RESET_TOKEN_TTL_MS);
 
   // Invalidate any existing unused tokens for this player
@@ -192,7 +195,7 @@ async function createPasswordResetToken(email) {
 }
 
 async function consumePasswordResetToken(rawToken, newPassword) {
-  const hash = crypto.createHmac('sha256', JWT_SECRET).update(rawToken).digest('hex');
+  const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
   const res  = await db.query(
     `SELECT prt.player_id, prt.expires_at, prt.used_at, p.status
      FROM password_reset_tokens prt
@@ -233,7 +236,7 @@ const VERIFY_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 async function createEmailVerificationToken(playerId) {
   const raw  = crypto.randomBytes(32).toString('hex');
-  const hash = crypto.createHmac('sha256', JWT_SECRET).update(raw).digest('hex');
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
   const exp  = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
 
   // Invalidate any existing unused tokens for this player
@@ -253,7 +256,7 @@ async function createEmailVerificationToken(playerId) {
 }
 
 async function consumeEmailVerificationToken(rawToken) {
-  const hash = crypto.createHmac('sha256', JWT_SECRET).update(rawToken).digest('hex');
+  const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
   const res  = await db.query(
     `SELECT evt.player_id, evt.expires_at, evt.used_at,
             p.id, p.display_name, p.region, p.status

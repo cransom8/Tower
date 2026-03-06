@@ -295,10 +295,25 @@ button:hover, .btn:hover { background: var(--border); }
 .btn-danger:hover  { background: #ff6b63; border-color: #ff6b63; }
 .btn-success { background: var(--success); border-color: var(--success); color: #fff; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-link {
+  background: transparent;
+  border-color: transparent;
+  color: var(--primary);
+  justify-content: center;
+}
+.btn-link:hover {
+  background: rgba(56, 139, 253, 0.12);
+  border-color: rgba(56, 139, 253, 0.25);
+}
 
 /* ── Forms ── */
 .form-group { margin-bottom: 14px; }
 label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.field-help {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.35;
+}
 input, select, textarea {
   width: 100%;
   padding: 8px 12px;
@@ -506,6 +521,33 @@ input:focus, select:focus { border-color: var(--primary); }
   gap: 16px;
 }
 
+.tower-kanban {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.tower-kanban-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  min-height: 120px;
+}
+
+.tower-kanban-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.tower-kanban-col-body {
+  display: grid;
+  gap: 10px;
+}
+
 .tower-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -515,9 +557,19 @@ input:focus, select:focus { border-color: var(--primary); }
   flex-direction: column;
   gap: 10px;
   transition: border-color 0.15s;
+  cursor: pointer;
 }
 .tower-card:hover { border-color: var(--primary); }
 .tower-card--disabled { opacity: 0.55; }
+
+.tower-card-preview {
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #111;
+}
 
 .tower-card-header {
   display: flex;
@@ -665,3 +717,152 @@ input:focus, select:focus { border-color: var(--primary); }
 
 #modal-body details summary::-webkit-details-marker { color: var(--muted); }
 #modal-body details[open] summary { margin-bottom: 0; }
+
+/* ── Units tab: view toggle ─────────────────────────────────────────────── */
+.units-view-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.units-view-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  border-right: 1px solid var(--border);
+  transition: background 0.1s, color 0.1s;
+}
+.units-view-btn:last-child { border-right: none; }
+.units-view-btn.active { background: var(--primary); color: #fff; }
+.units-view-btn:hover:not(.active) { background: var(--card); color: var(--text); }
+
+/* ── Unit kanban grid ────────────────────────────────────────────────────── */
+.unit-kanban-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  padding: 4px 2px;
+}
+.unit-kanban-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s, box-shadow 0.15s;
+  position: relative;
+  text-align: center;
+}
+.unit-kanban-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.unit-kanban-card.ukc-disabled { opacity: 0.5; }
+.ukc-display-dot {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+.ukc-display-dot.on  { background: var(--success); }
+.ukc-display-dot.off { background: var(--danger); }
+.ukc-icon {
+  width: 60px; height: 60px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--surface);
+  display: block;
+  margin: 0 auto 8px;
+}
+.ukc-icon-placeholder {
+  width: 60px; height: 60px;
+  border-radius: 6px;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  margin: 0 auto 8px;
+}
+.ukc-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.ukc-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  line-height: 1.4;
+  min-height: 30px;
+}
+.ukc-badges {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.ukc-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 8px;
+  font-size: 10px;
+  text-align: left;
+  margin-bottom: 8px;
+}
+.ukc-stat-label { color: var(--muted); }
+.ukc-stat-val   { color: var(--text); font-weight: 600; text-align: right; }
+.ukc-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+
+/* ── Display Settings section ────────────────────────────────────────────── */
+.display-settings-section { margin-top: 32px; }
+.display-settings-section h3 { margin: 0 0 4px; }
+.display-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px;
+  margin: 12px 0;
+}
+.display-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.display-field-row label { cursor: pointer; flex: 1; user-select: none; }
+.display-field-row input[type=checkbox] { cursor: pointer; }
+.display-preview-wrap {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.display-preview-card {
+  background: var(--card);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  padding: 14px;
+  width: 200px;
+  text-align: center;
+}
+.display-preview-card .ukc-icon-placeholder { margin: 0 auto 8px; }
+.display-preview-card .ukc-name { margin-bottom: 6px; }
+.display-preview-card .ukc-stats { font-size: 11px; }
+.display-preview-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 6px;
+}
+

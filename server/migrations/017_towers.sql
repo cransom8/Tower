@@ -67,6 +67,40 @@ CREATE TABLE IF NOT EXISTS tower_ability_assignments (
 CREATE INDEX IF NOT EXISTS idx_tower_abilities_asgn_tower
   ON tower_ability_assignments(tower_id);
 
+-- Normalize existing data before adding uniqueness:
+-- keep the oldest tower row per case-insensitive name.
+WITH ranked AS (
+  SELECT
+    id,
+    ROW_NUMBER() OVER (PARTITION BY lower(name) ORDER BY id) AS rn,
+    MIN(id) OVER (PARTITION BY lower(name)) AS keep_id
+  FROM towers
+),
+dups AS (
+  SELECT id AS dup_id, keep_id
+  FROM ranked
+  WHERE rn > 1
+)
+INSERT INTO tower_ability_assignments (tower_id, ability_key, params)
+SELECT d.keep_id, taa.ability_key, taa.params
+FROM dups d
+JOIN tower_ability_assignments taa ON taa.tower_id = d.dup_id
+ON CONFLICT (tower_id, ability_key) DO NOTHING;
+
+WITH ranked AS (
+  SELECT
+    id,
+    ROW_NUMBER() OVER (PARTITION BY lower(name) ORDER BY id) AS rn
+  FROM towers
+)
+DELETE FROM towers t
+USING ranked r
+WHERE t.id = r.id
+  AND r.rn > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS towers_name_lower_uniq
+  ON towers (lower(name));
+
 -- ── Seed: predefined ability templates ───────────────────────────────────────
 INSERT INTO tower_abilities (key, name, category, description, param_schema) VALUES
   ('splash_damage',   'Splash Damage',            'damage',        'Deals damage in an area around the primary target.',

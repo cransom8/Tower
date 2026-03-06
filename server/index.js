@@ -12,8 +12,9 @@ const { Server } = require("socket.io");
 
 const crypto = require("crypto");
 
-const sim = require("./sim");
 const simMl = require("./sim-multilane");
+const { stringToSeed } = require("./sim-core");
+const simSurvival = require("./sim-survival");
 let aiRuntime;
 try {
   // Monorepo layout: server/index.js + ../ai/*
@@ -57,31 +58,139 @@ try {
         };
       },
     };
-    console.warn("[ai] new ai runtime module not found; using legacy adapter fallback");
+    // log deferred â€" logger loaded after this block
+    process.stderr.write(JSON.stringify({ level: 'warn', ts: new Date().toISOString(), msg: '[ai] new ai runtime module not found; using legacy adapter fallback' }) + '\n');
   }
 }
 const authService = require("./auth");
 const matchmaker = require("./services/matchmaker");
 const log = require("./logger");
+const unitTypes = require("./unitTypes");
+const barracksLevels = require("./barracksLevels");
 const db = process.env.DATABASE_URL ? require("./db") : null;
 const ratingService = process.env.DATABASE_URL ? require("./services/rating") : null;
 const seasonService = process.env.DATABASE_URL ? require("./services/season") : null;
 const gameConfig    = require("./gameConfig");
+
+// â"€â"€ Loadout helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+function loadoutEntry(ut) {
+  return {
+    id:           ut.id,
+    key:          ut.key,
+    name:         ut.name,
+    send_cost:    Number(ut.send_cost)    || 0,
+    hp:           Number(ut.hp)           || 0,
+    attack_damage:Number(ut.attack_damage)|| 0,
+    attack_speed: Number(ut.attack_speed) || 1,
+    range:        Number(ut.range)        || 0,
+    path_speed:   Number(ut.path_speed)   || 0,
+    damage_type:  ut.damage_type          || 'NORMAL',
+    armor_type:   ut.armor_type           || 'UNARMORED',
+    income:       Number(ut.income)       || 0,
+    icon_url:     ut.icon_url             || null,
+    sprite_url:   ut.sprite_url           || null,
+    animation_url: ut.animation_url       || null,
+    sprite_url_front: ut.sprite_url_front || null,
+    sprite_url_back: ut.sprite_url_back   || null,
+    animation_url_front: ut.animation_url_front || null,
+    animation_url_back: ut.animation_url_back   || null,
+    idle_sprite_url: ut.idle_sprite_url || null,
+    idle_sprite_url_front: ut.idle_sprite_url_front || null,
+    idle_sprite_url_back: ut.idle_sprite_url_back || null,
+  };
+}
+
+// Resolve a player's loadout to an array of exactly 5 unit type objects.
+// Only unit types with behavior_mode='both' are allowed.
+// Falls back to the 5 cheapest enabled 'both' unit types by default.
+async function resolveLoadout(playerId, loadoutSlot, inlineUnitTypeIds) {
+  const all    = unitTypes.getAllUnitTypes();
+  const byId   = {};
+  for (const ut of all) byId[ut.id] = ut;
+
+  let ids = null;
+
+  // Authenticated player with a saved slot
+  if (Number.isInteger(loadoutSlot) && loadoutSlot >= 0 && loadoutSlot <= 3 && db && playerId) {
+    try {
+      const row = await db.query(
+        'SELECT unit_type_ids FROM loadouts WHERE player_id = $1 AND slot = $2',
+        [playerId, loadoutSlot]
+      ).then(r => r.rows[0]);
+      if (row) ids = row.unit_type_ids;
+    } catch { /* fall through to default */ }
+  }
+
+  // Guest inline IDs
+  if (!ids && Array.isArray(inlineUnitTypeIds) && inlineUnitTypeIds.length === 5) {
+    ids = inlineUnitTypeIds;
+  }
+
+  // Resolve IDs â†' enabled moving unit types
+  if (ids) {
+    const resolved = ids
+      .map(id => byId[id])
+      .filter(ut => ut && ut.enabled && ut.behavior_mode === 'both');
+    if (resolved.length === 5) return resolved.map(loadoutEntry);
+  }
+
+  // Default: cheapest 5 enabled moving units
+  const moving = all
+    .filter(ut => ut.enabled && ut.behavior_mode === 'both')
+    .sort((a, b) => (Number(a.send_cost) || 0) - (Number(b.send_cost) || 0));
+  return moving.slice(0, 5).map(loadoutEntry);
+}
+
+function hasValidInlineLoadoutIds(unitTypeIds) {
+  if (!Array.isArray(unitTypeIds) || unitTypeIds.length !== 5) return false;
+  const allowedIds = new Set(
+    unitTypes.getAllUnitTypes()
+      .filter(ut => ut.enabled && ut.behavior_mode === "both")
+      .map(ut => ut.id)
+  );
+  return unitTypeIds.every(id => {
+    const parsed = Number(id);
+    return Number.isInteger(parsed) && allowedIds.has(parsed);
+  });
+}
+
+function validateLoadoutSelection(socket, loadoutSlot, unitTypeIds) {
+  const validSlot = Number.isInteger(loadoutSlot) && loadoutSlot >= 0 && loadoutSlot <= 3;
+  if (!validSlot) {
+    socket.emit("error_message", { message: "Select a loadout slot before starting a match." });
+    return false;
+  }
+  if (socket.playerId) return true;
+  if (hasValidInlineLoadoutIds(unitTypeIds)) return true;
+  socket.emit("error_message", { message: "Save a temporary loadout before starting as a guest." });
+  return false;
+}
+
 if (db) {
   gameConfig.loadActiveConfigs(db).catch(err =>
-    log.warn('game config load failed, using hardcoded defaults', { err: err.message })
+    log.warn('game config load failed, using hardcoded defaults', {
+      err: err && (err.stack || err.message || String(err)),
+      code: err?.code || null,
+      name: err?.name || null,
+    })
   );
 }
 
 const app = express();
+// M5: validate ALLOWED_ORIGIN is never a wildcard when credentials=true
+const _corsOrigin = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
+if (_corsOrigin === '*' || _corsOrigin.includes('*')) {
+  throw new Error('[startup] ALLOWED_ORIGIN cannot be a wildcard when credentials=true');
+}
 // H-4: restrict CORS to known origin; wildcard is unsafe for auth endpoints
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  origin: _corsOrigin,
   methods: ['GET', 'POST', 'PATCH'],
   credentials: true,
 }));
-app.use(express.json());
-// Minimal cookie parser — populates req.cookies without adding a dependency
+app.use(express.json({ limit: '8mb' }));
+// Minimal cookie parser â€" populates req.cookies without adding a dependency
 app.use((req, _res, next) => {
   const cookies = {};
   for (const pair of String(req.headers.cookie || '').split(';')) {
@@ -95,12 +204,19 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ── Security headers ──────────────────────────────────────────────────────────
+// â"€â"€ Security headers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.use((_req, res, next) => {
-  const isAdminDocument = _req.path === '/admin.html';
+  const isAdminDocument = _req.path === '/admin.html' || _req.path === '/admin';
   const scriptSrc = isAdminDocument
     ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
     : "script-src 'self' https://accounts.google.com https://cdn.socket.io; ";
+
+  // Google Identity popup flow can fail silently under strict COOP.
+  // Allow popups on the admin document so GIS callback can complete.
+  if (isAdminDocument) {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  }
 
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -123,7 +239,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-// ── Auth + player routes ──────────────────────────────────────────────────────
+// â"€â"€ Auth + player routes â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 app.use("/auth",    require("./routes/auth"));
 app.use("/players", require("./routes/players"));
 app.use("/parties", require("./routes/parties"));
@@ -131,6 +247,7 @@ app.use("/queue",   require("./routes/queue"));
 app.use("/matches",     require("./routes/matches"));
 app.use("/leaderboard", require("./routes/leaderboard"));
 app.use("/admin",       require("./routes/admin"));
+app.use("/api/loadouts", require("./routes/loadouts"));
 
 // Public config for client (Google Client ID etc.)
 app.get("/config", (_req, res) => {
@@ -140,7 +257,7 @@ app.get("/config", (_req, res) => {
   });
 });
 
-// Public tower catalog — returns enabled towers with abilities
+// Public tower catalog â€" returns enabled towers with abilities
 app.get("/api/towers", async (_req, res) => {
   if (!db) return res.json({ towers: [] });
   try {
@@ -161,6 +278,21 @@ app.get("/api/towers", async (_req, res) => {
     log.error('[api] GET /api/towers error', { err: err.message });
     res.json({ towers: [] });
   }
+});
+
+// Public unit type catalog — returns enabled, player-visible unit types + display field config
+app.get("/api/unit-types", async (_req, res) => {
+  const all = unitTypes.getAllUnitTypes().filter(
+    ut => ut.enabled && ut.display_to_players !== false
+  );
+  let displayFields = null;
+  if (db) {
+    try {
+      const r = await db.query('SELECT * FROM unit_display_fields ORDER BY sort_order');
+      displayFields = r.rows;
+    } catch { /* table may not exist until migration 026 runs */ }
+  }
+  res.json({ unitTypes: all, displayFields });
 });
 
 // Serve web app client at both / and /client for production compatibility.
@@ -220,7 +352,7 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
   return true;
 };
 
-// ── Cookie parsing helper ─────────────────────────────────────────────────────
+// â"€â"€ Cookie parsing helper â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 function parseCookies(cookieStr) {
   const out = {};
   for (const pair of String(cookieStr || '').split(';')) {
@@ -233,8 +365,8 @@ function parseCookies(cookieStr) {
   return out;
 }
 
-// ── Socket.IO auth middleware ─────────────────────────────────────────────────
-// Auth is optional — guests without a token continue as before.
+// â"€â"€ Socket.IO auth middleware â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+// Auth is optional â€" guests without a token continue as before.
 // Accepts token from handshake.auth.token (legacy) or cd_access cookie.
 // Authenticated players get socket.playerId / socket.playerDisplayName attached.
 // Banned players get socket.playerBanned = true; requireAuthSocket checks this.
@@ -246,53 +378,50 @@ io.use(async (socket, next) => {
       const payload = authService.verifyAccessToken(token);
       socket.playerId          = payload.sub;
       socket.playerDisplayName = payload.displayName;
-      // Check ban status (non-blocking; treat DB errors as not-banned)
+      // Check ban status with cache (M6: avoid DB hit on every connect)
       if (db) {
         try {
-          const r = await db.query(`SELECT status FROM players WHERE id = $1`, [payload.sub]);
-          if (r.rows[0]?.status === 'suspended') socket.playerBanned = true;
+          const cached = playerBanCache.get(payload.sub);
+          if (cached && Date.now() - cached.cachedAt < PLAYER_BAN_CACHE_TTL_MS) {
+            if (cached.suspended) socket.playerBanned = true;
+          } else {
+            const r = await db.query(`SELECT status FROM players WHERE id = $1`, [payload.sub]);
+            const suspended = r.rows[0]?.status === 'suspended';
+            playerBanCache.set(payload.sub, { suspended, cachedAt: Date.now() });
+            if (suspended) socket.playerBanned = true;
+          }
         } catch { /* ignore */ }
       }
-    } catch { /* invalid/expired — treat as guest */ }
+    } catch { /* invalid/expired â€" treat as guest */ }
   }
   next();
 });
-
-const ALLOWED_ACTION_TYPES = new Set([
-  "spawn_unit",
-  "build_tower",
-  "upgrade_tower",
-  "sell_tower",
-  "upgrade_barracks",
-  "set_autosend",
-  "set_tower_target",
-]);
 
 const DEFAULT_MATCH_SETTINGS = Object.freeze({
   startIncome: 10,
 });
 
-// code -> { roomId, players: [socketId], sidesBySocketId: Map<socketId, side>, createdAt }
-const roomsByCode = new Map();
 // code -> { roomId, players:[socketId], laneBySocketId:Map, readySet:Set, playerNames:Map, createdAt, mode:"multilane", hostSocketId }
 const mlRoomsByCode = new Map();
-// socketId -> { code, roomId, side } | { code, roomId, laneIndex, mode:"multilane" }
+// code -> { roomId, players:[socketId], laneBySocketId:Map, readySet:Set, playerNames:Map, hostSocketId, coopMode:bool, createdAt }
+const survivalRoomsByCode = new Map();
+// socketId -> { code, roomId, side } | { code, roomId, laneIndex, mode:"multilane" } | { code, roomId, laneIndex, mode:"survival" }
 const sessionBySocketId = new Map();
 
 // roomId -> { game, tickHandle, snapshotEveryNTicks }
 const gamesByRoomId = new Map();
 
-// ── Competitive in-memory state ───────────────────────────────────────────────
+// â"€â"€ Competitive in-memory state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // partyId -> PartyObject
 const partiesById = new Map();
 // playerId -> partyId
 const partyByPlayerId = new Map();
 // playerId -> socketId  (only authenticated players)
 const socketByPlayerId = new Map();
-// L-4: O(1) party code lookup — kept in sync with partiesById
+// L-4: O(1) party code lookup â€" kept in sync with partiesById
 const partiesByCode = new Map();
 
-// ── Reconnect state ───────────────────────────────────────────────────────────
+// â"€â"€ Reconnect state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const RECONNECT_GRACE_MS = 120_000; // 2 minutes grace before forfeit
 // `${roomId}:${seatKey}` -> { graceHandle, expiresAt, playerId, guestId, playerName, code, mode, seatKey, prevSocketId }
 const disconnectGrace = new Map();
@@ -301,17 +430,41 @@ const disconnectGrace = new Map();
 app.locals.partiesById     = partiesById;
 app.locals.partyByPlayerId = partyByPlayerId;
 // Admin dashboard live-state access
-app.locals.gamesByRoomId   = gamesByRoomId;
-app.locals.roomsByCode     = roomsByCode;
-app.locals.mlRoomsByCode   = mlRoomsByCode;
-app.locals.socketByPlayerId = socketByPlayerId;
+app.locals.gamesByRoomId      = gamesByRoomId;
+app.locals.mlRoomsByCode      = mlRoomsByCode;
+app.locals.survivalRoomsByCode = survivalRoomsByCode;
+app.locals.socketByPlayerId   = socketByPlayerId;
+// playerBanCache assigned to app.locals below after declaration
 
-// fix #4: per-socket rate-limit counters
+// Per-socket rate-limit counters (resets on reconnect â€" see IP limit below for bypass prevention)
 // socketId -> { lobbyCount, lobbyWindowStart, actionCount, actionWindowStart }
 const rateLimitBySocketId = new Map();
 
-function checkLobbyRateLimit(socketId) {
+// H5: IP-based lobby rate limit â€" persists across reconnects
+// ip -> { count, windowStart }
+const lobbyRateLimitByIp = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [ip, r] of lobbyRateLimitByIp) {
+    if (r.windowStart < cutoff) lobbyRateLimitByIp.delete(ip);
+  }
+}, 60_000).unref();
+
+// M6: per-player ban status cache (5min TTL) to avoid a DB hit on every socket connect
+// playerId -> { suspended: bool, cachedAt: number }
+const playerBanCache = new Map();
+app.locals.playerBanCache     = playerBanCache; // admin ban/unban should call .delete(playerId)
+const PLAYER_BAN_CACHE_TTL_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - PLAYER_BAN_CACHE_TTL_MS;
+  for (const [id, v] of playerBanCache) {
+    if (v.cachedAt < cutoff) playerBanCache.delete(id);
+  }
+}, 60_000).unref();
+
+function checkLobbyRateLimit(socketId, ip) {
   const now = Date.now();
+  // Socket-level limit
   let r = rateLimitBySocketId.get(socketId);
   if (!r) {
     r = { lobbyCount: 0, lobbyWindowStart: now, actionCount: 0, actionWindowStart: now };
@@ -322,7 +475,19 @@ function checkLobbyRateLimit(socketId) {
     r.lobbyWindowStart = now;
   }
   r.lobbyCount++;
-  return r.lobbyCount <= 10; // max 10 create_room / join_room per minute
+  if (r.lobbyCount > 10) return false; // max 10 lobby ops per minute per socket
+
+  // H5: IP-level limit â€" prevents bypass via reconnect; allows 20/min per IP
+  if (ip) {
+    let ipR = lobbyRateLimitByIp.get(ip);
+    if (!ipR || now - ipR.windowStart > 60_000) {
+      ipR = { count: 0, windowStart: now };
+      lobbyRateLimitByIp.set(ip, ipR);
+    }
+    ipR.count++;
+    if (ipR.count > 20) return false;
+  }
+  return true;
 }
 
 function checkActionRateLimit(socketId) {
@@ -347,9 +512,9 @@ function generateCode(len = 6) {
   return Array.from(bytes, b => chars[b % chars.length]).join('');
 }
 
-// ── Reconnect token helpers ───────────────────────────────────────────────────
+// â"€â"€ Reconnect token helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const jwt = require("jsonwebtoken");
-const RECONNECT_JWT_SECRET = process.env.JWT_SECRET; // required — server/auth.js throws at startup if unset
+const RECONNECT_JWT_SECRET = process.env.JWT_SECRET; // required â€" server/auth.js throws at startup if unset
 
 function issueReconnectToken(roomId, code, mode, seatKey, socket) {
   return jwt.sign(
@@ -377,7 +542,7 @@ function normalizeMatchSettings(settings) {
   return { startIncome };
 }
 
-// ── Match logging helpers ────────────────────────────────────────────────────
+// â"€â"€ Match logging helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 async function logMatchStart(roomId, mode) {
   if (!db) return null;
@@ -398,127 +563,42 @@ async function logMatchEnd(matchIdPromise, winnerLane, playerSnapshots) {
   if (!db) return;
   const matchId = await matchIdPromise;
   if (!matchId) return;
+  const client = await db.getClient();
   try {
-    await db.query(
+    await client.query('BEGIN');
+    await client.query(
       `UPDATE matches SET status='completed', ended_at=NOW(), winner_lane=$1 WHERE id=$2`,
       [winnerLane ?? null, matchId]
     );
-    for (const { playerId, laneIndex, result } of playerSnapshots) {
-      await db.query(
-        `INSERT INTO match_players (match_id, player_id, lane_index, result) VALUES ($1, $2, $3, $4)`,
-        [matchId, playerId, laneIndex, result]
+    if (playerSnapshots.length > 0) {
+      const placeholders = playerSnapshots.map((_, i) =>
+        `($1, ${i * 3 + 2}, ${i * 3 + 3}, ${i * 3 + 4})`
+      ).join(', ');
+      const params = [matchId];
+      for (const { playerId, laneIndex, result } of playerSnapshots) {
+        params.push(playerId, laneIndex, result);
+      }
+      await client.query(
+        `INSERT INTO match_players (match_id, player_id, lane_index, result) VALUES ${placeholders}`,
+        params
       );
     }
+    await client.query('COMMIT');
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     log.error('[match] close failed:', { err: err.message });
+  } finally {
+    client.release();
   }
 }
 
-function createRoom(settings) {
-  let code;
-  do code = generateCode(6);
-  while (roomsByCode.has(code));
-  const roomId = `room_${code}`;
-  roomsByCode.set(code, {
-    roomId,
-    players: [],
-    sidesBySocketId: new Map(),
-    createdAt: Date.now(),
-    settings: normalizeMatchSettings(settings),
-  });
-  return { code, roomId };
-}
 
-function startGame(roomId, settings) {
-  if (gamesByRoomId.has(roomId)) return;
-
-  const game = sim.createGame(settings);
-  const snapshotEveryNTicks = 2; // 20hz tick, 10hz snapshots
-
-  // Snapshot authenticated players for DB logging (captured at start, before room cleanup)
-  const playerSnapshot = [];
-  for (const [, room] of roomsByCode.entries()) {
-    if (room.roomId !== roomId) continue;
-    for (const [sid, side] of room.sidesBySocketId.entries()) {
-      const sock = io.sockets.sockets.get(sid);
-      if (sock?.playerId) {
-        playerSnapshot.push({ playerId: sock.playerId, laneIndex: side === "bottom" ? 0 : 1 });
-      }
-    }
-    break;
-  }
-  const matchIdPromise = logMatchStart(roomId, "classic");
-
-  let localTick = 0;
-  const tickHandle = setInterval(() => {
-    const entry = gamesByRoomId.get(roomId);
-    if (!entry) return;
-
-    sim.tick(entry.game);
-    localTick++;
-
-    if (localTick % snapshotEveryNTicks === 0) {
-      io.to(roomId).emit("state_snapshot", sim.createSnapshot(entry.game));
-    }
-
-    if (entry.game.phase === "ended") {
-      const winner = entry.game.winner;
-      io.to(roomId).emit("game_over", { winner });
-      const winnerLane = winner === "bottom" ? 0 : winner === "top" ? 1 : null;
-      const snapshots = entry.playerSnapshot.map(p => ({
-        ...p,
-        result: winnerLane === null ? "draw" : p.laneIndex === winnerLane ? "win" : "loss",
-      }));
-      logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
-      stopGame(roomId);
-    }
-  }, sim.TICK_MS);
-
-  gamesByRoomId.set(roomId, { game, tickHandle, snapshotEveryNTicks, matchIdPromise, playerSnapshot });
-
-  // Issue reconnect tokens to human players
-  for (const [rCode, room] of roomsByCode.entries()) {
-    if (room.roomId !== roomId) continue;
-    for (const [sid, side] of room.sidesBySocketId.entries()) {
-      const sock = io.sockets.sockets.get(sid);
-      if (!sock) continue;
-      const rToken = issueReconnectToken(roomId, rCode, "classic", side, sock);
-      sock.emit("reconnect_token", { token: rToken, gracePeriodMs: RECONNECT_GRACE_MS });
-    }
-    break;
-  }
-
-  log.info('game started', { roomId });
-}
-
-function stopGame(roomId) {
-  const entry = gamesByRoomId.get(roomId);
-  if (!entry) return;
-  clearInterval(entry.tickHandle);
-  gamesByRoomId.delete(roomId);
-  log.info('game stopped', { roomId });
-
-  // fix #5: schedule room cleanup 60 s after game ends to prevent indefinite memory leak
-  const handle = setTimeout(() => {
-    for (const [code, room] of roomsByCode.entries()) {
-      if (room.roomId === roomId) {
-        roomsByCode.delete(code);
-        log.info('room cleaned up', { code, reason: 'post-game timeout' });
-        break;
-      }
-    }
-  }, 60_000);
-  for (const [, room] of roomsByCode.entries()) {
-    if (room.roomId === roomId) { room._cleanupHandle = handle; break; }
-  }
-}
-
-// ── Multi-Lane helpers ───────────────────────────────────────────────────────
+// â"€â"€ Multi-Lane helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function createMLRoom(hostSocketId, displayName, settings) {
   let code;
   do code = generateCode(6);
-  while (roomsByCode.has(code) || mlRoomsByCode.has(code));
+  while (mlRoomsByCode.has(code));
   const roomId = `mlroom_${code}`;
   const room = {
     roomId,
@@ -671,10 +751,34 @@ function startMLGame(roomId, code, io) {
       laneTeams[a.laneIndex] = a.team || "red";
     }
   }
-  const game = simMl.createMLGame(playerCount, { ...room.settings, laneTeams });
+  const matchSeedStr = buildMlMatchSeed(roomId, code, laneAssignments);
+  const matchSeedNum = stringToSeed(matchSeedStr);
+  const game = simMl.createMLGame(playerCount, { ...room.settings, laneTeams, matchSeed: matchSeedNum });
 
   io.to(roomId).emit("ml_match_ready", { code, playerCount, laneAssignments, aiEngine: "new_bot_controller_v1" });
-  io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
+  const _mlBaseConfig = simMl.createMLPublicConfig(room.settings);
+  io.to(roomId).emit("ml_match_config", _mlBaseConfig);
+
+  // Per-player loadout resolution (non-blocking â€" arrives shortly after match_ready)
+  if (!room.loadoutByLane) room.loadoutByLane = [];
+  Promise.all(room.players.map(async sid => {
+    const sock = io.sockets.sockets.get(sid);
+    if (!sock) return;
+    const laneIdx = room.laneBySocketId.get(sid);
+    const loadout = await resolveLoadout(
+      sock.playerId || null,
+      sock.pendingLoadoutSlot,
+      sock.pendingUnitTypeIds
+    );
+    sock.pendingLoadoutSlot = null;
+    sock.pendingUnitTypeIds = null;
+    room.loadoutByLane[laneIdx] = loadout;
+    // Phase D: wire loadout key order into lane.autosend so auto-send respects slot order
+    if (game.lanes[laneIdx]) {
+      game.lanes[laneIdx].autosend.loadoutKeys = loadout.map(ut => ut.key);
+    }
+    sock.emit("ml_match_config", { loadout });
+  })).catch(err => log.error('[loadout] resolve error', { err: err.message }));
   const botController = aiList.length > 0
     ? aiRuntime.createBotController({
       game,
@@ -711,7 +815,7 @@ function startMLGame(roomId, code, io) {
 
   const eliminatedNotified = new Set();
   let localTick = 0;
-  const snapshotEveryNTicks = 2;
+  const snapshotEveryNTicks = 10; // Phase B: 10 ticks = 0.5s at 20Hz
 
   const tickHandle = setInterval(() => {
     const entry = gamesByRoomId.get(roomId);
@@ -745,6 +849,25 @@ function startMLGame(roomId, code, io) {
 
     if (localTick % snapshotEveryNTicks === 0) {
       io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+    }
+
+    // Phase D: emit per-player queue_update every 5 ticks (250ms at 20Hz)
+    if (localTick % 5 === 0) for (const sid of room.players) {
+      const laneIdx = room.laneBySocketId.get(sid);
+      if (laneIdx === undefined) continue;
+      const qLane = entry.game.lanes[laneIdx];
+      if (!qLane) continue;
+      const qSock = io.sockets.sockets.get(sid);
+      if (!qSock) continue;
+      const queues = {};
+      for (const k of qLane.sendQueue) queues[k] = (queues[k] || 0) + 1;
+      qSock.emit("queue_update", {
+        queues,
+        drainProgress: simMl.SEND_INTERVAL_TICKS > 0
+          ? qLane.sendDrainCounter / simMl.SEND_INTERVAL_TICKS : 0,
+        totalQueued: qLane.sendQueue.length,
+        queueCap: simMl.QUEUE_CAP,
+      });
     }
 
     if (entry.game.phase === "ended") {
@@ -845,7 +968,161 @@ function stopMLGame(roomId, code) {
   if (room) room._cleanupHandle = handle;
 }
 
-// ── Friends helpers ────────────────────────────────────────────────────────────
+// â"€â"€ Survival helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+async function loadActiveWaveSet() {
+  if (!db) return null;
+  try {
+    const setRes = await db.query(
+      `SELECT * FROM survival_wave_sets WHERE is_active = true LIMIT 1`
+    );
+    if (!setRes.rows[0]) return null;
+    const waveSet = setRes.rows[0];
+
+    const wavesRes = await db.query(
+      `SELECT w.*, COALESCE(
+         json_agg(sg ORDER BY sg.start_delay_ms, sg.id) FILTER (WHERE sg.id IS NOT NULL), '[]'
+       ) AS spawn_groups
+       FROM survival_waves w
+       LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
+       WHERE w.wave_set_id = $1
+       GROUP BY w.id
+       ORDER BY w.wave_number`,
+      [waveSet.id]
+    );
+    waveSet.waves = wavesRes.rows;
+    return waveSet;
+  } catch (err) {
+    log.error('[survival] loadActiveWaveSet error', { err: err.message });
+    return null;
+  }
+}
+
+function createSurvivalRoom(hostSocketId, displayName, coopMode) {
+  let code;
+  do code = generateCode(6);
+  while (mlRoomsByCode.has(code) || survivalRoomsByCode.has(code));
+  const roomId = `svroom_${code}`;
+  const room = {
+    roomId,
+    players: [hostSocketId],
+    laneBySocketId: new Map([[hostSocketId, 0]]),
+    playerNames: new Map([[hostSocketId, sanitizeDisplayName(displayName)]]),
+    readySet: new Set(),
+    hostSocketId,
+    coopMode: !!coopMode,
+    createdAt: Date.now(),
+    mode: "survival",
+  };
+  survivalRoomsByCode.set(code, room);
+  return { code, roomId };
+}
+
+async function startSurvivalGame(roomId, code, io) {
+  if (gamesByRoomId.has(roomId)) return;
+  const room = survivalRoomsByCode.get(code);
+  if (!room) return;
+
+  // Load wave set from DB (or use minimal fallback)
+  let waveSet = await loadActiveWaveSet();
+  if (!waveSet) {
+    waveSet = {
+      id: null, name: "Default", description: "", auto_scale: true,
+      starting_gold: 150, starting_lives: 20, waves: [],
+    };
+  }
+
+  const playerCount = room.players.length;
+  const survivalSeedNum = stringToSeed(`${roomId}:${code}:survival`);
+  const game = simSurvival.createSurvivalGame(playerCount, waveSet, survivalSeedNum);
+
+  const playerSnapshot = room.players
+    .map(sid => {
+      const sock = io.sockets.sockets.get(sid);
+      return sock?.playerId
+        ? { playerId: sock.playerId, laneIndex: room.laneBySocketId.get(sid) }
+        : null;
+    })
+    .filter(Boolean);
+
+  const matchIdPromise = logMatchStart(roomId, "survival");
+
+  // Announce match ready
+  const laneAssignments = room.players.map(sid => ({
+    laneIndex: room.laneBySocketId.get(sid),
+    displayName: room.playerNames.get(sid) || "Player",
+  }));
+  io.to(roomId).emit("survival_match_ready", { code, playerCount, laneAssignments, waveSetName: waveSet.name });
+  // Send tower/unit definitions so the client's towerMeta is populated (same event
+  // the ML client already handles via applyMatchConfig).
+  io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig({}));
+
+  let localTick = 0;
+  const snapshotEveryNTicks = 10; // Phase B: 10 ticks = 0.5s at 20Hz
+
+  const tickHandle = setInterval(() => {
+    const entry = gamesByRoomId.get(roomId);
+    if (!entry) return;
+
+    simSurvival.tickSurvival(entry.game);
+    localTick++;
+
+    // Emit wave start banner when phase transitions to SPAWNING
+    if (entry.game.wavePhase === "SPAWNING" && entry._lastWavePhase !== "SPAWNING") {
+      const waveConfig = (entry.game.config?.waves || []).find(w => w.wave_number === entry.game.waveNumber);
+      io.to(roomId).emit("survival_wave_start", {
+        waveNumber: entry.game.waveNumber,
+        isBoss:  waveConfig?.is_boss  || false,
+        isRush:  waveConfig?.is_rush  || false,
+        isElite: waveConfig?.is_elite || false,
+      });
+    }
+    entry._lastWavePhase = entry.game.wavePhase;
+
+    if (localTick % snapshotEveryNTicks === 0) {
+      io.to(roomId).emit("survival_state_snapshot", simSurvival.createSurvivalSnapshot(entry.game));
+    }
+
+    if (entry.game.phase === "ended") {
+      const snap = simSurvival.createSurvivalSnapshot(entry.game);
+      io.to(roomId).emit("survival_ended", {
+        wavesCleared: snap.totalWavesCleared,
+        killCount: snap.killCount,
+        timeSurvived: snap.timeSurvived,
+        goldEarned: snap.goldEarned,
+        wavePhase: snap.wavePhase,
+      });
+      logMatchEnd(entry.matchIdPromise, null, entry.playerSnapshot);
+      stopSurvivalGame(roomId, code);
+    }
+  }, simSurvival.TICK_MS);
+
+  gamesByRoomId.set(roomId, {
+    game,
+    tickHandle,
+    mode: "survival",
+    snapshotEveryNTicks,
+    matchIdPromise,
+    playerSnapshot,
+    _lastWavePhase: "PREP",
+  });
+
+  log.info('[survival] game started', { roomId, code, playerCount });
+}
+
+function stopSurvivalGame(roomId, code) {
+  const entry = gamesByRoomId.get(roomId);
+  if (!entry) return;
+  clearInterval(entry.tickHandle);
+  gamesByRoomId.delete(roomId);
+  log.info('[survival] game stopped', { roomId });
+  setTimeout(() => {
+    survivalRoomsByCode.delete(code);
+    log.info('[survival] room cleaned up', { code });
+  }, 60_000);
+}
+
+// â"€â"€ Friends helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 /**
  * Returns the friends list for a player as:
@@ -888,7 +1165,7 @@ async function pushFriendsList(playerId) {
   sock.emit('friends_list', friends);
 }
 
-// ── Party / queue business logic ──────────────────────────────────────────────
+// â"€â"€ Party / queue business logic â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 /**
  * Remove a player from their party. Disbands the party if it becomes empty.
@@ -903,7 +1180,7 @@ function _leaveParty(socket, partyId) {
   socket.leave("party:" + partyId);
 
   if (party.members.length === 0) {
-    // Disband — remove from both indexes (L-4)
+    // Disband â€" remove from both indexes (L-4)
     if (party.status === "queued") matchmaker.removeFromQueue(partyId);
     partiesById.delete(partyId);
     partiesByCode.delete(party.code);
@@ -917,7 +1194,7 @@ function _leaveParty(socket, partyId) {
     if (newLeader) {
       party.leaderId = newLeader.playerId;
     } else {
-      // No connected member — disband
+      // No connected member â€" disband
       if (party.status === "queued") matchmaker.removeFromQueue(partyId);
       partiesById.delete(partyId);
       partiesByCode.delete(party.code);
@@ -1027,7 +1304,7 @@ function onMatchFound(partyA, partyB, mode) {
   io.to("party:" + partyB.id).emit("party_update", { party: partyB });
 }
 
-// ── Party helpers ─────────────────────────────────────────────────────────────
+// â"€â"€ Party helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 function generatePartyCode() {
   // H-5: reuses CSPRNG-based generateCode; L-4: uniqueness checked via partiesByCode
@@ -1046,7 +1323,7 @@ function requireAuthSocket(socket, cb) {
   return cb();
 }
 
-// ── Socket.IO connection ─────────────────────────────────────────────────────
+// â"€â"€ Socket.IO connection â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 io.on("connection", (socket) => {
   log.info('socket connected');
@@ -1078,7 +1355,7 @@ io.on("connection", (socket) => {
   // (e.g. user signs in while lobby is open without reloading the page).
   socket.on("authenticate", ({ token } = {}) => {
     // H-2: rate-limit JWT verify calls to prevent event-loop DoS
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!token) return;
     try {
       const payload = authService.verifyAccessToken(token);
@@ -1106,7 +1383,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ── Reconnect ──────────────────────────────────────────────────────────────────
+  // â"€â"€ Reconnect â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
   socket.on("rejoin_game", ({ token } = {}) => {
     if (!token || typeof token !== "string") {
@@ -1194,53 +1471,24 @@ io.on("connection", (socket) => {
       // Send ack first so client sets myLaneIndex before ml_match_ready fires
       socket.emit("rejoin_ack", { success: true, mode: "multilane", laneIndex, code });
       socket.emit("ml_match_ready", { code, playerCount: laneAssignments.length, laneAssignments });
-      socket.emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
+      const _reconnectConfig = simMl.createMLPublicConfig(room.settings);
+      if (room.loadoutByLane && room.loadoutByLane[laneIndex]) {
+        _reconnectConfig.loadout = room.loadoutByLane[laneIndex];
+      }
+      socket.emit("ml_match_config", _reconnectConfig);
       socket.emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
       io.to(roomId).emit("player_reconnected", { laneIndex, displayName: playerName, mode: "multilane" });
       log.info(`[reconnect] ml lane ${laneIndex} in ${roomId}`);
 
     } else {
-      const room = roomsByCode.get(code);
-      if (!room) return socket.emit("rejoin_fail", { reason: "room_gone" });
-
-      const side = seatKey;
-
-      // Remove stale socket holding this side (if any)
-      for (const [sid, s] of room.sidesBySocketId.entries()) {
-        if (s === side && sid !== socket.id) {
-          if (io.sockets.sockets.has(sid)) {
-            return socket.emit("rejoin_fail", { reason: "seat_taken" });
-          }
-          room.players = room.players.filter(p => p !== sid);
-          room.sidesBySocketId.delete(sid);
-          sessionBySocketId.delete(sid);
-          break;
-        }
-      }
-
-      const grace = disconnectGrace.get(graceKey);
-      if (grace) { clearTimeout(grace.graceHandle); disconnectGrace.delete(graceKey); }
-
-      const playerName = grace?.playerName || socket.playerDisplayName || "Player";
-
-      if (!room.players.includes(socket.id)) room.players.push(socket.id);
-      room.sidesBySocketId.set(socket.id, side);
-      socket.join(roomId);
-      sessionBySocketId.set(socket.id, { code, roomId, side });
-
-      // Send ack first so client sets myCode/mySide before state_snapshot fires
-      socket.emit("rejoin_ack", { success: true, mode: "classic", side, code });
-      socket.emit("state_snapshot", sim.createSnapshot(entry.game));
-      socket.emit("match_config", sim.createPublicConfig(room.settings));
-      io.to(roomId).emit("player_reconnected", { side, displayName: playerName, mode: "classic" });
-      log.info(`[reconnect] classic side=${side} in ${roomId}`);
+      socket.emit("rejoin_fail", { reason: "mode_unsupported" });
     }
   });
 
-  // ── Party events ─────────────────────────────────────────────────────────────
+  // â"€â"€ Party events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
   socket.on("party:create", () => {
-    if (!checkLobbyRateLimit(socket.id)) {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
     requireAuthSocket(socket, () => {
@@ -1276,7 +1524,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("party:join", ({ code } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
     requireAuthSocket(socket, () => {
@@ -1313,10 +1561,10 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ── Friends events ─────────────────────────────────────────────────────────────
+  // â"€â"€ Friends events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
   socket.on("friend:list", () => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return;
     requireAuthSocket(socket, () => {
       getFriendsList(socket.playerId).then(friends => {
@@ -1326,7 +1574,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("friend:add", ({ displayName } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return socket.emit('friend_error', { message: 'Friends require an account.' });
     if (!displayName || typeof displayName !== 'string') return;
     const name = displayName.trim().slice(0, 20);
@@ -1361,7 +1609,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("friend:accept", ({ playerId: requesterId } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return;
     if (!requesterId || typeof requesterId !== 'string') return;
     requireAuthSocket(socket, () => {
@@ -1383,7 +1631,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("friend:decline", ({ playerId: otherId } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return;
     if (!otherId || typeof otherId !== 'string') return;
     requireAuthSocket(socket, () => {
@@ -1401,7 +1649,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("friend:remove", ({ playerId: otherId } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return;
     if (!otherId || typeof otherId !== 'string') return;
     requireAuthSocket(socket, () => {
@@ -1424,7 +1672,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("party:invite", ({ targetPlayerId } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) return;
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
     if (!db) return;
     if (!targetPlayerId || typeof targetPlayerId !== 'string') return;
     requireAuthSocket(socket, () => {
@@ -1474,13 +1722,95 @@ io.on("connection", (socket) => {
     });
   });
 
-  // ── Queue events ──────────────────────────────────────────────────────────────
+  // â"€â"€ Queue events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-  socket.on("queue:enter", ({ mode } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) {
+  socket.on("queue:enter", ({ mode, loadoutSlot, unitTypeIds, filters = {}, displayName, settings, pvpMode } = {}) => {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
+
+    // ── Solo modes (no auth required — guests can play solo too) ─────────────
+    if (mode === 'solo_td' || mode === 'solo_t2t') {
+      if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
+      const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || 'Player');
+      const normalizedSettings = normalizeMatchSettings(settings);
+      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+      socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+      const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
+      const room = mlRoomsByCode.get(code);
+      sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: 'multilane' });
+      socket.join(roomId);
+      // Add bots from filters.botConfigs (default: one medium bot)
+      const botCfgs = Array.isArray(filters.botConfigs) && filters.botConfigs.length > 0
+        ? filters.botConfigs : [{ difficulty: 'medium' }];
+      const validDiffs = ['easy', 'medium', 'hard'];
+      for (const b of botCfgs) {
+        const diff = validDiffs.includes(b.difficulty) ? b.difficulty : 'medium';
+        const totalPlayers = room.players.length + (room.aiPlayers || []).length;
+        if (totalPlayers >= 4) break;
+        if (!room.aiPlayers) room.aiPlayers = [];
+        room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: pickBalancedMlTeam(room) });
+      }
+      // autoStart=true tells the client to skip the lobby waiting panel
+      socket.emit('match_found', {
+        roomCode: code, laneIndex: 0,
+        teammates: [playerDisplayName],
+        opponents: (room.aiPlayers || []).map(ai => `CPU (${ai.difficulty})`),
+        autoStart: true,
+      });
+      startMLGame(roomId, code, io);
+      log.info('solo match started via queue:enter', { code, bots: (room.aiPlayers || []).length });
+      return;
+    }
+
+    // ── Private modes (no auth required) ─────────────────────────────────────
+    if (mode === 'private_td' || mode === 'private_t2t') {
+      if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
+      const privateCode = typeof filters.privateCode === 'string'
+        ? filters.privateCode.trim().toUpperCase() : null;
+      if (!privateCode) {
+        // HOST: create a new private room
+        const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || 'Player');
+        const normalizedSettings = normalizeMatchSettings(settings);
+        const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
+        const room = mlRoomsByCode.get(code);
+        room.pvpMode = pvpMode === 'ffa' ? 'ffa' : '2v2';
+        socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+        socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+        sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: 'multilane' });
+        socket.join(roomId);
+        socket.emit('ml_room_created', { code, laneIndex: 0, displayName: playerDisplayName, settings: room.settings });
+        io.to(roomId).emit('ml_lobby_update', mlLobbyUpdatePayload(code, room));
+        log.info('private room created via queue:enter', { code });
+      } else {
+        // GUEST: join an existing private room by code
+        const room = mlRoomsByCode.get(privateCode);
+        if (!room) return socket.emit('error_message', { message: 'Room not found.' });
+        const totalInRoom = room.players.length + (room.aiPlayers || []).length;
+        if (totalInRoom >= 4) return socket.emit('error_message', { message: 'Room is full (max 4).' });
+        if (gamesByRoomId.has(room.roomId)) return socket.emit('error_message', { message: 'Game already started.' });
+        const laneIndex = room.players.length;
+        const assignedTeam = room.pvpMode === 'ffa' ? ffaTeamForLane(laneIndex) : pickBalancedMlTeam(room);
+        room.players.push(socket.id);
+        room.laneBySocketId.set(socket.id, laneIndex);
+        room.playerTeamsBySocketId.set(socket.id, assignedTeam);
+        const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || 'Player');
+        room.playerNames.set(socket.id, playerDisplayName);
+        if (room.aiPlayers) room.aiPlayers.forEach((ai, i) => { ai.laneIndex = room.players.length + i; });
+        socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+        socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+        sessionBySocketId.set(socket.id, { code: privateCode, roomId: room.roomId, laneIndex, mode: 'multilane' });
+        socket.join(room.roomId);
+        socket.emit('ml_room_joined', { code: privateCode, laneIndex, displayName: playerDisplayName });
+        io.to(room.roomId).emit('ml_lobby_update', mlLobbyUpdatePayload(privateCode, room));
+        log.info('joined private room via queue:enter', { code: privateCode });
+      }
+      return;
+    }
+
+    // ── Ranked / Casual (auth required) ──────────────────────────────────────
     requireAuthSocket(socket, () => {
+      if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
       const validModes = ["ranked_2v2", "casual_2v2"];
       const queueMode = validModes.includes(mode) ? mode : "casual_2v2";
       const dbMode = queueMode === "ranked_2v2" ? "2v2_ranked" : "2v2_casual";
@@ -1554,6 +1884,10 @@ io.on("connection", (socket) => {
         party.queueMode = queueMode;
         party.queueEnteredAt = Date.now();
 
+        // Store loadout preference on socket for use at match start
+        socket.pendingLoadoutSlot  = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+        socket.pendingUnitTypeIds  = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+
         const isPlacement = queueMode === "ranked_2v2" && rankedMatches < 10;
         matchmaker.addToQueue(partyId, {
           mode: queueMode,
@@ -1592,58 +1926,18 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("create_room", ({ settings } = {}) => {
-    // fix #4: rate-limit lobby events
-    if (!checkLobbyRateLimit(socket.id)) {
+
+  // â"€â"€ Multi-Lane lobby events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+  socket.on("create_ml_room", ({ displayName, settings, pvpMode, loadoutSlot, unitTypeIds } = {}) => {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
-    const normalizedSettings = normalizeMatchSettings(settings);
-    const { code, roomId } = createRoom(normalizedSettings);
-    const room = roomsByCode.get(code);
-
-    room.players.push(socket.id);
-    room.sidesBySocketId.set(socket.id, "bottom");
-    room.hostSocketId = socket.id;
-    sessionBySocketId.set(socket.id, { code, roomId, side: "bottom" });
-    socket.join(roomId);
-
-    socket.emit("room_created", { code, side: "bottom", settings: room.settings });
-  });
-
-  socket.on("join_room", ({ code }) => {
-    // fix #4: rate-limit lobby events
-    if (!checkLobbyRateLimit(socket.id)) {
-      return socket.emit("error_message", { message: "Too many requests. Please wait." });
-    }
-    const normalized = String(code || "").trim().toUpperCase();
-    // fix #6: exact length check before map lookup
-    if (normalized.length !== 6) return socket.emit("error_message", { message: "Invalid room code." });
-    const room = roomsByCode.get(normalized);
-
-    if (!room) return socket.emit("error_message", { message: "Room not found." });
-    if (room.players.length >= 2) return socket.emit("error_message", { message: "Room is full." });
-
-    room.players.push(socket.id);
-    room.sidesBySocketId.set(socket.id, "top");
-    sessionBySocketId.set(socket.id, { code: normalized, roomId: room.roomId, side: "top" });
-    socket.join(room.roomId);
-
-    socket.emit("room_joined", { code: normalized, side: "top" });
-    io.to(room.roomId).emit("match_ready", { code: normalized });
-
-    // Start match sim once both players are in
-    startGame(room.roomId, room.settings);
-    io.to(room.roomId).emit("match_config", sim.createPublicConfig(room.settings));
-  });
-
-  // ── Multi-Lane lobby events ────────────────────────────────────────────────
-
-  socket.on("create_ml_room", ({ displayName, settings, pvpMode } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) {
-      return socket.emit("error_message", { message: "Too many requests. Please wait." });
-    }
+    if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
     const normalizedSettings = normalizeMatchSettings(settings);
     const { code, roomId } = createMLRoom(socket.id, displayName, normalizedSettings);
+    socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+    socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
     sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
     socket.join(roomId);
     const room = mlRoomsByCode.get(code);
@@ -1658,10 +1952,11 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
   });
 
-  socket.on("join_ml_room", ({ code, displayName } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) {
+  socket.on("join_ml_room", ({ code, displayName, loadoutSlot, unitTypeIds } = {}) => {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
+    if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
     const normalized = String(code || "").trim().toUpperCase();
     if (normalized.length !== 6) return socket.emit("error_message", { message: "Invalid room code." });
     const room = mlRoomsByCode.get(normalized);
@@ -1682,6 +1977,8 @@ io.on("connection", (socket) => {
       room.aiPlayers.forEach((ai, i) => { ai.laneIndex = room.players.length + i; });
     }
 
+    socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+    socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
     sessionBySocketId.set(socket.id, { code: normalized, roomId: room.roomId, laneIndex, mode: "multilane" });
     socket.join(room.roomId);
 
@@ -1700,7 +1997,7 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(normalized, room));
 
     // Auto-start when all human players are ready and total (human + AI) >= 2
-    // FFA rooms skip auto-start — host uses force-start to control when the game begins
+    // FFA rooms skip auto-start â€" host uses force-start to control when the game begins
     const totalPlayers = room.players.length + (room.aiPlayers || []).length;
     const teamCheck = validateMlTeamSetup(room);
     if (!teamCheck.ok) {
@@ -1733,17 +2030,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("update_room_settings", ({ settings } = {}) => {
-    const session = sessionBySocketId.get(socket.id);
-    if (!session || session.mode === "multilane") return;
-    const room = roomsByCode.get(session.code);
-    if (!room) return;
-    if (gamesByRoomId.has(room.roomId)) return;
-    if (room.hostSocketId !== socket.id) return;
-    room.settings = normalizeMatchSettings(settings);
-    io.to(room.roomId).emit("room_settings_update", { settings: room.settings });
-  });
-
   socket.on("update_ml_room_settings", ({ settings } = {}) => {
     const session = sessionBySocketId.get(socket.id);
     if (!session || session.mode !== "multilane") return;
@@ -1756,7 +2042,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("add_ai_to_ml_room", ({ difficulty } = {}) => {
-    if (!checkLobbyRateLimit(socket.id)) {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
       return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
     const session = sessionBySocketId.get(socket.id);
@@ -1888,7 +2174,7 @@ io.on("connection", (socket) => {
     io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
   });
 
-  // ── Player actions (classic path below; ML path branches here) ─────────────
+  // â"€â"€ Player actions (classic path below; ML path branches here) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
   socket.on("player_action", ({ code, side, type, data }) => {
     // fix #4: rate-limit player actions
@@ -1902,7 +2188,26 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // ── Multi-lane branch ──
+    // â"€â"€ Survival branch â"€â"€
+    if (session.mode === "survival") {
+      const entry = gamesByRoomId.get(session.roomId);
+      if (!entry) return socket.emit("error_message", { message: "Game not started" });
+
+      const res = simSurvival.applySurvivalAction(entry.game, session.laneIndex, { type, data });
+      if (!res.ok) return socket.emit("error_message", { message: res.reason || "Action rejected" });
+
+      const lane = entry.game.lanes[session.laneIndex];
+      socket.emit("action_applied", {
+        type,
+        laneIndex: session.laneIndex,
+        tick: entry.game.tick,
+        gold: lane ? lane.gold : 0,
+        income: lane ? lane.income : 0,
+      });
+      return;
+    }
+
+    // â"€â"€ Multi-lane branch â"€â"€
     if (session.mode === "multilane") {
       const entry = gamesByRoomId.get(session.roomId);
       if (!entry) return socket.emit("error_message", { message: "Game not started" });
@@ -1923,53 +2228,98 @@ io.on("connection", (socket) => {
       });
       return;
     }
+  });
 
-    const room = roomsByCode.get(session.code);
-    if (!room) {
-      socket.emit("error_message", { message: "Room not found for action" });
-      return;
-    }
-    if (!room.players.includes(socket.id)) {
-      socket.emit("error_message", { message: "You are not in this room" });
-      return;
-    }
+  // â"€â"€ Survival lobby events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-    const entry = gamesByRoomId.get(session.roomId);
-    if (!entry) {
-      socket.emit("error_message", { message: "Game not started" });
-      return;
+  socket.on("create_survival_room", ({ displayName, coopMode, loadoutSlot, unitTypeIds } = {}) => {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
     }
-
-    const expectedSide = session.side || room.sidesBySocketId.get(socket.id);
-    if (!expectedSide) {
-      socket.emit("error_message", { message: "Side assignment missing" });
-      return;
-    }
-
-    // Server-authoritative side: ignore client-provided side except for diagnostics.
-    if (side && side !== expectedSide) {
-      socket.emit("error_message", { message: "Side mismatch corrected by server" });
-    }
-
-    if (!ALLOWED_ACTION_TYPES.has(type)) {
-      socket.emit("error_message", { message: "Action not allowed" });
-      return;
-    }
-
-    const res = sim.applyAction(entry.game, expectedSide, { type, data });
-    if (!res.ok) {
-      socket.emit("error_message", { message: res.reason || "Action rejected" });
-      return;
-    }
-
-    socket.emit("action_applied", {
-      type,
-      side: expectedSide,
-      tick: entry.game.tick,
-      units: entry.game.units.length,
-      gold: entry.game.players[expectedSide].gold,
-      income: entry.game.players[expectedSide].income,
+    if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
+    const { code, roomId } = createSurvivalRoom(socket.id, displayName, coopMode);
+    socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+    socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+    sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "survival" });
+    socket.join(roomId);
+    socket.emit("survival_room_created", {
+      code,
+      laneIndex: 0,
+      coopMode: !!coopMode,
+      displayName: sanitizeDisplayName(displayName),
     });
+  });
+
+  socket.on("join_survival_room", ({ code, displayName, loadoutSlot, unitTypeIds } = {}) => {
+    if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
+      return socket.emit("error_message", { message: "Too many requests. Please wait." });
+    }
+    if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
+    const normalized = String(code || "").trim().toUpperCase();
+    if (normalized.length !== 6) return socket.emit("error_message", { message: "Invalid room code." });
+    const room = survivalRoomsByCode.get(normalized);
+    if (!room) return socket.emit("error_message", { message: "Survival room not found." });
+    if (!room.coopMode) return socket.emit("error_message", { message: "Room is solo-only." });
+    if (room.players.length >= 2) return socket.emit("error_message", { message: "Co-op room is full." });
+    if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
+
+    const laneIndex = room.players.length;
+    room.players.push(socket.id);
+    room.laneBySocketId.set(socket.id, laneIndex);
+    room.playerNames.set(socket.id, sanitizeDisplayName(displayName));
+    socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
+    socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
+    sessionBySocketId.set(socket.id, { code: normalized, roomId: room.roomId, laneIndex, mode: "survival" });
+    socket.join(room.roomId);
+
+    socket.emit("survival_room_joined", { code: normalized, laneIndex, displayName: room.playerNames.get(socket.id) });
+    io.to(room.roomId).emit("survival_lobby_update", {
+      code: normalized,
+      players: room.players.map(sid => ({
+        laneIndex: room.laneBySocketId.get(sid),
+        displayName: room.playerNames.get(sid) || "Player",
+        ready: room.readySet.has(sid),
+      })),
+      coopMode: room.coopMode,
+    });
+  });
+
+  socket.on("survival_player_ready", ({ code } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "survival") return;
+    const normalized = String(code || session.code || "").trim().toUpperCase();
+    const room = survivalRoomsByCode.get(normalized);
+    if (!room || !room.players.includes(socket.id)) return;
+
+    room.readySet.add(socket.id);
+    io.to(room.roomId).emit("survival_lobby_update", {
+      code: normalized,
+      players: room.players.map(sid => ({
+        laneIndex: room.laneBySocketId.get(sid),
+        displayName: room.playerNames.get(sid) || "Player",
+        ready: room.readySet.has(sid),
+      })),
+      coopMode: room.coopMode,
+    });
+
+    // Auto-start when all players are ready
+    if (room.readySet.size >= room.players.length && room.players.length >= 1) {
+      startSurvivalGame(room.roomId, normalized, io);
+    }
+  });
+
+  socket.on("survival_force_start", ({ code } = {}) => {
+    const session = sessionBySocketId.get(socket.id);
+    if (!session || session.mode !== "survival") return;
+    const normalized = String(code || session.code || "").trim().toUpperCase();
+    const room = survivalRoomsByCode.get(normalized);
+    if (!room) return;
+    if (room.hostSocketId !== socket.id) {
+      return socket.emit("error_message", { message: "Only the host can force start." });
+    }
+    if (!gamesByRoomId.has(room.roomId)) {
+      startSurvivalGame(room.roomId, normalized, io);
+    }
   });
 
   socket.on("request_rematch", () => {
@@ -1990,23 +2340,6 @@ io.on("connection", (socket) => {
         room.readySet = new Set();
         if (room._cleanupHandle) { clearTimeout(room._cleanupHandle); room._cleanupHandle = null; }
         startMLGame(room.roomId, session.code, io);
-      }
-    } else {
-      const room = roomsByCode.get(session.code);
-      if (!room) return;
-      if (room.players.length < 2) return;
-      if (gamesByRoomId.has(room.roomId)) return;
-      if (!room.rematchVotes) room.rematchVotes = new Set();
-      if (room.rematchVotes.has(socket.id)) return;
-      room.rematchVotes.add(socket.id);
-      const needed = room.players.length;
-      io.to(room.roomId).emit("rematch_vote", { count: room.rematchVotes.size, needed });
-      if (room.rematchVotes.size >= needed) {
-        room.rematchVotes = null;
-        if (room._cleanupHandle) { clearTimeout(room._cleanupHandle); room._cleanupHandle = null; }
-        startGame(room.roomId, room.settings);
-        io.to(room.roomId).emit("match_ready", { code: session.code });
-        io.to(room.roomId).emit("match_config", sim.createPublicConfig(room.settings));
       }
     }
   });
@@ -2047,38 +2380,9 @@ io.on("connection", (socket) => {
       }
       return;
     }
-
-    const code = session.code;
-    const room = roomsByCode.get(code);
-    if (!room) return;
-
-    const side = session.side || room.sidesBySocketId.get(socket.id);
-    const entry = gamesByRoomId.get(room.roomId);
-    if (entry && side) {
-      const winner = side === "bottom" ? "top" : "bottom";
-      const winnerLane = winner === "bottom" ? 0 : 1;
-      const snapshots = entry.playerSnapshot.map(p => ({
-        ...p,
-        result: p.laneIndex === winnerLane ? "win" : "loss",
-      }));
-      io.to(room.roomId).emit("game_over", { winner, reason: "quit" });
-      logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
-      stopGame(room.roomId);
-    }
-
-    const idx = room.players.indexOf(socket.id);
-    if (idx !== -1) room.players.splice(idx, 1);
-    room.sidesBySocketId.delete(socket.id);
-    if (room.rematchVotes) room.rematchVotes.delete(socket.id);
+    // Non-ML sessions have no room to clean up
     sessionBySocketId.delete(socket.id);
-    socket.leave(room.roomId);
     socket.emit("left_game_ack");
-
-    if (room.players.length === 0) {
-      roomsByCode.delete(code);
-    } else if (!entry) {
-      io.to(room.roomId).emit("player_left", { code });
-    }
   });
 
   socket.on("disconnect", () => {
@@ -2113,63 +2417,23 @@ io.on("connection", (socket) => {
       }
     }
 
-    // Classic room cleanup — grace period if mid-game, immediate otherwise
-    for (const [code, room] of roomsByCode.entries()) {
+    // Survival room cleanup
+    for (const [code, room] of survivalRoomsByCode.entries()) {
       const idx = room.players.indexOf(socket.id);
       if (idx !== -1) {
-        const side = room.sidesBySocketId.get(socket.id);
-        const isActive = gamesByRoomId.has(room.roomId);
-
-        if (isActive && side) {
-          // Start grace period — don't remove from room or stop game yet
-          const graceKey = `${room.roomId}:${side}`;
-          const playerName = socket.playerDisplayName || "Player";
-          io.to(room.roomId).emit("opponent_disconnected", { side, gracePeriodMs: RECONNECT_GRACE_MS });
-
-          const graceHandle = setTimeout(() => {
-            disconnectGrace.delete(graceKey);
-            const gEntry = gamesByRoomId.get(room.roomId);
-            if (gEntry) {
-              // Forfeit: award win to remaining side
-              const winner = side === "bottom" ? "top" : "bottom";
-              const winnerLane = winner === "bottom" ? 0 : 1;
-              const snapshots = gEntry.playerSnapshot.map(p => ({
-                ...p,
-                result: p.laneIndex === winnerLane ? "win" : "loss",
-              }));
-              io.to(room.roomId).emit("game_over", { winner, reason: "forfeit" });
-              logMatchEnd(gEntry.matchIdPromise, winnerLane, snapshots);
-              stopGame(room.roomId);
-            }
-            // Clean up the now-stale slot
-            const r = roomsByCode.get(code);
-            if (r) {
-              const i = r.players.indexOf(socket.id);
-              if (i !== -1) r.players.splice(i, 1);
-              r.sidesBySocketId.delete(socket.id);
-              if (r.players.length === 0) roomsByCode.delete(code);
-            }
-          }, RECONNECT_GRACE_MS);
-
-          disconnectGrace.set(graceKey, {
-            graceHandle, expiresAt: Date.now() + RECONNECT_GRACE_MS,
-            playerId: socket.playerId || null, guestId: socket.guestId,
-            playerName, code, mode: "classic", seatKey: side, prevSocketId: socket.id,
-          });
-        } else {
-          room.players.splice(idx, 1);
-          room.sidesBySocketId.delete(socket.id);
-          io.to(room.roomId).emit("player_left", { code });
-          if (room.players.length === 0) {
-            stopGame(room.roomId);
-            roomsByCode.delete(code);
-          }
+        room.players.splice(idx, 1);
+        room.laneBySocketId.delete(socket.id);
+        room.playerNames.delete(socket.id);
+        room.readySet.delete(socket.id);
+        if (room.players.length === 0) {
+          stopSurvivalGame(room.roomId, code);
+          survivalRoomsByCode.delete(code);
         }
         break;
       }
     }
 
-    // ML room cleanup — grace period if mid-game, immediate otherwise
+    // ML room cleanup â€" grace period if mid-game, immediate otherwise
     for (const [code, room] of mlRoomsByCode.entries()) {
       const idx = room.players.indexOf(socket.id);
       if (idx !== -1) {
@@ -2233,6 +2497,10 @@ app.get("/", (_req, res) => {
   sendClientFile(res, "index.html");
 });
 
+app.get("/admin", (_req, res) => {
+  sendClientFile(res, "admin.html");
+});
+
 app.get("/terms", (_req, res) => {
   sendClientFile(res, "terms.html");
 });
@@ -2267,12 +2535,12 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 async function startServer() {
-  // ── Startup security checks ──────────────────────────────────────────────
+  // â"€â"€ Startup security checks â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
   if (!process.env.JWT_SECRET) {
-    log.warn('JWT_SECRET is not set — authentication will not work securely');
+    log.warn('JWT_SECRET is not set â€" authentication will not work securely');
   }
   if (process.env.NODE_ENV === 'production' && !process.env.ALLOWED_ORIGIN) {
-    log.warn('ALLOWED_ORIGIN not set in production — CORS allows all origins');
+    log.warn('ALLOWED_ORIGIN not set in production â€" CORS allows all origins');
   }
 
   // Auto-run DB migrations when DATABASE_URL is present
@@ -2284,9 +2552,33 @@ async function startServer() {
         env: process.env,
       });
     } catch (err) {
-      log.error('migration failed', { err: err.message });
-      // Don't abort — server can still serve the game without DB
+      const stderr = Buffer.isBuffer(err?.stderr) ? err.stderr.toString('utf8') : String(err?.stderr || '');
+      const stdout = Buffer.isBuffer(err?.stdout) ? err.stdout.toString('utf8') : String(err?.stdout || '');
+      log.error('migration failed', {
+        message: err?.message || String(err),
+        code: err?.code || null,
+        status: err?.status ?? null,
+        signal: err?.signal || null,
+        stderr: stderr || null,
+        stdout: stdout || null,
+        stack: err?.stack || null,
+      });
+      // Don't abort â€" server can still serve the game without DB
     }
+  }
+
+  // Load unit types cache after migrations
+  if (db) {
+    unitTypes.loadUnitTypes(db).catch(err =>
+      log.warn('unit types load failed', {
+        err: err && (err.stack || err.message || String(err)),
+      })
+    );
+    barracksLevels.loadBarracksLevels(db).catch(err =>
+      log.warn('barracks levels load failed', {
+        err: err && (err.stack || err.message || String(err)),
+      })
+    );
   }
 
   // Start in-memory matchmaking loop
@@ -2297,7 +2589,7 @@ async function startServer() {
   });
 }
 
-// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// â"€â"€ Graceful shutdown â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // On SIGTERM / SIGINT: stop game loops, disconnect sockets, close DB pool, exit.
 
 function gracefulShutdown(signal) {
@@ -2331,7 +2623,7 @@ function gracefulShutdown(signal) {
   }, 10_000);
   forceExit.unref();
 
-  // Close socket.io → HTTP server → DB pool → exit
+  // Close socket.io â†' HTTP server â†' DB pool â†' exit
   io.close(() => {
     server.close(async () => {
       if (db) {
@@ -2347,3 +2639,4 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
 startServer();
+

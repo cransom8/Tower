@@ -1,2 +1,14 @@
 node_modules/
 .env
+
+# Log files
+*.log
+
+# Railway / deploy artifacts
+app.ransomforge.com
+
+# server/client/ is a redundant copy of client/ — server resolves ../client directly
+server/client/
+
+# Untracked asset directories (large binary files)
+client/assets/

@@ -18,7 +18,7 @@ async function main() {
                   (process.env.DATABASE_URL || '').includes('127.0.0.1');
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: isLocal ? false : { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true' },
+    ssl: isLocal ? false : { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' },
   });
 
   const migrationsDir = path.join(__dirname, 'migrations');
