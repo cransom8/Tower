@@ -3753,6 +3753,69 @@ html, body {
   line-height: 1.5;
 }
 
+/* Device Authorize Modal */
+#device-auth-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10100;
+  background: rgba(0,0,0,0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#device-auth-panel {
+  background: rgba(8, 10, 18, 0.97);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  border-radius: 12px;
+  padding: 28px 24px 20px;
+  width: 340px;
+  max-width: 92vw;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+  text-align: center;
+}
+#device-auth-header {
+  font-family: 'Cinzel', serif;
+  font-size: 16px;
+  color: var(--gold);
+  margin-bottom: 10px;
+}
+.device-auth-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 6px 0 14px;
+  line-height: 1.5;
+}
+#device-auth-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(212,175,55,0.08);
+  border: 1px solid rgba(212,175,55,0.25);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+}
+.device-auth-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.device-auth-code-val {
+  font-family: 'Rajdhani', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--gold);
+}
+#device-auth-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
 /* 2FA Modal */
 #tfa-modal {
   position: fixed;

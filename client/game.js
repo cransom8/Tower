@@ -7300,6 +7300,69 @@ applyBranding();
   await Auth.init(onAuthStateChange);
 })();
 
+// ── Device authorization flow (?authorize=CODE in URL) ───────────────────────
+// When a Unity Editor/Standalone client needs to sign in, it opens the web app
+// with ?authorize=USERCODE.  The signed-in player clicks "Authorize" here, and
+// the Unity client polls /auth/device/poll until it receives the access token.
+(function initDeviceAuth() {
+  const params   = new URLSearchParams(window.location.search);
+  const userCode = params.get('authorize');
+  if (!userCode) return;
+
+  const modal       = document.getElementById('device-auth-modal');
+  const codeEl      = document.getElementById('device-auth-code');
+  const signinPrompt= document.getElementById('device-auth-signin-prompt');
+  const errorEl     = document.getElementById('device-auth-error');
+  const successEl   = document.getElementById('device-auth-success');
+  const actions     = document.getElementById('device-auth-actions');
+  const btnAuth     = document.getElementById('btn-device-authorize');
+  const btnCancel   = document.getElementById('btn-device-cancel');
+  if (!modal) return;
+
+  codeEl.textContent = userCode.toUpperCase();
+  modal.style.display = 'flex';
+
+  function refreshState() {
+    const signedIn = Auth.isSignedIn();
+    if (signinPrompt) signinPrompt.style.display = signedIn ? 'none' : '';
+    if (btnAuth)      btnAuth.style.display      = signedIn ? ''     : 'none';
+  }
+  refreshState();
+
+  // Re-check when auth state changes (e.g. user signs in while modal is open)
+  const origOnAuth = window._deviceAuthOrigOnAuth || onAuthStateChange;
+  window._deviceAuthOrigOnAuth = origOnAuth;
+
+  btnCancel.addEventListener('click', () => { modal.style.display = 'none'; });
+
+  btnAuth.addEventListener('click', async () => {
+    if (!Auth.isSignedIn()) { refreshState(); return; }
+    btnAuth.disabled = true;
+    if (errorEl)   { errorEl.style.display = 'none'; }
+    try {
+      const res = await Auth.apiFetch('/auth/device/authorize', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ userCode }),
+      });
+      if (res.ok) {
+        if (actions)   actions.style.display   = 'none';
+        if (successEl) successEl.style.display = '';
+      } else {
+        const data = await res.json().catch(() => ({}));
+        if (errorEl) { errorEl.textContent = data.error || 'Authorization failed.'; errorEl.style.display = ''; }
+        btnAuth.disabled = false;
+      }
+    } catch {
+      if (errorEl) { errorEl.textContent = 'Network error. Try again.'; errorEl.style.display = ''; }
+      btnAuth.disabled = false;
+    }
+  });
+
+  // Keep "Authorize" button in sync if user signs in while the modal is open
+  document.addEventListener('authStateChanged', refreshState);
+})();
+
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Party panel ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 let _currentParty   = null; // local party state

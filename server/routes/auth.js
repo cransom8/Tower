@@ -502,4 +502,70 @@ router.post('/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Device authorization flow (Unity Editor / Standalone) ────────────────────
+// Implements a lightweight device-code grant so non-WebGL Unity builds can sign
+// in through the browser without the user ever touching a token string.
+//
+// Flow:
+//   1. Unity calls POST /auth/device → gets { deviceCode, userCode, expiresIn }
+//   2. Unity opens browser to /?authorize=<userCode>
+//   3. User signs in on the web and clicks "Authorize" → POST /auth/device/authorize
+//   4. Unity polls GET /auth/device/poll?code=<deviceCode> until { status:'authorized', accessToken }
+
+const _deviceCodes = new Map(); // deviceCode → { userCode, accessToken, expiresAt }
+
+// Clean up expired codes every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of _deviceCodes) if (v.expiresAt < now) _deviceCodes.delete(k);
+}, 5 * 60_000).unref();
+
+// POST /auth/device
+router.post('/device', (req, res) => {
+  const crypto     = require('crypto');
+  const deviceCode = crypto.randomBytes(16).toString('hex');
+  const userCode   = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 hex chars
+  _deviceCodes.set(deviceCode, { userCode, accessToken: null, expiresAt: Date.now() + 10 * 60_000 });
+  res.json({ deviceCode, userCode, expiresIn: 600 });
+});
+
+// GET /auth/device/poll?code=<deviceCode>  — Unity polls this
+router.get('/device/poll', (req, res) => {
+  const entry = _deviceCodes.get(req.query.code);
+  if (!entry)                      return res.json({ status: 'expired' });
+  if (Date.now() > entry.expiresAt){ _deviceCodes.delete(req.query.code); return res.json({ status: 'expired' }); }
+  if (entry.accessToken) {
+    const token = entry.accessToken;
+    _deviceCodes.delete(req.query.code);
+    return res.json({ status: 'authorized', accessToken: token });
+  }
+  res.json({ status: 'pending' });
+});
+
+// POST /auth/device/authorize  — web client calls this after the user confirms
+const { requireAuth } = require('../middleware/auth');
+router.post('/device/authorize', requireAuth, async (req, res) => {
+  const { userCode } = req.body;
+  if (!userCode) return res.status(400).json({ error: 'userCode required' });
+
+  const found = [..._deviceCodes.entries()]
+    .find(([, v]) => v.userCode === userCode.trim().toUpperCase() && !v.accessToken);
+  if (!found) return res.status(404).json({ error: 'Code not found or already used' });
+
+  const [deviceCode, data] = found;
+  if (Date.now() > data.expiresAt) {
+    _deviceCodes.delete(deviceCode);
+    return res.status(410).json({ error: 'Code expired' });
+  }
+
+  // Issue a fresh access token for the signed-in player
+  const accessToken = authService.signAccessToken({
+    id:           req.player.sub || req.player.id,
+    display_name: req.player.displayName,
+    region:       req.player.region,
+  });
+  data.accessToken = accessToken;
+  res.json({ ok: true });
+});
+
 module.exports = router;

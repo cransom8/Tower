@@ -251,6 +251,27 @@
     </div>
   </div>
 
+  <!-- DEVICE AUTHORIZE MODAL — shown when ?authorize=CODE is in the URL (Unity device flow) -->
+  <div id="device-auth-modal" style="display:none">
+    <div id="device-auth-panel">
+      <div id="device-auth-header">Authorize Unity Client</div>
+      <p class="device-auth-desc">A Unity game client wants to sign in as you.</p>
+      <div id="device-auth-code-row">
+        <span class="device-auth-label">Code</span>
+        <span id="device-auth-code" class="device-auth-code-val"></span>
+      </div>
+      <div id="device-auth-signin-prompt" style="display:none">
+        <p class="device-auth-desc">Sign in first, then return to this page to authorize.</p>
+      </div>
+      <div id="device-auth-error" class="auth-pw-error" style="display:none"></div>
+      <div id="device-auth-success" class="auth-forgot-success" style="display:none">Unity client authorized! You can close this tab.</div>
+      <div id="device-auth-actions">
+        <button id="btn-device-authorize" class="auth-submit-btn">Authorize</button>
+        <button id="btn-device-cancel"    class="auth-back-btn"   style="margin-top:6px">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- EMAIL VERIFICATION MODAL — shown after registration or when email_not_verified -->
   <div id="verify-modal" style="display:none">
     <div id="verify-panel">
