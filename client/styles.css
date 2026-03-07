@@ -3373,7 +3373,61 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   pointer-events: auto;
-  display: none; /* shown by JS when DB or Google auth is configured */
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 6px;
+}
+
+/* Guest state — shown when no auth is configured */
+#auth-guest-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  padding: 10px 8px;
+  text-align: center;
+}
+.auth-guest-label {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+}
+.auth-guest-hint {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+/* Guest message panels — shown in party/friends slots when not signed in */
+.panel-guest-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  padding: 10px 8px;
+  text-align: center;
+}
+.panel-guest-icon {
+  font-size: 20px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.panel-guest-label {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+}
+.panel-guest-hint {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.3;
 }
 
 #auth-bar.auth-in-rail {

@@ -14,10 +14,15 @@
   <!-- RIGHT COLUMN — fixed right-side panel stack: auth 20% · party 35% · friends 45% -->
   <div id="right-column">
 
-  <!-- AUTH SLOT — always reserves 20% of right column; auth-bar inside hidden until auth is configured -->
+  <!-- AUTH SLOT — always reserves 20% of right column -->
   <div id="rc-auth-slot">
-  <!-- AUTH BAR — shown by JS when DB or Google auth is configured -->
+  <!-- AUTH BAR — always visible; guest-area shown when no auth is configured -->
   <div id="auth-bar">
+    <!-- Shown when no login system is configured -->
+    <div id="auth-guest-area">
+      <span class="auth-guest-label">&#x1F464; Guest</span>
+      <span class="auth-guest-hint">Sign in to save progress &amp; unlock social features</span>
+    </div>
     <!-- Shown when signed out -->
     <div id="auth-signin-area" style="display:none">
       <!-- Google button (shown only when Google is configured) -->
@@ -86,9 +91,14 @@
     </div>
   </div><!-- /#rc-loadout-slot -->
 
-  <!-- PARTY SLOT — reserves 35% of right column; panel hidden until signed in -->
+  <!-- PARTY SLOT — reserves 35% of right column -->
   <div id="rc-party-slot">
   <div id="party-panel" style="display:none">
+    <div id="party-guest-msg" class="panel-guest-msg" style="display:none">
+      <span class="panel-guest-icon">&#x1F91D;</span>
+      <span class="panel-guest-label">Party</span>
+      <span class="panel-guest-hint">Sign in to create parties &amp; queue for ranked matches</span>
+    </div>
     <div id="party-panel-inner">
       <div id="party-header">
         <span class="party-label">Party</span>
@@ -117,9 +127,14 @@
   </div>
   </div>
 
-  <!-- FRIENDS SLOT — reserves 45% of right column; panel hidden until signed in -->
+  <!-- FRIENDS SLOT — reserves 45% of right column -->
   <div id="rc-friends-slot">
   <div id="friends-panel" style="display:none">
+    <div id="friends-guest-msg" class="panel-guest-msg" style="display:none">
+      <span class="panel-guest-icon">&#x1F465;</span>
+      <span class="panel-guest-label">Friends</span>
+      <span class="panel-guest-hint">Sign in to add friends &amp; see who&apos;s online</span>
+    </div>
     <div id="friends-panel-inner">
       <div id="friends-invite-banner" style="display:none">
         <span id="friends-invite-text"></span>

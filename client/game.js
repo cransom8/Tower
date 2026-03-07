@@ -227,6 +227,7 @@ let autosendRate = 'normal';
 UNIT_TYPES.forEach(t => { autosendEnabled[t] = false; });
 
 // â"€â"€ Loadout state â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+let _authConfigured      = false; // true when server has password or Google auth enabled
 let _selectedLoadoutSlot = 0;   // which slot to send with queue:enter
 let _savedLoadouts       = [];  // loaded from GET /api/loadouts
 const _guestTempLoadouts = {};  // session-only guest loadouts: { [slot]: number[5] }
@@ -809,7 +810,17 @@ function setLobbyState(state) {
   // Keep top-right account/party controls uncluttered during gameplay.
   const signedIn = !!Auth.getPlayer();
   const party = document.getElementById('party-panel');
-  if (party) party.style.display = (signedIn && state !== 'playing') ? '' : 'none';
+  if (party) {
+    if (state === 'playing') {
+      party.style.display = 'none';
+    } else {
+      party.style.display = '';
+      const pg = document.getElementById('party-guest-msg');
+      const pi = document.getElementById('party-panel-inner');
+      if (pg) pg.style.display = signedIn ? 'none' : '';
+      if (pi) pi.style.display = signedIn ? '' : 'none';
+    }
+  }
 
   const authBtn = document.getElementById('btn-auth-signout');
   if (authBtn) authBtn.textContent = state === 'playing' ? 'Quit Game' : 'Sign out';
@@ -5146,8 +5157,10 @@ function initMLLaneTabs() {
     const isTeammate = !isMine && myTeam && a.team === myTeam;
     btn.className = 'lane-tab ' + (isMine || isTeammate ? 'lane-tab-mine' : 'lane-tab-enemy');
     btn.dataset.laneIndex = String(a.laneIndex);
+    if (a.slotColor) btn.style.borderLeft = '4px solid ' + a.slotColor;
     const star = isMine ? '\u2605 ' : '';
-    btn.innerHTML = star + a.displayName + ' <span class="lane-tab-lives" id="ltab-lives-' + a.laneIndex + '">\u2665?</span>';
+    const label = a.branchLabel || a.displayName;
+    btn.innerHTML = star + label + ' <span class="lane-tab-lives" id="ltab-lives-' + a.laneIndex + '">\u2665?</span>';
     btn.addEventListener('click', () => switchViewingLane(a.laneIndex));
     mlLaneTabs.appendChild(btn);
   });
@@ -5175,7 +5188,7 @@ function switchViewingLane(index) {
   if (mlSpectateNotice) {
     if (isEnemy) {
       const assign = mlLaneAssignments.find(a => a.laneIndex === index);
-      const name = assign ? assign.displayName : ('Lane ' + index);
+      const name = assign ? (assign.branchLabel || assign.displayName) : ('Branch ' + (index + 1));
       if (mlSpectateName) mlSpectateName.textContent = name;
       mlSpectateNotice.style.display = 'block';
     } else {
@@ -6166,11 +6179,11 @@ function updateLaneNavLabel() {
   if (btnNextLane) btnNextLane.style.display = showNav ? 'flex' : 'none';
   if (!mlViewingLabel) return;
   if (mlMidNextBtn) mlMidNextBtn.style.display = 'none';
+  const assign = mlLaneAssignments.find(a => a.laneIndex === viewingLaneIndex);
   if (viewingLaneIndex === myLaneIndex) {
-    mlViewingLabel.textContent = 'My Lane';
+    mlViewingLabel.textContent = assign?.branchLabel || 'My Branch';
   } else {
-    const assign = mlLaneAssignments.find(a => a.laneIndex === viewingLaneIndex);
-    mlViewingLabel.textContent = assign ? assign.displayName : ('Lane ' + viewingLaneIndex);
+    mlViewingLabel.textContent = assign ? (assign.branchLabel || assign.displayName) : ('Branch ' + (viewingLaneIndex + 1));
   }
 }
 
@@ -6426,6 +6439,7 @@ canvas.addEventListener('touchmove', (e) => {
 
 const authSigninArea  = document.getElementById('auth-signin-area');
 const authProfileArea = document.getElementById('auth-profile-area');
+const authGuestArea   = document.getElementById('auth-guest-area');
 const authDisplayName = document.getElementById('auth-display-name');
 const btnAuthSignout  = document.getElementById('btn-auth-signout');
 const btnAuth2fa      = document.getElementById('btn-auth-2fa');
@@ -6799,13 +6813,26 @@ function onAuthStateChange(player) {
   if (player) {
     authSigninArea.style.display  = 'none';
     authProfileArea.style.display = 'flex';
+    if (authGuestArea) authGuestArea.style.display = 'none';
     authDisplayName.textContent   = player.displayName;
     // Reconnect socket so the server picks up the new HttpOnly auth cookie
     if (socket.connected) socket.disconnect();
     socket.connect();
-    // Show friends panel when signed in; party panel stays hidden during gameplay.
-    document.getElementById('party-panel').style.display = lobbyState === 'playing' ? 'none' : '';
-    document.getElementById('friends-panel').style.display = '';
+    // Show all panels with signed-in content; party hidden during gameplay.
+    if (lobbyState !== 'playing') {
+      const party = document.getElementById('party-panel');
+      if (party) party.style.display = '';
+      const pg = document.getElementById('party-guest-msg');
+      if (pg) pg.style.display = 'none';
+      const pi = document.getElementById('party-panel-inner');
+      if (pi) pi.style.display = '';
+    }
+    const friends = document.getElementById('friends-panel');
+    if (friends) friends.style.display = '';
+    const fg = document.getElementById('friends-guest-msg');
+    if (fg) fg.style.display = 'none';
+    const fi = document.getElementById('friends-panel-inner');
+    if (fi) fi.style.display = '';
     syncFriendsPanelPlacement();
     btnAuthSignout.textContent = lobbyState === 'playing' ? 'Quit Game' : 'Sign out';
     renderPartyPanel(null);
@@ -6820,10 +6847,27 @@ function onAuthStateChange(player) {
       if (label) label.style.display = 'none';
     });
   } else {
-    authSigninArea.style.display  = 'flex';
+    if (_authConfigured) {
+      authSigninArea.style.display = 'flex';
+      if (authGuestArea) authGuestArea.style.display = 'none';
+    } else {
+      authSigninArea.style.display = 'none';
+      if (authGuestArea) authGuestArea.style.display = '';
+    }
     authProfileArea.style.display = 'none';
-    document.getElementById('party-panel').style.display = 'none';
-    document.getElementById('friends-panel').style.display = 'none';
+    // Keep panels visible with guest messages instead of hiding them.
+    const partyPanel = document.getElementById('party-panel');
+    if (partyPanel) partyPanel.style.display = '';
+    const pg = document.getElementById('party-guest-msg');
+    if (pg) pg.style.display = '';
+    const pi = document.getElementById('party-panel-inner');
+    if (pi) pi.style.display = 'none';
+    const friendsPanel = document.getElementById('friends-panel');
+    if (friendsPanel) friendsPanel.style.display = '';
+    const fg = document.getElementById('friends-guest-msg');
+    if (fg) fg.style.display = '';
+    const fi = document.getElementById('friends-panel-inner');
+    if (fi) fi.style.display = 'none';
     syncFriendsPanelPlacement();
     _friendsList = [];
     _savedLoadouts = [];
@@ -7245,12 +7289,13 @@ applyBranding();
       }
       document.getElementById('auth-google-wrap').style.display = '';
     }
-    // Show auth bar when DB is present (password auth) or Google is configured
+    // Show sign-in form when auth is configured; otherwise keep guest area visible
     if (cfg.passwordAuthEnabled || cfg.googleClientId) {
-      document.getElementById('auth-bar').style.display = 'block';
-      syncAuthBarPlacement();
+      _authConfigured = true;
+      if (authGuestArea) authGuestArea.style.display = 'none';
     }
-  } catch { /* no DB / no Google config â€" auth bar stays hidden */ }
+    syncAuthBarPlacement();
+  } catch { /* no DB / no Google config — guest area stays visible */ }
 
   await Auth.init(onAuthStateChange);
 })();
