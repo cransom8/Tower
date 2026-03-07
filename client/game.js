@@ -180,9 +180,15 @@ let mlLobbyPlayers = [];
 let mlIsHost = false;
 let mlMyCode = null;
 let _soloAiDiff = 'medium';
-let _gameType  = 't2t';   // 't2t' | 'td'
-let _pvpMode   = '1v1';   // '1v1' | 'ffa' | '2v2'
-let _matchType = 'ranked'; // 'ranked' | 'unranked' | 'private' | 'solo'
+let _entryType   = 'public';    // 'public' | 'private'
+let _gameType    = 'line_wars'; // 'line_wars' | 'survival'
+let _matchFormat = '2v2';       // '1v1' | '2v2' | 'ffa'
+let _ranked      = false;       // ranked toggle for public queue
+// Lobby state
+let _currentLobbyId          = null;
+let _currentLobbyCode        = null;
+let _currentLobbyIsHost      = false;
+let _currentLobbyMatchFormat = '2v2';
 const DEFAULT_MATCH_SETTINGS = Object.freeze({ startIncome: 10 });
 
 // ML grid constants (mirrors server/sim-multilane.js)
@@ -675,47 +681,54 @@ sendButtons.forEach(btn => {
 });
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Multi-lane DOM refs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-const mlLobbyPanel = document.getElementById('ml-lobby-panel');
-const mlPlayerList = document.getElementById('ml-player-list');
-const mlTeamSetupStatus = document.getElementById('ml-team-setup-status');
-const btnCreateMl = document.getElementById('btn-create-ml');
-const btnToggleMlJoin = document.getElementById('btn-toggle-ml-join');
-const mlJoinForm = document.getElementById('ml-join-form');
-const btnJoinMl = document.getElementById('btn-join-ml');
-const mlJoinInput = document.getElementById('ml-join-code-input');
-const mlNameInput = document.getElementById('ml-name-input');
-const btnReadyMl = document.getElementById('btn-ready-ml');
-const btnForceStart = document.getElementById('btn-force-start-ml');
 const spectatorBadge = document.getElementById('spectator-badge');
-const lobbyQueueSection    = document.getElementById('lobby-queue-section');
-const lobbyPrivateSection  = document.getElementById('lobby-private-section');
-const lobbySoloSection     = document.getElementById('lobby-solo-section');
-const lobbyMlSection       = document.getElementById('lobby-ml-section');
-const btnTabRanked   = document.getElementById('btn-tab-ranked');
-const btnTabUnranked = document.getElementById('btn-tab-unranked');
-const btnTabPrivate  = document.getElementById('btn-tab-private');
-const btnTabSolo     = document.getElementById('btn-tab-solo');
-const btnGameT2t     = document.getElementById('btn-game-t2t');
-const btnGameTd      = document.getElementById('btn-game-td');
-const pvpModeSeparator = document.getElementById('pvp-mode-separator');
-const pvpModeBar     = document.getElementById('pvp-mode-bar');
-const btnPvpFfa      = document.getElementById('btn-pvp-ffa');
-const btnPvpTwoV2    = document.getElementById('btn-pvp-2v2');
-const queueModeDesc  = document.getElementById('queue-mode-desc');
-const btnQueueFind   = document.getElementById('btn-queue-find');
-const privateTtUI    = document.getElementById('private-t2t-ui');
-const privateTdUI    = document.getElementById('private-td-ui');
-const soloTtUI       = document.getElementById('solo-t2t-ui');
-const soloTdUI       = document.getElementById('solo-td-ui');
-const mlRoomCodeRow = document.getElementById('ml-room-code-row');
-const mlRoomCodeDisplay = document.getElementById('ml-room-code-display');
-const btnCopyMlCode = document.getElementById('btn-copy-ml-code');
-const btnCopyMlLink = document.getElementById('btn-copy-ml-link');
-const mlAiControls = document.getElementById('ml-ai-controls');
+// Wizard step 4 panels
+const ws4Public          = document.getElementById('ws4-public');
+const ws4Private         = document.getElementById('ws4-private');
+// Public queue sub-panel
+const queueModeDesc      = document.getElementById('queue-mode-desc');
+const btnQueueFind       = document.getElementById('btn-queue-find');
+const btnTabCasual       = document.getElementById('btn-tab-casual');
+const btnTabRanked       = document.getElementById('btn-tab-ranked');
+const queueWaitingPanel  = document.getElementById('queue-waiting-panel');
+const queueWaitingStatus = document.getElementById('queue-waiting-status');
+const queueWaitingElapsed = document.getElementById('queue-waiting-elapsed');
+const btnQueueLeaveV2    = document.getElementById('btn-queue-leave-v2');
+// Private lobby sub-panel
+const ws4PrivateEntry    = document.getElementById('ws4-private-entry');
+const btnLobbyCreate     = document.getElementById('btn-lobby-create');
+const btnToggleLobbyJoin = document.getElementById('btn-toggle-lobby-join');
+const lobbyJoinForm      = document.getElementById('lobby-join-form');
+const lobbyJoinCodeInput = document.getElementById('lobby-join-code-input');
+const btnLobbyJoin       = document.getElementById('btn-lobby-join');
+const ws4LobbyPanel      = document.getElementById('ws4-lobby-panel');
+const lobbyPanelTitle    = document.getElementById('lobby-panel-title');
+const lobbyCodeRow       = document.getElementById('lobby-code-row');
+const lobbyCodeDisplay   = document.getElementById('lobby-code-display');
+const btnCopyLobbyCode   = document.getElementById('btn-copy-lobby-code');
+const btnCopyLobbyLink   = document.getElementById('btn-copy-lobby-link');
+const lobbyMemberList    = document.getElementById('lobby-member-list');
+const lobbyBotControls   = document.getElementById('lobby-bot-controls');
+const btnLobbyReady      = document.getElementById('btn-lobby-ready');
+const lobbyLaunchRow     = document.getElementById('lobby-launch-row');
+const btnLobbyLaunch     = document.getElementById('btn-lobby-launch');
+const btnLobbyLeave      = document.getElementById('btn-lobby-leave');
+// Nulled-out old ML lobby panel refs (elements removed from HTML; null-safe guards kept in place)
+const mlLobbyPanel       = null;
+const mlPlayerList       = null;
+const mlTeamSetupStatus  = null;
+const mlRoomCodeRow      = null;
+const mlRoomCodeDisplay  = null;
+const mlAiControls       = null;
+const btnForceStart      = null;
+const btnReadyMl         = null;
+const btnCopyMlCode      = null;
+const btnCopyMlLink      = null;
+const btnAddAiEasy       = null;
+const btnAddAiMedium     = null;
+const btnAddAiHard       = null;
+const mlNameInput        = null;
 const mlStartIncomeInput = document.getElementById('ml-start-income');
-const btnAddAiEasy = document.getElementById('btn-add-ai-easy');
-const btnAddAiMedium = document.getElementById('btn-add-ai-medium');
-const btnAddAiHard = document.getElementById('btn-add-ai-hard');
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ ML grid UI DOM refs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const mlBarracksHud = document.getElementById('ml-barracks-hud');
@@ -788,10 +801,10 @@ function setStatus(msg, type) {
 function setLobbyState(state) {
   lobbyState = state;
   const inFlight = state === 'creating' || state === 'joining';
-  btnCreate.disabled = inFlight;
-  btnJoin.disabled = inFlight;
-  joinInput.disabled = inFlight;
-  joinNameInput.disabled = inFlight;
+  if (btnCreate)    btnCreate.disabled    = inFlight;
+  if (btnJoin)      btnJoin.disabled      = inFlight;
+  if (joinInput)    joinInput.disabled    = inFlight;
+  if (joinNameInput) joinNameInput.disabled = inFlight;
 
   // Keep top-right account/party controls uncluttered during gameplay.
   const signedIn = !!Auth.getPlayer();
@@ -1066,6 +1079,7 @@ function applyMatchConfig(config) {
         dmg: Number(ut.attack_damage) || 0,
         atkCdTicks: atkCd,
         damageType: String(ut.damage_type || 'NORMAL'),
+        icon_url: ut.icon_url || null,
       };
     }
     towerMeta = Object.assign({}, towerMeta, fixedNext);
@@ -2236,6 +2250,22 @@ function drawTowerArt(type, cx, cy, scale) {
     // Spire highlight
     ctx.fillStyle = hi;
     ctx.fillRect(-1.5, -6, 0.8, 13);
+  } else {
+    // Generic fallback for DB unit types used as defenders
+    ctx.fillStyle = '#3a4460';
+    ctx.fillRect(-5, 4, 10, 6);
+    ctx.fillRect(-4, -5, 8, 10);
+    ctx.fillStyle = col;
+    ctx.fillRect(-5, -10, 3, 6);
+    ctx.fillRect(2, -10, 3, 6);
+    ctx.fillStyle = dark;
+    ctx.fillRect(-2, -9, 4, 5);
+    // Unit initial badge — larger & bright for visibility
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((type || '?')[0].toUpperCase(), 0, 1);
   }
   ctx.restore();
 }
@@ -3338,24 +3368,25 @@ function resetToLobby(msg) {
   mlIsHost = false;
   mlMyCode = null;
 
-  // Restore default tab
-  _gameType  = 't2t';
-  _pvpMode   = '1v1';
-  _matchType = null;
-  activateGameType('t2t');
+  // Reset wizard state
+  _entryType   = 'public';
+  _gameType    = 'line_wars';
+  _matchFormat = '2v2';
+  _ranked      = false;
+  _currentLobbyId     = null;
+  _currentLobbyCode   = null;
+  _currentLobbyIsHost = false;
   // Clear wizard selections and return to step 1
-  document.querySelectorAll('#ws-1 .game-card').forEach(c => c.classList.remove('selected'));
-  document.querySelectorAll('#ws2-t2t .mode-card, #ws2-td .mode-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('#ws-1 .mode-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('#ws-2 .game-card').forEach(c => c.classList.remove('selected'));
+  document.querySelectorAll('#ws-3 .mode-card').forEach(c => c.classList.remove('selected'));
   gotoWizardStep(1);
   hideMLLobbyPanel();
-  if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'none';
-  if (btnForceStart) btnForceStart.style.display = 'none';
-  if (btnReadyMl) btnReadyMl.classList.remove('is-ready');
+  hideLobbyWaitingPanel();
 
   // Reset survival state
   svMyCode = null;
   svMyLaneIndex = null;
-  svCoopMode = false;
   svCurrentSnap = null;
   hideSvHud();
   hideSvEndScreen();
@@ -3697,143 +3728,32 @@ setMlSettingsEditable(false);
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Tab helpers and event handlers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
-function updateLobbyContent() {
-  // Queue description + button label
-  if (_matchType === 'ranked' || _matchType === 'unranked') {
-    const r = _matchType === 'ranked';
-    const modeStr = _gameType === 't2t' ? '1v1' : (_pvpMode === '2v2' ? '2v2' : 'FFA');
-    if (queueModeDesc) queueModeDesc.textContent = r
-      ? `Rated ${modeStr} â€" requires account.`
-      : `Casual ${modeStr} â€" no rating at stake.`;
-    if (btnQueueFind) btnQueueFind.textContent = r ? `âš" Find Ranked ${modeStr}` : `ðŸ›¡ Find ${modeStr} Match`;
-  }
-  // Private sub-panel
-  if (privateTtUI) privateTtUI.style.display = 'none';
-  if (privateTdUI) privateTdUI.style.display = '';
-  // Solo sub-panel â€" AI difficulty picker always shown (solo always uses multilane)
-  if (soloTdUI) soloTdUI.style.display = '';
+function updateQueueModeDesc() {
+  const formatStr = _matchFormat === '1v1' ? '1v1' : _matchFormat === '2v2' ? '2v2' : 'FFA';
+  if (queueModeDesc) queueModeDesc.textContent = _ranked
+    ? `Ranked ${formatStr} \u2014 rated match, requires an account.`
+    : `Casual ${formatStr} \u2014 public queue, no rating changes.`;
+  if (btnQueueFind) btnQueueFind.textContent = `\u2694 Find ${_ranked ? 'Ranked' : 'Casual'} Match`;
 }
 
-function setPvpModeUiVisibility(show) {
-  if (pvpModeBar) pvpModeBar.style.display = show ? '' : 'none';
-  if (pvpModeSeparator) pvpModeSeparator.style.display = show ? '' : 'none';
+function updateWs4Panels() {
+  const isPublic = _entryType === 'public';
+  if (ws4Public)  ws4Public.style.display  = isPublic  ? '' : 'none';
+  if (ws4Private) ws4Private.style.display = !isPublic ? '' : 'none';
+  if (isPublic) updateQueueModeDesc();
 }
 
-function activateLobbyTab(tab) {
-  _matchType = tab;
-  // Show/hide pvp bar: visible for TD + not solo
-  setPvpModeUiVisibility(_gameType === 'td' && tab !== 'solo');
-  // Show/hide content sections
-  if (lobbyQueueSection)   lobbyQueueSection.style.display   = (tab === 'ranked' || tab === 'unranked') ? '' : 'none';
-  if (lobbyPrivateSection) lobbyPrivateSection.style.display = tab === 'private' ? '' : 'none';
-  if (lobbySoloSection)    lobbySoloSection.style.display    = tab === 'solo'    ? '' : 'none';
-  // Active tab state
-  [btnTabRanked, btnTabUnranked, btnTabPrivate, btnTabSolo].forEach(b => b && b.classList.remove('active'));
-  const tabEl = { ranked: btnTabRanked, unranked: btnTabUnranked, private: btnTabPrivate, solo: btnTabSolo }[tab];
-  if (tabEl) tabEl.classList.add('active');
-  updateLobbyContent();
-}
-
-function activateGameType(type) {
-  _gameType = type;
-  if (type === 't2t') {
-    _pvpMode = '1v1';
-  } else if (_pvpMode === '1v1') {
-    // '1v1' is t2t-only; default TD to FFA and sync button visuals
-    _pvpMode = 'ffa';
-    [btnPvpFfa, btnPvpTwoV2].forEach(b => b && b.classList.remove('active'));
-    if (btnPvpFfa) btnPvpFfa.classList.add('active');
-  }
-  [btnGameT2t, btnGameTd].forEach(b => b && b.classList.remove('active'));
-  const gameEl = { t2t: btnGameT2t, td: btnGameTd }[type];
-  if (gameEl) gameEl.classList.add('active');
-  setPvpModeUiVisibility(type === 'td' && _matchType !== 'solo');
-  updateLobbyContent();
-  renderLoadoutPicker();
-}
-
-function activatePvpMode(mode) {
-  _pvpMode = mode;
-  [btnPvpFfa, btnPvpTwoV2].forEach(b => b && b.classList.remove('active'));
-  const pvpEl = { ffa: btnPvpFfa, '2v2': btnPvpTwoV2 }[mode];
-  if (pvpEl) pvpEl.classList.add('active');
-  updateLobbyContent();
-}
-
-if (btnGameT2t) btnGameT2t.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  activateGameType('t2t');
-  hideMLLobbyPanel();
-});
-
-if (btnGameTd) btnGameTd.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  gameMode = 'multilane';
-  activateGameType('td');
-  hideMLLobbyPanel();
-});
-
-if (btnPvpFfa) btnPvpFfa.addEventListener('click', () => {
-  activatePvpMode('ffa');
-});
-
-if (btnPvpTwoV2) btnPvpTwoV2.addEventListener('click', () => {
-  activatePvpMode('2v2');
-});
-
-if (btnTabRanked) btnTabRanked.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  activateLobbyTab('ranked');
-  hideMLLobbyPanel();
-});
-
-if (btnTabUnranked) btnTabUnranked.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  activateLobbyTab('unranked');
-  hideMLLobbyPanel();
-});
-
-if (btnTabPrivate) btnTabPrivate.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  gameMode = 'multilane';
-  activateLobbyTab('private');
-  hideMLLobbyPanel();
-});
-
-if (btnTabSolo) btnTabSolo.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
-  setLobbyState('idle');
-  setStatus('', '');
-  gameMode = 'multilane';
-  activateLobbyTab('solo');
-  hideMLLobbyPanel();
-});
-
-// Initialize queue description on page load
-updateLobbyContent();
-
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Wizard navigation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// ── Wizard DOM refs ────────────────────────────────────────────────────────
 
 const wsPane1     = document.getElementById('ws-1');
 const wsPane2     = document.getElementById('ws-2');
 const wsPane3     = document.getElementById('ws-3');
-const ws2T2t      = document.getElementById('ws2-t2t');
-const ws2Td       = document.getElementById('ws2-td');
-const ws3TdTabs   = document.getElementById('ws3-td-tabs');
+const wsPane4     = document.getElementById('ws-4');
 const wWizardBack = document.getElementById('wizard-back');
 const wbc1        = document.getElementById('wbc-1');
 const wbc2        = document.getElementById('wbc-2');
 const wbc3        = document.getElementById('wbc-3');
+const wbc4        = document.getElementById('wbc-4');
 let _wizardStep   = 1;
 
 function gotoWizardStep(n) {
@@ -3841,198 +3761,424 @@ function gotoWizardStep(n) {
   if (wsPane1) wsPane1.style.display = n === 1 ? '' : 'none';
   if (wsPane2) wsPane2.style.display = n === 2 ? '' : 'none';
   if (wsPane3) wsPane3.style.display = n === 3 ? '' : 'none';
-  // Breadcrumb
-  [wbc1, wbc2, wbc3].forEach((b, i) => {
+  if (wsPane4) wsPane4.style.display = n === 4 ? '' : 'none';
+  if (n === 3) {
+    const ws3lw = document.getElementById('ws3-linewars');
+    const ws3sv = document.getElementById('ws3-survival');
+    if (ws3lw) ws3lw.style.display = _gameType === 'survival' ? 'none' : '';
+    if (ws3sv) ws3sv.style.display = _gameType === 'survival' ? '' : 'none';
+  }
+  [wbc1, wbc2, wbc3, wbc4].forEach((b, i) => {
     if (!b) return;
     b.classList.toggle('wb-active', i + 1 < n);
     b.classList.toggle('wb-current', i + 1 === n);
   });
-  // Back button: visible on steps 2+
   if (wWizardBack) wWizardBack.style.display = n > 1 ? '' : 'none';
-  // Step-specific setup
-  if (n === 2) {
-    if (ws2T2t) ws2T2t.style.display = _gameType === 'td' ? 'none' : '';
-    if (ws2Td)  ws2Td.style.display  = _gameType === 'td' ? '' : 'none';
-    // Restore sticky selection when navigating back to step 2
-    if (_gameType === 't2t' && _matchType) {
-      document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => {
-        c.classList.toggle('selected', c.dataset.matchtype === _matchType);
-      });
-    }
-    if (_gameType === 'td' && _pvpMode !== '1v1') {
-      document.querySelectorAll('#ws2-td .mode-card').forEach(c => {
-        c.classList.toggle('selected', c.dataset.pvp === _pvpMode);
-      });
-    }
-  }
-  if (n === 3) {
-    if (ws3TdTabs) ws3TdTabs.style.display = _gameType === 'td' ? '' : 'none';
+  if (n === 4) {
     setLobbyState('idle');
     setStatus('', '');
-
+    updateWs4Panels();
     if (_gameType === 'survival') {
       gameMode = 'survival';
-      hideMLLobbyPanel();
-      // Hide all other sections, show survival section
-      if (lobbyQueueSection)   lobbyQueueSection.style.display   = 'none';
-      if (lobbyPrivateSection) lobbyPrivateSection.style.display = 'none';
-      if (lobbySoloSection)    lobbySoloSection.style.display    = 'none';
-      const svSec = document.getElementById('survival-lobby-section');
-      if (svSec) svSec.style.display = '';
-      svShowModePick();
-      return;
-    }
-
-    // Hide survival section when switching away
-    const svSec = document.getElementById('survival-lobby-section');
-    if (svSec) svSec.style.display = 'none';
-
-    gameMode = 'multilane';
-    hideMLLobbyPanel();
-    const tab = _matchType || 'ranked';
-    if (_gameType === 'td') {
-      activateLobbyTab(tab);
-      document.querySelectorAll('#ws3-td-tabs .stab').forEach(t => {
-        t.classList.toggle('active', t.dataset.matchtype === tab);
-      });
     } else {
-      activateLobbyTab(_matchType);
+      gameMode = 'multilane';
     }
   }
 }
 
-// Game card clicks â€" Step 1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 2
-document.querySelectorAll('#ws-1 .game-card:not(.disabled)').forEach(card => {
-  card.addEventListener('click', () => {
-    if (lobbyState === 'playing') return;
-    document.querySelectorAll('#ws-1 .game-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
-    const game = card.dataset.game;
-    activateGameType(game);
-    if (game === 't2t') {
-      _matchType = null;
-      document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => c.classList.remove('selected'));
+function showLobbyWaitingPanel() {
+  if (ws4PrivateEntry) ws4PrivateEntry.style.display = 'none';
+  if (ws4LobbyPanel)   ws4LobbyPanel.style.display   = '';
+  if (_wizardStep !== 4) {
+    _entryType = 'private';
+    gotoWizardStep(4);
+  } else {
+    if (ws4Private) ws4Private.style.display = '';
+    if (ws4Public)  ws4Public.style.display  = 'none';
+  }
+}
+
+function hideLobbyWaitingPanel() {
+  if (ws4PrivateEntry)   ws4PrivateEntry.style.display   = '';
+  if (ws4LobbyPanel)     ws4LobbyPanel.style.display     = 'none';
+  if (lobbyJoinForm)     lobbyJoinForm.style.display      = 'none';
+  if (queueWaitingPanel) queueWaitingPanel.style.display  = 'none';
+  if (btnQueueFind)      btnQueueFind.style.display       = '';
+}
+
+function renderLobbyPanel(snapshot) {
+  if (!lobbyMemberList) return;
+  _currentLobbyCode   = snapshot.code   || _currentLobbyCode;
+  if (snapshot.hostSocketId) {
+    _currentLobbyIsHost = (snapshot.hostSocketId === socket.id);
+  } else if (snapshot.isHost !== undefined) {
+    _currentLobbyIsHost = snapshot.isHost;
+  }
+  if (snapshot.matchFormat) _currentLobbyMatchFormat = snapshot.matchFormat;
+  if (lobbyPanelTitle) {
+    const gt = snapshot.gameType    || _gameType;
+    const mf = snapshot.matchFormat || _matchFormat;
+    lobbyPanelTitle.textContent = 'Lobby \u2014 ' + gt + ' ' + mf;
+  }
+  if (lobbyCodeDisplay) lobbyCodeDisplay.textContent = _currentLobbyCode || '';
+  if (lobbyCodeRow)     lobbyCodeRow.style.display   = _currentLobbyCode ? 'flex' : 'none';
+  const _snapGameType = snapshot.gameType || _gameType;
+  if (lobbyBotControls) lobbyBotControls.style.display = (_currentLobbyIsHost && _snapGameType !== 'survival') ? '' : 'none';
+  if (lobbyLaunchRow)   lobbyLaunchRow.style.display   = _currentLobbyIsHost ? '' : 'none';
+  const members = snapshot.members || snapshot.players || [];
+  lobbyMemberList.innerHTML = '';
+  let meReady = false;
+  members.forEach(m => {
+    const li = document.createElement('li');
+    const nameSpan = document.createElement('span');
+    nameSpan.style.flex = '1';
+    nameSpan.textContent = m.displayName || m.name || 'Player';
+    if (m.isBot || m.isAI) {
+      const aiBadge = document.createElement('span');
+      aiBadge.className = 'ai-badge';
+      aiBadge.textContent = 'BOT';
+      nameSpan.appendChild(aiBadge);
     }
-    // Survival skips step 2 entirely
-    if (game === 'survival') {
-      gotoWizardStep(3);
-    } else {
-      gotoWizardStep(2);
+    if (m.isHost) {
+      const hostBadge = document.createElement('span');
+      hostBadge.className = 'ml-team-badge';
+      hostBadge.textContent = 'HOST';
+      hostBadge.style.marginLeft = '4px';
+      nameSpan.appendChild(hostBadge);
     }
+    const isReady = m.isReady || m.ready;
+    if (m.socketId === socket.id || m.isMe) meReady = !!isReady;
+    const badge = document.createElement('span');
+    badge.className = isReady ? 'player-ready-badge' : 'player-waiting-badge';
+    badge.textContent = isReady ? 'READY' : 'WAITING';
+    li.appendChild(nameSpan);
+    li.appendChild(badge);
+    if (_currentLobbyIsHost && !m.isBot && !m.isAI && m.socketId &&
+        (_currentLobbyMatchFormat === '2v2' || _currentLobbyMatchFormat === 'ffa')) {
+      const teamColors = _currentLobbyMatchFormat === 'ffa'
+        ? ['red', 'blue', 'green', 'orange']
+        : ['red', 'blue'];
+      const sel = document.createElement('select');
+      sel.className = 'team-assign-select';
+      const optAuto = document.createElement('option');
+      optAuto.value = '';
+      optAuto.textContent = 'auto';
+      sel.appendChild(optAuto);
+      for (const color of teamColors) {
+        const opt = document.createElement('option');
+        opt.value = color;
+        opt.textContent = color;
+        if (m.team === color) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      if (!m.team) sel.value = '';
+      const targetSid = m.socketId;
+      sel.addEventListener('change', () => {
+        socket.emit('lobby:assign_team', { targetSocketId: targetSid, team: sel.value || null });
+      });
+      li.appendChild(sel);
+    }
+    if (_currentLobbyIsHost && (m.isBot || m.isAI) && m.botSlotIndex !== undefined) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'lobby-btn secondary small';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.style.marginLeft = '4px';
+      removeBtn.addEventListener('click', () => socket.emit('lobby:remove_bot', { botSlotIndex: m.botSlotIndex }));
+      li.appendChild(removeBtn);
+    }
+    lobbyMemberList.appendChild(li);
   });
-  card.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  // Render bot slots
+  (snapshot.botSlots || []).forEach((bot, idx) => {
+    const li = document.createElement('li');
+    const nameSpan = document.createElement('span');
+    nameSpan.style.flex = '1';
+    nameSpan.textContent = `CPU (${bot.difficulty || 'medium'})`;
+    const aiBadge = document.createElement('span');
+    aiBadge.className = 'ai-badge';
+    aiBadge.textContent = 'BOT';
+    aiBadge.style.marginLeft = '4px';
+    nameSpan.appendChild(aiBadge);
+    const readyBadge = document.createElement('span');
+    readyBadge.className = 'player-ready-badge';
+    readyBadge.textContent = 'READY';
+    li.appendChild(nameSpan);
+    li.appendChild(readyBadge);
+    if (_currentLobbyIsHost) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'lobby-btn secondary small';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.style.marginLeft = '4px';
+      removeBtn.addEventListener('click', () => socket.emit('lobby:remove_bot', { index: bot.index ?? idx }));
+      li.appendChild(removeBtn);
+    }
+    lobbyMemberList.appendChild(li);
   });
-});
+  if (btnLobbyReady) {
+    btnLobbyReady.classList.toggle('is-ready', meReady);
+    btnLobbyReady.textContent = meReady ? '\u2714 Ready (click to unready)' : '\u2714 Ready';
+  }
+  if (btnLobbyLaunch) {
+    const humanMembers = members.filter(m => !m.isBot && !m.isAI);
+    const readyCount = humanMembers.filter(m => m.isReady || m.ready).length;
+    btnLobbyLaunch.textContent = `\u25BA Launch (${readyCount}/${humanMembers.length} ready)`;
+  }
+}
 
-// Mode card clicks â€" T2T match type (Step 2) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 3
-document.querySelectorAll('#ws2-t2t .mode-card').forEach(card => {
-  card.addEventListener('click', () => {
-    if (lobbyState === 'playing') return;
-    document.querySelectorAll('#ws2-t2t .mode-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
-    _matchType = card.dataset.matchtype;
-    gotoWizardStep(3);
-  });
-  card.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
-  });
-});
-
-// Mode card clicks â€" TD team format (Step 2) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 3
-document.querySelectorAll('#ws2-td .mode-card').forEach(card => {
-  card.addEventListener('click', () => {
-    if (lobbyState === 'playing') return;
-    document.querySelectorAll('#ws2-td .mode-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
-    activatePvpMode(card.dataset.pvp);
-    gotoWizardStep(3);
-  });
-  card.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
-  });
-});
-
-// TD match type tabs â€" Step 3
-document.querySelectorAll('#ws3-td-tabs .stab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('#ws3-td-tabs .stab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    _matchType = tab.dataset.matchtype;
-    setLobbyState('idle');
-    setStatus('', '');
-    gameMode = 'multilane';
-    activateLobbyTab(_matchType);
-    hideMLLobbyPanel();
-  });
-});
-
-// Wizard Back
-if (wWizardBack) wWizardBack.addEventListener('click', () => {
-  if (lobbyState === 'playing') return;
+function leavePendingLobbySession() {
+  if (_queueStatus === 'queued') socket.emit('queue:leave');
+  if (_currentLobbyId) {
+    socket.emit('lobby:leave');
+  } else if ((lobbyState === 'waiting' || lobbyState === 'joining' || lobbyState === 'creating') && mlMyCode) {
+    socket.emit('leave_game');
+  }
+  _currentLobbyId          = null;
+  _currentLobbyCode        = null;
+  _currentLobbyIsHost      = false;
+  _currentLobbyMatchFormat = '2v2';
+  mlMyCode          = null;
+  mlIsHost          = false;
+  mlPlayerCount     = 0;
+  mlLaneAssignments = [];
+  mlLobbyPlayers    = [];
+  svMyCode      = null;
+  svMyLaneIndex = null;
   setLobbyState('idle');
   setStatus('', '');
   hideMLLobbyPanel();
-  if (_wizardStep > 1) gotoWizardStep(_wizardStep - 1);
+  hideLobbyWaitingPanel();
+}
+
+// Stub for backward compat (ml_match_ready still calls hideMLLobbyPanel)
+function setPvpModeUiVisibility() {}
+
+// ── Step 1: Entry type ────────────────────────────────────────────────────────
+document.querySelectorAll('#ws-1 .mode-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws-1 .mode-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    _entryType = card.dataset.entry;
+    gotoWizardStep(2);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// ── Step 2: Game type ─────────────────────────────────────────────────────────
+document.querySelectorAll('#ws-2 .game-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws-2 .game-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    _gameType = card.dataset.game;
+    gotoWizardStep(3);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// ── Step 3: Match format ──────────────────────────────────────────────────────
+document.querySelectorAll('#ws-3 .mode-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (lobbyState === 'playing') return;
+    document.querySelectorAll('#ws-3 .mode-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    _matchFormat = card.dataset.format;
+    gotoWizardStep(4);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+  });
+});
+
+// ── Ranked/casual toggle ──────────────────────────────────────────────────────
+if (btnTabCasual) btnTabCasual.addEventListener('click', () => {
+  _ranked = false;
+  if (btnTabCasual) btnTabCasual.classList.add('active');
+  if (btnTabRanked) btnTabRanked.classList.remove('active');
+  updateQueueModeDesc();
+});
+if (btnTabRanked) btnTabRanked.addEventListener('click', () => {
+  _ranked = true;
+  if (btnTabRanked) btnTabRanked.classList.add('active');
+  if (btnTabCasual) btnTabCasual.classList.remove('active');
+  updateQueueModeDesc();
+});
+
+// ── Public queue ──────────────────────────────────────────────────────────────
+if (btnQueueFind) {
+  btnQueueFind.addEventListener('click', () => {
+    if (lobbyState !== 'idle') return;
+    if (!ensureLoadoutSelectedOrBlock()) return;
+    const loadout = getSelectedLoadoutPayload();
+    const name = Auth.getPlayer()?.displayName || 'Player';
+    setLobbyState('creating');
+    setStatus('Searching for a match\u2026', 'wait');
+    if (queueWaitingPanel) queueWaitingPanel.style.display = '';
+    if (queueWaitingStatus) queueWaitingStatus.textContent = 'Searching\u2026';
+    if (queueWaitingElapsed) queueWaitingElapsed.textContent = '';
+    socket.emit('queue:enter_v2', {
+      gameType: _gameType,
+      matchFormat: _matchFormat,
+      ranked: _ranked,
+      displayName: name,
+      ...loadout,
+    });
+  });
+}
+
+if (btnQueueLeaveV2) {
+  btnQueueLeaveV2.addEventListener('click', () => {
+    socket.emit('queue:leave');
+    if (queueWaitingPanel) queueWaitingPanel.style.display = 'none';
+    setLobbyState('idle');
+    setStatus('', '');
+  });
+}
+
+// ── Private lobby ─────────────────────────────────────────────────────────────
+if (btnLobbyCreate) {
+  btnLobbyCreate.addEventListener('click', () => {
+    if (lobbyState !== 'idle') return;
+    if (!ensureLoadoutSelectedOrBlock()) return;
+    const loadout = getSelectedLoadoutPayload();
+    const name = Auth.getPlayer()?.displayName || 'Player';
+    setLobbyState('creating');
+    setStatus('Creating lobby\u2026', 'wait');
+    socket.emit('lobby:create', {
+      gameType: _gameType,
+      matchFormat: _matchFormat,
+      displayName: name,
+      ...loadout,
+    });
+  });
+}
+
+if (btnToggleLobbyJoin) {
+  btnToggleLobbyJoin.addEventListener('click', () => {
+    if (!lobbyJoinForm) return;
+    const visible = lobbyJoinForm.style.display !== 'none';
+    lobbyJoinForm.style.display = visible ? 'none' : '';
+  });
+}
+
+if (btnLobbyJoin) {
+  btnLobbyJoin.addEventListener('click', () => {
+    if (lobbyState !== 'idle') return;
+    if (!ensureLoadoutSelectedOrBlock()) return;
+    const loadout = getSelectedLoadoutPayload();
+    const code = lobbyJoinCodeInput ? lobbyJoinCodeInput.value.trim().toUpperCase() : '';
+    if (code.length < 6) return setStatus('Enter the full 6-character room code.', 'error');
+    const name = Auth.getPlayer()?.displayName || 'Player';
+    setLobbyState('joining');
+    setStatus('Joining lobby\u2026', 'wait');
+    socket.emit('lobby:join', { lobbyCode: code, displayName: name, ...loadout });
+  });
+}
+
+if (lobbyJoinCodeInput) {
+  lobbyJoinCodeInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { if (btnLobbyJoin) btnLobbyJoin.click(); }
+  });
+}
+
+// ── Lobby waiting panel ───────────────────────────────────────────────────────
+if (btnLobbyReady) {
+  btnLobbyReady.addEventListener('click', () => {
+    const isReady = btnLobbyReady.classList.toggle('is-ready');
+    btnLobbyReady.textContent = isReady ? '\u2714 Ready (click to unready)' : '\u2714 Ready';
+    if (_currentLobbyId) {
+      socket.emit('lobby:ready', { lobbyId: _currentLobbyId, ready: isReady });
+    } else if (mlMyCode && isReady) {
+      socket.emit('ml_player_ready', { code: mlMyCode });
+    }
+  });
+}
+
+if (btnLobbyLaunch) {
+  btnLobbyLaunch.addEventListener('click', () => {
+    if (_currentLobbyId) {
+      socket.emit('lobby:launch', { lobbyId: _currentLobbyId });
+    } else if (mlMyCode && mlIsHost) {
+      socket.emit('ml_force_start', { code: mlMyCode });
+    }
+  });
+}
+
+if (btnLobbyLeave) {
+  btnLobbyLeave.addEventListener('click', () => {
+    leavePendingLobbySession();
+    gotoWizardStep(1);
+  });
+}
+
+['easy', 'medium', 'hard'].forEach(diff => {
+  const btn = document.getElementById('btn-lobby-add-bot-' + diff);
+  if (btn) {
+    btn.addEventListener('click', () => {
+      if (_currentLobbyId) {
+        socket.emit('lobby:add_bot', { lobbyId: _currentLobbyId, difficulty: diff });
+      } else if (mlMyCode) {
+        socket.emit('add_ai_to_ml_room', { difficulty: diff });
+      }
+    });
+  }
+});
+
+if (btnCopyLobbyCode) {
+  btnCopyLobbyCode.addEventListener('click', async () => {
+    const code = _currentLobbyCode || mlMyCode;
+    if (!code) return;
+    try {
+      await copyToClipboard(code);
+      setStatus('Code copied!', 'ok');
+    } catch (_) {
+      setStatus('Copy failed.', 'error');
+    }
+  });
+}
+
+if (btnCopyLobbyLink) {
+  btnCopyLobbyLink.addEventListener('click', async () => {
+    const code = _currentLobbyCode || mlMyCode;
+    if (!code) return;
+    try {
+      await copyToClipboard(makeShareUrl(code, 'lobby'));
+      setStatus('Invite link copied!', 'ok');
+    } catch (_) {
+      setStatus('Copy failed.', 'error');
+    }
+  });
+}
+
+// ── Wizard Back ───────────────────────────────────────────────────────────────
+if (wWizardBack) wWizardBack.addEventListener('click', () => {
+  if (lobbyState === 'playing') return;
+  leavePendingLobbySession();
+  if (_wizardStep > 1) gotoWizardStep(Math.max(1, _wizardStep - 1));
 });
 
 // Initialize wizard
 gotoWizardStep(1);
 
-if (btnToggleMlJoin) {
-  btnToggleMlJoin.addEventListener('click', () => {
-    const visible = mlJoinForm && mlJoinForm.style.display !== 'none';
-    if (mlJoinForm) mlJoinForm.style.display = visible ? 'none' : '';
-  });
-}
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Wizard navigation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
-btnCreateMl.addEventListener('click', () => {
-  if (lobbyState !== 'idle') return;
-  if (!ensureLoadoutSelectedOrBlock()) return;
-  const loadout = getSelectedLoadoutPayload();
-  const name = Auth.getPlayer()?.displayName || mlNameInput.value.trim() || 'Player';
-  const settings = readMlSettingsFromUi();
-  setLobbyState('creating');
-  setStatus('Creating private room...', 'wait');
-  socket.emit('queue:enter', { mode: 'private_td', displayName: name, settings, pvpMode: _pvpMode, ...loadout });
-});
 
-btnJoinMl.addEventListener('click', () => {
-  if (lobbyState !== 'idle') return;
-  if (!ensureLoadoutSelectedOrBlock()) return;
-  const loadout = getSelectedLoadoutPayload();
-  const code = mlJoinInput.value.trim().toUpperCase();
-  if (code.length < 6) return setStatus('Enter the full 6-character room code.', 'error');
-  const name = Auth.getPlayer()?.displayName || mlNameInput.value.trim() || 'Player';
-  setLobbyState('joining');
-  setStatus('Joining private room...', 'wait');
-  socket.emit('queue:enter', { mode: 'private_td', displayName: name, filters: { privateCode: code }, ...loadout });
-});
 
-mlJoinInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') btnJoinMl.click();
-});
+
+// Game card clicks â€" Step 1 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 2
+
+// Mode card clicks â€" T2T match type (Step 2) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 3
+
+// Mode card clicks â€" TD team format (Step 2) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ auto-advance to Step 3
+
+// TD match type tabs â€" Step 3
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Lobby queue entry button ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
-if (btnQueueFind) {
-  btnQueueFind.addEventListener('click', () => {
-    if (!ensureLoadoutSelectedOrBlock()) return;
-    const loadout = getSelectedLoadoutPayload();
-    const modeMap = {
-      't2t-ranked':      'ranked_1v1',
-      't2t-unranked':    'casual_1v1',
-      'td-ffa-ranked':   'ranked_ffa',
-      'td-ffa-unranked': 'casual_ffa',
-      'td-2v2-ranked':   'ranked_2v2',
-      'td-2v2-unranked': 'casual_2v2',
-    };
-    const key = _gameType === 't2t'
-      ? `${_gameType}-${_matchType}`
-      : `td-${_pvpMode}-${_matchType}`;
-    socket.emit('queue:enter', { mode: modeMap[key], ...loadout });
-  });
-}
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Solo mode ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
@@ -4065,52 +4211,8 @@ if (btnSoloPlay) {
   });
 }
 
-btnReadyMl.addEventListener('click', () => {
-  if (!mlMyCode) return;
-  const isReady = btnReadyMl.classList.toggle('is-ready');
-  btnReadyMl.textContent = isReady ? '\u2714 Ready (click to unready)' : '\u2714 Ready';
-  if (isReady) socket.emit('ml_player_ready', { code: mlMyCode });
-});
-
-btnForceStart.addEventListener('click', () => {
-  if (!mlMyCode) return;
-  socket.emit('ml_force_start', { code: mlMyCode });
-});
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ AI add/remove buttons (host only) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-['easy', 'medium', 'hard'].forEach(diff => {
-  const btn = document.getElementById('btn-add-ai-' + diff);
-  if (btn) {
-    btn.addEventListener('click', () => {
-      if (!mlMyCode) return;
-      socket.emit('add_ai_to_ml_room', { difficulty: diff });
-    });
-  }
-});
-
-if (btnCopyMlCode) {
-  btnCopyMlCode.addEventListener('click', async () => {
-    if (!mlMyCode) return;
-    try {
-      await copyToClipboard(mlMyCode);
-      setStatus('Room code copied!', 'ok');
-    } catch (_) {
-      setStatus('Copy failed.', 'error');
-    }
-  });
-}
-
-if (btnCopyMlLink) {
-  btnCopyMlLink.addEventListener('click', async () => {
-    if (!mlMyCode) return;
-    try {
-      await copyToClipboard(makeShareUrl(mlMyCode, 'multilane'));
-      setStatus('Invite link copied!', 'ok');
-    } catch (_) {
-      setStatus('Copy failed.', 'error');
-    }
-  });
-}
 
 if (mlStartIncomeInput) {
   mlStartIncomeInput.addEventListener('change', () => {
@@ -4123,7 +4225,7 @@ if (mlStartIncomeInput) {
 
 function makeShareUrl(code, mode) {
   const base = window.location.origin + window.location.pathname;
-  const param = mode === 'multilane' ? 'mljoin' : 'join';
+  const param = mode === 'lobby' ? 'lobby' : mode === 'multilane' ? 'mljoin' : 'join';
   return base + '?' + param + '=' + encodeURIComponent(code);
 }
 
@@ -4275,21 +4377,21 @@ socket.on('left_game_ack', () => {
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Share-link auto-join ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 (function handleShareLink() {
   const params = new URLSearchParams(window.location.search);
-  const mlCode = params.get('mljoin');
-  if (!mlCode) return;
+  const lobbyCode = params.get('lobby') || params.get('mljoin');
+  if (!lobbyCode) return;
 
-  // Strip the param from the address bar immediately
-  history.replaceState(null, '', window.location.pathname);
+  history.replaceState(window.history.state, '', window.location.pathname);
 
   function doPreFill() {
-    const code = mlCode.toUpperCase().slice(0, 6);
+    const code = lobbyCode.toUpperCase().slice(0, 6);
     if (code.length !== 6) return setStatus('Invalid invite link.', 'error');
-    // Switch to Private tab
-    activateGameType('td');
-    activateLobbyTab('private');
-    mlJoinInput.value = code;
-    setStatus("You've been invited! Enter your name, then click Join ML Room.", 'wait');
-    mlNameInput.focus();
+    // Navigate to private lobby join
+    _entryType = 'private';
+    gotoWizardStep(4);
+    if (lobbyJoinCodeInput) lobbyJoinCodeInput.value = code;
+    if (lobbyJoinForm) lobbyJoinForm.style.display = '';
+    setStatus("You've been invited! Click Join Lobby to connect.", 'wait');
+    if (lobbyJoinCodeInput) lobbyJoinCodeInput.focus();
   }
 
   if (socket.connected) {
@@ -4623,7 +4725,7 @@ function drawMLGridLane(lane, local) {
     const tileCount = srcCols * srcRows;
 
     ctx.save();
-    ctx.globalAlpha = 0.42;
+    ctx.globalAlpha = canUseSheet ? 0.82 : 0.60;
     for (let gy = 0; gy < ML_GRID_H; gy++) {
       for (let gx = 0; gx < ML_GRID_W; gx++) {
         const x0 = Math.round(gx * tileSize);
@@ -4646,6 +4748,24 @@ function drawMLGridLane(lane, local) {
         }
       }
     }
+    ctx.restore();
+    // Tile seam grid so the individual stones are visible.
+    ctx.save();
+    ctx.globalAlpha = 0.38;
+    ctx.strokeStyle = 'rgba(10,8,6,0.70)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let gy = 1; gy < ML_GRID_H; gy++) {
+      const y = Math.round(gy * tileSize) + 0.5;
+      ctx.moveTo(0, y);
+      ctx.lineTo(Math.round(ML_GRID_W * tileSize), y);
+    }
+    for (let gx = 1; gx < ML_GRID_W; gx++) {
+      const x = Math.round(gx * tileSize) + 0.5;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, Math.round(ML_GRID_H * tileSize));
+    }
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -4696,6 +4816,9 @@ function drawMLGridLane(lane, local) {
   if (lane.towerCells && lane.towerCells.length > 0) {
     for (const { x, y, type, level, debuffed } of lane.towerCells) {
       const col = debuffed ? '#c060ff' : towerColor(type);
+      // Background fill so the tile is clearly distinct from empty grid
+      ctx.fillStyle = 'rgba(18, 24, 38, 0.88)';
+      ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)';
       ctx.lineWidth = debuffed ? 3 : 2.4;
       ctx.strokeRect(x * tileSize + 1, y * tileSize + 1, tileSize - 2, tileSize - 2);
@@ -4704,7 +4827,14 @@ function drawMLGridLane(lane, local) {
       // Scaled tower art centered in tile
       const tcx = (x + 0.5) * tileSize;
       const tcy = (y + 0.5) * tileSize;
-      drawTowerArt(type, tcx, tcy, tileSize / 22);
+      const towerIconUrl = (towerMeta[type] || DEFAULT_TOWER_META[type] || {}).icon_url;
+      const towerIconImg = towerIconUrl ? getUnitSpriteImageFromUrl(towerIconUrl) : null;
+      if (towerIconImg) {
+        const iconS = tileSize * 0.72;
+        ctx.drawImage(towerIconImg, tcx - iconS / 2, tcy - iconS / 2 - 2, iconS, iconS);
+      } else {
+        drawTowerArt(type, tcx, tcy, tileSize / 22);
+      }
       // Level badge at tile bottom
       const fs = Math.max(5, Math.floor(tileSize * 0.22));
       ctx.fillStyle = debuffed ? '#c060ff' : '#e8a828';
@@ -5308,12 +5438,10 @@ socket.on('ml_room_created', data => {
 
   setLobbyState('waiting');
   setStatus('Share code \u2014 waiting for players...', 'wait');
-  lobbyMlSection.style.display = 'none';
-  showMLLobbyPanel();
-  if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'block';
-  if (mlRoomCodeDisplay) mlRoomCodeDisplay.textContent = data.code;
-  if (btnForceStart) btnForceStart.style.display = '';
-  if (mlAiControls) mlAiControls.style.display = '';
+  _currentLobbyCode = data.code;
+  _currentLobbyIsHost = true;
+  showLobbyWaitingPanel();
+  renderLobbyPanel({ code: data.code, isHost: true, members: [] });
 });
 
 socket.on('ml_room_joined', data => {
@@ -5323,13 +5451,11 @@ socket.on('ml_room_joined', data => {
   mlIsHost = false;
   setMlSettingsEditable(false);
   setLobbyState('waiting');
-  setStatus('Joined! Click Ready when set.', 'ok');
-  lobbyMlSection.style.display = 'none';
-  showMLLobbyPanel();
-  if (mlRoomCodeRow) mlRoomCodeRow.style.display = 'block';
-  if (mlRoomCodeDisplay) mlRoomCodeDisplay.textContent = data.code;
-  if (btnForceStart) btnForceStart.style.display = 'none';
-  if (mlAiControls) mlAiControls.style.display = 'none';
+  setStatus('Joined! Click Ready when you are set.', 'ok');
+  _currentLobbyCode = data.code;
+  _currentLobbyIsHost = false;
+  showLobbyWaitingPanel();
+  renderLobbyPanel({ code: data.code, isHost: false, members: [] });
 });
 
 socket.on('ml_lobby_update', data => {
@@ -5770,13 +5896,18 @@ function showMLWallConvertMenu(gx, gy) {
   const selectedWalls = getSelectionWallTiles(lane, gx, gy);
   const selectedCount = selectedWalls.length;
 
-  let html = '<div class="ml-menu-title">Wall -> Tower</div>';
+  let html = '<div class="ml-menu-title">Place Defender</div>';
   if (selectedCount > 1) {
     html += `<div class="ml-menu-stat" data-selected-walls>Selected walls: ${selectedCount}</div>`;
   }
-  const towerTypes = mlFixedUnitTypes.length > 0
-    ? mlFixedUnitTypes.map(ut => ut.key)
-    : ['archer', 'fighter', 'mage', 'ballista', 'cannon'];
+  const _loadoutSet = new Set(activeUnitTypes);
+  let towerTypes;
+  if (mlFixedUnitTypes.length > 0) {
+    const filtered = mlFixedUnitTypes.filter(ut => _loadoutSet.has(ut.key));
+    towerTypes = (filtered.length > 0 ? filtered : mlFixedUnitTypes).map(ut => ut.key);
+  } else {
+    towerTypes = activeUnitTypes.length > 0 ? [...activeUnitTypes] : ['archer', 'fighter', 'mage', 'ballista', 'cannon'];
+  }
   for (const t of towerTypes) {
     const m = towerMeta[t] || DEFAULT_TOWER_META[t];
     const unitCost = m ? m.cost : 0;
@@ -6314,6 +6445,15 @@ const loadoutBuilderSave   = document.getElementById('lp-builder-save');
 const loadoutBuilderClose  = document.getElementById('lp-builder-close');
 const loadoutBuilderName   = document.getElementById('lp-builder-name');
 
+let _branding = {
+  publicTitle: 'Ransom Forge',
+  publicSubtitle: 'PvP Tower Defense',
+  publicBrowserTitle: 'Ransom Forge - Multiplayer',
+  loadoutTitle: 'Loadout',
+  loadoutHint: 'Click a slot to edit',
+  loadoutBuilderTitle: 'Loadout Builder',
+};
+
 let _allUnitTypes    = [];  // from GET /api/unit-types
 let _lbkDisplayFields = []; // from GET /api/unit-types displayFields
 let _lbkCurrentSlot  = 0;  // which slot is being edited inside the builder
@@ -6330,6 +6470,22 @@ async function fetchSavedLoadouts() {
     }
   } catch { /* ignore */ }
   renderLoadoutPicker();
+}
+
+function applyBranding(branding = {}) {
+  _branding = Object.assign({}, _branding, branding || {});
+  document.title = _branding.publicBrowserTitle || `${_branding.publicTitle} - Multiplayer`;
+  const publicTitleEl = document.getElementById('brand-public-title');
+  if (publicTitleEl) publicTitleEl.textContent = _branding.publicTitle;
+  const publicSubtitleEl = document.getElementById('brand-public-subtitle');
+  if (publicSubtitleEl) publicSubtitleEl.textContent = _branding.publicSubtitle;
+  const loadoutTitleEl = document.getElementById('loadout-title-text');
+  if (loadoutTitleEl) loadoutTitleEl.textContent = _branding.loadoutTitle;
+  const loadoutHintEl = document.getElementById('loadout-hint-text');
+  if (loadoutHintEl) loadoutHintEl.textContent = _branding.loadoutHint;
+  if (loadoutBuilderSlot && !loadoutBuilderModal?.dataset?.editingSlot) {
+    loadoutBuilderSlot.textContent = _branding.loadoutBuilderTitle;
+  }
 }
 
 async function fetchAllUnitTypes() {
@@ -6371,9 +6527,7 @@ function renderLoadoutPicker() {
     } else if (!Auth.isSignedIn() && Array.isArray(_guestTempLoadouts[_selectedLoadoutSlot]) && _guestTempLoadouts[_selectedLoadoutSlot].length === 5) {
       loadoutPreviewEl.textContent = 'Guest: temporary loadout selected';
     } else {
-      loadoutPreviewEl.textContent = Auth.isSignedIn()
-        ? 'Slot empty - save a loadout to start'
-        : 'Guest: save a temporary loadout to start';
+      loadoutPreviewEl.textContent = 'Slot empty — using default units';
     }
   }
 }
@@ -6387,23 +6541,16 @@ function getSelectedLoadoutPayload() {
 }
 
 function ensureLoadoutSelectedOrBlock() {
-  if (Auth.isSignedIn()) {
-    const saved = _savedLoadouts.find(s => s.slot === _selectedLoadoutSlot);
-    if (saved && Array.isArray(saved.unit_type_ids) && saved.unit_type_ids.length === 5) return true;
-    setStatus('Select and save a loadout before starting a match.', 'error');
-    return false;
-  }
-  const guestIds = _guestTempLoadouts[_selectedLoadoutSlot];
-  if (Array.isArray(guestIds) && guestIds.length === 5) return true;
-  setStatus('Select and save a temporary loadout before starting.', 'error');
-  return false;
+  // Always allowed — server falls back to default units when no loadout is configured.
+  return true;
 }
 
 // ── Kanban loadout builder helpers ─────────────────────────────────────────
 
 function _lbkIconHtml(ut, size, phClass) {
-  if (ut.icon_url) {
-    return `<img src="${ut.icon_url}" class="lbk-unit-icon" style="width:${size}px;height:${size}px" alt="${ut.name}">`;
+  const iconSrc = ut.icon_url || UNIT_PHOTO_SRC[ut.key] || '';
+  if (iconSrc) {
+    return `<img src="${iconSrc}" class="lbk-unit-icon" style="width:${size}px;height:${size}px" alt="${ut.name}">`;
   }
   const emoji = { moving: '⚔', fixed: '🏰', both: '🛡' }[ut.behavior_mode] || '?';
   return `<div class="${phClass}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.48)}px">${emoji}</div>`;
@@ -6588,6 +6735,7 @@ async function openLoadoutBuilder(slot) {
   if (listBtn)   listBtn.onclick   = () => { _lbkView = 'list';   listBtn.classList.add('active');  kanbanBtn?.classList.remove('active'); _lbkRenderPicker(); };
 
   loadoutBuilderModal.dataset.editingSlot = String(slot);
+  if (loadoutBuilderSlot) loadoutBuilderSlot.textContent = `${_branding.loadoutBuilderTitle} - Slot ${slot + 1}`;
   loadoutBuilderModal.style.display = 'flex';
 
   _lbkRefreshSlotTabs();
@@ -6680,6 +6828,7 @@ function onAuthStateChange(player) {
     _friendsList = [];
     _savedLoadouts = [];
     _pendingPartyInvite = null;
+    _pendingLobbyInvite = null;
     _resetPwForm();
     renderLoadoutPicker();
     // Restore name inputs for guests
@@ -6977,7 +7126,7 @@ document.getElementById('btn-verify-close').addEventListener('click', () => {
   const params = new URLSearchParams(window.location.search);
   const token  = params.get('verify');
   if (!token) return;
-  history.replaceState(null, '', window.location.pathname);
+  history.replaceState(window.history.state, '', window.location.pathname);
   Auth.verifyEmail(token).catch(err => {
     // Show error in verify modal with a message
     verifyEmailDisplay.textContent = '';
@@ -7001,7 +7150,7 @@ const btnResetSubmit= document.getElementById('btn-reset-submit');
   const token  = params.get('reset');
   if (!token) return;
   // Remove token from URL bar without reloading
-  history.replaceState(null, '', window.location.pathname);
+  history.replaceState(window.history.state, '', window.location.pathname);
   resetModal.style.display = '';
   resetModal._token = token;
 })();
@@ -7074,10 +7223,12 @@ initRenderAssets().then(() => {
 });
 
 // Boot auth: fetch public config, then init
+applyBranding();
 (async () => {
   try {
     const cfgRes = await fetch('/config');
     const cfg    = await cfgRes.json();
+    applyBranding(cfg.branding);
     if (cfg.googleClientId) {
       document.getElementById('g_id_onload')
         .setAttribute('data-client_id', cfg.googleClientId);
@@ -7114,9 +7265,10 @@ let _queueSize      = 0;
 let _queueInterval  = null; // local elapsed timer
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Friends panel state ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-let _friendsList       = [];
+let _friendsList        = [];
 let _pendingPartyInvite = null;
-let _friendsMsgTimer   = null;
+let _pendingLobbyInvite = null;
+let _friendsMsgTimer    = null;
 
 const partyPanel        = document.getElementById('party-panel');
 const friendsPanel      = document.getElementById('friends-panel');
@@ -7136,6 +7288,18 @@ const queueStatusText   = document.getElementById('queue-status-text');
 const btnQueueRanked    = document.getElementById('btn-queue-enter-ranked');
 const btnQueueCasual    = document.getElementById('btn-queue-enter-casual');
 const btnQueueLeave     = document.getElementById('btn-queue-leave');
+
+function _formatQueueModeLabel(mode) {
+  if (!mode) return 'Unknown';
+  const parts = mode.split(':');
+  if (parts.length === 3) {
+    const fmt = parts[1].toUpperCase();
+    return `${parts[2] === '1' ? 'Ranked' : 'Casual'} ${fmt}`;
+  }
+  if (mode === 'ranked_2v2') return 'Ranked 2v2';
+  if (mode === 'casual_2v2') return 'Casual 2v2';
+  return mode;
+}
 
 function renderPartyPanel(party) {
   _currentParty = party || null;
@@ -7174,13 +7338,18 @@ function renderPartyPanel(party) {
     queueStatusText.textContent = (inParty && !isLeader) ? 'Waiting for leader' : 'Ready to queue';
     queueStatusText.className   = '';
   } else if (_queueStatus === 'queued') {
-    const modeLabel = _queueMode === 'ranked_2v2' ? 'Ranked 2v2' : 'Casual 2v2';
+    const modeLabel = _formatQueueModeLabel(_queueMode);
     const sizeStr   = _queueSize > 0 ? ` Ãƒâ€šÃ‚Â· ${_queueSize} in queue` : '';
     queueStatusText.textContent = `Searching ${modeLabel}ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ ${_queueElapsed}s${sizeStr}`;
     queueStatusText.className   = 'queued';
   } else if (_queueStatus === 'matched') {
     queueStatusText.textContent = 'Match found!';
     queueStatusText.className   = 'matched';
+  }
+  if (_queueStatus === 'queued') {
+    const modeLabel = _formatQueueModeLabel(_queueMode);
+    const sizeStr = _queueSize > 0 ? ` - ${_queueSize} in queue` : '';
+    queueStatusText.textContent = `Searching ${modeLabel}... ${_queueElapsed}s${sizeStr}`;
   }
   // Keep friends panel content in sync with party state changes.
   renderFriendsPanel(_friendsList);
@@ -7209,7 +7378,7 @@ function renderFriendsPanel(friends) {
   const myParty    = _currentParty;
   const amLeader   = myParty && myParty.leaderId === myPlayerId;
 
-  // Invite banner
+  // Party invite banner
   const banner     = document.getElementById('friends-invite-banner');
   const inviteText = document.getElementById('friends-invite-text');
   if (_pendingPartyInvite) {
@@ -7217,6 +7386,18 @@ function renderFriendsPanel(friends) {
     banner.style.display = '';
   } else {
     banner.style.display = 'none';
+  }
+
+  // Lobby invite banner
+  const lobbyInviteBanner = document.getElementById('lobby-invite-banner');
+  const lobbyInviteText   = document.getElementById('lobby-invite-text');
+  if (lobbyInviteBanner) {
+    if (_pendingLobbyInvite) {
+      lobbyInviteText.textContent = `${_pendingLobbyInvite.fromDisplayName} invited you to their lobby!`;
+      lobbyInviteBanner.style.display = '';
+    } else {
+      lobbyInviteBanner.style.display = 'none';
+    }
   }
 
   // Online count
@@ -7258,11 +7439,18 @@ function renderFriendsPanel(friends) {
     actions.className = 'friends-actions';
 
     if (f.status === 'accepted') {
-      if (amLeader && f.online) {
+      const isLobbyHost = !!(_currentLobbyId && _currentLobbyIsHost);
+      if ((isLobbyHost || amLeader) && f.online) {
         const invBtn = document.createElement('button');
         invBtn.className = 'party-btn small';
         invBtn.textContent = 'Invite';
-        invBtn.addEventListener('click', () => socket.emit('party:invite', { targetPlayerId: f.playerId }));
+        invBtn.addEventListener('click', () => {
+          if (_currentLobbyId && _currentLobbyIsHost) {
+            socket.emit('lobby:invite', { targetPlayerId: f.playerId });
+          } else {
+            socket.emit('party:invite', { targetPlayerId: f.playerId });
+          }
+        });
         actions.appendChild(invBtn);
       }
       const rmBtn = document.createElement('button');
@@ -7293,8 +7481,6 @@ function renderFriendsPanel(friends) {
     list.appendChild(li);
   }
 
-  // Keep friends panel stacked directly below party panel.
-  _repositionFriendsPanel();
 }
 
 function syncFriendsPanelPlacement() {
@@ -7319,20 +7505,9 @@ function syncFriendsPanelPlacement() {
   } else {
     friendsPanelHomeParent.appendChild(friendsPanel);
   }
-  _repositionFriendsPanel();
 }
 
-function _repositionFriendsPanel() {
-  const pp = document.getElementById('party-panel');
-  const fp = document.getElementById('friends-panel');
-  if (!pp || !fp || fp.style.display === 'none') return;
-  if (fp.parentElement === rightRail || lobbyState === 'playing') {
-    fp.style.top = '';
-    return;
-  }
-  const rect = pp.getBoundingClientRect();
-  fp.style.top = (rect.bottom + 6) + 'px';
-}
+
 
 function _startElapsedTimer() {
   if (_queueInterval) return;
@@ -7376,12 +7551,12 @@ btnPartyLeave.addEventListener('click', () => {
 
 btnQueueRanked.addEventListener('click', () => {
   if (!ensureLoadoutSelectedOrBlock()) return;
-  socket.emit('queue:enter', { mode: 'ranked_2v2', ...getSelectedLoadoutPayload() });
+  socket.emit('queue:enter_v2', { gameType: 'line_wars', matchFormat: '2v2', ranked: true, ...getSelectedLoadoutPayload() });
 });
 
 btnQueueCasual.addEventListener('click', () => {
   if (!ensureLoadoutSelectedOrBlock()) return;
-  socket.emit('queue:enter', { mode: 'casual_2v2', ...getSelectedLoadoutPayload() });
+  socket.emit('queue:enter_v2', { gameType: 'line_wars', matchFormat: '2v2', ranked: false, ...getSelectedLoadoutPayload() });
 });
 
 btnQueueLeave.addEventListener('click', () => {
@@ -7411,54 +7586,105 @@ socket.on('queue_status', ({ status, mode, elapsed, queueSize }) => {
       if (typeof elapsed === 'number') _queueElapsed = elapsed;
     }
     if (typeof queueSize === 'number') _queueSize = queueSize;
+    if (queueWaitingStatus) queueWaitingStatus.textContent = `Searching\u2026 (${_queueSize} in queue)`;
+    if (queueWaitingElapsed) queueWaitingElapsed.textContent = `${_queueElapsed}s`;
   } else {
     _queueStatus = 'idle';
     _queueSize   = 0;
     _stopElapsedTimer();
+    if (queueWaitingPanel) queueWaitingPanel.style.display = 'none';
   }
   renderPartyPanel(_currentParty);
 });
 
-socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents, autoStart }) => {
+// ── Lobby socket events ───────────────────────────────────────────────────────
+socket.on('lobby_created', ({ lobbyId, code, lobby }) => {
+  _currentLobbyId   = lobbyId;
+  _currentLobbyCode = code;
+  _currentLobbyIsHost = true;
+  setLobbyState('waiting');
+  showLobbyWaitingPanel();
+  if (lobby) renderLobbyPanel(lobby);
+});
+
+socket.on('lobby_joined', ({ lobbyId, code, lobby }) => {
+  _currentLobbyId   = lobbyId;
+  _currentLobbyCode = code;
+  _currentLobbyIsHost = false;
+  setLobbyState('waiting');
+  showLobbyWaitingPanel();
+  if (lobby) renderLobbyPanel(lobby);
+});
+
+socket.on('lobby_update', ({ lobby }) => {
+  if (lobby) renderLobbyPanel(lobby);
+});
+
+socket.on('lobby_left', () => {
+  _currentLobbyId   = null;
+  _currentLobbyCode = null;
+  _currentLobbyIsHost = false;
+  hideLobbyWaitingPanel();
+  setLobbyState('idle');
+  setStatus('', '');
+  gotoWizardStep(1);
+});
+
+socket.on('lobby_error', ({ message }) => {
+  setStatus(message || 'Lobby error.', 'error');
+  // Only reset state if we're not already seated in an established lobby
+  if (!_currentLobbyId) setLobbyState('idle');
+});
+
+socket.on('match_found', ({ roomCode, laneIndex, teammates, opponents, autoStart, gameType: matchGameType }) => {
   _queueStatus = 'matched';
   _stopElapsedTimer();
   renderPartyPanel(_currentParty);
 
-  // Set up ML state variables (needed before ml_match_ready fires)
-  gameMode    = 'multilane';
-  mlMyCode    = roomCode;
   myLaneIndex = laneIndex;
-  mlIsHost    = (laneIndex === 0);
   setMlSettingsEditable(false);
   setLobbyState('waiting');
 
-  if (autoStart) {
-    // Solo match: server has already started the game, just wait for ml_match_ready
-    setStatus('Starting solo match\u2026', 'wait');
+  if (matchGameType === 'survival') {
+    // survival_match_ready will set gameMode = 'survival' and start the game
+    svMyCode      = roomCode;
+    svMyLaneIndex = laneIndex;
+    setStatus('Starting survival match\u2026', 'wait');
     return;
   }
 
-  // Ranked / casual / private: show ML lobby panel while waiting for ready
-  setStatus('Match found! Joining\u2026', 'ok');
-  activateGameType('td');
-  activateLobbyTab('ranked');
-  showMLLobbyPanel();
+  // Set up ML state variables (needed before ml_match_ready fires)
+  gameMode    = 'multilane';
+  mlMyCode    = roomCode;
+  mlIsHost    = (laneIndex === 0);
 
-  if (mlRoomCodeRow) { mlRoomCodeRow.style.display = 'block'; }
-  if (mlRoomCodeDisplay) { mlRoomCodeDisplay.textContent = roomCode; }
-  if (btnForceStart) btnForceStart.style.display = mlIsHost ? '' : 'none';
-  if (mlAiControls)  mlAiControls.style.display  = mlIsHost ? '' : 'none';
+  if (autoStart) {
+    // lobby:launch path: server has started the game, wait for ml_match_ready
+    setStatus('Starting match\u2026', 'wait');
+    return;
+  }
 
+  // Queue match: show lobby waiting panel while players ready up
   const tmStr  = (teammates || []).join(', ');
   const oppStr = (opponents || []).join(', ');
-  setStatus(`Match found! Team: ${tmStr} | vs: ${oppStr}`, 'ok');
+  setStatus(`Match found! Team: ${tmStr} vs ${oppStr}`, 'ok');
+  _currentLobbyIsHost = mlIsHost;
+  showLobbyWaitingPanel();
+  renderLobbyPanel({
+    code: roomCode,
+    isHost: mlIsHost,
+    members: [
+      ...(teammates || []).map((name, i) => ({ displayName: name, isMe: i === 0 && laneIndex === 0, isHost: i === 0 && mlIsHost, isReady: false })),
+      ...(opponents || []).map(name => ({ displayName: name, isMe: false, isHost: false, isReady: false })),
+    ],
+  });
 });
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Friends panel events & socket listeners ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
-window.addEventListener('resize', () => _repositionFriendsPanel());
+
 if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', () => _repositionFriendsPanel());
+  
 }
 
 document.getElementById('btn-friends-add').addEventListener('click', () => {
@@ -7482,6 +7708,19 @@ document.getElementById('btn-invite-accept').addEventListener('click', () => {
 
 document.getElementById('btn-invite-dismiss').addEventListener('click', () => {
   _pendingPartyInvite = null;
+  renderFriendsPanel(_friendsList);
+});
+
+document.getElementById('btn-lobby-invite-accept').addEventListener('click', () => {
+  if (!_pendingLobbyInvite) return;
+  const inviteCode = _pendingLobbyInvite.code;
+  _pendingLobbyInvite = null;
+  renderFriendsPanel(_friendsList);
+  socket.emit('lobby:join', { code: inviteCode, displayName: (typeof Auth !== 'undefined' && Auth.getPlayer()?.displayName) || '' });
+});
+
+document.getElementById('btn-lobby-invite-dismiss').addEventListener('click', () => {
+  _pendingLobbyInvite = null;
   renderFriendsPanel(_friendsList);
 });
 
@@ -7531,6 +7770,14 @@ socket.on('party_invite', (invite) => {
 });
 socket.on('party_invite_sent', ({ displayName }) => {
   _showFriendsMsg(`Party invite sent to ${displayName || 'player'}.`);
+});
+
+socket.on('lobby_invite', (invite) => {
+  _pendingLobbyInvite = invite;
+  renderFriendsPanel(_friendsList);
+});
+socket.on('lobby_invite_sent', ({ displayName }) => {
+  _showFriendsMsg(`Lobby invite sent to ${displayName || 'player'}.`);
 });
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Leaderboard ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
@@ -7660,89 +7907,9 @@ socket.on('party_invite_sent', ({ displayName }) => {
 
 let svMyCode        = null;
 let svMyLaneIndex   = null;
-let svCoopMode      = false;
 let svCurrentSnap   = null;
 
 // â"€â"€ Survival lobby helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-function svShowModePick() {
-  const modePick = document.getElementById('survival-mode-pick');
-  const roomPanel = document.getElementById('survival-room-panel');
-  if (modePick)  modePick.style.display  = '';
-  if (roomPanel) roomPanel.style.display = 'none';
-}
-
-function svShowRoomPanel(coopMode) {
-  svCoopMode = !!coopMode;
-  const modePick   = document.getElementById('survival-mode-pick');
-  const roomPanel  = document.getElementById('survival-room-panel');
-  const coopJoin   = document.getElementById('sv-coop-join-row');
-  const waitPanel  = document.getElementById('sv-waiting-panel');
-  if (modePick)  modePick.style.display  = 'none';
-  if (roomPanel) roomPanel.style.display = '';
-  if (coopJoin)  coopJoin.style.display  = coopMode ? '' : 'none';
-  if (waitPanel) waitPanel.style.display = 'none';
-}
-
-// Solo card
-const svSoloCard = document.getElementById('sv-solo-card');
-if (svSoloCard) {
-  svSoloCard.addEventListener('click', () => svShowRoomPanel(false));
-  svSoloCard.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); svSoloCard.click(); } });
-}
-
-// Co-op card
-const svCoopCard = document.getElementById('sv-coop-card');
-if (svCoopCard) {
-  svCoopCard.addEventListener('click', () => svShowRoomPanel(true));
-  svCoopCard.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); svCoopCard.click(); } });
-}
-
-// Start button
-const btnSvStart = document.getElementById('btn-sv-start');
-if (btnSvStart) {
-  btnSvStart.addEventListener('click', () => {
-    if (lobbyState !== 'idle') return;
-    if (!ensureLoadoutSelectedOrBlock()) return;
-    const loadout = getSelectedLoadoutPayload();
-    const name = Auth.getPlayer()?.displayName
-      || document.getElementById('sv-name-input')?.value?.trim()
-      || 'Player';
-    const joinCode = (document.getElementById('sv-join-code')?.value || '').trim().toUpperCase();
-
-    if (svCoopMode && joinCode.length === 6) {
-      // Join existing co-op room
-      setLobbyState('joining');
-      setStatus('Joining survival room…', 'wait');
-      socket.emit('join_survival_room', { code: joinCode, displayName: name, ...loadout });
-    } else {
-      // Create new room
-      setLobbyState('creating');
-      setStatus('Creating survival room…', 'wait');
-      socket.emit('create_survival_room', { displayName: name, coopMode: svCoopMode, ...loadout });
-    }
-  });
-}
-// Ready button
-const btnSvReady = document.getElementById('btn-sv-ready');
-if (btnSvReady) {
-  btnSvReady.addEventListener('click', () => {
-    if (!svMyCode) return;
-    socket.emit('survival_player_ready', { code: svMyCode });
-    if (btnSvReady) btnSvReady.disabled = true;
-  });
-}
-
-// Copy code button
-const btnCopySvCode = document.getElementById('btn-copy-sv-code');
-if (btnCopySvCode) {
-  btnCopySvCode.addEventListener('click', () => {
-    if (svMyCode) {
-      navigator.clipboard?.writeText(svMyCode).catch(() => {});
-      setStatus('Room code copied!', 'ok');
-    }
-  });
-}
-
 // Play again / back lobby
 const btnSvPlayAgain = document.getElementById('btn-sv-play-again');
 if (btnSvPlayAgain) {
@@ -7777,8 +7944,10 @@ function updateSvHud(snap) {
   const maxLiv  = document.getElementById('sv-max-lives');
   const gold    = document.getElementById('sv-gold');
   const phase   = document.getElementById('sv-phase-text');
+  const emptyWaveLabel = '-';
 
   if (waveNum) waveNum.textContent = snap.waveNumber > 0 ? snap.waveNumber : 'â€"';
+  if (waveNum && !(snap.waveNumber > 0)) waveNum.textContent = emptyWaveLabel;
   if (lives)   lives.textContent   = snap.lives;
   if (maxLiv)  maxLiv.textContent  = snap.maxLives;
   if (gold) {
@@ -7833,62 +8002,6 @@ function hideSvEndScreen() {
 }
 
 // â"€â"€ Survival socket events â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-
-socket.on('survival_room_created', ({ code, laneIndex, coopMode }) => {
-  svMyCode      = code;
-  svMyLaneIndex = laneIndex;
-  setLobbyState('waiting');
-  setStatus('', '');
-
-  // Show waiting panel
-  const waitPanel = document.getElementById('sv-waiting-panel');
-  const roomPanel = document.getElementById('survival-room-panel');
-  if (waitPanel) waitPanel.style.display = '';
-  if (roomPanel) roomPanel.style.display = '';
-  const startBtn = document.getElementById('btn-sv-start');
-  if (startBtn) startBtn.style.display = 'none';
-
-  const title = document.getElementById('sv-waiting-title');
-  if (title) title.textContent = coopMode
-    ? `Waiting for co-op partnerâ€¦ (Code: ${code})`
-    : 'Solo run ready. Click Ready!';
-
-  // Show room code row for co-op
-  const codeRow = document.getElementById('sv-room-code-row');
-  const codeDisp = document.getElementById('sv-room-code-display');
-  if (codeRow)  codeRow.style.display  = coopMode ? '' : 'none';
-  if (codeDisp) codeDisp.textContent   = code;
-
-  // For solo, auto-ready
-  if (!coopMode) {
-    setTimeout(() => {
-      socket.emit('survival_player_ready', { code });
-      if (btnSvReady) btnSvReady.disabled = true;
-    }, 300);
-  }
-});
-
-socket.on('survival_room_joined', ({ code, laneIndex }) => {
-  svMyCode      = code;
-  svMyLaneIndex = laneIndex;
-  setLobbyState('waiting');
-  setStatus('', '');
-
-  const waitPanel = document.getElementById('sv-waiting-panel');
-  if (waitPanel) waitPanel.style.display = '';
-  const startBtn = document.getElementById('btn-sv-start');
-  if (startBtn) startBtn.style.display = 'none';
-  const title = document.getElementById('sv-waiting-title');
-  if (title) title.textContent = 'Joined! Click Ready when you are.';
-});
-
-socket.on('survival_lobby_update', ({ players, coopMode }) => {
-  const list = document.getElementById('sv-player-list');
-  if (!list) return;
-  list.innerHTML = (players || []).map(p =>
-    `<li>${escHtml(p.displayName)} â€" ${p.ready ? 'âœ" Ready' : 'Waitingâ€¦'}</li>`
-  ).join('');
-});
 
 socket.on('survival_match_ready', ({ code, playerCount, laneAssignments, waveSetName }) => {
   setStatus('', '');

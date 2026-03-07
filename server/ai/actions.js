@@ -77,7 +77,8 @@ function validateActionShape(action, defs) {
   const towerDefs = (defs && defs.towerDefs) || simMl.TOWER_DEFS;
 
   if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    if (!towerDefs[normalized.towerType]) {
+    const towerResolved = (towerDefs && towerDefs[normalized.towerType]) || simMl.resolveTowerDef(normalized.towerType);
+    if (!towerResolved) {
       return { ok: false, reason: "Unknown tower type", normalized };
     }
     if (!parseGridId(normalized.tileId)) {
@@ -168,7 +169,8 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
       return { ok: true, normalized };
     }
     if (tile.type === "wall") {
-      const cost = towerDefs[normalized.towerType].cost;
+      const towerResolved = (towerDefs && towerDefs[normalized.towerType]) || simMl.resolveTowerDef(normalized.towerType);
+      const cost = towerResolved ? towerResolved.cost : 0;
       if (lane.gold < cost) return { ok: false, reason: "Not enough gold for conversion", normalized };
       return { ok: true, normalized };
     }
@@ -197,8 +199,8 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
   return { ok: true, normalized };
 }
 
-function translateActionToCommands(game, laneIndex, action) {
-  const checked = validateActionAgainstGame(game, laneIndex, action);
+function translateActionToCommands(game, laneIndex, action, defs) {
+  const checked = validateActionAgainstGame(game, laneIndex, action, defs);
   if (!checked.ok) return { ok: false, reason: checked.reason, commands: [], normalized: checked.normalized };
   const normalized = checked.normalized;
   const lane = game.lanes[laneIndex];
@@ -225,8 +227,8 @@ function translateActionToCommands(game, laneIndex, action) {
       return {
         ok: true,
         commands: [{
-          type: "convert_wall",
-          data: { gridX: pos.x, gridY: pos.y, towerType: normalized.towerType },
+          type: "upgrade_wall",
+          data: { gridX: pos.x, gridY: pos.y, unitTypeKey: normalized.towerType },
         }],
         normalized,
       };
@@ -265,5 +267,6 @@ module.exports = {
   createDoNothingAction,
   clampCountBucket,
   isOpponentLane,
+  getUnitCostForLane,
 };
 

@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Castle Defender — Admin</title>
+  <title id="admin-page-title">Castle Defender Admin</title>
   <link rel="stylesheet" href="/admin.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="/render/assets.js"></script>
 </head>
 <body>
 
 <!-- Login -->
 <div id="login-screen">
   <div class="login-box">
-    <h1>⚙ Admin Dashboard</h1>
+    <h1 id="admin-login-title">Admin Dashboard</h1>
     <p>Authenticate to continue.</p>
 
     <div id="login-email-form">
@@ -47,7 +48,7 @@
             autocomplete="email" onkeydown="if(event.key==='Enter')submitForgotPassword()">
         </div>
         <button class="btn-primary w100" onclick="submitForgotPassword()">Send Reset Link</button>
-        <button class="btn-sm w100 mt8" onclick="backToLogin()">← Back to Login</button>
+        <button class="btn-sm w100 mt8" onclick="backToLogin()">&#x2190; Back to Login</button>
       </div>
       <div id="login-reset-section" class="hidden">
         <p style="margin-bottom:12px;font-size:13px">Set your new admin password.</p>
@@ -62,7 +63,7 @@
             autocomplete="new-password" onkeydown="if(event.key==='Enter')submitResetPassword()">
         </div>
         <button class="btn-primary w100" onclick="submitResetPassword()">Reset Password</button>
-        <button class="btn-sm w100 mt8" onclick="backToLogin()">← Back to Login</button>
+        <button class="btn-sm w100 mt8" onclick="backToLogin()">&#x2190; Back to Login</button>
       </div>
       <div id="login-2fa-section" class="hidden">
         <p style="margin-bottom:12px;font-size:13px">Enter the 6-digit code from your authenticator app.</p>
@@ -73,7 +74,7 @@
             onkeydown="if(event.key==='Enter')doLogin2fa()">
         </div>
         <button class="btn-primary w100" onclick="doLogin2fa()">Verify</button>
-        <button class="btn-sm" style="margin-top:8px;width:100%" onclick="cancelLogin2fa()">← Back</button>
+        <button class="btn-sm" style="margin-top:8px;width:100%" onclick="cancelLogin2fa()">&#x2190; Back</button>
       </div>
     </div>
 
@@ -85,34 +86,35 @@
 <!-- App -->
 <div id="app" class="hidden">
   <header>
-    <span class="logo">⚔ Castle Defender Admin</span>
+    <span class="logo" id="admin-header-title">Castle Defender Admin</span>
     <span class="live-dot" id="live-dot"></span>
-    <span id="live-label" class="text-muted" style="font-size:12px">—</span>
+    <span id="live-label" class="text-muted" style="font-size:12px">&#8212;</span>
     <span class="spacer"></span>
     <span id="admin-identity" class="text-muted" style="font-size:12px"></span>
     <button class="btn-sm" id="btn-my-account" onclick="myAccountModal()" style="display:none">My Account</button>
-    <button class="btn-sm" onclick="refreshCurrent()">↻ Refresh</button>
+    <button class="btn-sm" onclick="refreshCurrent()">&#8635; Refresh</button>
     <button class="btn-sm" onclick="doLogout()">Logout</button>
   </header>
 
   <nav>
-    <a href="#" class="active" data-tab="dashboard"><span class="icon">📊</span> Dashboard</a>
-    <a href="#" data-tab="players"><span class="icon">👤</span> Players</a>
-    <a href="#" data-tab="towers" style="display:none"><span class="icon">🏰</span> Mobs</a>
-    <a href="#" data-tab="anticheat"><span class="icon">🛡</span> Anti-cheat</a>
-    <a href="#" data-tab="matches"><span class="icon">⚔</span> Matches</a>
-    <a href="#" data-tab="analytics"><span class="icon">📈</span> Analytics</a>
-    <a href="#" data-tab="config"><span class="icon">🎮</span> Config</a>
-    <a href="#" data-tab="ops"><span class="icon">🔧</span> Ops</a>
-    <a href="#" data-tab="audit"><span class="icon">📋</span> Audit Log</a>
-    <a href="#" data-tab="survival"><span class="icon">🌊</span> Survival</a>
-    <a href="#" data-tab="units"><span class="icon">⚔</span> Units</a>
-    <a href="#" data-tab="assets"><span class="icon">🎨</span> Assets</a>
-    <a href="#" data-tab="team" id="nav-team" class="hidden"><span class="icon">👥</span> Admin Team</a>
+    <a href="#" class="active" data-tab="dashboard"><span class="icon">&#128202;</span> Dashboard</a>
+    <a href="#" data-tab="players"><span class="icon">&#128100;</span> Players</a>
+    <a href="#" data-tab="towers" style="display:none"><span class="icon">&#127984;</span> Mobs</a>
+    <a href="#" data-tab="anticheat"><span class="icon">&#128737;</span> Anti-cheat</a>
+    <a href="#" data-tab="matches"><span class="icon">&#9876;</span> Matches</a>
+    <a href="#" data-tab="analytics"><span class="icon">&#128200;</span> Analytics</a>
+    <a href="#" data-tab="branding"><span class="icon">&#129511;</span> Branding</a>
+    <a href="#" data-tab="config"><span class="icon">&#127918;</span> Config</a>
+    <a href="#" data-tab="ops"><span class="icon">&#128295;</span> Ops</a>
+    <a href="#" data-tab="audit"><span class="icon">&#128203;</span> Audit Log</a>
+    <a href="#" data-tab="survival"><span class="icon">&#127754;</span> Survival</a>
+    <a href="#" data-tab="units"><span class="icon">&#9876;</span> Units</a>
+    <a href="#" data-tab="assets"><span class="icon">&#127912;</span> Assets</a>
+    <a href="#" data-tab="team" id="nav-team" class="hidden"><span class="icon">&#128101;</span> Admin Team</a>
   </nav>
 
   <main id="main-content">
-    <p class="load">Loading…</p>
+    <p class="load">Loading&#8230;</p>
   </main>
 </div>
 
@@ -121,7 +123,7 @@
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-header">
       <h3 id="modal-title">Detail</h3>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+      <button class="modal-close" onclick="closeModal()">&#10005;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-footer" id="modal-footer"></div>

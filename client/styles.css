@@ -1489,6 +1489,17 @@ html, body {
   letter-spacing: 0.06em;
 }
 
+.team-assign-select {
+  margin-left: 6px;
+  padding: 1px 4px;
+  font-size: 0.6rem;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--muted2);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
 #btn-ready-ml.is-ready {
   background: rgba(40, 208, 96, 0.18);
   border-color: var(--green);
@@ -3233,15 +3244,135 @@ html, body {
 }
 
 
-/* ── Auth Bar ──────────────────────────────────────────────────────────────── */
+/* ── Right Column ──────────────────────────────────────── */
 
-#auth-bar {
+/* auth 20% + party slot 35% + friends slot 45% = 100% of right column */
+#right-column {
   position: fixed;
   top: calc(8px + env(safe-area-inset-top));
   right: var(--side-rail-right);
   width: var(--side-rail-w);
   max-width: calc(100vw - (var(--side-rail-right) * 2));
+  height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   z-index: 9000;
+  pointer-events: none;
+}
+
+/* Slot wrappers always hold their percentage — inner panels can be display:none */
+/* auth 25% + loadout 14% + party 28% + friends 33% = 100% */
+#rc-auth-slot {
+  flex: 25 1 0;
+  min-height: 0;
+  border-radius: 6px;
+  background: var(--panelL);
+  overflow: hidden;
+}
+
+#rc-loadout-slot {
+  flex: 14 1 0;
+  min-height: 0;
+  border-radius: 6px;
+  background: var(--panelL);
+  overflow: hidden;
+}
+
+#rc-party-slot {
+  flex: 28 1 0;
+  min-height: 0;
+  border-radius: 6px;
+  background: var(--panelL);
+  overflow: hidden;
+}
+
+#rc-friends-slot {
+  flex: 33 1 0;
+  min-height: 0;
+  border-radius: 6px;
+  background: var(--panelL);
+  overflow: hidden;
+}
+
+/* Panels fill their slot */
+#rc-auth-slot > #auth-bar,
+#rc-loadout-slot > #loadout-picker-section,
+#rc-party-slot > #party-panel,
+#rc-friends-slot > #friends-panel {
+  height: 100%;
+  pointer-events: auto;
+}
+
+/* Slot wrappers passthrough pointer events to inner panels */
+#rc-auth-slot,
+#rc-loadout-slot,
+#rc-party-slot,
+#rc-friends-slot {
+  pointer-events: none;
+}
+
+/* ── Right Column — Mobile ───────────────────────────────────────────────────── */
+/* On narrow screens the vertical right-side column becomes a full-width bottom bar */
+
+@media (max-width: 640px) {
+  /* Shift lobby card up so it sits above the bottom panel bar */
+  #lobby {
+    padding-bottom: 30dvh;
+  }
+
+  /* Reposition column: full-width fixed bottom bar */
+  #right-column {
+    top: auto;
+    bottom: env(safe-area-inset-bottom);
+    right: 0;
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 30dvh;
+    flex-direction: row;
+    gap: 3px;
+    padding: 3px;
+    background: var(--bg);
+    border-top: 1px solid var(--stone2);
+    pointer-events: auto; /* block touches on the bar */
+  }
+
+  /* Equal-width horizontal slots; each scrolls its own content */
+  #rc-auth-slot,
+  #rc-loadout-slot,
+  #rc-party-slot,
+  #rc-friends-slot {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Tighten text inside slots on mobile */
+  #rc-auth-slot,
+  #rc-loadout-slot,
+  #rc-party-slot,
+  #rc-friends-slot {
+    font-size: 0.72rem;
+  }
+
+  /* Auth sign-in inputs take full width */
+  #auth-bar input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+/* ── Auth Bar ──────────────────────────────────────────────────────────────── */
+
+#auth-bar {
+  /* Flex sizing now on #rc-auth-slot; auth-bar fills the slot */
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  pointer-events: auto;
   display: none; /* shown by JS when DB or Google auth is configured */
 }
 
@@ -3674,12 +3805,8 @@ html, body {
 /* ── Party Panel ─────────────────────────────────────────────────────────────── */
 
 #party-panel {
-  position: fixed;
-  top: calc(44px + env(safe-area-inset-top));
-  right: var(--side-rail-right);
-  z-index: 600;
-  width: var(--side-rail-w);
-  max-width: calc(100vw - (var(--side-rail-right) * 2));
+  width: 100%;
+  box-sizing: border-box;
 }
 
 #party-panel-inner {
@@ -3687,7 +3814,7 @@ html, body {
   border: 1px solid var(--stone);
   border-radius: 6px;
   padding: 8px 10px;
-  max-height: calc(100vh - 56px);
+  height: 100%;
   overflow-y: auto;
   font-family: 'Rajdhani', sans-serif;
   font-size: 13px;
@@ -4011,12 +4138,8 @@ html, body {
 /* ── Friends Panel ─────────────────────────────────────────────────────────── */
 
 #friends-panel {
-  position: fixed;
-  right: var(--side-rail-right);
-  top: calc(44px + env(safe-area-inset-top)); /* overwritten dynamically by JS */
-  z-index: 600;
-  width: var(--side-rail-w);
-  max-width: calc(100vw - (var(--side-rail-right) * 2));
+  width: 100%;
+  box-sizing: border-box;
   pointer-events: auto;
 }
 
@@ -4025,6 +4148,8 @@ html, body {
   border: 1px solid var(--stone);
   border-radius: 6px;
   padding: 8px 10px;
+  height: 100%;
+  overflow-y: auto;
   font-family: 'Rajdhani', sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -4164,20 +4289,11 @@ html, body {
 
 /* ── Loadout Picker ──────────────────────────────────────────────────────────── */
 #loadout-picker-section {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-}
-
-#auth-bar #loadout-picker-section {
-  margin-top: 8px;
   width: 100%;
-  background: rgba(8, 10, 18, 0.92);
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  border-radius: 10px;
-  backdrop-filter: blur(8px);
+  height: 100%;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
 }
 .lp-header {
   display: flex;
@@ -4235,60 +4351,68 @@ html, body {
 #loadout-builder-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.75);
+  background:
+    radial-gradient(circle at top, rgba(232,168,40,0.12), transparent 24%),
+    rgba(6,8,14,0.96);
   display: none;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   z-index: 3000;
 }
 #loadout-builder-panel {
   background: var(--bg-card, #1a1e26);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 10px;
-  padding: 18px 20px;
-  width: 720px;
-  max-width: 96vw;
-  max-height: 90vh;
+  border: none;
+  border-radius: 0;
+  padding: 22px 24px 18px;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 #loadout-builder-panel .lb-body {
-  overflow-y: auto;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 .lb-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 14px;
-  font-size: 0.95rem;
+  margin-bottom: 18px;
+  font-size: 1.05rem;
   color: var(--gold);
 }
 .lb-close-btn {
   background: none;
-  border: none;
-  color: #778;
-  font-size: 1.2rem;
+  border: 1px solid rgba(255,255,255,0.14);
+  color: #d5deee;
+  font-size: 1.4rem;
   cursor: pointer;
   line-height: 1;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
 }
 .lb-close-btn:hover { color: #fff; }
-.lb-body { display: flex; flex-direction: column; gap: 8px; position: relative; }
-.lb-row { display: flex; align-items: center; gap: 8px; }
+.lb-body { display: flex; flex-direction: column; gap: 14px; position: relative; }
+.lb-row { display: flex; align-items: center; gap: 12px; }
 .lb-label {
-  font-size: 0.72rem;
-  color: #778;
-  min-width: 50px;
+  font-size: 0.8rem;
+  color: #d9e2f1;
+  min-width: 58px;
 }
 .lb-name-input {
   flex: 1;
+  min-height: 42px;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 4px;
+  border-radius: 10px;
   color: #ccd;
-  padding: 5px 8px;
-  font-size: 0.8rem;
+  padding: 8px 12px;
+  font-size: 0.9rem;
 }
 .lb-units-header { margin-top: 4px; }
 .lb-units {
@@ -4308,8 +4432,9 @@ html, body {
 }
 .lb-footer {
   display: flex;
+  justify-content: flex-end;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 18px;
   flex-shrink: 0;
 }
 .lb-footer .lobby-btn { margin: 0; }
@@ -4317,17 +4442,18 @@ html, body {
 /* ── Loadout Builder Kanban ──────────────────────────────────────────────── */
 .lbk-slot-tabs {
   display: flex;
-  gap: 4px;
-  margin: 10px 0 8px;
+  gap: 8px;
+  margin: 4px 0 2px;
 }
 .lbk-slot-btn {
   flex: 1;
-  padding: 6px 4px;
+  min-height: 64px;
+  padding: 10px 8px;
   background: rgba(255,255,255,0.04);
   border: 2px solid transparent;
-  border-radius: 6px;
-  color: #778;
-  font-size: 11px;
+  border-radius: 10px;
+  color: #cbd5e1;
+  font-size: 12px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -4339,29 +4465,30 @@ html, body {
 .lbk-slot-btn.active {
   border-color: var(--gold);
   background: rgba(232,168,40,0.08);
-  color: var(--text);
+  color: #fff3cf;
 }
 .lbk-slot-num { font-size: 13px; font-weight: 700; }
 .lbk-slot-unit {
-  font-size: 9px;
-  color: #556;
+  font-size: 10px;
+  color: #b8c4d6;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 80px;
+  max-width: 100%;
 }
-.lbk-slot-btn.active .lbk-slot-unit { color: var(--gold); }
-.lbk-slot-btn.lbk-slot-filled .lbk-slot-unit { color: #7a9; }
+.lbk-slot-btn.active .lbk-slot-unit { color: #ffe29a; }
+.lbk-slot-btn.lbk-slot-filled .lbk-slot-unit { color: #a6e3c4; }
 
 .lbk-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 12px;
+  margin-bottom: 0;
 }
 .lbk-picking-label {
-  font-size: 11px;
-  color: #778;
+  font-size: 12px;
+  color: #d6deeb;
 }
 .lbk-view-toggle {
   display: flex;
@@ -4376,32 +4503,33 @@ html, body {
   border: none;
   padding: 3px 9px;
   font-size: 11px;
-  color: #778;
+  color: #cad4e3;
   cursor: pointer;
   border-right: 1px solid rgba(255,255,255,0.08);
   transition: background 0.1s, color 0.1s;
 }
 .lbk-view-btn:last-child { border-right: none; }
-.lbk-view-btn.active { background: rgba(255,255,255,0.1); color: #ccd; }
+.lbk-view-btn.active { background: rgba(255,255,255,0.1); color: #fff0c0; }
 .lbk-view-btn:hover:not(.active) { background: rgba(255,255,255,0.07); }
 
 .lbk-unit-picker {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  max-height: 360px;
-  padding: 2px;
+  padding: 6px 2px 2px;
 }
 
 /* Kanban grid */
 .lbk-kanban-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+  gap: 12px;
 }
 .lbk-unit-card {
   background: rgba(255,255,255,0.04);
   border: 2px solid transparent;
-  border-radius: 8px;
-  padding: 10px 8px 8px;
+  border-radius: 12px;
+  padding: 14px 10px 10px;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.1s, background 0.15s;
   text-align: center;
@@ -4436,7 +4564,7 @@ html, body {
 .lbk-unit-name {
   font-size: 11px;
   font-weight: 600;
-  color: #ccd;
+  color: #eef4ff;
   margin-bottom: 3px;
   white-space: nowrap;
   overflow: hidden;
@@ -4444,7 +4572,7 @@ html, body {
 }
 .lbk-unit-stats {
   font-size: 9px;
-  color: #667;
+  color: #c5cfde;
   line-height: 1.5;
 }
 .lbk-unit-badge {
@@ -4477,7 +4605,7 @@ html, body {
 .lbk-list-table th {
   text-align: left;
   padding: 5px 8px;
-  color: #667;
+  color: #c7d2e2;
   border-bottom: 1px solid rgba(255,255,255,0.06);
   font-weight: 500;
 }
@@ -4494,8 +4622,8 @@ html, body {
   position: absolute;
   inset: 0;
   background: var(--bg-card, #1a1e26);
-  border-radius: 8px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 18px;
   overflow-y: auto;
   z-index: 10;
 }
@@ -4523,7 +4651,7 @@ html, body {
   flex-shrink: 0;
 }
 .lbk-detail-title { font-size: 16px; font-weight: 700; color: var(--gold); }
-.lbk-detail-desc  { font-size: 11px; color: #778; margin-top: 2px; }
+.lbk-detail-desc  { font-size: 11px; color: #d0dae8; margin-top: 2px; }
 .lbk-detail-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -4536,6 +4664,55 @@ html, body {
   padding: 6px 8px;
   text-align: center;
 }
-.lbk-detail-stat-label { font-size: 9px; color: #667; margin-bottom: 2px; }
+.lbk-detail-stat-label { font-size: 9px; color: #c1ccdc; margin-bottom: 2px; }
 .lbk-detail-stat-val   { font-size: 13px; font-weight: 700; color: #ccd; }
 .lbk-detail-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+@media (max-width: 920px) {
+  #loadout-builder-panel {
+    padding: 16px 14px 14px;
+  }
+
+  .lb-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .lbk-slot-tabs {
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .lbk-slot-btn {
+    min-width: 88px;
+    flex: 0 0 88px;
+  }
+
+  .lbk-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lbk-view-toggle {
+    width: 100%;
+  }
+
+  .lbk-view-btn {
+    flex: 1;
+    padding: 8px 10px;
+  }
+
+  .lbk-kanban-grid {
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 10px;
+  }
+
+  .lbk-detail-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .lbk-detail-actions {
+    flex-direction: column;
+  }
+}

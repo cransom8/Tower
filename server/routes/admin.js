@@ -9,6 +9,7 @@ const fs       = require('fs');
 const fsp      = fs.promises;
 const path     = require('path');
 const log      = require('../logger');
+const branding = require('../branding');
 
 const UUID_RE      = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FLAG_NAME_RE = /^[a-z_]{1,64}$/;
@@ -361,7 +362,7 @@ router.post('/auth/google', async (req, res) => {
     const ticket = await gClient.verifyIdToken({ idToken: credential, audience: googleClientId });
     const p = ticket.getPayload();
     const googleId = p.sub;
-    const email = p.email;
+    const email = String(p.email || '').trim().toLowerCase();
 
     const db = require('../db');
     // Match by google_id first, then fall back to email (to auto-link on first SSO use)
@@ -375,7 +376,10 @@ router.post('/auth/google', async (req, res) => {
     );
     const user = r.rows[0];
     if (!user || !user.active) {
-      return res.status(401).json({ error: 'No admin account found for this Google account. Contact an owner to create one.' });
+      const suffix = email ? ` (${email})` : '';
+      return res.status(401).json({
+        error: `No active admin account found for this Google account${suffix}. Contact an owner to create or enable it.`,
+      });
     }
 
     // Auto-link google_id on first SSO login via email match
@@ -1094,7 +1098,7 @@ router.post('/players/:id/adjust-rating', requireAdmin, requirePermission('ratin
   const db = require('../db');
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid player ID' });
   const { mode, mu, sigma } = req.body;
-  if (!['2v2_ranked', '2v2_casual'].includes(mode)) return res.status(400).json({ error: 'Invalid mode' });
+  if (!['2v2_ranked', '2v2_casual', '1v1_ranked', '1v1_casual', 'ffa_ranked', 'ffa_casual'].includes(mode)) return res.status(400).json({ error: 'Invalid mode' });
   const mu_n = Number(mu), sigma_n = Number(sigma);
   if (!Number.isFinite(mu_n) || !Number.isFinite(sigma_n) || sigma_n <= 0) {
     return res.status(400).json({ error: 'mu/sigma must be finite numbers; sigma > 0' });
@@ -1292,6 +1296,35 @@ router.get('/game-config/history', requireAdmin, async (req, res) => {
     res.json({ versions: r.rows });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/branding — current branding config
+router.get('/branding', requireAdmin, async (_req, res) => {
+  if (!process.env.DATABASE_URL) {
+    return res.json({ branding: { ...branding.DEFAULT_BRANDING, updatedAt: null, updatedBy: null } });
+  }
+  try {
+    const db = require('../db');
+    const current = await branding.getBranding(db);
+    res.json({ branding: current });
+  } catch (err) {
+    log.error('[admin] GET /branding failed', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /admin/branding — update branding config
+router.put('/branding', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  try {
+    const db = require('../db');
+    const saved = await branding.saveBranding(db, req.body?.branding || req.body || {}, req.adminEmail);
+    await audit(db, 'update_branding', 'branding_settings', 'singleton', saved, req.adminEmail, req.ip);
+    res.json({ branding: saved });
+  } catch (err) {
+    log.error('[admin] PUT /branding failed', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -2088,6 +2121,7 @@ const UNIT_TYPE_FIELDS = [
   'hp','attack_damage','attack_speed','range','path_speed',
   'damage_type','armor_type','damage_reduction_pct',
   'send_cost','build_cost','income','refund_pct',
+  'bounty','projectile_travel_ticks','special_props',
   'barracks_scales_hp','barracks_scales_dmg',
   'icon_url','sprite_url','animation_url',
   'sprite_url_front','sprite_url_back',
@@ -2117,6 +2151,18 @@ function validateUnitTypeBody(body) {
   if (body.refund_pct !== undefined) {
     const v = Number(body.refund_pct);
     if (!Number.isFinite(v) || v < 0 || v > 100) errs.push('refund_pct must be 0–100');
+  }
+  if (body.bounty !== undefined) {
+    const v = Number(body.bounty);
+    if (!Number.isFinite(v) || v < 0) errs.push('bounty must be a non-negative number');
+  }
+  if (body.projectile_travel_ticks !== undefined) {
+    const v = Number(body.projectile_travel_ticks);
+    if (!Number.isFinite(v) || v < 1) errs.push('projectile_travel_ticks must be >= 1');
+  }
+  if (body.special_props !== undefined) {
+    if (typeof body.special_props !== 'object' || Array.isArray(body.special_props) || body.special_props === null)
+      errs.push('special_props must be a plain object');
   }
   return errs;
 }

@@ -21,7 +21,6 @@ const CASTLE_Y = 27;
 const GRID_W = simMl.GRID_W;
 const GRID_H = simMl.GRID_H;
 const WALL_COST = 2;
-const UNIT_TYPES = Object.keys(simMl.UNIT_DEFS);
 
 const TANK_UNITS = new Set(["ironclad", "golem"]);
 const SWARM_UNITS = new Set(["runner", "footman"]);
@@ -45,15 +44,16 @@ function getUnitCostMultiplier(lane) {
   return 1;
 }
 
-function getUnitCost(lane, unitType) {
-  const def = simMl.UNIT_DEFS[unitType];
+function getUnitCost(lane, unitType, unitDefs) {
+  const defs = unitDefs || simMl.UNIT_DEFS;
+  const def = defs[unitType];
   if (!def) return Infinity;
   return Math.ceil(def.cost * getUnitCostMultiplier(lane));
 }
 
 function getTowerUpgradeCost(tile) {
   if (!tile || tile.type !== "tower" || !tile.towerType) return Infinity;
-  const def = simMl.TOWER_DEFS[tile.towerType];
+  const def = simMl.resolveTowerDef(tile.towerType);
   if (!def) return Infinity;
   const nextLevel = (Number(tile.towerLevel) || 1) + 1;
   return Math.ceil(def.cost * (0.75 + 0.25 * nextLevel));
@@ -106,7 +106,7 @@ function hasPathWithCandidateWall(lane, wallX, wallY) {
   return false;
 }
 
-function estimateActionCost(game, laneIndex, action) {
+function estimateActionCost(game, laneIndex, action, unitDefs) {
   const lane = getLane(game, laneIndex);
   if (!lane) return 0;
   if (!action || action.type === AI_ACTION_TYPE.DO_NOTHING) return 0;
@@ -122,7 +122,7 @@ function estimateActionCost(game, laneIndex, action) {
     if (!tile) return 0;
     if (tile.type === "empty") return WALL_COST;
     if (tile.type === "wall") {
-      const def = simMl.TOWER_DEFS[action.towerType];
+      const def = simMl.resolveTowerDef(action.towerType);
       return def ? def.cost : 0;
     }
     return 0;
@@ -137,7 +137,7 @@ function estimateActionCost(game, laneIndex, action) {
   }
   if (action.type === AI_ACTION_TYPE.SEND_UNITS) {
     const c = clampCountBucket(Number(action.countBucket) || 1);
-    return getUnitCost(lane, action.unitType) * c;
+    return getUnitCost(lane, action.unitType, unitDefs) * c;
   }
   return 0;
 }
@@ -162,6 +162,11 @@ class BotBrain {
 
     this.personality = choosePersonality(this.rng, cfg.personality);
     this.personalityProfile = getPersonalityProfile(this.personality);
+
+    this.unitDefs = (cfg.unitDefMap && Object.keys(cfg.unitDefMap).length > 0)
+      ? cfg.unitDefMap
+      : simMl.UNIT_DEFS;
+    this.unitTypes = Object.freeze(Object.keys(this.unitDefs));
 
     this.memory = {
       nextThinkTick: 0,
@@ -194,27 +199,38 @@ class BotBrain {
     }
     this.memory.tankPressureBias = Math.max(0, this.memory.tankPressureBias - 0.02);
 
-    const obs = buildObservation(game, this.laneIndex, runtime);
+    const obs = buildObservation(game, this.laneIndex, runtime, this.unitDefs);
     this.memory.observationDim = obs.vector.length;
   }
 
   chooseTowerType(game, lane, targetLaneIndex, danger) {
+    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
+    const pool = loadoutKeys && loadoutKeys.length > 0 ? loadoutKeys : null;
+
+    const pick = (type) => {
+      if (pool) return pool.includes(type) ? type : null;
+      return simMl.resolveTowerDef(type) ? type : null;
+    };
+
     const incomingMix = scanUnitMix(lane.units, lane.laneIndex);
     const swarmCount = incomingMix.runner + incomingMix.footman;
     const heavyCount = incomingMix.ironclad + incomingMix.golem;
-    if (danger && swarmCount >= 4) return "cannon";
-    if (danger && heavyCount >= 3) return "ballista";
+    if (danger && swarmCount >= 4) { const t = pick("cannon"); if (t) return t; }
+    if (danger && heavyCount >= 3) { const t = pick("ballista"); if (t) return t; }
 
     const targetLane = getLane(game, targetLaneIndex);
     const targetMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
-    if (targetMix.warlock >= 3) return "mage";
+    if (targetMix.warlock >= 3) { const t = pick("mage"); if (t) return t; }
 
-    // Adaptive: if tanks are repeatedly leaking, prefer anti-heavy and heavy sends.
-    if (this.memory.tankPressureBias > 1.0) return "ballista";
+    if (this.memory.tankPressureBias > 1.0) { const t = pick("ballista"); if (t) return t; }
 
     for (const t of this.personalityProfile.preferredTowers) {
-      if (simMl.TOWER_DEFS[t]) return t;
+      const chosen = pick(t);
+      if (chosen) return chosen;
     }
+
+    // Fall back to first available loadout key or default
+    if (pool) return pool[0];
     return "archer";
   }
 
@@ -235,7 +251,7 @@ class BotBrain {
     wallCandidates.sort((a, b) => b.score - a.score);
     for (const c of wallCandidates) {
       const action = { type: AI_ACTION_TYPE.BUILD_TOWER, towerType, tileId: makeTileId(c.x, c.y) };
-      const legal = validateActionAgainstGame(game, this.laneIndex, action);
+      const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
       if (legal.ok) return legal.normalized;
     }
 
@@ -258,7 +274,7 @@ class BotBrain {
     candidates.sort((a, b) => b.score - a.score);
     for (const c of candidates) {
       const action = { type: AI_ACTION_TYPE.BUILD_TOWER, towerType, tileId: makeTileId(c.x, c.y) };
-      const legal = validateActionAgainstGame(game, this.laneIndex, action);
+      const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
       if (legal.ok) return legal.normalized;
     }
     return null;
@@ -274,7 +290,7 @@ class BotBrain {
         const cost = getTowerUpgradeCost(tile);
         if (!Number.isFinite(cost) || lane.gold < cost) continue;
         const nearCastle = y / (GRID_H - 1);
-        const base = simMl.TOWER_DEFS[tile.towerType];
+        const base = simMl.resolveTowerDef(tile.towerType);
         const dps = base ? base.dmg / Math.max(1, base.atkCdTicks) : 0.1;
         const levelBonus = 1 / Math.max(1, tile.towerLevel || 1);
         let score = dps * 2 + levelBonus;
@@ -286,7 +302,7 @@ class BotBrain {
     candidates.sort((a, b) => b.score - a.score);
     for (const c of candidates) {
       const action = { type: AI_ACTION_TYPE.UPGRADE_TOWER, towerId: makeTowerId(c.x, c.y) };
-      const legal = validateActionAgainstGame(game, this.laneIndex, action);
+      const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
       if (legal.ok) return legal.normalized;
     }
     return null;
@@ -298,7 +314,7 @@ class BotBrain {
     if (lane.income < next.reqIncome) return null;
     if (lane.gold < next.cost) return null;
     const action = { type: AI_ACTION_TYPE.UPGRADE_INCOME };
-    const legal = validateActionAgainstGame(game, this.laneIndex, action);
+    const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
     return legal.ok ? legal.normalized : null;
   }
 
@@ -319,16 +335,16 @@ class BotBrain {
 
     const dedup = [];
     for (const u of preference) {
-      if (UNIT_TYPES.includes(u) && !dedup.includes(u)) dedup.push(u);
+      if (this.unitTypes.includes(u) && !dedup.includes(u)) dedup.push(u);
     }
-    for (const fallback of UNIT_TYPES) {
+    for (const fallback of this.unitTypes) {
       if (!dedup.includes(fallback)) dedup.push(fallback);
     }
     return dedup[0] || "footman";
   }
 
   chooseSendBucket(lane, unitType, reserveGold, spikePlan) {
-    const unitCost = getUnitCost(lane, unitType);
+    const unitCost = getUnitCost(lane, unitType, this.unitDefs);
     if (!Number.isFinite(unitCost) || unitCost <= 0) return null;
     const maxAffordable = Math.floor(Math.max(0, lane.gold - reserveGold) / unitCost);
     if (maxAffordable <= 0) return null;
@@ -359,13 +375,13 @@ class BotBrain {
       laneId: targetLaneIndex,
       countBucket,
     };
-    const legal = validateActionAgainstGame(game, this.laneIndex, action);
+    const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
     return legal.ok ? legal.normalized : null;
   }
 
   applyGuardrails(game, lane, action, danger, fallbackDefenseAction) {
     if (!action || action.type === AI_ACTION_TYPE.DO_NOTHING) return action;
-    const spend = estimateActionCost(game, this.laneIndex, action);
+    const spend = estimateActionCost(game, this.laneIndex, action, this.unitDefs);
     const postGold = lane.gold - spend;
     const safetyReserve = danger ? 20 : 6;
 
@@ -422,7 +438,7 @@ class BotBrain {
     }
 
     // Defensive and pressure context from actual lane state (no hidden info).
-    const threat = estimateLaneThreat(lane);
+    const threat = estimateLaneThreat(lane, this.unitDefs);
     const defense = estimateLaneDefense(lane);
     const danger = lane.lives <= 8 || threat > Math.max(2, defense * 1.08);
     const overDefendedTarget = isInteger(targetLaneIndex) && targeting.isLaneOverDefended(game, targetLaneIndex);
@@ -438,7 +454,7 @@ class BotBrain {
     const sendAction = this.findSendAction(game, lane, targetLaneIndex, danger, spikePlan);
     const doNothing = createDoNothingAction();
 
-    const obs = buildObservation(game, this.laneIndex, runtime);
+    const obs = buildObservation(game, this.laneIndex, runtime, this.unitDefs);
     const leakPressure = obs.named ? obs.named.myLeaksLast3Waves : 0;
 
     const candidates = [];
@@ -474,11 +490,11 @@ class BotBrain {
     let action = selected.action || doNothing;
     action = this.applyGuardrails(game, lane, action, danger, defenseAction);
 
-    const legal = validateActionAgainstGame(game, this.laneIndex, action);
+    const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
     if (!legal.ok) {
       this.memory.invalidStreak += 1;
       if (this.memory.invalidStreak >= 2 && defenseAction) {
-        const fallbackLegal = validateActionAgainstGame(game, this.laneIndex, defenseAction);
+        const fallbackLegal = validateActionAgainstGame(game, this.laneIndex, defenseAction, { unitDefs: this.unitDefs });
         if (fallbackLegal.ok) {
           this.memory.invalidStreak = 0;
           this.memory.lastActionTick = currentTick;

@@ -7,10 +7,9 @@
  * Wall placement requires BFS validation + combat lock.
  * Barracks provides global unit-tech upgrades.
  *
- * Phase B: wired to sim-core (computeDamage, fireProjectile, resolveProjectile,
- * mulberry32 RNG) and unitTypes DB cache. UNIT_DEFS / TOWER_DEFS are kept as
- * hardcoded fallback for any fields not yet stored in the DB (bounty,
- * warlockDebuff, projectileTicks).
+ * Wired to sim-core (computeDamage, fireProjectile, resolveProjectile, mulberry32 RNG)
+ * and the unitTypes DB cache. UNIT_DEFS / TOWER_DEFS serve as last-resort fallbacks
+ * for units not present in the DB (e.g. during local dev without migrations).
  */
 
 const {
@@ -37,7 +36,7 @@ const START_GOLD = 70;
 const START_INCOME = 10;
 const LIVES_START = 20;
 const TOWER_MAX_LEVEL = 10;
-const MAX_UNITS_PER_LANE = 80;
+const MAX_UNITS_PER_LANE = 200;
 const GATE_KILL_BOUNTY = 10;
 
 // Grid constants
@@ -209,12 +208,15 @@ function buildAbilitiesForUnitType(unitTypeKey) {
 
 /**
  * Resolve a unit definition — DB-first, falls back to UNIT_DEFS.
- * Fields not yet in DB (bounty, warlockDebuff) are taken from the hardcoded def.
+ * DB is authoritative; UNIT_DEFS used only as last-resort fallback.
  */
 function resolveUnitDef(key) {
   const ut = getUnitType(key);
   if (!ut) return UNIT_DEFS[key] || null;
+  // Fixed-only units (e.g. archer, wall_placeholder) cannot be sent as attackers
+  if (ut.behavior_mode === "fixed") return null;
   const base = UNIT_DEFS[key] || {};
+  const sp   = (ut.special_props && typeof ut.special_props === "object") ? ut.special_props : {};
   const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
   return {
     cost:               Number(ut.send_cost),
@@ -223,14 +225,14 @@ function resolveUnitDef(key) {
     dmg:                Number(ut.attack_damage),
     atkCdTicks:         Math.max(1, Math.round(TICK_HZ / attackSpeed)),
     pathSpeed:          Number(ut.path_speed),
-    bounty:             base.bounty     || 1,
+    bounty:             Number(ut.bounty) || base.bounty || 1,
     range:              Number(ut.range),
     ranged:             Number(ut.range) > 0,
     armorType:          ut.armor_type   || "MEDIUM",
     damageType:         ut.damage_type  || "NORMAL",
     damageReductionPct: Number(ut.damage_reduction_pct) || 0,
-    warlockDebuff:       !!base.warlockDebuff,
-    structBonus:         base.structBonus || 0,
+    warlockDebuff:      sp.warlockDebuff  != null ? !!sp.warlockDebuff  : !!base.warlockDebuff,
+    structBonus:        sp.structBonus    != null ?  +sp.structBonus    : (base.structBonus || 0),
     barracks_scales_hp:  ut.barracks_scales_hp  === true,
     barracks_scales_dmg: ut.barracks_scales_dmg === true,
   };
@@ -238,22 +240,29 @@ function resolveUnitDef(key) {
 
 /**
  * Resolve a tower definition — DB-first, falls back to TOWER_DEFS.
- * DB range is stored normalised to [0,1] × GRID_W; projectileTicks comes from
- * the hardcoded fallback (not yet a DB field).
+ * DB range is stored normalised to [0,1] × GRID_W.
  */
 function resolveTowerDef(key) {
   const ut = getUnitType(key);
   if (!ut) return TOWER_DEFS[key] || null;
   const base = TOWER_DEFS[key] || {};
   const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
+  const dbBehavior = ut.proj_behavior || null;
+  const dbBehaviorParams = (ut.proj_behavior_params && typeof ut.proj_behavior_params === "object")
+    ? ut.proj_behavior_params : null;
+  // Fall back: splash damage type → splash behavior; otherwise single
+  const fallbackBehavior = ut.damage_type === "SPLASH" ? "splash" : "single";
+  const fallbackParams   = ut.damage_type === "SPLASH" ? { radius: SPLASH_RADIUS_TILES } : {};
   return {
     cost:            Number(ut.build_cost),
     range:           Number(ut.range) * GRID_W,   // DB range normalised to [0,1] × GRID_W
     dmg:             Number(ut.attack_damage),
     atkCdTicks:      Math.max(1, Math.round(TICK_HZ / attackSpeed)),
-    projectileTicks: base.projectileTicks || 7,
+    projectileTicks: Number(ut.projectile_travel_ticks) || base.projectileTicks || 7,
     damageType:      ut.damage_type || "NORMAL",
-    isSplash:        ut.damage_type === "SPLASH",
+    projBehavior:       dbBehavior       || fallbackBehavior,
+    projBehaviorParams: dbBehaviorParams || fallbackParams,
+    isSplash:        (dbBehavior || fallbackBehavior) === "splash",
   };
 }
 
@@ -338,8 +347,10 @@ function getTowerStats(type, level) {
     dmg: base.dmg * (1 + 0.12 * s),
     range: base.range * (1 + 0.015 * s),
     atkCdTicks: Math.max(5, Math.round(base.atkCdTicks * (1 - 0.015 * s))),
-    projectileTicks: base.projectileTicks,
-    damageType: base.damageType,
+    projectileTicks:    base.projectileTicks,
+    damageType:         base.damageType,
+    projBehavior:       base.projBehavior       || (base.isSplash ? "splash" : "single"),
+    projBehaviorParams: base.projBehaviorParams  || (base.isSplash ? { radius: SPLASH_RADIUS_TILES } : {}),
     isSplash: base.isSplash || false,
   };
 }
@@ -469,7 +480,7 @@ function createMLGame(playerCount, options) {
       sendDrainCounter: 0,  // ticks until next drain
       autosend: {
         enabled: false,
-        enabledUnits: Object.fromEntries(Object.keys(UNIT_DEFS).map(k => [k, false])),
+        enabledUnits: {},  // populated from loadout keys when match starts
         rate: "normal",
         tickCounter: 0,
         loadoutKeys: null,  // ordered unit-type keys for auto-send; set from index.js
@@ -548,6 +559,10 @@ function applyMLAction(game, laneIndex, action) {
     const unitType = String((data && data.unitType) || "").toLowerCase();
     const def = resolveUnitDef(unitType);
     if (!def) return { ok: false, reason: "Unknown unitType" };
+    const _loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
+    if (_loadoutKeys && _loadoutKeys.length > 0 && !_loadoutKeys.includes(unitType)) {
+      return { ok: false, reason: "Unit not in loadout" };
+    }
     if (lane.gold < def.cost) return { ok: false, reason: "Not enough gold" };
     if (lane.sendQueue.length >= QUEUE_CAP) return { ok: false, reason: "Send queue full" };
 
@@ -595,6 +610,10 @@ function applyMLAction(game, laneIndex, action) {
     const tile = lane.grid[gx][gy];
     if (tile.type !== "wall") return { ok: false, reason: "Tile is not a wall" };
     if (!resolveTowerDef(towerType)) return { ok: false, reason: "Unknown towerType" };
+    const _lkConvert = lane.autosend && lane.autosend.loadoutKeys;
+    if (_lkConvert && _lkConvert.length > 0 && !_lkConvert.includes(towerType)) {
+      return { ok: false, reason: "Unit not in loadout" };
+    }
     const cost = resolveTowerDef(towerType).cost;
     if (lane.gold < cost) return { ok: false, reason: "Not enough gold" };
 
@@ -639,6 +658,10 @@ function applyMLAction(game, laneIndex, action) {
     if (ut && ut.behavior_mode !== "fixed" && ut.behavior_mode !== "both") {
       return { ok: false, reason: "Unit type is not a fixed defender" };
     }
+    const _lkUpgrade = lane.autosend && lane.autosend.loadoutKeys;
+    if (_lkUpgrade && _lkUpgrade.length > 0 && !_lkUpgrade.includes(unitTypeKey)) {
+      return { ok: false, reason: "Unit not in loadout" };
+    }
     const def = resolveTowerDef(unitTypeKey);
     if (!def) return { ok: false, reason: "Unknown unit type" };
     const cost = def.cost;
@@ -678,6 +701,10 @@ function applyMLAction(game, laneIndex, action) {
   if (type === "bulk_convert_walls") {
     const towerType = String((data && data.towerType) || "").toLowerCase();
     if (!resolveTowerDef(towerType)) return { ok: false, reason: "Unknown towerType" };
+    const _lkBulkConvert = lane.autosend && lane.autosend.loadoutKeys;
+    if (_lkBulkConvert && _lkBulkConvert.length > 0 && !_lkBulkConvert.includes(towerType)) {
+      return { ok: false, reason: "Unit not in loadout" };
+    }
     const parsed = parseBulkTiles(data && data.tiles);
     if (!parsed.ok) return { ok: false, reason: parsed.reason };
 
@@ -737,6 +764,10 @@ function applyMLAction(game, laneIndex, action) {
     const ut = getUnitType(unitTypeKey);
     if (ut && ut.behavior_mode !== "fixed" && ut.behavior_mode !== "both") {
       return { ok: false, reason: "Unit type is not a fixed defender" };
+    }
+    const _lkBulk = lane.autosend && lane.autosend.loadoutKeys;
+    if (_lkBulk && _lkBulk.length > 0 && !_lkBulk.includes(unitTypeKey)) {
+      return { ok: false, reason: "Unit not in loadout" };
     }
     const parsed = parseBulkTiles(data && data.tiles);
     if (!parsed.ok) return { ok: false, reason: parsed.reason };
@@ -1147,11 +1178,11 @@ function mlTick(game) {
         const auraDmgMult = 1 + (activeAuras.dmg_bonus || 0) / 100;
         const effDmg = stats.dmg * debuffMult * auraDmgMult;
 
-        // Phase G: onAttack abilities may change behavior
+        // onAttack abilities may override behavior (e.g. splash_damage ability)
         const attackCtx = {
           target,
-          behavior:       stats.isSplash ? "splash" : "single",
-          behaviorParams: stats.isSplash ? { radius: SPLASH_RADIUS_TILES } : {},
+          behavior:       stats.projBehavior,
+          behaviorParams: Object.assign({}, stats.projBehaviorParams),
         };
         if (tile.abilities && tile.abilities.length > 0) {
           resolveAbilityHook(game, lane, { abilities: tile.abilities }, "onAttack", attackCtx);
@@ -1401,6 +1432,7 @@ function createMLPublicConfig(options) {
       attack_damage: Number(ut.attack_damage) || 0,
       attack_speed: Number(ut.attack_speed) || 1,
       damage_type: ut.damage_type || "NORMAL",
+      icon_url: ut.icon_url || null,
       ...pickSoundFields(ut),
     }));
 
@@ -1442,6 +1474,24 @@ function createMLPublicConfig(options) {
   };
 }
 
+/**
+ * Returns a key→unitDef map for all sendable (moving/both-mode) units from the
+ * DB cache. Falls back to the hardcoded UNIT_DEFS when the DB has no rows yet
+ * (e.g. local dev without migrations).
+ */
+function getMovingUnitDefMap() {
+  const all = getAllUnitTypes();
+  if (all.length === 0) return Object.assign({}, UNIT_DEFS);
+  const map = {};
+  for (const ut of all) {
+    if (!ut.enabled) continue;
+    if (ut.behavior_mode !== "both" && ut.behavior_mode !== "moving") continue;
+    const def = resolveUnitDef(ut.key);
+    if (def) map[ut.key] = def;
+  }
+  return Object.keys(map).length > 0 ? map : Object.assign({}, UNIT_DEFS);
+}
+
 module.exports = {
   TICK_HZ,
   TICK_MS,
@@ -1451,6 +1501,7 @@ module.exports = {
   UNIT_DEFS,
   TOWER_DEFS,
   getBarracksLevelDef,
+  getMovingUnitDefMap,
   GRID_W,
   GRID_H,
   createMLGame,
@@ -1458,4 +1509,5 @@ module.exports = {
   mlTick,
   createMLSnapshot,
   createMLPublicConfig,
+  resolveTowerDef,
 };

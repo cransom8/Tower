@@ -40,6 +40,27 @@ const Auth = (() => {
     return true;
   }
 
+  async function _restoreSession() {
+    const res = await fetch('/auth/session', {
+      method:      'GET',
+      credentials: 'include',
+      headers:     { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      _clear();
+      return false;
+    }
+
+    const data = await res.json();
+    if (!data?.signedIn || !data.player) {
+      _clear();
+      return false;
+    }
+
+    _store(null, null, data.player);
+    return true;
+  }
+
   // Authenticated fetch — tokens sent via HttpOnly cookie, auto-refreshes on 401
   async function apiFetch(url, options = {}) {
     const go = () => fetch(url, { ...options, credentials: 'include' });
@@ -197,7 +218,7 @@ const Auth = (() => {
     // Silently validate session via cookie — clears local state if session is gone
     if (_player) {
       try {
-        await _refresh();
+        await _restoreSession();
       } catch {
         _clear();
       }

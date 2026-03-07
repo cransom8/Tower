@@ -114,18 +114,15 @@ function _teamComposite(internalPlayers) {
  * @param {number} partyASize    - number of lanes belonging to team A (default 1)
  * @returns {Promise<Array<{playerId:string, newRating:number, delta:number}>>}
  */
+const RANKED_MODES = new Set(['2v2_ranked', '1v1_ranked', 'ffa_ranked']);
+
 async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
-  if (mode !== '2v2_ranked') return [];
+  if (!RANKED_MODES.has(mode)) return [];
   if (!db) return [];
 
   // Only process authenticated players with a decisive result
   const players = snapshots.filter(s => s.playerId && (s.result === 'win' || s.result === 'loss' || s.result === 'draw'));
   if (players.length < 2) return [];
-
-  // Split into teams by laneIndex
-  const teamA = players.filter(p => p.laneIndex < partyASize);
-  const teamB = players.filter(p => p.laneIndex >= partyASize);
-  if (teamA.length === 0 || teamB.length === 0) return [];
 
   // Fetch current ratings for all players
   const allIds = players.map(p => p.playerId);
@@ -151,12 +148,50 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
     };
   }
 
+  let updates;
+
+  if (mode === 'ffa_ranked') {
+    // FFA: each player vs composite of all other players in the match
+    updates = players.map(player => {
+      const others = players.filter(p => p.playerId !== player.playerId);
+      const composite = _teamComposite(others.map(p => toInternal(p.playerId)));
+      const current = toInternal(player.playerId);
+      const score = player.result === 'win' ? 1.0 : player.result === 'draw' ? 0.5 : 0.0;
+      const { new_mu, new_phi } = _updatePlayer(
+        current.mu, current.phi, current.sigma,
+        [{ mu_j: composite.mu_j, phi_j: composite.phi_j, score }]
+      );
+      const new_mu_d    = SCALE * new_mu + 1500;
+      const new_sigma_d = SCALE * new_phi;
+      const new_rating  = new_mu_d - 3 * new_sigma_d;
+      const old = ratingMap.get(player.playerId);
+      const old_mu_d    = old ? Number(old.mu)    : 1500;
+      const old_sigma_d = old ? Number(old.sigma) : 350;
+      return {
+        playerId:  player.playerId,
+        result:    player.result,
+        old_mu:    old_mu_d,
+        old_sigma: old_sigma_d,
+        new_mu:    new_mu_d,
+        new_sigma: new_sigma_d,
+        new_rating,
+        delta:     new_rating - (old_mu_d - 3 * old_sigma_d),
+        wins:   (old ? Number(old.wins)   : 0) + (player.result === 'win'  ? 1 : 0),
+        losses: (old ? Number(old.losses) : 0) + (player.result === 'loss' ? 1 : 0),
+      };
+    });
+  } else {
+    // Team-based (2v2_ranked, 1v1_ranked): split by laneIndex < partyASize
+    const teamA = players.filter(p => p.laneIndex < partyASize);
+    const teamB = players.filter(p => p.laneIndex >= partyASize);
+    if (teamA.length === 0 || teamB.length === 0) return [];
+
   // Build composite opponents for each team (in internal scale)
   const compositeA = _teamComposite(teamA.map(p => toInternal(p.playerId)));
   const compositeB = _teamComposite(teamB.map(p => toInternal(p.playerId)));
 
   // Compute updates
-  const updates = players.map(player => {
+  updates = players.map(player => {
     const current = toInternal(player.playerId);
     const score   = player.result === 'win' ? 1.0 : player.result === 'draw' ? 0.5 : 0.0;
     const isTeamA = player.laneIndex < partyASize;
@@ -191,6 +226,7 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
       losses:    newLosses,
     };
   });
+  } // end else (team-based)
 
   // Write to DB in a single transaction
   const client = await db.getClient();

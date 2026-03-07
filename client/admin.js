@@ -18,8 +18,9 @@ const S = {
   players:    { q: '', offset: 0, total: 0, rows: [] },
   matches:    { tab: 'history', status: '', mode: '', offset: 0, total: 0, rows: [], live: [] },
   audit:      { offset: 0, total: 0, rows: [] },
-  units:      { view: 'list', displayFields: [] },
+  units:      { view: 'kanban', displayFields: [] },
   liveHandle: null,
+  branding:   null,
 };
 
 // RBAC permission map (mirrors server)
@@ -405,6 +406,7 @@ function loadTab(tab) {
     anticheat: loadAnticheat,
     matches:   loadMatches,
     analytics: loadAnalytics,
+    branding:  loadBranding,
     config:    loadConfig,
     ops:       loadOps,
     audit:     loadAudit,
@@ -420,6 +422,35 @@ function loadTab(tab) {
 function setContent(html) {
   document.getElementById('main-content').innerHTML = html;
   applyFieldDescriptions(document.getElementById('main-content'));
+}
+
+function defaultBranding() {
+  return {
+    publicTitle: 'Ransom Forge',
+    publicSubtitle: 'PvP Tower Defense',
+    publicBrowserTitle: 'Ransom Forge - Multiplayer',
+    adminTitle: 'Castle Defender Admin',
+    adminLoginTitle: 'Admin Dashboard',
+    loadoutTitle: 'Loadout',
+    loadoutHint: 'Click a slot to edit',
+    loadoutBuilderTitle: 'Loadout Builder',
+  };
+}
+
+function currentBranding() {
+  return Object.assign(defaultBranding(), S.branding || {});
+}
+
+function applyAdminBranding(brandingInput) {
+  S.branding = Object.assign(defaultBranding(), brandingInput || {});
+  const branding = currentBranding();
+  const pageTitleEl = document.getElementById('admin-page-title');
+  if (pageTitleEl) pageTitleEl.textContent = branding.adminTitle;
+  else document.title = branding.adminTitle;
+  const loginTitleEl = document.getElementById('admin-login-title');
+  if (loginTitleEl) loginTitleEl.textContent = branding.adminLoginTitle;
+  const headerTitleEl = document.getElementById('admin-header-title');
+  if (headerTitleEl) headerTitleEl.textContent = branding.adminTitle;
 }
 
 const FIELD_HELP_BY_ID = {
@@ -568,8 +599,8 @@ async function loadDashboard() {
     ]);
 
     const q = queueData.queues || {};
-    const ranked  = q['ranked_2v2']  || { entries: 0, players: 0, oldestMs: null };
-    const casual  = q['casual_2v2']  || { entries: 0, players: 0, oldestMs: null };
+    const ranked  = q['line_wars:2v2:1'] || { entries: 0, players: 0, oldestMs: null };
+    const casual  = q['line_wars:2v2:0'] || { entries: 0, players: 0, oldestMs: null };
     const privates = queueData.privateLobbies || [];
     const soloGames = queueData.soloGames || [];
 
@@ -1253,6 +1284,121 @@ async function loadAnalytics() {
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIG (editable, versioned)
 // ═══════════════════════════════════════════════════════════════════════
+async function loadBranding() {
+  setContent('<p class="load">Loading branding...</p>');
+  try {
+    const data = await api('GET', '/admin/branding');
+    applyAdminBranding(data.branding);
+    renderBranding();
+  } catch (err) {
+    setContent(`<p class="load text-danger">Error: ${esc(err.message)}</p>`);
+  }
+}
+
+function renderBranding() {
+  const branding = currentBranding();
+  const canWrite = can('config.write');
+  const previewUpdated = branding.updatedAt
+    ? `${reltime(branding.updatedAt)} by ${esc(branding.updatedBy || 'unknown')}`
+    : 'Using defaults';
+
+  setContent(`
+    <h2>Branding ${!canWrite ? '<span class="badge badge-gray">Read-only</span>' : ''}</h2>
+    <p class="text-muted" style="font-size:12px;margin-bottom:16px">
+      Update the shared copy used by the public lobby, loadout flow, and admin shell. Changes apply immediately after saving.
+    </p>
+
+    <div class="section" style="margin-bottom:16px">
+      <div class="section-header">
+        <h3>Shared Identity</h3>
+        ${canWrite ? '<button class="btn-primary btn-sm" onclick="saveBranding()">Save Branding</button>' : ''}
+      </div>
+      <div class="section-body">
+        <div class="two-col">
+          <div class="form-group">
+            <label>Public Title</label>
+            <input id="branding-public-title" value="${esc(branding.publicTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group">
+            <label>Public Browser Title</label>
+            <input id="branding-public-browser-title" value="${esc(branding.publicBrowserTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Public Subtitle</label>
+            <input id="branding-public-subtitle" value="${esc(branding.publicSubtitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group">
+            <label>Admin Header Title</label>
+            <input id="branding-admin-title" value="${esc(branding.adminTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group">
+            <label>Admin Login Title</label>
+            <input id="branding-admin-login-title" value="${esc(branding.adminLoginTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" style="margin-bottom:16px">
+      <div class="section-header"><h3>Loadout Copy</h3></div>
+      <div class="section-body">
+        <div class="two-col">
+          <div class="form-group">
+            <label>Loadout Section Title</label>
+            <input id="branding-loadout-title" value="${esc(branding.loadoutTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group">
+            <label>Loadout Helper Text</label>
+            <input id="branding-loadout-hint" value="${esc(branding.loadoutHint)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Loadout Builder Title</label>
+            <input id="branding-loadout-builder-title" value="${esc(branding.loadoutBuilderTitle)}" ${canWrite ? '' : 'disabled'}>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h3>Preview</h3></div>
+      <div class="section-body">
+        <div class="card" style="padding:16px;margin-bottom:12px">
+          <div style="font-size:24px;font-weight:700;margin-bottom:4px">${esc(branding.publicTitle)}</div>
+          <div class="text-muted" style="margin-bottom:12px">${esc(branding.publicSubtitle)}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span class="badge badge-blue">${esc(branding.loadoutTitle)}</span>
+            <span class="badge badge-gray">${esc(branding.loadoutHint)}</span>
+            <span class="badge badge-amber">${esc(branding.loadoutBuilderTitle)}</span>
+          </div>
+        </div>
+        <p class="text-muted" style="font-size:12px">Last updated: ${previewUpdated}</p>
+      </div>
+    </div>
+  `);
+}
+
+async function saveBranding() {
+  const branding = {
+    publicTitle: document.getElementById('branding-public-title')?.value || '',
+    publicBrowserTitle: document.getElementById('branding-public-browser-title')?.value || '',
+    publicSubtitle: document.getElementById('branding-public-subtitle')?.value || '',
+    adminTitle: document.getElementById('branding-admin-title')?.value || '',
+    adminLoginTitle: document.getElementById('branding-admin-login-title')?.value || '',
+    loadoutTitle: document.getElementById('branding-loadout-title')?.value || '',
+    loadoutHint: document.getElementById('branding-loadout-hint')?.value || '',
+    loadoutBuilderTitle: document.getElementById('branding-loadout-builder-title')?.value || '',
+  };
+  try {
+    const data = await api('PUT', '/admin/branding', { branding });
+    applyAdminBranding(data.branding);
+    renderBranding();
+    toast('Branding saved');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.saveBranding = saveBranding;
+
 let configData    = null;
 let configMode    = 'classic';
 let configDraft   = null;
@@ -2330,15 +2476,76 @@ function fileToDataUrl(file) {
   });
 }
 
-async function uploadTowerAssetFile(file) {
-  const dataBase64 = await fileToDataUrl(file);
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = dataUrl;
+  });
+}
+
+function canvasToDataUrl(canvas, mimeType, quality) {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/webp') {
+    return canvas.toDataURL(mimeType, quality);
+  }
+  return canvas.toDataURL(mimeType);
+}
+
+async function normalizeAssetUpload(file, options = {}) {
+  const { maxWidth = 0, maxHeight = 0, outputMimeType = '' } = options;
+  const isBitmap = /^image\/(png|jpeg|webp)$/i.test(file.type);
+  if (!isBitmap || (!maxWidth && !maxHeight)) {
+    return {
+      fileName: file.name,
+      mimeType: file.type,
+      dataBase64: await fileToDataUrl(file),
+    };
+  }
+
+  const srcDataUrl = await fileToDataUrl(file);
+  const img = await loadImageFromDataUrl(srcDataUrl);
+  const widthLimit = maxWidth || img.naturalWidth;
+  const heightLimit = maxHeight || img.naturalHeight;
+  const scale = Math.min(
+    1,
+    widthLimit / Math.max(1, img.naturalWidth),
+    heightLimit / Math.max(1, img.naturalHeight)
+  );
+
+  if (scale >= 1) {
+    return {
+      fileName: file.name,
+      mimeType: file.type,
+      dataBase64: srcDataUrl,
+    };
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas is unavailable for image resize');
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const mimeType = outputMimeType || file.type || 'image/png';
+  const safeName = file.name.replace(/\.[^.]+$/, '');
+  return {
+    fileName: `${safeName}.${mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png'}`,
+    mimeType,
+    dataBase64: canvasToDataUrl(canvas, mimeType, 0.92),
+  };
+}
+
+async function uploadTowerAssetFile(file, options = {}) {
+  const payload = await normalizeAssetUpload(file, options);
   const res = await fetch('/admin/assets/upload-image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      fileName: file.name,
-      mimeType: file.type,
-      dataBase64,
+      fileName: payload.fileName,
+      mimeType: payload.mimeType,
+      dataBase64: payload.dataBase64,
     }),
     credentials: 'include',
   });
@@ -2350,7 +2557,7 @@ async function uploadTowerAssetFile(file) {
 
 async function uploadSelectedTowerAssets() {
   const assetFields = [
-    { fileId: 'tf-icon-file', urlId: 'tf-icon', label: 'icon' },
+    { fileId: 'tf-icon-file', urlId: 'tf-icon', label: 'icon', uploadOptions: { maxWidth: 256, maxHeight: 256, outputMimeType: 'image/png' } },
     { fileId: 'tf-sprite-file', urlId: 'tf-sprite', label: 'sprite' },
     { fileId: 'tf-proj-file', urlId: 'tf-proj', label: 'projectile' },
     { fileId: 'tf-anim-file', urlId: 'tf-anim', label: 'animation' },
@@ -2361,7 +2568,7 @@ async function uploadSelectedTowerAssets() {
     const input = document.getElementById(asset.fileId);
     const file = input?.files?.[0];
     if (!file) continue;
-    const url = await uploadTowerAssetFile(file);
+    const url = await uploadTowerAssetFile(file, asset.uploadOptions || {});
     const urlEl = document.getElementById(asset.urlId);
     if (urlEl) urlEl.value = url;
     uploaded.push(asset.label);
@@ -2965,6 +3172,7 @@ const UNIT_DTYPE_COLORS = {
   NORMAL: '#90a4ae', PIERCE: '#42a5f5', SPLASH: '#ffa726',
   SIEGE: '#ab47bc',  MAGIC:  '#7e57c2', PHYSICAL: '#ff8a65', TRUE: '#ef5350',
 };
+const UNIT_DTYPE_ORDER = ['NORMAL', 'PHYSICAL', 'PIERCE', 'SPLASH', 'SIEGE', 'MAGIC', 'TRUE'];
 const UNIT_ARMOR_COLORS = {
   UNARMORED: '#90a4ae', LIGHT: '#42a5f5', MEDIUM: '#ffa726', HEAVY: '#ef5350', MAGIC: '#7e57c2',
 };
@@ -2993,6 +3201,37 @@ function switchUnitsView(view) {
 }
 window.switchUnitsView = switchUnitsView;
 
+function _utPlaceholderSymbol(ut) {
+  return { moving: '⚔', fixed: '🏰', both: '🛡' }[ut.behavior_mode] || '?';
+}
+
+function _utPlaceholderHtml(ut, size = 60) {
+  return `<div class="ukc-icon-placeholder" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.45)}px">${_utPlaceholderSymbol(ut)}</div>`;
+}
+
+function _utBuiltinIconSrc(ut) {
+  const images = window.RenderAssets?.manifest?.images || {};
+  return images[`unit_icon_${ut.key}`] || '';
+}
+
+function adminUnitIconFallback(imgEl) {
+  if (!imgEl) return;
+  const fallbackSrc = imgEl.dataset.fallbackSrc || '';
+  if (fallbackSrc && imgEl.src !== fallbackSrc) {
+    imgEl.dataset.fallbackSrc = '';
+    imgEl.src = fallbackSrc;
+    return;
+  }
+  const placeholder = document.createElement('div');
+  placeholder.className = 'ukc-icon-placeholder';
+  placeholder.style.width = imgEl.style.width || '60px';
+  placeholder.style.height = imgEl.style.height || '60px';
+  placeholder.style.fontSize = `${Math.round((parseInt(imgEl.dataset.size, 10) || 60) * 0.45)}px`;
+  placeholder.textContent = imgEl.dataset.placeholder || '?';
+  imgEl.replaceWith(placeholder);
+}
+window.adminUnitIconFallback = adminUnitIconFallback;
+
 function _utBadge(label, color) {
   return `<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;background:${color}22;color:${color};border:1px solid ${color}44">${label}</span>`;
 }
@@ -3001,6 +3240,16 @@ function _utIconHtml(ut, size = 60, cssClass = 'ukc-icon') {
   if (ut.icon_url) return `<img src="${esc(ut.icon_url)}" class="${cssClass}" style="width:${size}px;height:${size}px" alt="${esc(ut.name)}">`;
   const emoji = { moving: '⚔', fixed: '🏰', both: '🛡' }[ut.behavior_mode] || '?';
   return `<div class="ukc-icon-placeholder" style="width:${size}px;height:${size}px;font-size:${Math.round(size*0.45)}px">${emoji}</div>`;
+}
+
+function _utIconHtml(ut, size = 60, cssClass = 'ukc-icon') {
+  const fallbackSrc = _utBuiltinIconSrc(ut);
+  const primarySrc = ut.icon_url || fallbackSrc;
+  if (primarySrc) {
+    const fallbackAttr = fallbackSrc && ut.icon_url ? ` data-fallback-src="${esc(fallbackSrc)}"` : '';
+    return `<img src="${esc(primarySrc)}" class="${cssClass}" style="width:${size}px;height:${size}px" alt="${esc(ut.name)}" data-size="${size}" data-placeholder="${_utPlaceholderSymbol(ut)}"${fallbackAttr} onerror="adminUnitIconFallback(this)">`;
+  }
+  return _utPlaceholderHtml(ut, size);
 }
 
 function renderUnitsTab(unitTypes, displayFields) {
@@ -3034,15 +3283,22 @@ function renderUnitsTab(unitTypes, displayFields) {
     </tr>`;
   }).join('');
 
-  // ── Kanban cards
-  const kanbanCards = unitTypes.map(ut => {
+  // ── Kanban cards grouped by damage type
+  const unitsByDamageType = new Map();
+  unitTypes.forEach((ut) => {
+    const key = String(ut.damage_type || 'OTHER').toUpperCase();
+    if (!unitsByDamageType.has(key)) unitsByDamageType.set(key, []);
+    unitsByDamageType.get(key).push(ut);
+  });
+
+  const kanbanCard = (ut) => {
     const bColor = BEHAVIOR_BADGE_COLOR[ut.behavior_mode] || '#aaa';
     const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
     const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
     return `<div class="unit-kanban-card${ut.enabled ? '' : ' ukc-disabled'}" onclick="openUnitTypeModal(${ut.id})">
       <span class="ukc-display-dot ${ut.display_to_players ? 'on' : 'off'}"
         title="${ut.display_to_players ? 'Shown to players' : 'Hidden from players'}"></span>
-      ${_utIconHtml(ut, 60)}
+      ${_utIconHtml(ut, 84)}
       <div class="ukc-name">${esc(ut.name)}</div>
       <div class="ukc-desc">${esc(ut.description || '')}</div>
       <div class="ukc-badges">
@@ -3062,7 +3318,29 @@ function renderUnitsTab(unitTypes, displayFields) {
         <button class="btn-sm" style="color:#ef5350" onclick="deleteUnitType(${ut.id},'${esc(ut.key)}')">Del</button>
       </div>` : ''}
     </div>`;
-  }).join('');
+  };
+
+  const damageColumns = UNIT_DTYPE_ORDER
+    .filter((dtype) => unitsByDamageType.has(dtype))
+    .concat(Array.from(unitsByDamageType.keys()).filter((dtype) => !UNIT_DTYPE_ORDER.includes(dtype)).sort())
+    .map((dtype) => {
+      const units = unitsByDamageType.get(dtype) || [];
+      const color = UNIT_DTYPE_COLORS[dtype] || '#aaa';
+      const cards = units
+        .slice()
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        .map(kanbanCard)
+        .join('');
+      return `<section class="tower-kanban-col">
+        <header class="tower-kanban-col-head">
+          <div>${_utBadge(dtype, color)}</div>
+          <span class="text-muted" style="font-size:11px">${units.length}</span>
+        </header>
+        <div class="tower-kanban-col-body">
+          ${cards || '<p class="text-muted" style="padding:12px">No units</p>'}
+        </div>
+      </section>`;
+    }).join('');
 
   setContent(`
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
@@ -3098,8 +3376,8 @@ function renderUnitsTab(unitTypes, displayFields) {
     </div>
 
     <div id="units-kanban-wrap" style="${S.units.view === 'kanban' ? '' : 'display:none'}">
-      <div class="unit-kanban-grid">
-        ${kanbanCards || '<p class="text-muted" style="padding:20px">No unit types found.</p>'}
+      <div class="tower-kanban">
+        ${damageColumns || '<p class="text-muted" style="padding:20px">No unit types found.</p>'}
       </div>
     </div>
 
@@ -3350,7 +3628,11 @@ async function openUnitTypeModal(id) {
 
     <h4 style="margin:16px 0 8px">Assets</h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      <div class="form-group"><label>Icon URL</label>${inp('icon_url')}</div>
+      <div class="form-group">
+        <label>Icon URL</label>
+        <input id="ut-icon_url-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" style="width:100%;margin-bottom:6px">
+        ${inp('icon_url')}
+      </div>
       <div class="form-group"><label>Sprite URL (Legacy/Fallback)</label>${inp('sprite_url')}</div>
       <div class="form-group"><label>Animation URL (Legacy/Fallback)</label>${inp('animation_url')}</div>
       <div class="form-group">
@@ -3450,6 +3732,7 @@ function readUnitTypeForm() {
 
 async function uploadSelectedUnitAssets() {
   const assetFields = [
+    { fileId: 'ut-icon_url-file', urlId: 'ut-icon_url', uploadOptions: { maxWidth: 256, maxHeight: 256, outputMimeType: 'image/png' } },
     { fileId: 'ut-sprite_url_front-file', urlId: 'ut-sprite_url_front' },
     { fileId: 'ut-sprite_url_back-file', urlId: 'ut-sprite_url_back' },
     { fileId: 'ut-animation_url_front-file', urlId: 'ut-animation_url_front' },
@@ -3462,7 +3745,7 @@ async function uploadSelectedUnitAssets() {
     const input = document.getElementById(asset.fileId);
     const file = input?.files?.[0];
     if (!file) continue;
-    const url = await uploadTowerAssetFile(file);
+    const url = await uploadTowerAssetFile(file, asset.uploadOptions || {});
     const urlEl = document.getElementById(asset.urlId);
     if (urlEl) urlEl.value = url;
   }
@@ -3601,7 +3884,10 @@ async function init() {
   try {
     const cfg = await fetch('/config').then(r => r.json());
     if (cfg.googleClientId) window.__GOOGLE_CLIENT_ID__ = cfg.googleClientId;
-  } catch { /* non-fatal */ }
+    applyAdminBranding(cfg.branding);
+  } catch {
+    applyAdminBranding(defaultBranding());
+  }
 
   // Render Google button (GSI may not be loaded yet)
   if (typeof google !== 'undefined') renderGoogleBtn();
@@ -3617,9 +3903,19 @@ async function init() {
   }
 
   if (S.authMode !== 'jwt') return;
+  const hasStoredAdminIdentity = !!(S.adminEmail || S.adminRole || S.adminDisplayName);
+  if (!hasStoredAdminIdentity) return;
 
   try {
-    await api('GET', '/admin/stats/daily');
+    const me = await api('GET', '/admin/me');
+    if (me?.user) {
+      S.adminRole = me.user.role || S.adminRole;
+      S.adminEmail = me.user.email || S.adminEmail;
+      S.adminDisplayName = me.user.display_name || S.adminDisplayName || me.user.email || 'Admin';
+      sessionStorage.setItem('adminRole', S.adminRole);
+      sessionStorage.setItem('adminEmail', S.adminEmail);
+      sessionStorage.setItem('adminDisplayName', S.adminDisplayName);
+    }
     enterApp();
   } catch {
     doLogout();

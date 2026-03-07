@@ -55,13 +55,13 @@ function summarizeTowerStats(lane) {
   return { counts, avgLevels };
 }
 
-function estimateLaneThreat(lane) {
+function estimateLaneThreat(lane, unitDefMap) {
   if (!lane || lane.eliminated) return 0;
   const pathLen = Math.max(1, (lane.path && lane.path.length) || 1);
   let threat = 0;
   for (const u of lane.units || []) {
     if (u.ownerLane === lane.laneIndex || (u.hp || 0) <= 0) continue;
-    const base = simMl.UNIT_DEFS[u.type];
+    const base = (unitDefMap && unitDefMap[u.type]) || simMl.UNIT_DEFS[u.type];
     const maxHp = base ? base.hp : 100;
     const hpNorm = Math.max(0.2, Math.min(3, (Number(u.hp) || 0) / maxHp));
     const progress = Math.max(0, Math.min(1, (Number(u.pathIdx) || 0) / Math.max(1, pathLen - 1)));
@@ -151,13 +151,14 @@ function getLastEnemySendSummary(runtime, myLaneIndex, targetLaneIndex) {
   return list[list.length - 1];
 }
 
-function buildLastSendVector(summary) {
-  const unitOneHot = UNIT_TYPES.map((u) => (summary && summary.unitType === u ? 1 : 0));
+function buildLastSendVector(summary, localUnitTypes) {
+  const types = localUnitTypes || UNIT_TYPES;
+  const unitOneHot = types.map((u) => (summary && summary.unitType === u ? 1 : 0));
   const bucketOneHot = COUNT_BUCKETS.map((b) => (summary && Number(summary.countBucket) === b ? 1 : 0));
   return unitOneHot.concat(bucketOneHot);
 }
 
-function buildObservation(game, laneIndex, runtime) {
+function buildObservation(game, laneIndex, runtime, unitDefMap) {
   const lane = game && game.lanes && game.lanes[laneIndex];
   if (!lane) {
     return {
@@ -182,9 +183,11 @@ function buildObservation(game, laneIndex, runtime) {
   const laneThreatEstimate = new Array(MAX_LANES).fill(0);
   const laneDefenseEstimate = new Array(MAX_LANES).fill(0);
   const laneLeakRate = new Array(MAX_LANES).fill(0);
+  const localUnitTypes = unitDefMap ? Object.keys(unitDefMap) : UNIT_TYPES;
+
   for (const l of game.lanes || []) {
     if (!l || !Number.isInteger(l.laneIndex) || l.laneIndex < 0 || l.laneIndex >= MAX_LANES) continue;
-    laneThreatEstimate[l.laneIndex] = norm(estimateLaneThreat(l), 18);
+    laneThreatEstimate[l.laneIndex] = norm(estimateLaneThreat(l, unitDefMap), 18);
     laneDefenseEstimate[l.laneIndex] = norm(estimateLaneDefense(l), 22);
     laneLeakRate[l.laneIndex] = norm(getLaneLeakRate(runtime, l.laneIndex), 6);
   }
@@ -199,7 +202,7 @@ function buildObservation(game, laneIndex, runtime) {
   });
 
   const lastEnemySend = getLastEnemySendSummary(runtime, laneIndex, targetLaneIndex);
-  const lastEnemySendSummary = buildLastSendVector(lastEnemySend);
+  const lastEnemySendSummary = buildLastSendVector(lastEnemySend, localUnitTypes);
 
   const named = {
     myGold: norm(lane.gold, 500),

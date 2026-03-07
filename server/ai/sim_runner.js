@@ -175,8 +175,9 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
   const opt = options && typeof options === "object" ? options : {};
   const tick = Number(game && game.tick) || 0;
   const safeAction = action || createDoNothingAction();
+  const defs = opt.defs || null;
 
-  const checked = validateActionAgainstGame(game, laneIndex, safeAction);
+  const checked = validateActionAgainstGame(game, laneIndex, safeAction, defs);
   if (!checked.ok) {
     runtime.recordInvalidAction(laneIndex);
     return {
@@ -190,7 +191,7 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
     };
   }
 
-  const mapped = translateActionToCommands(game, laneIndex, checked.normalized);
+  const mapped = translateActionToCommands(game, laneIndex, checked.normalized, defs);
   if (!mapped.ok) {
     runtime.recordInvalidAction(laneIndex);
     return {
@@ -256,10 +257,16 @@ class BotMatchController {
     this.botsByLane = {};
     this.actionLog = [];
 
+    const unitDefMap = typeof simMl.getMovingUnitDefMap === "function" ? simMl.getMovingUnitDefMap() : null;
+    this.unitDefMap = unitDefMap;
     const botConfigs = Array.isArray(cfg.botConfigs) ? cfg.botConfigs : [];
     for (const botCfg of botConfigs) {
       if (!botCfg || !Number.isInteger(botCfg.laneIndex)) continue;
-      const fullCfg = Object.assign({}, botCfg, { tickMs: this.tickMs, seed: `${cfg.seed || "match"}:${botCfg.laneIndex}` });
+      const fullCfg = Object.assign({}, botCfg, {
+        tickMs: this.tickMs,
+        seed: `${cfg.seed || "match"}:${botCfg.laneIndex}`,
+        unitDefMap,
+      });
       this.botsByLane[botCfg.laneIndex] = new BotBrain(fullCfg);
     }
   }
@@ -284,7 +291,7 @@ class BotMatchController {
       if (!lane || lane.eliminated) continue;
       const bot = this.botsByLane[laneIndex];
       const action = bot.tick({ game, runtime: this.runtimeTracker.getRuntimeView() });
-      const result = executeBotAction(game, laneIndex, action, this.runtimeTracker);
+      const result = executeBotAction(game, laneIndex, action, this.runtimeTracker, { defs: this.unitDefMap ? { unitDefs: this.unitDefMap } : null });
       if (result.action && result.action.type !== "DO_NOTHING") {
         this.actionLog.push(result);
       }

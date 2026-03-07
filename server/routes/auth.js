@@ -445,6 +445,52 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
+// GET /auth/session
+// Lightweight startup check for client bootstrapping.
+// Returns 200 in both signed-in and signed-out states to avoid noisy expected 401s.
+router.get('/session', async (req, res) => {
+  try {
+    const accessToken = req.cookies?.cd_access || '';
+    if (!accessToken) {
+      return res.json({ signedIn: false });
+    }
+
+    const payload = authService.verifyAccessToken(accessToken);
+    if (!db) {
+      return res.json({
+        signedIn: true,
+        player: {
+          id: payload.sub,
+          displayName: payload.displayName || null,
+          region: null,
+        },
+      });
+    }
+
+    const row = await db.query(
+      'SELECT id, display_name, region, status FROM players WHERE id = $1',
+      [payload.sub]
+    );
+    if (!row.rows.length || row.rows[0].status === 'suspended') {
+      clearAuthCookies(res);
+      return res.json({ signedIn: false });
+    }
+
+    const player = row.rows[0];
+    return res.json({
+      signedIn: true,
+      player: {
+        id: player.id,
+        displayName: player.display_name,
+        region: player.region,
+      },
+    });
+  } catch {
+    clearAuthCookies(res);
+    return res.json({ signedIn: false });
+  }
+});
+
 // POST /auth/logout
 // Revokes the refresh token (from cookie or body) and clears auth cookies.
 router.post('/logout', async (req, res) => {

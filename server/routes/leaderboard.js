@@ -4,7 +4,7 @@ const log = require('../logger');
 const express = require('express');
 const router  = express.Router();
 
-const VALID_MODES   = new Set(['2v2_ranked', '2v2_casual']);
+const VALID_MODES   = new Set(['2v2_ranked', '2v2_casual', '1v1_ranked', '1v1_casual', 'ffa_ranked', 'ffa_casual']);
 const VALID_REGIONS = new Set(['global', 'na', 'eu', 'asia']);
 const PAGE_SIZE = 50;
 
