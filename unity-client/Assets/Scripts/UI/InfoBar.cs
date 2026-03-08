@@ -40,6 +40,10 @@ namespace CastleDefender.UI
         public Color   GoldFlashColor  = new Color(1f, 0.9f, 0.2f, 1f);
         public Color   GoldNormalColor = new Color(0.6f, 0.5f, 0.1f, 0.6f);
 
+        [Header("Branch identity (optional — Phase 4)")]
+        [Tooltip("If assigned, shows the player's branch name and defending side (e.g. 'Red Branch  [left]').")]
+        public TMP_Text TxtBranchLabel;
+
         [Header("FX anchors (canvas space)")]
         public RectTransform GoldPopAnchor;
         public Transform     FloatTextAnchor;
@@ -48,6 +52,7 @@ namespace CastleDefender.UI
         float    _prevGold     = -1f;
         int      _prevLives    = -1;
         int      _prevBarracks = -1;
+        bool     _branchLabelSet;
         Coroutine _goldFlash;
         Coroutine _livesFlash;
         Coroutine _barracksFlash;
@@ -123,6 +128,28 @@ namespace CastleDefender.UI
             if (ImgIncomeRing != null && snap != null)
                 ImgIncomeRing.fillAmount =
                     1f - (float)snap.incomeTicksRemaining / IncomePeriodTicks;
+
+            // Branch identity — set once when assignment data first arrives
+            if (TxtBranchLabel != null && !_branchLabelSet)
+            {
+                var sa     = SnapshotApplier.Instance;
+                var assign = sa?.GetLaneAssignment(sa.MyLaneIndex);
+                if (assign != null)
+                {
+                    string lbl  = !string.IsNullOrWhiteSpace(assign.branchLabel)
+                                  ? assign.branchLabel
+                                  : $"Lane {sa.MyLaneIndex + 1}";
+                    string side = !string.IsNullOrWhiteSpace(assign.castleSide)
+                                  ? assign.castleSide
+                                  : (assign.side ?? "");
+                    TxtBranchLabel.text = string.IsNullOrWhiteSpace(side)
+                                         ? lbl
+                                         : $"{lbl}  [{side}]";
+                    if (SnapshotApplier.TryResolveSlotColor(assign.slotColor, out var slotCol))
+                        TxtBranchLabel.color = slotCol;
+                    _branchLabelSet = true;
+                }
+            }
 
             // Barracks level
             if (lane.barracksLevel != _prevBarracks)

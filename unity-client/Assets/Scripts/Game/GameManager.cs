@@ -17,6 +17,7 @@ using System.Collections;
 
 namespace CastleDefender.Game
 {
+    [DefaultExecutionOrder(-100)]
     public class GameManager : MonoBehaviour
     {
         // ── Inspector ─────────────────────────────────────────────────────────
@@ -38,6 +39,20 @@ namespace CastleDefender.Game
         [Header("Camera Preset")]
         public bool ForceCameraPreset = true;
         public float CameraOrthoSize = 22f;
+
+        [Header("Battlefield Camera (Phase 3)")]
+        [Tooltip("World position of the camera for the full-battlefield view.")]
+        public Vector3 BattlefieldCameraPosition = new Vector3(0f, 20f, -10f);
+        [Tooltip("World point the battlefield camera looks at.")]
+        public Vector3 BattlefieldLookTarget = new Vector3(0f, 0f, 0f);
+
+        [Header("Camera Re-lock (frames to hold camera after scene load)")]
+        [Tooltip("Number of frames to re-apply the battlefield camera POV, preventing any late-initializing component from overriding it.")]
+        public int CameraLockFrames = 5;
+
+        int _cameraLockCountdown;
+
+        [Header("Legacy Single-Lane Camera (unused in battlefield mode)")]
         public float CameraBehind = 0f;
         public float CameraSide = 0f;
         public float CameraHeight = 20f;
@@ -55,6 +70,7 @@ namespace CastleDefender.Game
             InitPools();
             WireInfoBarAnchor();
             EnsureCameraPOV();
+            _cameraLockCountdown = CameraLockFrames;
         }
 
         void Start()
@@ -63,6 +79,15 @@ namespace CastleDefender.Game
             // initialization after Awake; re-apply POV at Start and next frame.
             EnsureCameraPOV();
             StartCoroutine(EnsureCameraPOVNextFrame());
+        }
+
+        void LateUpdate()
+        {
+            if (_cameraLockCountdown > 0)
+            {
+                EnsureCameraPOV();
+                _cameraLockCountdown--;
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -108,27 +133,12 @@ namespace CastleDefender.Game
 
             cam.orthographic = true;
             cam.orthographicSize = CameraOrthoSize;
-            Vector3 castlePos = CastleTileTransform != null
-                ? CastleTileTransform.position
-                : TileGrid.TileToWorld(5, 27);
-            Vector3 spawnPos = TileGrid.TileToWorld(5, 0);
-            Vector3 laneDir = spawnPos - castlePos;
-            laneDir.y = 0f;
-            if (laneDir.sqrMagnitude < 0.001f) laneDir = new Vector3(0.9f, 0f, -0.45f);
-            laneDir.Normalize();
-            Vector3 laneRight = Vector3.Cross(Vector3.up, laneDir).normalized;
-            Vector3 laneAnchor = Vector3.Lerp(castlePos, spawnPos, CameraLaneAnchorT);
-            Vector3 framingAnchor = laneAnchor + new Vector3(CameraFrameOffsetX, 0f, CameraFrameOffsetZ);
 
-            // Anchor camera on lane center so tweaks affect lane framing, not just board edge.
-            cam.transform.position = framingAnchor
-                                   - laneDir * CameraBehind
-                                   + laneRight * CameraSide
-                                   + Vector3.up * CameraHeight;
-            cam.transform.LookAt(framingAnchor
-                               + laneDir * CameraLookAhead
-                               + laneRight * CameraLookSide
-                               + Vector3.up * CameraLookHeight);
+            // Phase 3: frame the full 4-branch battlefield centered at world origin.
+            // BattlefieldCameraPosition and BattlefieldLookTarget are tunable in the Inspector.
+            // Default: camera at (0, 20, -10) looking at (0, 0, 0) gives a natural RTS angle.
+            cam.transform.position = BattlefieldCameraPosition;
+            cam.transform.LookAt(BattlefieldLookTarget);
 
             var ctrl = FindFirstObjectByType<global::CameraController>();
             if (ctrl == null)

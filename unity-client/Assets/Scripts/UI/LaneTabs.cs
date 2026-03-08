@@ -75,8 +75,7 @@ namespace CastleDefender.UI
                 {
                     int captured = i;
                     var tab = Instantiate(TabPrefab, TabContainer);
-                    tab.GetComponentInChildren<TMP_Text>().text =
-                        i == myLane ? $"Lane {i + 1} (You)" : $"Lane {i + 1}";
+                    tab.GetComponentInChildren<TMP_Text>().text = GetLaneLabel(i, myLane);
                     tab.onClick.AddListener(() => SwitchTo(captured));
                     _tabs[i] = tab;
                 }
@@ -105,7 +104,8 @@ namespace CastleDefender.UI
             _viewing = laneIdx;
             SnapshotApplier.Instance.ViewingLane = laneIdx;
             RefreshColors();
-            SetEnemyTint(laneIdx != _myLane);
+            bool isEnemy = SnapshotApplier.Instance == null || !SnapshotApplier.Instance.AreLanesAllied(laneIdx, _myLane);
+            SetEnemyTint(isEnemy);
         }
 
         void RefreshColors()
@@ -116,11 +116,37 @@ namespace CastleDefender.UI
                 if (_tabs[i] == null) continue;
                 bool isActive = i == _viewing;
                 bool isMine   = i == _myLane;
-                Color c = isMine
-                    ? (isActive ? ColorMineActive  : ColorMineInactive)
-                    : (isActive ? ColorEnemyActive : ColorEnemyInactive);
+                bool isAlly   = SnapshotApplier.Instance != null && SnapshotApplier.Instance.AreLanesAllied(i, _myLane);
+                var baseColor = ResolveTabBaseColor(i, isMine, isAlly);
+                Color c = isActive
+                    ? Color.Lerp(baseColor, Color.white, 0.18f)
+                    : Color.Lerp(baseColor, Color.black, 0.30f);
                 _tabs[i].image.color = c;
             }
+        }
+
+        string GetLaneLabel(int laneIdx, int myLane)
+        {
+            var sa = SnapshotApplier.Instance;
+            var assignment = sa != null ? sa.GetLaneAssignment(laneIdx) : null;
+            string label = assignment != null && !string.IsNullOrWhiteSpace(assignment.branchLabel)
+                ? assignment.branchLabel
+                : $"P{laneIdx + 1}";
+            return laneIdx == myLane ? $"{label} (You)" : label;
+        }
+
+        Color ResolveTabBaseColor(int laneIdx, bool isMine, bool isAlly)
+        {
+            var sa = SnapshotApplier.Instance;
+            if (sa != null)
+            {
+                var laneColor = sa.GetLaneColor(laneIdx, Color.clear);
+                if (laneColor.a > 0f)
+                    return laneColor;
+            }
+
+            if (isMine) return ColorMineActive;
+            return isAlly ? ColorMineInactive : ColorEnemyInactive;
         }
 
         void SetEnemyTint(bool show)

@@ -1,6 +1,6 @@
-// ProjectileSystem.cs — Renders projectiles from the ML snapshot.
+// ProjectileSystem.cs — Renders projectiles from ALL lanes in the ML battlefield.
 // Projectiles from the server have a 0..1 progress value; this script
-// positions them between source and target tiles each frame.
+// positions them between source and target tiles in branch world space each frame.
 //
 // SETUP (Game_ML.unity):
 //   Attach alongside LaneRenderer.
@@ -23,9 +23,9 @@ namespace CastleDefender.Game
     {
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Prefabs")]
-        public GameObject ProjectilePrefab;  // default bullet
-        public GameObject CannonPrefab;      // cannon ball (falls back to ProjectilePrefab)
-        public GameObject SplashFxPrefab;    // instantiated on cannon landing (optional)
+        public GameObject ProjectilePrefab;
+        public GameObject CannonPrefab;
+        public GameObject SplashFxPrefab;
 
         [Header("Arc")]
         public float ArcHeight = 1.5f;
@@ -36,23 +36,19 @@ namespace CastleDefender.Game
             public GameObject go;
             public Vector3    from;
             public Vector3    to;
-            public float      progress;       // server's last known progress
-            public float      smoothProg;     // locally interpolated
+            public float      progress;
+            public float      smoothProg;
             public bool       isSplash;
             public bool       landedFxPlayed;
-            public string     projectileType; // archer|fighter|mage|ballista|cannon
+            public string     projectileType;
             public string     damageType;
         }
 
         readonly Dictionary<string, ProjView> _projs = new();
-        int _lastViewingLane = -1;
         bool _subscribed;
 
         // ─────────────────────────────────────────────────────────────────────
-        void OnEnable()
-        {
-            TrySubscribeSnapshots();
-        }
+        void OnEnable()  => TrySubscribeSnapshots();
 
         void OnDisable()
         {
@@ -64,40 +60,14 @@ namespace CastleDefender.Game
         // ─────────────────────────────────────────────────────────────────────
         void OnSnapshot(MLSnapshot snap)
         {
-            var sa      = SnapshotApplier.Instance;
-            int viewing = sa.ViewingLane;
+            if (snap?.lanes == null) return;
 
-            if (viewing != _lastViewingLane)
-            {
-                DestroyAll();
-                _lastViewingLane = viewing;
-            }
-
-            if (snap?.lanes == null || viewing >= snap.lanes.Length) return;
-            var lane = snap.lanes[viewing];
-
-            SyncProjectiles(lane);
-        }
-
-        void SyncProjectiles(MLLaneSnap lane)
-        {
             var seen = new HashSet<string>();
 
-            if (lane.projectiles != null)
+            foreach (var lane in snap.lanes)
             {
-                foreach (var p in lane.projectiles)
-                {
-                    seen.Add(p.id);
-
-                    if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
-                        view = CreateProjectile(p);
-
-                    // Update target progress (smooth local interpolation happens in Update)
-                    view.from     = TileGrid.TileToWorld(p.fromX, p.fromY);
-                    view.to       = TileGrid.TileToWorld(p.toX, p.toY);
-                    view.progress = p.progress;
-                    view.isSplash = p.isSplash;
-                }
+                if (lane == null) continue;
+                SyncLaneProjectiles(lane, seen);
             }
 
             // Remove projectiles that disappeared (assumed hit)
@@ -111,9 +81,7 @@ namespace CastleDefender.Game
 
                 if (v.isSplash && !v.landedFxPlayed)
                 {
-                    // Use CannonSplash pool (falls back to legacy prefab)
-                    if (CannonSplash._prefabSet)
-                        CannonSplash.Play(v.to);
+                    if (CannonSplash._prefabSet) CannonSplash.Play(v.to);
                     else if (SplashFxPrefab != null)
                     {
                         var fx = Instantiate(SplashFxPrefab, v.to, Quaternion.identity);
@@ -123,16 +91,32 @@ namespace CastleDefender.Game
                 }
                 else if (!v.isSplash && v.go != null)
                 {
-                    // Hit spark for non-splash projectiles
                     var hitEffect = HitEffectPool.Get();
-                    if (hitEffect != null)
-                        hitEffect.Play(v.to, TowerTypeFromString(v.projectileType));
-
+                    if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType));
                     AudioManager.I?.Play(HitSFXFor(v.projectileType));
                 }
 
                 if (v.go != null) Destroy(v.go);
                 _projs.Remove(id);
+            }
+        }
+
+        void SyncLaneProjectiles(MLLaneSnap lane, HashSet<string> seen)
+        {
+            if (lane.projectiles == null) return;
+
+            foreach (var p in lane.projectiles)
+            {
+                seen.Add(p.id);
+
+                if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
+                    view = CreateProjectile(p);
+
+                // Use ownerLane for branch-local world positions
+                view.from     = TileGrid.TileToWorld(p.ownerLane, p.fromX, p.fromY);
+                view.to       = TileGrid.TileToWorld(p.ownerLane, p.toX,   p.toY);
+                view.progress = p.progress;
+                view.isSplash = p.isSplash;
             }
         }
 
@@ -142,12 +126,11 @@ namespace CastleDefender.Game
             var  prefab   = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
             if (prefab == null) return new ProjView();
 
-            var from = TileGrid.TileToWorld(p.fromX, p.fromY);
-            var to   = TileGrid.TileToWorld(p.toX,   p.toY);
+            var from = TileGrid.TileToWorld(p.ownerLane, p.fromX, p.fromY);
+            var to   = TileGrid.TileToWorld(p.ownerLane, p.toX,   p.toY);
             var go   = Instantiate(prefab, from, Quaternion.identity, transform);
             go.name  = $"Proj_{p.id}";
 
-            // Scale by type
             float scale = p.projectileType switch
             {
                 "cannon"   => 0.4f,
@@ -157,7 +140,6 @@ namespace CastleDefender.Game
             };
             go.transform.localScale = Vector3.one * scale;
 
-            // Colour hint per damage type
             var rend = go.GetComponentInChildren<Renderer>();
             if (rend != null)
             {
@@ -185,9 +167,7 @@ namespace CastleDefender.Game
             };
             _projs[p.id] = view;
 
-            // Shoot SFX
             AudioManager.I?.Play(ShootSFXFor(p.projectileType));
-
             return view;
         }
 
@@ -196,7 +176,6 @@ namespace CastleDefender.Game
         {
             TrySubscribeSnapshots();
 
-            // Advance smooth progress toward server progress each frame
             const float lerpSpeed = 8f;
 
             foreach (var kv in _projs)
@@ -204,21 +183,16 @@ namespace CastleDefender.Game
                 var v = kv.Value;
                 if (v.go == null) continue;
 
-                v.smoothProg = Mathf.MoveTowards(v.smoothProg, v.progress,
-                                                 lerpSpeed * Time.deltaTime);
+                v.smoothProg = Mathf.MoveTowards(v.smoothProg, v.progress, lerpSpeed * Time.deltaTime);
                 float t = Mathf.Clamp01(v.smoothProg);
 
-                // Parabolic arc for cannon, straight line for others
                 Vector3 pos = Vector3.Lerp(v.from, v.to, t);
-                if (v.isSplash)
-                    pos.y += ArcHeight * 4f * t * (1f - t);  // parabola
+                if (v.isSplash) pos.y += ArcHeight * 4f * t * (1f - t);
 
                 v.go.transform.position = pos;
 
-                // Face direction of travel
                 Vector3 dir = (v.to - v.from).normalized;
-                if (dir != Vector3.zero)
-                    v.go.transform.forward = dir;
+                if (dir != Vector3.zero) v.go.transform.forward = dir;
             }
         }
 
@@ -231,8 +205,7 @@ namespace CastleDefender.Game
             sa.OnMLSnapshotApplied += OnSnapshot;
             _subscribed = true;
 
-            if (sa.LatestML != null)
-                OnSnapshot(sa.LatestML);
+            if (sa.LatestML != null) OnSnapshot(sa.LatestML);
         }
 
         void DestroyAll()
@@ -243,7 +216,6 @@ namespace CastleDefender.Game
         }
 
         // ── Audio / FX helpers ────────────────────────────────────────────────
-
         static AudioManager.SFX ShootSFXFor(string projType) => projType switch
         {
             "cannon"   => AudioManager.SFX.CannonShoot,
@@ -255,9 +227,9 @@ namespace CastleDefender.Game
 
         static AudioManager.SFX HitSFXFor(string projType) => projType switch
         {
-            "mage"     => AudioManager.SFX.MageShoot,    // reuse — distinct enough
-            "cannon"   => AudioManager.SFX.CannonSplash,
-            _          => AudioManager.SFX.UnitDeath,
+            "mage"   => AudioManager.SFX.MageShoot,
+            "cannon" => AudioManager.SFX.CannonSplash,
+            _        => AudioManager.SFX.UnitDeath,
         };
 
         static HitEffect.TowerType TowerTypeFromString(string projType) => projType switch

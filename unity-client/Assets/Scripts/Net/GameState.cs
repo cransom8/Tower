@@ -67,6 +67,7 @@ namespace CastleDefender.Net
         public string             code;
         public int                playerCount;
         public MLLaneAssignment[] laneAssignments;
+        public MLBattlefieldTopology battlefieldTopology;
     }
 
     [Serializable]
@@ -75,6 +76,13 @@ namespace CastleDefender.Net
         public int    laneIndex;
         public string displayName;
         public bool   isAI;
+        public string team;
+        public string side;
+        public string slotKey;
+        public string slotColor;
+        public string branchId;
+        public string branchLabel;
+        public string castleSide;
     }
 
     [Serializable]
@@ -91,6 +99,8 @@ namespace CastleDefender.Net
         public LoadoutEntry[] loadout;       // Phase C — 5 unit types for this match
         public string       reconnectToken;  // Phase U8 — store for disconnect recovery
         public bool         ranked;
+        public MLBattlefieldTopology battlefieldTopology;
+        public MLSlotDefinition[] slotDefinitions;
     }
 
     [Serializable]
@@ -101,6 +111,56 @@ namespace CastleDefender.Net
         public int    send_cost;    // gold cost to send
         public int    hp;
         public float  path_speed;
+    }
+
+    [Serializable]
+    public class MLSlotDefinition
+    {
+        public int    laneIndex;
+        public string slotKey;
+        public string side;
+        public string slotColor;
+        public string branchId;
+        public string branchLabel;
+        public string castleSide;
+        public string team;
+    }
+
+    [Serializable]
+    public class MLBattlefieldTopology
+    {
+        public string             mapType;
+        public string             centerIslandId;
+        public string[]           sideOrder;
+        public MLCastleDef[]      castles;
+        public MLMergeZoneDef[]   mergeZones;
+        public MLBuildZoneDef[]   buildZones;
+        public bool               sharedZonesBuildable;
+        public MLSlotDefinition[] slotDefinitions;
+    }
+
+    [Serializable]
+    public class MLCastleDef
+    {
+        public string side;
+        public string castleId;
+        public string bridgeId;
+    }
+
+    [Serializable]
+    public class MLMergeZoneDef
+    {
+        public string side;
+        public string landmassId;
+        public string bridgeId;
+    }
+
+    [Serializable]
+    public class MLBuildZoneDef
+    {
+        public string branchId;
+        public int    ownerLaneIndex;
+        public bool   buildable;
     }
 
     // ─── Queue Update ─────────────────────────────────────────────────────────
@@ -141,6 +201,7 @@ namespace CastleDefender.Net
         public string       phase;                  // "playing"|"ended"
         public int          winner;                 // lane index when ended; 0 when null (check phase)
         public int          incomeTicksRemaining;   // global, shared by all lanes
+        public MLBattlefieldTopology battlefieldTopology;
         public MLLaneSnap[] lanes;
     }
 
@@ -148,6 +209,13 @@ namespace CastleDefender.Net
     public class MLLaneSnap
     {
         public int            laneIndex;
+        public string         team;
+        public string         side;
+        public string         slotKey;
+        public string         slotColor;
+        public string         branchId;
+        public string         branchLabel;
+        public string         castleSide;
         public bool           eliminated;
         public float          gold;
         public float          income;
@@ -216,6 +284,7 @@ namespace CastleDefender.Net
         public string id;
         public int    ownerLane;
         public string type;         // "runner"|"footman"|"ironclad"|"warlock"|"golem"
+        public string skinKey;      // null = default skin; otherwise overrides prefab lookup
         public float  pathIdx;
         public int    gridX;
         public int    gridY;

@@ -1,6 +1,7 @@
-// LaneRenderer.cs — Spawns, moves, and removes unit GameObjects for the viewed ML lane.
+// LaneRenderer.cs — Spawns, moves, and removes unit GameObjects for the full ML battlefield.
+// Renders units from ALL lanes simultaneously, positioned in their branch world space.
 // Interpolates positions between 10hz snapshots using Update-based Lerp (no DOTween).
-// Separate from TileGrid.cs which handles tile structures only.
+// Separate from TileGrid.cs which handles the viewed branch's tile structures.
 //
 // SETUP (Game_ML.unity):
 //   Attach to any GameObject (e.g. "LaneRenderer" GO).
@@ -23,7 +24,6 @@ namespace CastleDefender.Game
         [Header("HP bar prefab (optional WorldSpace Canvas Image)")]
         public GameObject HpBarPrefab;
 
-        // Time to lerp from one tile position to the next (slightly > snapshot period)
         const float MoveLerpDuration = 0.14f;
 
         // ── Runtime state ─────────────────────────────────────────────────────
@@ -39,7 +39,6 @@ namespace CastleDefender.Game
         }
 
         readonly Dictionary<string, UnitView> _units = new();
-        int  _lastViewingLane = -1;
         bool _subscribed;
 
         // ─────────────────────────────────────────────────────────────────────
@@ -74,51 +73,40 @@ namespace CastleDefender.Game
             sa.OnMLSnapshotApplied += OnSnapshot;
             _subscribed = true;
 
-            if (sa.LatestML != null)
-                OnSnapshot(sa.LatestML);
+            if (sa.LatestML != null) OnSnapshot(sa.LatestML);
         }
 
         // ─────────────────────────────────────────────────────────────────────
         void OnSnapshot(MLSnapshot snap)
         {
-            var sa      = SnapshotApplier.Instance;
-            int viewing = sa.ViewingLane;
-
-            if (viewing != _lastViewingLane)
-            {
-                DestroyAll();
-                _lastViewingLane = viewing;
-            }
-
-            if (snap?.lanes == null || viewing >= snap.lanes.Length) return;
-            SyncUnits(snap.lanes[viewing], sa.MyLaneIndex);
-        }
-
-        void SyncUnits(MLLaneSnap lane, int myLaneIndex)
-        {
+            if (snap?.lanes == null) return;
+            var sa  = SnapshotApplier.Instance;
             var seen = new HashSet<string>();
 
-            if (lane.units != null)
+            foreach (var lane in snap.lanes)
             {
+                if (lane?.units == null) continue;
                 foreach (var u in lane.units)
                 {
                     seen.Add(u.id);
 
                     if (!_units.TryGetValue(u.id, out var view) || view.go == null)
-                        view = CreateUnit(u, myLaneIndex);
+                        view = CreateUnit(u, sa);
 
                     if (view?.go == null) continue;
-                    Vector3 target = TileGrid.TileToWorld(u.gridX, u.gridY);
+
+                    // Position unit in its branch's world space
+                    Vector3 target = TileGrid.TileToWorld(u.ownerLane, u.gridX, u.gridY);
                     view.moveFrom = view.go.transform.position;
                     view.moveTo   = target;
                     view.lerpT    = 0f;
 
                     if (view.hpBarFill != null && u.maxHp > 0f)
-                        view.hpBarFill.localScale = new Vector3(
-                            Mathf.Clamp01(u.hp / u.maxHp), 1f, 1f);
+                        view.hpBarFill.localScale = new Vector3(Mathf.Clamp01(u.hp / u.maxHp), 1f, 1f);
                 }
             }
 
+            // Remove units that are no longer in any lane's snapshot
             var toRemove = new List<string>();
             foreach (var kv in _units)
                 if (!seen.Contains(kv.Key)) toRemove.Add(kv.Key);
@@ -135,43 +123,41 @@ namespace CastleDefender.Game
             }
         }
 
-        UnitView CreateUnit(MLUnit u, int myLaneIndex)
+        UnitView CreateUnit(MLUnit u, SnapshotApplier sa)
         {
-            bool isMine = u.ownerLane == myLaneIndex;
+            int  myLane = sa != null ? sa.MyLaneIndex : 0;
+            bool isMine = u.ownerLane == myLane;
+            bool isAlly = sa != null && sa.AreLanesAllied(u.ownerLane, myLane);
 
-            GameObject prefab = Registry != null ? Registry.GetPrefab(u.type) : null;
+            GameObject prefab = Registry != null ? Registry.GetPrefabForSkin(u.type, u.skinKey) : null;
             if (prefab == null)
             {
                 Debug.LogWarning("[LaneRenderer] No prefab for unit type: " + u.type);
                 return new UnitView();
             }
 
-            Vector3 spawnPos = TileGrid.TileToWorld(u.gridX, u.gridY);
+            Vector3 spawnPos = TileGrid.TileToWorld(u.ownerLane, u.gridX, u.gridY);
             var go = Instantiate(prefab, spawnPos, Quaternion.identity, transform);
-            go.name = $"Unit_{u.id}_{u.type}";
+            go.name = $"Unit_{u.id}_{u.type}_{u.skinKey ?? "default"}";
 
-            float scale = Registry != null ? Registry.GetScale(u.type) : 1f;
+            float scale = Registry != null ? Registry.GetScaleForSkin(u.type, u.skinKey) : 1f;
             go.transform.localScale = Vector3.one * scale;
 
-            Color col = Registry != null
+            Color fallback = Registry != null
                 ? (isMine ? Registry.GetTintMine(u.type) : Registry.GetTintEnemy(u.type))
                 : (isMine ? new Color(0.20f, 0.80f, 0.70f) : new Color(0.90f, 0.25f, 0.25f));
+            Color col = sa != null ? sa.GetLaneColor(u.ownerLane, fallback) : fallback;
             Color rim = isMine
-                ? new Color(0.2f, 0.9f, 0.8f)
-                : new Color(1.0f, 0.2f, 0.2f);
+                ? Color.Lerp(col, Color.white, 0.35f)
+                : isAlly
+                    ? Color.Lerp(col, Color.white, 0.20f)
+                    : Color.Lerp(col, Color.black, 0.25f);
 
             foreach (var r in go.GetComponentsInChildren<Renderer>())
             {
                 var bridge = r.GetComponent<ToonShaderBridge>();
-                if (bridge != null)
-                {
-                    bridge.SetBaseColor(col);
-                    bridge.SetRimColor(rim);
-                }
-                else
-                {
-                    r.material.color = col;
-                }
+                if (bridge != null) { bridge.SetBaseColor(col); bridge.SetRimColor(rim); }
+                else r.material.color = col;
             }
 
             Transform hpFill = null;

@@ -14,47 +14,47 @@ namespace CastleDefender.Editor
 {
     public static class WireRegistryAndScene
     {
-        const string REGISTRY_PATH = "Assets/UnitPrefabRegistry.asset";
+        // All paths from EditorPaths.cs — do not redeclare here.
 
         // ── Unit key → prefab asset path ──────────────────────────────────────
         static readonly (string key, string path, float scale)[] UNIT_MAP =
         {
             // Must Have Fantasy Villains
-            ("goblin",        "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Goblin/Prefabs/Goblin_PBR.prefab",         0.6f),
-            ("kobold",        "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Kobold/Prefabs/Kobold_PBR.prefab",         0.55f),
-            ("hobgoblin",     "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Hobgoblin/Prefabs/Hobgoblin_PBR.prefab",   0.65f),
-            ("orc",           "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Orc/Prefabs/Orc_PBR.prefab",               0.70f),
-            ("ogre",          "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Ogre/Prefabs/FatOgre_PBR.prefab",          0.80f),
-            ("troll",         "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Troll/Prefabs/Troll_PBR.prefab",           0.75f),
-            ("cyclops",       "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Must Have Fantasy Villains Pack/Cyclops/Prefabs/Cyclops_PBR.prefab",       0.85f),
+            (  "goblin",        EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Goblin/Prefabs/Goblin_PBR.prefab",         0.6f),
+            ("kobold",        EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Kobold/Prefabs/Kobold_PBR.prefab",         0.55f),
+            ("hobgoblin",     EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Hobgoblin/Prefabs/Hobgoblin_PBR.prefab",   0.65f),
+            ("orc",           EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Orc/Prefabs/Orc_PBR.prefab",               0.70f),
+            ("ogre",          EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Ogre/Prefabs/FatOgre_PBR.prefab",          0.80f),
+            ("troll",         EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Troll/Prefabs/Troll_PBR.prefab",           0.75f),
+            ("cyclops",       EditorPaths.HFC_ROOT + "/Must Have Fantasy Villains Pack/Cyclops/Prefabs/Cyclops_PBR.prefab",       0.85f),
             // Living Dead
-            ("ghoul",         "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Living Dead Pack/Ghoul/Prefabs/Ghoul_PBR.prefab",                          0.65f),
-            ("skeleton_knight","Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Living Dead Pack/Skeleton Knight/Prefabs/SkeletonKnight_PBR.prefab",      0.70f),
-            ("undead_warrior","Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Living Dead Pack/Undead/Prefabs/Undead_PBR.prefab",                         0.68f),
-            ("mummy",         "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Living Dead Pack/Mummy/Prefabs/Mummy_PBR.prefab",                          0.72f),
-            ("vampire",       "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Living Dead Pack/Vampire/Prefabs/Vampire_PBR.prefab",                      0.70f),
+            ("ghoul",         EditorPaths.HFC_ROOT + "/Living Dead Pack/Ghoul/Prefabs/Ghoul_PBR.prefab",                          0.65f),
+            ("skeleton_knight",EditorPaths.HFC_ROOT + "/Living Dead Pack/Skeleton Knight/Prefabs/SkeletonKnight_PBR.prefab",      0.70f),
+            ("undead_warrior",EditorPaths.HFC_ROOT + "/Living Dead Pack/Undead/Prefabs/Undead_PBR.prefab",                         0.68f),
+            ("mummy",         EditorPaths.HFC_ROOT + "/Living Dead Pack/Mummy/Prefabs/Mummy_PBR.prefab",                          0.72f),
+            ("vampire",       EditorPaths.HFC_ROOT + "/Living Dead Pack/Vampire/Prefabs/Vampire_PBR.prefab",                      0.70f),
             // Fantasy Animals
-            ("giant_rat",     "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Giant Rat/Prefabs/GiantRat_PBR.prefab",               0.50f),
-            ("fantasy_wolf",  "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Fantasy Wolf/Prefabs/M_FantasyWolf_PBR.prefab",       0.60f),
-            ("giant_viper",   "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Giant Viper/Prefabs/GiantViper_PBR.prefab",           0.60f),
-            ("darkness_spider","Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Darkness Spider/Prefabs/DarknessSpider_PBR.prefab",  0.65f),
+            ("giant_rat",     EditorPaths.HFC_ROOT + "/Fantasy Animals Pack/Giant Rat/Prefabs/GiantRat_PBR.prefab",               0.50f),
+            ("fantasy_wolf",  EditorPaths.HFC_ROOT + "/Fantasy Animals Pack/Fantasy Wolf/Prefabs/M_FantasyWolf_PBR.prefab",       0.60f),
+            ("giant_viper",   EditorPaths.HFC_ROOT + "/Fantasy Animals Pack/Giant Viper/Prefabs/GiantViper_PBR.prefab",           0.60f),
+            ("darkness_spider",EditorPaths.HFC_ROOT + "/Fantasy Animals Pack/Darkness Spider/Prefabs/DarknessSpider_PBR.prefab",  0.65f),
             // Fantasy Lizards
-            ("lizard_warrior","Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Lizards Pack/Lizard Warrior/Prefabs/LizardWarrior_PBR.prefab",     0.70f),
-            ("dragonide",     "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Lizards Pack/Dragonide/Prefabs/Dragonide_PBR.prefab",              0.75f),
-            ("wyvern",        "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Lizards Pack/Wyvern/Prefabs/Wyvern_PBR.prefab",                    0.80f),
-            ("hydra",         "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Lizards Pack/Hydra/Prefabs/Hydra_PBR.prefab",                      0.90f),
-            ("mountain_dragon","Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Lizards Pack/Mountain Dragon/Prefabs/MountainDragon_PBR.prefab",  0.90f),
+            ("lizard_warrior",EditorPaths.HFC_ROOT + "/Fantasy Lizards Pack/Lizard Warrior/Prefabs/LizardWarrior_PBR.prefab",     0.70f),
+            ("dragonide",     EditorPaths.HFC_ROOT + "/Fantasy Lizards Pack/Dragonide/Prefabs/Dragonide_PBR.prefab",              0.75f),
+            ("wyvern",        EditorPaths.HFC_ROOT + "/Fantasy Lizards Pack/Wyvern/Prefabs/Wyvern_PBR.prefab",                    0.80f),
+            ("hydra",         EditorPaths.HFC_ROOT + "/Fantasy Lizards Pack/Hydra/Prefabs/Hydra_PBR.prefab",                      0.90f),
+            ("mountain_dragon",EditorPaths.HFC_ROOT + "/Fantasy Lizards Pack/Mountain Dragon/Prefabs/MountainDragon_PBR.prefab",  0.90f),
             // Mythological
-            ("werewolf",      "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Mythological Creatures Pack/Werewolf/Prefabs/Werewolf_PBR.prefab",         0.75f),
-            ("harpy",         "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Mythological Creatures Pack/Harpy/Prefabs/HarpyBreastsCovered_PBR.prefab", 0.65f),
-            ("griffin",       "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Mythological Creatures Pack/Griffin/Prefabs/Griffin1SidedFeathers_PBR.prefab", 0.85f),
-            ("manticora",     "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Mythological Creatures Pack/Manticora/Prefabs/Manticora_PBR.prefab",       0.85f),
-            ("chimera",       "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Mythological Creatures Pack/Chimera/Prefabs/Chimera_PBR.prefab",           0.90f),
+            ("werewolf",      EditorPaths.HFC_ROOT + "/Mythological Creatures Pack/Werewolf/Prefabs/Werewolf_PBR.prefab",         0.75f),
+            ("harpy",         EditorPaths.HFC_ROOT + "/Mythological Creatures Pack/Harpy/Prefabs/HarpyBreastsCovered_PBR.prefab", 0.65f),
+            ("griffin",       EditorPaths.HFC_ROOT + "/Mythological Creatures Pack/Griffin/Prefabs/Griffin1SidedFeathers_PBR.prefab", 0.85f),
+            ("manticora",     EditorPaths.HFC_ROOT + "/Mythological Creatures Pack/Manticora/Prefabs/Manticora_PBR.prefab",       0.85f),
+            ("chimera",       EditorPaths.HFC_ROOT + "/Mythological Creatures Pack/Chimera/Prefabs/Chimera_PBR.prefab",           0.90f),
             // Demonic
-            ("evil_watcher",  "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Demonic Creatures Pack/Evil Watcher/Prefabs/EvilWatcher.prefab",           0.60f),
-            ("oak_tree_ent",  "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Demonic Creatures Pack/Oak Tree Ent/Prefabs/OakTreeEnt_PBR.prefab",        0.95f),
-            ("ice_golem",     "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Demonic Creatures Pack/Golem/Prefabs/GolemIce_PBR.prefab",                 0.85f),
-            ("demon_lord",    "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Demonic Creatures Pack/Demon Lord/Prefabs/DemonLord_PBR.prefab",           0.90f),
+            ("evil_watcher",  EditorPaths.HFC_ROOT + "/Demonic Creatures Pack/Evil Watcher/Prefabs/EvilWatcher.prefab",           0.60f),
+            ("oak_tree_ent",  EditorPaths.HFC_ROOT + "/Demonic Creatures Pack/Oak Tree Ent/Prefabs/OakTreeEnt_PBR.prefab",        0.95f),
+            ("ice_golem",     EditorPaths.HFC_ROOT + "/Demonic Creatures Pack/Golem/Prefabs/GolemIce_PBR.prefab",                 0.85f),
+            ("demon_lord",    EditorPaths.HFC_ROOT + "/Demonic Creatures Pack/Demon Lord/Prefabs/DemonLord_PBR.prefab",           0.90f),
         };
 
         static readonly Color TINT_ALLY  = Color.white;
@@ -66,17 +66,17 @@ namespace CastleDefender.Editor
             int created = 0, skipped = 0, warnings = 0;
 
             // ── 1. Create or load registry ─────────────────────────────────
-            var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(REGISTRY_PATH);
+            var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(EditorPaths.REGISTRY);
             bool isNew = registry == null;
             if (isNew)
             {
                 registry = ScriptableObject.CreateInstance<UnitPrefabRegistry>();
-                AssetDatabase.CreateAsset(registry, REGISTRY_PATH);
-                Debug.Log($"[WireRegistry] Created {REGISTRY_PATH}");
+                AssetDatabase.CreateAsset(registry, EditorPaths.REGISTRY);
+                Debug.Log($"[WireRegistry] Created {EditorPaths.REGISTRY}");
             }
             else
             {
-                Debug.Log($"[WireRegistry] Refreshing existing {REGISTRY_PATH}");
+                Debug.Log($"[WireRegistry] Refreshing existing {EditorPaths.REGISTRY}");
             }
 
             // ── 2. Populate entries ────────────────────────────────────────
@@ -121,11 +121,11 @@ namespace CastleDefender.Editor
                 tileGrid.Registry = registry;
 
                 if (tileGrid.FloorPrefab == null)
-                    tileGrid.FloorPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/FloorTile.prefab");
+                    tileGrid.FloorPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_FLOOR);
                 if (tileGrid.WallPrefab == null)
-                    tileGrid.WallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/WallTile.prefab");
+                    tileGrid.WallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_WALL);
                 if (tileGrid.CastlePrefab == null)
-                    tileGrid.CastlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/CastleTile.prefab");
+                    tileGrid.CastlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_CASTLE);
 
                 EditorUtility.SetDirty(tileGrid);
                 Debug.Log("[WireRegistry] TileGrid wired.");

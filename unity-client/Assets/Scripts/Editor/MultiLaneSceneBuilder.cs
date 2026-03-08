@@ -27,9 +27,7 @@ namespace CastleDefender.Editor
 {
     public static class MultiLaneSceneBuilder
     {
-        const string REGISTRY_PATH     = "Assets/UnitPrefabRegistry.asset";
-        const string GAME_ML_PATH      = "Assets/Scenes/Game_ML.unity";
-        const string GAME_SURVIVAL_PATH = "Assets/Scenes/Game_Survival.unity";
+        // All paths from EditorPaths.cs — do not redeclare here.
 
         // ── Menu items ────────────────────────────────────────────────────────
 
@@ -45,12 +43,12 @@ namespace CastleDefender.Editor
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
 
-            var sceneML = EditorSceneManager.OpenScene(GAME_ML_PATH, OpenSceneMode.Single);
+            var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
             BuildScene();
             EditorSceneManager.SaveScene(sceneML);
             Debug.Log("[MultiLane] Game_ML built and saved.");
 
-            var sceneSurv = EditorSceneManager.OpenScene(GAME_SURVIVAL_PATH, OpenSceneMode.Single);
+            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
             BuildScene();
             EditorSceneManager.SaveScene(sceneSurv);
             Debug.Log("[MultiLane] Game_Survival built and saved.");
@@ -62,9 +60,9 @@ namespace CastleDefender.Editor
 
         static void BuildScene()
         {
-            var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(REGISTRY_PATH);
+            var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(EditorPaths.REGISTRY);
             if (registry == null)
-                Debug.LogWarning("[MultiLane] UnitPrefabRegistry not found at " + REGISTRY_PATH +
+                Debug.LogWarning("[MultiLane] UnitPrefabRegistry not found at " + EditorPaths.REGISTRY +
                                  " — run 'Wire Registry and Scene' afterward.");
 
             EnsureTileGrid(registry);
@@ -80,9 +78,9 @@ namespace CastleDefender.Editor
 
         static void EnsureTileGrid(UnitPrefabRegistry registry)
         {
-            var floorPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/FloorTile.prefab");
-            var wallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/WallTile.prefab");
-            var castlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/CastleTile.prefab");
+            var floorPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_FLOOR);
+            var wallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_WALL);
+            var castlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_CASTLE);
             var cam          = Camera.main ?? Object.FindFirstObjectByType<Camera>();
 
             // Build a lookup of existing TileGrids by LaneIndex so we don't duplicate

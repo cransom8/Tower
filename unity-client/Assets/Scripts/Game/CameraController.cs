@@ -1,5 +1,6 @@
 using UnityEngine;
 using CastleDefender.Game;
+using CastleDefender.Net;
 
 /// <summary>
 /// Isometric camera pan + zoom — no Cinemachine API dependency.
@@ -150,7 +151,8 @@ public class CameraController : MonoBehaviour
 
     public void FocusTile(int col, int row)
     {
-        Vector3 p = TileGrid.TileToWorld(col, row);
+        int lane = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.ViewingLane : 0;
+        Vector3 p = TileGrid.TileToWorld(lane, col, row);
         _targetPos = new Vector3(p.x, CameraTarget.position.y, p.z);
     }
 
@@ -165,15 +167,25 @@ public class CameraController : MonoBehaviour
         var tg = FindFirstObjectByType<TileGrid>();
         if (tg == null) return;
 
-        var p0 = TileGrid.TileToWorld(0, 0);
-        var p1 = TileGrid.TileToWorld(tg.Cols - 1, 0);
-        var p2 = TileGrid.TileToWorld(0, tg.Rows - 1);
-        var p3 = TileGrid.TileToWorld(tg.Cols - 1, tg.Rows - 1);
-
-        float minX = Mathf.Min(Mathf.Min(p0.x, p1.x), Mathf.Min(p2.x, p3.x));
-        float maxX = Mathf.Max(Mathf.Max(p0.x, p1.x), Mathf.Max(p2.x, p3.x));
-        float minZ = Mathf.Min(Mathf.Min(p0.z, p1.z), Mathf.Min(p2.z, p3.z));
-        float maxZ = Mathf.Max(Mathf.Max(p0.z, p1.z), Mathf.Max(p2.z, p3.z));
+        // Compute bounds from all 4 branch corners to cover the full battlefield.
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minZ = float.MaxValue, maxZ = float.MinValue;
+        for (int lane = 0; lane < 4; lane++)
+        {
+            foreach (var p in new[]
+            {
+                TileGrid.TileToWorld(lane, 0,            0),
+                TileGrid.TileToWorld(lane, tg.Cols - 1,  0),
+                TileGrid.TileToWorld(lane, 0,            tg.Rows - 1),
+                TileGrid.TileToWorld(lane, tg.Cols - 1,  tg.Rows - 1),
+            })
+            {
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.z < minZ) minZ = p.z;
+                if (p.z > maxZ) maxZ = p.z;
+            }
+        }
 
         const float marginX = 2.5f;
         const float marginZ = 1.5f;

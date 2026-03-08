@@ -393,7 +393,7 @@ namespace CastleDefender.UI
                     string you  = mem.socketId == NetworkManager.Instance.MySocketId ? " (You)" : "";
                     string host = mem.isHost  ? " [Host]"  : "";
                     string rdy  = mem.isReady ? " [Ready]" : "";
-                    string team = !string.IsNullOrEmpty(mem.team) ? $" [{mem.team}]" : "";
+                    string team = !string.IsNullOrEmpty(mem.team) ? $" [{FormatTeamName(mem.team)}]" : "";
                     sb.AppendLine($"{mem.name}{you}{host}{team}{rdy}");
                 }
             }
@@ -402,6 +402,13 @@ namespace CastleDefender.UI
                     sb.AppendLine($"CPU ({bot.difficulty}) [Bot]");
             Txt_MemberList.text = sb.ToString();
         }
+
+        static string FormatTeamName(string t) => (t ?? string.Empty).ToLowerInvariant() switch
+        {
+            "left"  => "Left Team",
+            "right" => "Right Team",
+            _       => t
+        };
 
         void RefreshLobbyButtons()
         {

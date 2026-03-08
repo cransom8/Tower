@@ -2,6 +2,11 @@
 //
 // Menu: Castle Defender → Setup → Build LVE Background
 //       Castle Defender → Setup → Build LVE Background (Both Scenes)
+//       Castle Defender → Setup → Setup LVE Lighting
+//       Castle Defender → Setup → Setup LVE Lighting (Both Scenes)
+//
+// LVE shaders ARE URP Shader Graph ("RenderPipeline"="UniversalPipeline") — no conversion needed.
+// The cinematic look comes from post-processing + skybox, applied by "Setup LVE Lighting".
 //
 // Creates a "Background" GameObject in the active scene containing:
 //   • Lava floor  — large emissive orange quad at Y = -3
@@ -11,7 +16,6 @@
 //   • Lava particles — LVE smoke/ejection particles at cliff bases
 //
 // If LVE prefabs cannot be found, coloured Unity primitive proxies are used instead.
-// After running, if materials are pink: Castle Defender → Setup → Convert LVE Materials to URP.
 //
 // Battlefield geometry reference (from TileGrid.cs BranchConfigs):
 //   Lane 0 Red  : origin (0,0,13)  colDir (0,0,-1) rowDir (-1,0,0)  spans X[0..-27] Z[3..13]
@@ -24,18 +28,21 @@
 #if UNITY_EDITOR
 using System.IO;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using UnityEditor.Rendering;
 
 namespace CastleDefender.Editor
 {
     public static class LVESceneSetup
     {
-        // ── LVE asset paths ───────────────────────────────────────────────────
-        const string LVE_ROOT   = "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment";
-        const string ROCKS_STD  = LVE_ROOT + "/Rocks/Standard prefabs";
-        const string CLIFFS_V2  = LVE_ROOT + "/Cliffs/Vertex Paint Prefabs/Prefabs V2";
-        const string PARTICLES  = LVE_ROOT + "/Particles";
+        // ── LVE asset paths — sourced from EditorPaths.cs ────────────────────
+        // Do not redeclare these here. All path constants live in EditorPaths.
+        const string LVE_ROOT   = EditorPaths.LVE_ROOT;       // kept as local alias for brevity
+        const string ROCKS_STD  = EditorPaths.LVE_ROCKS;
+        const string CLIFFS_V2  = EditorPaths.LVE_CLIFFS;
+        const string PARTICLES  = EditorPaths.LVE_PARTICLES;
 
         // Bridge geometry constants (must match TileGrid BranchConfigs)
         const float BRIDGE_HALF_LEN = 13.5f;   // half of 27 tiles (rows 0-27)
@@ -55,7 +62,7 @@ namespace CastleDefender.Editor
         static void BuildCurrentScene()
         {
             Build();
-            Debug.Log("[LVESetup] Done. If materials are pink, run 'Convert LVE Materials to URP'.");
+            Debug.Log("[LVESetup] Done. Run 'Setup LVE Lighting' for bloom + skybox.");
         }
 
         [MenuItem("Castle Defender/Setup/Build LVE Background (Both Scenes)")]
@@ -63,15 +70,110 @@ namespace CastleDefender.Editor
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
 
-            var sceneML = EditorSceneManager.OpenScene("Assets/Scenes/Game_ML.unity", OpenSceneMode.Single);
+            var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
             Build();
             EditorSceneManager.SaveScene(sceneML);
 
-            var sceneSurv = EditorSceneManager.OpenScene("Assets/Scenes/Game_Survival.unity", OpenSceneMode.Single);
+            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
             Build();
             EditorSceneManager.SaveScene(sceneSurv);
 
             Debug.Log("[LVESetup] Both scenes built and saved.");
+        }
+
+        [MenuItem("Castle Defender/Setup/Setup LVE Lighting")]
+        static void SetupLightingCurrentScene()
+        {
+            SetupLighting();
+            Debug.Log("[LVESetup] Lighting set up. Check scene for Global Volume and Directional Light.");
+        }
+
+        [MenuItem("Castle Defender/Setup/Setup LVE Lighting (Both Scenes)")]
+        static void SetupLightingBothScenes()
+        {
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+
+            var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
+            SetupLighting();
+            EditorSceneManager.SaveScene(sceneML);
+
+            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
+            SetupLighting();
+            EditorSceneManager.SaveScene(sceneSurv);
+
+            Debug.Log("[LVESetup] Lighting applied to both scenes.");
+        }
+
+        // ── Lighting / post-processing setup ─────────────────────────────────
+        // Applies the LVE demo scene's look: lava sky, warm directional light,
+        // and the PostProcessVolumeProfile Lava (Bloom + color grading).
+
+        static void SetupLighting()
+        {
+            // ── Skybox ────────────────────────────────────────────────────────
+            // Try the lava sky first, fall back to the dark skybox
+            var sky = AssetDatabase.LoadAssetAtPath<Material>(EditorPaths.LVE_SKYBOX);
+            if (sky == null)
+                sky = AssetDatabase.LoadAssetAtPath<Material>(EditorPaths.LVE_SKYBOX_ALT);
+            if (sky != null)
+            {
+                RenderSettings.skybox = sky;
+                Debug.Log("[LVESetup] Skybox set to: " + sky.name);
+            }
+            else
+            {
+                Debug.LogWarning("[LVESetup] Lava skybox not found — skipping.");
+            }
+
+            // ── Ambient light — dark reddish to match lava cave ───────────────
+            RenderSettings.ambientMode  = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.12f, 0.05f, 0.03f);
+            RenderSettings.fogColor     = new Color(0.10f, 0.04f, 0.02f);
+            RenderSettings.fog          = true;
+            RenderSettings.fogMode      = FogMode.Linear;
+            RenderSettings.fogStartDistance = 25f;
+            RenderSettings.fogEndDistance   = 60f;
+
+            // ── Directional light — warm orange-red lava glow ─────────────────
+            var dirLight = Object.FindFirstObjectByType<Light>();
+            if (dirLight != null && dirLight.type == LightType.Directional)
+            {
+                dirLight.color     = new Color(1.0f, 0.45f, 0.15f);
+                dirLight.intensity = 1.2f;
+                dirLight.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+                EditorUtility.SetDirty(dirLight);
+                Debug.Log("[LVESetup] Directional light set to warm lava orange.");
+            }
+            else
+            {
+                Debug.LogWarning("[LVESetup] No Directional Light found in scene — add one manually.");
+            }
+
+            // ── Global Volume (post-processing) ───────────────────────────────
+            var profile = AssetDatabase.LoadAssetAtPath<VolumeProfile>(EditorPaths.LVE_POSTPROCESS);
+
+            if (profile != null)
+            {
+                // Find or create a Global Volume GO
+                var vol = Object.FindFirstObjectByType<Volume>();
+                if (vol == null)
+                {
+                    var volGo = new GameObject("GlobalVolume_LVE");
+                    vol = volGo.AddComponent<Volume>();
+                }
+                vol.isGlobal        = true;
+                vol.priority        = 10f;
+                vol.sharedProfile   = profile;
+                EditorUtility.SetDirty(vol);
+                Debug.Log("[LVESetup] Global Volume set to PostProcessVolumeProfile Lava.");
+            }
+            else
+            {
+                Debug.LogWarning("[LVESetup] PostProcessVolumeProfile Lava.asset not found. " +
+                                 "Bloom will not be applied. Check path: " + EditorPaths.LVE_POSTPROCESS);
+            }
+
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
         }
 
         // ── Main builder ──────────────────────────────────────────────────────
@@ -90,6 +192,7 @@ namespace CastleDefender.Editor
 
             AddLavaFloor(root);
             AddBridgeDecks(root);
+            AddBridgeRailings(root);
             AddCliffWalls(root);
             AddCenterRocks(root);
             AddLavaParticles(root);
@@ -133,10 +236,13 @@ namespace CastleDefender.Editor
                 ( BRIDGE_HALF_LEN, -BRIDGE_CENTER_Z, "BridgeDeck_Lane3_Green"),
             };
 
-            var mat = MakeUrpMaterial("BridgeDeck_Mat",
-                baseColor: new Color(0.22f, 0.18f, 0.16f),
-                emissiveColor: Color.black,
-                metallic: 0.1f, smoothness: 0.15f);
+            // Prefer an LVE dark volcanic ground material for authentic cracked-rock look.
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(EditorPaths.LVE_GROUND_MAT);
+            if (mat == null)
+                mat = MakeUrpMaterial("BridgeDeck_Mat",
+                    baseColor: new Color(0.22f, 0.18f, 0.16f),
+                    emissiveColor: new Color(0.15f, 0.04f, 0f),
+                    metallic: 0.1f, smoothness: 0.15f);
 
             foreach (var (cx, cz, label) in centers)
             {
@@ -148,6 +254,91 @@ namespace CastleDefender.Editor
                 Object.DestroyImmediate(go.GetComponent<BoxCollider>());
                 go.GetComponent<Renderer>().sharedMaterial = mat;
             }
+        }
+
+        // ── Bridge railings ───────────────────────────────────────────────────
+        // Stone pillar posts + hanging chain spans along the long sides of each bridge.
+        // Concept: dark stone posts every ~4.5u, thin cylinders sag between them like chains.
+
+        static readonly (float cx, float cz, string tag)[] BridgeDefs =
+        {
+            (-13.5f,  8f, "Lane0_Red"),
+            (-13.5f, -8f, "Lane1_Gold"),
+            ( 13.5f,  8f, "Lane2_Blue"),
+            ( 13.5f, -8f, "Lane3_Green"),
+        };
+
+        static void AddBridgeRailings(GameObject root)
+        {
+            var group = new GameObject("Bridge_Railings");
+            group.transform.parent = root.transform;
+
+            var postMat  = MakeUrpMaterial("BridgePost_Mat",
+                new Color(0.20f, 0.15f, 0.13f), new Color(0.10f, 0.03f, 0f), 0.1f, 0.1f);
+            var chainMat = MakeUrpMaterial("BridgeChain_Mat",
+                new Color(0.18f, 0.13f, 0.10f), new Color(0.25f, 0.06f, 0f), 0.5f, 0.35f);
+
+            float halfLen   = 13.0f;   // slightly inside bridge ends
+            float halfWidth = 5.0f;    // inside edge of bridge width
+            float postH     = 1.4f;    // post height above tile floor
+
+            // X positions of posts along the bridge (4 per side)
+            float[] xOffsets = { -halfLen, -halfLen * 0.33f, halfLen * 0.33f, halfLen };
+
+            foreach (var (cx, cz, tag) in BridgeDefs)
+            {
+                var bg = new GameObject("Rails_" + tag);
+                bg.transform.parent = group.transform;
+
+                foreach (float zSign in new[] { -1f, 1f })
+                {
+                    float zSide = cz + zSign * halfWidth;
+
+                    // Posts
+                    for (int i = 0; i < xOffsets.Length; i++)
+                    {
+                        var post = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                        post.name = $"Post_{tag}_{i}";
+                        post.transform.parent = bg.transform;
+                        post.transform.position = new Vector3(cx + xOffsets[i], postH * 0.5f, zSide);
+                        post.transform.localScale = new Vector3(0.30f, postH, 0.30f);
+                        Object.DestroyImmediate(post.GetComponent<BoxCollider>());
+                        post.GetComponent<Renderer>().sharedMaterial = postMat;
+                    }
+
+                    // Sagging chain spans between consecutive posts
+                    for (int i = 0; i < xOffsets.Length - 1; i++)
+                        AddChainSpan(bg, chainMat,
+                            cx + xOffsets[i], cx + xOffsets[i + 1],
+                            zSide, postH);
+                }
+            }
+        }
+
+        static void AddChainSpan(GameObject parent, Material mat,
+                                  float x0, float x1, float z, float postH)
+        {
+            float midX = (x0 + x1) * 0.5f;
+            float sagY = postH * 0.55f;   // droops to 55% of post height
+            float topY = postH * 0.82f;   // attaches near post top
+
+            AddChainSeg(parent, mat, new Vector3(x0, topY, z), new Vector3(midX, sagY, z));
+            AddChainSeg(parent, mat, new Vector3(midX, sagY, z), new Vector3(x1, topY, z));
+        }
+
+        static void AddChainSeg(GameObject parent, Material mat, Vector3 from, Vector3 to)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            go.name = "Chain";
+            go.transform.parent = parent.transform;
+            Object.DestroyImmediate(go.GetComponent<CapsuleCollider>());
+            go.GetComponent<Renderer>().sharedMaterial = mat;
+
+            Vector3 dir = to - from;
+            float len = dir.magnitude;
+            go.transform.position = (from + to) * 0.5f;
+            go.transform.localScale = new Vector3(0.06f, len * 0.5f, 0.06f);
+            go.transform.rotation = Quaternion.FromToRotation(Vector3.up, dir.normalized);
         }
 
         // ── Cliff walls ───────────────────────────────────────────────────────
@@ -368,8 +559,11 @@ namespace CastleDefender.Editor
                 for (int i = 0; i < mats.Length; i++)
                 {
                     if (mats[i] == null) continue;
-                    // Only swap if on a non-URP shader (pink or Built-in)
-                    if (mats[i].shader == shader) continue;
+                    // Only swap if on a Built-in / missing shader.
+                    // Skip any shader that is already URP-family or NatureManufacture Shader Graph.
+                    string sName = mats[i].shader != null ? mats[i].shader.name : "";
+                    if (sName.Contains("Universal") || sName.Contains("NatureManufacture") ||
+                        sName.Contains("Shader Graphs")) continue;
 
                     var m = new Material(shader);
                     m.SetColor("_BaseColor",     baseColor);

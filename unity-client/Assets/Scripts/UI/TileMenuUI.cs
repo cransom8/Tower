@@ -244,11 +244,11 @@ namespace CastleDefender.UI
             var canvas = GetComponentInParent<Canvas>();
             if (rt == null || canvas == null)
             {
-                transform.position = TileGrid.TileToWorld(col, row) + Vector3.up * 0.5f;
+                transform.position = TileGrid.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
                 return;
             }
 
-            Vector3 world = TileGrid.TileToWorld(col, row) + Vector3.up * 0.5f;
+            Vector3 world = TileGrid.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
             Camera cam = canvas.renderMode == RenderMode.ScreenSpaceOverlay
                 ? null
                 : (canvas.worldCamera != null ? canvas.worldCamera : Camera.main);
