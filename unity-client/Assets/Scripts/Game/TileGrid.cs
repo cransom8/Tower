@@ -59,8 +59,16 @@ namespace CastleDefender.Game
         [Tooltip("Vertical lift for towers so they sit on top of floor tiles.")]
         public float TowerSpawnYOffset = 0.54f;
 
+        [Header("HP bar prefab (optional WorldSpace Canvas Image, same as LaneRenderer)")]
+        [Tooltip("If assigned, a fill-bar is shown above each living tower tile.")]
+        public GameObject HpBarPrefab;
+
+        [Header("Waypoints")]
+        [Tooltip("Optional prefab placed at each path waypoint (should include a Light). If null a point light is created at runtime.")]
+        public GameObject WaypointMarkerPrefab;
+
         // ── Public static geometry ────────────────────────────────────────────
-        public const float TileW = 1f;
+        public const float TileW = 1f;  // 1 world unit per tile (bridge 27 units / 27 rows = 1; row 27 extends 1 tile onto island)
         public const float TileH = 1f;
 
         // ── Battlefield branch configs ────────────────────────────────────────
@@ -85,10 +93,13 @@ namespace CastleDefender.Game
 
         static readonly BranchConfig[] _branchConfigs =
         {
-            new BranchConfig(new Vector3(0f,0f, 13f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 0 Red
-            new BranchConfig(new Vector3(0f,0f, -3f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 1 Gold
-            new BranchConfig(new Vector3(0f,0f,  3f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 2 Blue
-            new BranchConfig(new Vector3(0f,0f,-13f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 3 Green
+            // Origins computed from actual scene bridges (Player_Bridge_Lane_1–4, scale 27×3×11, Y top=1):
+            //   Row 0 = spawn side (1 unit inside center-island edge), Row 27 = castle (1 tile onto split island)
+            //   Col 5 = bridge centre in Z; colDir sign places col 0 at far-Z edge
+            new BranchConfig(new Vector3(-26f, 1f, 17.5f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 0 Red   upper-left
+            new BranchConfig(new Vector3(-26f, 1f, -7.5f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 1 Gold  lower-left
+            new BranchConfig(new Vector3( 26f, 1f,  7.5f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 2 Blue  upper-right
+            new BranchConfig(new Vector3( 26f, 1f,-17.5f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 3 Green lower-right
         };
 
         /// <summary>Maps tile (col, row) on a given branch to world space.</summary>
@@ -102,6 +113,60 @@ namespace CastleDefender.Game
             return TileToWorld(col, row);
         }
 
+static readonly Vector3[][] _lanePathWaypoints =
+        {
+            // 6 waypoints per lane — units must pass through each in sequence.
+            // Y=1 = bridge top surface.  All points lie on bridges or island surfaces.
+            //   pt0 = centre-island spawn edge
+            //   pt1 = inner-bridge entry (centre-island side)
+            //   pt2 = inner-bridge bottom-quarter checkpoint (75 % toward split island)
+            //   pt3 = Island_Split exit / team-bridge entry (Z merged to 0)
+            //   pt4 = team-bridge bottom-quarter checkpoint (75 % toward castle island)
+            //   pt5 = castle island
+            //   pt1  — 4 tiles inside the centre island, clear of the build zone (grid row 0 at X=±26)
+            //   pt2  — 1 unit past the grid's castle-end (row 28, outside Rows=28 range) on Island_Split,
+            //          so TryWorldToTile returns false → no tile is blocked by this checkpoint
+            new[]{ new Vector3(  0f,1f, 12.5f), new Vector3(-22f,1f, 12.5f), new Vector3(-54f,1f, 12.5f), new Vector3(-82f,1f,0f), new Vector3(-102f,1f,0f), new Vector3(-129f,1f,0f) }, // Lane 0 Red
+            new[]{ new Vector3(  0f,1f,-12.5f), new Vector3(-22f,1f,-12.5f), new Vector3(-54f,1f,-12.5f), new Vector3(-82f,1f,0f), new Vector3(-102f,1f,0f), new Vector3(-129f,1f,0f) }, // Lane 1 Gold
+            new[]{ new Vector3(  0f,1f, 12.5f), new Vector3( 22f,1f, 12.5f), new Vector3( 54f,1f, 12.5f), new Vector3( 82f,1f,0f), new Vector3( 102f,1f,0f), new Vector3( 129f,1f,0f) }, // Lane 2 Blue
+            new[]{ new Vector3(  0f,1f,-12.5f), new Vector3( 22f,1f,-12.5f), new Vector3( 54f,1f,-12.5f), new Vector3( 82f,1f,0f), new Vector3( 102f,1f,0f), new Vector3( 129f,1f,0f) }, // Lane 3 Green
+        };
+
+        /// <summary>
+        /// Maps normProgress (0..1) to world position along the lane's polyline.
+        /// Interpolation is proportional to arc length so visual speed stays consistent.
+        /// Units follow: centre island → inner bridge → Island_Split → team bridge → castle.
+        /// </summary>
+        public static Vector3 NormProgressToWorld(int laneIndex, float normProgress)
+        {
+            var pts = (uint)laneIndex < (uint)_lanePathWaypoints.Length
+                ? _lanePathWaypoints[laneIndex]
+                : _lanePathWaypoints[0];
+
+            float t = Mathf.Clamp01(normProgress);
+
+            // Compute total arc length
+            float totalLen = 0f;
+            for (int i = 0; i < pts.Length - 1; i++)
+                totalLen += Vector3.Distance(pts[i], pts[i + 1]);
+
+            // Walk segments until we reach the proportional distance
+            float target = t * totalLen;
+            float walked = 0f;
+            for (int i = 0; i < pts.Length - 1; i++)
+            {
+                float segLen = Vector3.Distance(pts[i], pts[i + 1]);
+                if (walked + segLen >= target)
+                {
+                    float segT = segLen > 0f ? (target - walked) / segLen : 0f;
+                    return Vector3.Lerp(pts[i], pts[i + 1], segT);
+                }
+                walked += segLen;
+            }
+            return pts[pts.Length - 1];
+        }
+
+
         /// <summary>Legacy single-lane mapping (straight +Z). Prefer the 3-arg overload.</summary>
         public static Vector3 TileToWorld(int col, int row)
             => new Vector3(col * TileW, 0f, row * TileH);
@@ -112,13 +177,12 @@ namespace CastleDefender.Game
         string[]     _towerTypes;
         int          _currentLaneIndex = -1;
         bool         _subscribed;
+        readonly Dictionary<int, Transform> _towerHpFills = new(); // tileIdx → HP bar fill Transform
 
         Vector3              _mouseDownPos;
         bool                 _wasDrag;
-        bool                 _wallDragActive;
-        int                  _dragStartCol = -1, _dragStartRow = -1;
-        readonly List<Vector2Int>  _pendingWallCells = new();
-        readonly List<GameObject>  _wallPreviewPool  = new();
+        readonly HashSet<int>      _waypointTileIndices = new();
+        readonly List<GameObject>  _waypointMarkers     = new();
 
         // ─────────────────────────────────────────────────────────────────────
         void Awake()
@@ -133,7 +197,6 @@ namespace CastleDefender.Game
         void OnEnable()
         {
             TrySubscribeSnapshots();
-            CmdBar.OnWallModeChanged += SetWallMode;
         }
 
         void OnDisable()
@@ -141,13 +204,10 @@ namespace CastleDefender.Game
             if (_subscribed && SnapshotApplier.Instance != null)
                 SnapshotApplier.Instance.OnMLSnapshotApplied -= OnSnapshot;
             _subscribed = false;
-            CmdBar.OnWallModeChanged -= SetWallMode;
-            SetPreviewCount(0);
-            _wallDragActive = false;
-            _pendingWallCells.Clear();
+            foreach (var go in _waypointMarkers) if (go != null) Destroy(go);
+            _waypointMarkers.Clear();
+            _waypointTileIndices.Clear();
         }
-
-        void SetWallMode(bool active) { }
 
         // ─────────────────────────────────────────────────────────────────────
         void OnSnapshot(MLSnapshot snap)
@@ -164,6 +224,7 @@ namespace CastleDefender.Game
             if (laneIndex == _currentLaneIndex) return;
 
             // Destroy all existing tile objects
+            _towerHpFills.Clear();
             for (int i = 0; i < _tileObjects.Length; i++)
             {
                 if (_tileObjects[i] != null) { Destroy(_tileObjects[i]); _tileObjects[i] = null; }
@@ -171,37 +232,77 @@ namespace CastleDefender.Game
                 _towerTypes[i] = null;
             }
 
-            // Place floor/castle tiles at branch world positions
+            // Place floor tiles at branch world positions
             for (int row = 0; row < Rows; row++)
             for (int col = 0; col < Cols; col++)
             {
-                int  idx      = row * Cols + col;
-                bool isCastle = col == 5 && row == Rows - 1;
-                var  prefab   = isCastle ? CastlePrefab : FloorPrefab;
-                if (prefab == null) continue;
+                int idx = row * Cols + col;
+                if (FloorPrefab == null) continue;
 
-                var go = Instantiate(prefab, TileToWorld(laneIndex, col, row), Quaternion.identity, transform);
+                var go = Instantiate(FloorPrefab, TileToWorld(laneIndex, col, row), Quaternion.identity, transform);
                 go.name           = $"Tile_{col}_{row}";
                 _tileObjects[idx] = go;
-                _tileTypes[idx]   = isCastle ? "castle" : "floor";
+                _tileTypes[idx]   = "floor";
             }
 
             _currentLaneIndex = laneIndex;
+            BuildWaypointMarkers(laneIndex);
+        }
+
+        // ── Waypoint markers ──────────────────────────────────────────────────
+        void BuildWaypointMarkers(int laneIndex)
+        {
+            foreach (var go in _waypointMarkers) if (go != null) Destroy(go);
+            _waypointMarkers.Clear();
+            _waypointTileIndices.Clear();
+
+            if ((uint)laneIndex >= (uint)_lanePathWaypoints.Length) return;
+
+            foreach (var worldPos in _lanePathWaypoints[laneIndex])
+            {
+                // Spawn marker
+                GameObject marker;
+                if (WaypointMarkerPrefab != null)
+                {
+                    marker = Instantiate(WaypointMarkerPrefab, worldPos, Quaternion.identity, transform);
+                }
+                else
+                {
+                    marker = new GameObject("WaypointMarker");
+                    marker.transform.SetParent(transform);
+                    marker.transform.position = worldPos;
+                    var light = marker.AddComponent<Light>();
+                    light.type      = LightType.Point;
+                    light.color     = new Color(0.4f, 0.8f, 1f);  // cool blue — contrasts warm lava
+                    light.intensity = 3f;
+                    light.range     = 6f;
+                }
+                marker.name = "WaypointMarker";
+                _waypointMarkers.Add(marker);
+
+                // Register tile index if this waypoint falls on a tile in this grid
+                if (TryWorldToTile(laneIndex, worldPos, out int col, out int row))
+                    _waypointTileIndices.Add(row * Cols + col);
+            }
+        }
+
+        /// <summary>Inverse of TileToWorld — returns the tile (col, row) for a world position, or false if outside the grid.</summary>
+        bool TryWorldToTile(int laneIndex, Vector3 worldPos, out int col, out int row)
+        {
+            col = row = -1;
+            if ((uint)laneIndex >= (uint)_branchConfigs.Length) return false;
+            var bc  = _branchConfigs[laneIndex];
+            var loc = worldPos - bc.origin;
+            col = Mathf.RoundToInt(Vector3.Dot(loc, bc.colDir) / TileW);
+            row = Mathf.RoundToInt(Vector3.Dot(loc, bc.rowDir) / TileH);
+            return col >= 0 && col < Cols && row >= 0 && row < Rows;
         }
 
         // ── Tile sync ─────────────────────────────────────────────────────────
         void UpdateTiles(MLLaneSnap lane)
         {
-            var wallSet  = new HashSet<int>();
             var towerMap = new Dictionary<int, MLTowerCell>();
-
-            if (lane.walls != null)
-                foreach (var w in lane.walls)
-                {
-                    int x = w.X, y = w.Y;
-                    if (x >= 0 && x < Cols && y >= 0 && y < Rows)
-                        wallSet.Add(y * Cols + x);
-                }
+            var deadMap  = new Dictionary<int, MLDeadCell>();
 
             if (lane.towerCells != null)
                 foreach (var t in lane.towerCells)
@@ -211,18 +312,25 @@ namespace CastleDefender.Game
                         towerMap[y * Cols + x] = t;
                 }
 
+            if (lane.deadCells != null)
+                foreach (var d in lane.deadCells)
+                {
+                    if (d.x >= 0 && d.x < Cols && d.y >= 0 && d.y < Rows)
+                        deadMap[d.y * Cols + d.x] = d;
+                }
+
             for (int row = 0; row < Rows; row++)
             for (int col = 0; col < Cols; col++)
             {
-                int    idx    = row * Cols + col;
-                if (_tileTypes[idx] == "castle") continue;
+                int         idx     = row * Cols + col;
+                bool        isTower = towerMap.TryGetValue(idx, out var tc);
+                MLDeadCell  dc      = null;
+                bool        isDead  = !isTower && deadMap.TryGetValue(idx, out dc);
+                string      wanted  = isTower ? "tower" : isDead ? "dead_tower" : "floor";
+                string      wantedType = isTower ? tc.type : (dc != null ? dc.type : null);
 
-                bool   isWall  = wallSet.Contains(idx);
-                bool   isTower = towerMap.TryGetValue(idx, out var tc);
-                string wanted  = isWall ? "wall" : isTower ? "tower" : "floor";
-
-                bool towerChanged = isTower && _towerTypes[idx] != tc.type;
-                if (_tileTypes[idx] == wanted && !towerChanged) continue;
+                bool typeChanged = _towerTypes[idx] != wantedType;
+                if (_tileTypes[idx] == wanted && !typeChanged) continue;
 
                 if (_tileObjects[idx] != null && _tileTypes[idx] != "floor")
                 {
@@ -230,32 +338,47 @@ namespace CastleDefender.Game
                     _tileObjects[idx] = null;
                 }
 
-                GameObject prefab = wanted switch
-                {
-                    "wall"  => WallPrefab,
-                    "tower" => GetTowerPrefab(tc?.type),
-                    _       => FloorPrefab
-                };
+                GameObject prefab = (wanted == "tower" || wanted == "dead_tower")
+                    ? GetTowerPrefab(wantedType)
+                    : FloorPrefab;
 
                 if (prefab != null)
                 {
                     Vector3 pos = TileToWorld(_currentLaneIndex, col, row);
-                    if (wanted == "tower") pos.y += TowerSpawnYOffset;
+                    if (wanted != "floor") pos.y += TowerSpawnYOffset;
 
                     _tileObjects[idx]      = Instantiate(prefab, pos, Quaternion.identity, transform);
                     _tileObjects[idx].name = $"Tile_{col}_{row}";
+
+                    if (wanted == "tower")
+                    {
+                        UpgradeToURP(_tileObjects[idx]);
+                        AudioManager.I?.Play(AudioManager.SFX.BuildTower, 0.8f);
+                        ApplyDebuffTint(_tileObjects[idx], tc.debuffed);
+
+                        // Spawn HP bar for this tower slot
+                        _towerHpFills.Remove(idx);
+                        if (HpBarPrefab != null)
+                        {
+                            var bar  = Instantiate(HpBarPrefab, _tileObjects[idx].transform);
+                            bar.transform.localPosition = Vector3.up * (TowerSpawnYOffset + 0.8f);
+                            var fill = bar.transform.Find("Fill");
+                            if (fill != null) _towerHpFills[idx] = fill;
+                        }
+                    }
+                    else if (wanted == "dead_tower")
+                    {
+                        // Dead defenders have no HP bar — remove any existing one
+                        _towerHpFills.Remove(idx);
+                        ApplyDeadTint(_tileObjects[idx]);
+                    }
                 }
 
                 _tileTypes[idx]  = wanted;
-                _towerTypes[idx] = isTower ? tc.type : null;
-
-                if (wanted == "wall")  AudioManager.I?.Play(AudioManager.SFX.PlaceWall,  0.6f);
-                else if (wanted == "tower") AudioManager.I?.Play(AudioManager.SFX.BuildTower, 0.8f);
-
-                if (isTower && _tileObjects[idx] != null)
-                    ApplyDebuffTint(_tileObjects[idx], tc.debuffed);
+                _towerTypes[idx] = wantedType;
             }
 
+            // Update debuff tint and HP bars on living defenders each snapshot
             if (lane.towerCells != null)
             {
                 foreach (var t in lane.towerCells)
@@ -264,7 +387,11 @@ namespace CastleDefender.Game
                     if (tx < 0 || tx >= Cols || ty < 0 || ty >= Rows) continue;
                     int idx = ty * Cols + tx;
                     if (_tileObjects[idx] != null && _tileTypes[idx] == "tower")
+                    {
                         ApplyDebuffTint(_tileObjects[idx], t.debuffed);
+                        if (_towerHpFills.TryGetValue(idx, out var fill) && fill != null && t.maxHp > 0f)
+                            fill.localScale = new Vector3(Mathf.Clamp01(t.hp / t.maxHp), 1f, 1f);
+                    }
                 }
             }
         }
@@ -279,6 +406,18 @@ namespace CastleDefender.Game
             }
         }
 
+        // Dead defenders render at reduced opacity/grey — they restore next build phase.
+        static void ApplyDeadTint(GameObject go)
+        {
+            var grey = new Color(0.45f, 0.45f, 0.45f, 0.65f);
+            foreach (var r in go.GetComponentsInChildren<Renderer>())
+            {
+                var bridge = r.GetComponent<ToonShaderBridge>();
+                if (bridge != null) bridge.SetDebuffed(true);
+                else r.material.color = grey;
+            }
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         void Update()
         {
@@ -289,72 +428,7 @@ namespace CastleDefender.Game
             if (sa != null && sa.MyLaneIndex >= 0)
                 IsInteractive = (sa.MyLaneIndex == LaneIndex);
 
-            UpdateWallPreview();
             HandleInput();
-        }
-
-        void UpdateWallPreview()
-        {
-            if (!IsInteractive) { SetPreviewCount(0); return; }
-
-            bool wallMode = CmdBar.WallModeActive;
-            if (!wallMode || Cam == null || WallPrefab == null)
-            {
-                SetPreviewCount(0);
-                return;
-            }
-
-            if (_wallDragActive)
-            {
-                for (int i = 0; i < _pendingWallCells.Count; i++)
-                {
-                    var p = GetPreviewAt(i);
-                    p.SetActive(true);
-                    p.transform.position = TileToWorld(_currentLaneIndex,
-                        _pendingWallCells[i].x, _pendingWallCells[i].y);
-                }
-                SetPreviewCount(_pendingWallCells.Count);
-                return;
-            }
-
-            if (!TryPickTile(Input.mousePosition, out int col, out int row))
-            {
-                SetPreviewCount(0);
-                return;
-            }
-
-            int idx = row * Cols + col;
-            if (_tileTypes[idx] != "floor")
-            {
-                SetPreviewCount(0);
-                return;
-            }
-
-            var hover = GetPreviewAt(0);
-            hover.SetActive(true);
-            hover.transform.position = TileToWorld(_currentLaneIndex, col, row);
-            SetPreviewCount(1);
-        }
-
-        GameObject GetPreviewAt(int index)
-        {
-            while (_wallPreviewPool.Count <= index)
-            {
-                var go = Instantiate(WallPrefab, Vector3.zero, Quaternion.identity, transform);
-                go.name = $"WallPreview_{_wallPreviewPool.Count}";
-                foreach (var c in go.GetComponentsInChildren<Collider>(true)) c.enabled = false;
-                foreach (var r in go.GetComponentsInChildren<Renderer>(true))
-                    r.material.color = new Color(0.7f, 0.9f, 1f, 0.55f);
-                go.SetActive(false);
-                _wallPreviewPool.Add(go);
-            }
-            return _wallPreviewPool[index];
-        }
-
-        void SetPreviewCount(int activeCount)
-        {
-            for (int i = activeCount; i < _wallPreviewPool.Count; i++)
-                _wallPreviewPool[i].SetActive(false);
         }
 
         void TrySubscribeSnapshots()
@@ -373,93 +447,60 @@ namespace CastleDefender.Game
         {
             if (!IsInteractive) return;
 
-            bool wallMode = CmdBar.WallModeActive;
-
-            if (Input.GetMouseButtonDown(1))
-            {
-                if (TryPickTile(Input.mousePosition, out int rc, out int rr))
-                    HandleTileClick(rc, rr);
-                return;
-            }
-
             if (Input.GetMouseButtonDown(0))
             {
                 _mouseDownPos = Input.mousePosition;
                 _wasDrag      = false;
-
-                if (!TryPickTile(Input.mousePosition, out int c, out int r)) return;
-
-                int  idx         = r * Cols + c;
-                bool isStructure = _tileTypes[idx] == "wall" || _tileTypes[idx] == "tower";
-
-                if (!wallMode)
-                {
-                    if (isStructure) { HandleTileClick(c, r); _wasDrag = true; }
-                    return;
-                }
-
-                if (isStructure) { HandleTileClick(c, r); _wasDrag = true; return; }
-
-                _wallDragActive = true;
-                _dragStartCol   = c;
-                _dragStartRow   = r;
-                _pendingWallCells.Clear();
-                _pendingWallCells.Add(new Vector2Int(c, r));
             }
 
             if (Input.GetMouseButton(0))
             {
                 if (Vector3.Distance(Input.mousePosition, _mouseDownPos) > 12f) _wasDrag = true;
-
-                if (wallMode && _wallDragActive && TryPickTile(Input.mousePosition, out int col, out int row))
-                {
-                    _pendingWallCells.Clear();
-                    foreach (var cell in BuildLine(_dragStartCol, _dragStartRow, col, row))
-                    {
-                        if (cell.x < 0 || cell.x >= Cols || cell.y < 0 || cell.y >= Rows) continue;
-                        int cidx = cell.y * Cols + cell.x;
-                        if (_tileTypes[cidx] == "floor") _pendingWallCells.Add(cell);
-                    }
-                }
             }
 
             if (Input.GetMouseButtonUp(0))
             {
-                if (wallMode && _wallDragActive)
-                {
-                    foreach (var cell in _pendingWallCells) ActionSender.PlaceWall(cell.x, cell.y);
-                    _wallDragActive = false;
-                    _pendingWallCells.Clear();
-                    SetPreviewCount(0);
-                    return;
-                }
-
                 if (!_wasDrag && TryPickTile(Input.mousePosition, out int cc, out int rr))
                     HandleTileClick(cc, rr);
-            }
-        }
-
-        static IEnumerable<Vector2Int> BuildLine(int x0, int y0, int x1, int y1)
-        {
-            int dx = Mathf.Abs(x1 - x0), dy = Mathf.Abs(y1 - y0);
-            int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-            int err = dx - dy;
-            while (true)
-            {
-                yield return new Vector2Int(x0, y0);
-                if (x0 == x1 && y0 == y1) break;
-                int e2 = 2 * err;
-                if (e2 > -dy) { err -= dy; x0 += sx; }
-                if (e2 < dx)  { err += dx; y0 += sy; }
             }
         }
 
         void HandleTileClick(int col, int row)
         {
             if (!IsInteractive) return;
+
+            // Gate: placement only valid during build phase
+            var snap = SnapshotApplier.Instance?.LatestML;
+            if (snap == null || snap.roundState != "build") return;
+
             int idx = row * Cols + col;
-            if (_tileTypes[idx] == "wall" || _tileTypes[idx] == "tower")
-                TileMenu?.Show(col, row, _tileTypes[idx], _towerTypes[idx]);
+
+            // Dead defenders: not buildable until next build phase
+            if (_tileTypes[idx] == "dead_tower") return;
+
+            // Path endpoints (spawn / castle): never buildable
+            if (snap.lanes != null && LaneIndex < snap.lanes.Length)
+            {
+                var lane = snap.lanes[LaneIndex];
+                if (lane.path != null && lane.path.Length > 0)
+                {
+                    var spawn  = lane.path[0];
+                    var castle = lane.path[lane.path.Length - 1];
+                    if ((col == spawn.x  && row == spawn.y) ||
+                        (col == castle.x && row == castle.y)) return;
+                }
+            }
+
+            // Tower tile: open upgrade/sell menu
+            if (_tileTypes[idx] == "tower")
+            {
+                TileMenu?.Show(col, row, "tower", _towerTypes[idx]);
+                return;
+            }
+
+            // Empty floor tile: open unit placement picker
+            if (_tileTypes[idx] == "floor")
+                TileMenu?.Show(col, row, "empty", null);
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -470,7 +511,7 @@ namespace CastleDefender.Game
             if (Cam == null) return false;
 
             Ray ray = Cam.ScreenPointToRay(screenPos);
-            var plane = new Plane(Vector3.up, Vector3.zero);
+            var plane = new Plane(Vector3.up, new Vector3(0f, 1f, 0f));
             if (!plane.Raycast(ray, out float enter)) return false;
 
             Vector3 hit = ray.GetPoint(enter);
@@ -496,6 +537,36 @@ namespace CastleDefender.Game
         {
             if (Registry != null) { var p = Registry.GetPrefab(type); if (p != null) return p; }
             return WallPrefab;
+        }
+
+        static void UpgradeToURP(GameObject go)
+        {
+            var urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit == null) return;
+            foreach (var r in go.GetComponentsInChildren<Renderer>())
+            {
+                if (r.GetComponent<ToonShaderBridge>() != null) continue;
+                var shared    = r.sharedMaterials;
+                var instanced = r.materials;
+                bool changed  = false;
+                for (int mi = 0; mi < instanced.Length; mi++)
+                {
+                    var mat = instanced[mi];
+                    if (mat == null) continue;
+                    if (mat.shader != null && mat.shader.name.StartsWith("Universal Render Pipeline")) continue;
+                    var upgraded = new Material(urpLit);
+                    var orig = mi < shared.Length ? shared[mi] : null;
+                    if (orig != null)
+                    {
+                        if (orig.HasProperty("_MainTex")) { var t = orig.GetTexture("_MainTex"); if (t != null) upgraded.SetTexture("_BaseMap", t); }
+                        var c = orig.HasProperty("_Color") ? orig.GetColor("_Color") : Color.white;
+                        upgraded.SetColor("_BaseColor", c);
+                    }
+                    instanced[mi] = upgraded;
+                    changed = true;
+                }
+                if (changed) r.materials = instanced;
+            }
         }
     }
 }

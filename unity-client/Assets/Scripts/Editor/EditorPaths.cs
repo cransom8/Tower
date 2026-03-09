@@ -18,7 +18,6 @@ namespace CastleDefender.Editor
         public const string REGISTRY      = "Assets/UnitPrefabRegistry.asset";
 
         public const string SCENE_ML       = "Assets/Scenes/Game_ML.unity";
-        public const string SCENE_SURVIVAL = "Assets/Scenes/Game_Survival.unity";
         public const string SCENE_LOGIN    = "Assets/Scenes/Login.unity";
 
         public const string TILE_FLOOR  = "Assets/Prefabs/Tiles/FloorTile.prefab";
@@ -39,6 +38,7 @@ namespace CastleDefender.Editor
 
         // Materials
         public const string LVE_GROUND_MAT  = LVE_ROOT + "/Ground and River Textures/Ground Material/Ground_01.mat";
+        public const string LVE_LAVA_LAKE_MAT = LVE_ROOT + "/Lava Materials/Lava_2_flow Lake.mat";
         public const string LVE_SKYBOX      = LVE_ROOT + "/Demo Scenes/Vulcano Sky.mat";
         public const string LVE_SKYBOX_ALT  = LVE_ROOT + "/Demo Scenes/Skybox.mat";
         public const string LVE_POSTPROCESS = LVE_ROOT + "/Demo Scenes/PostProcessVolumeProfile Lava.asset";

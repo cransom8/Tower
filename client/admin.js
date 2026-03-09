@@ -2742,426 +2742,246 @@ function saveAbilityParam(towerId, abilityKey) {
 window.saveAbilityParam = saveAbilityParam;
 
 // ═══════════════════════════════════════════════════════════════════════
-// SURVIVAL TAB
+// ML WAVE CONFIG TAB (replaces old Survival tab)
 // ═══════════════════════════════════════════════════════════════════════
 
-// ── State ──────────────────────────────────────────────────────────────
-const survivalState = {
-  sets: [],
-  builderSetId: null,
-  builderWaves: [],
-  selectedWaveNum: null,
+const mlWaveState = {
+  configs: [],
+  editingId: null,
+  editingWaves: [],   // [{wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult}]
+  unitTypes: [],      // populated from /api/units on first load
 };
 
 async function loadSurvival() {
-  setContent('<p class="load">Loading wave sets…</p>');
+  setContent('<p class="load">Loading wave configs…</p>');
   try {
-    const data = await api('GET', '/admin/survival/wave-sets');
-    survivalState.sets = data.waveSets || [];
-    renderWaveSetsPage();
+    const [configsData, unitsData] = await Promise.all([
+      api('GET', '/admin/ml-waves/configs'),
+      api('GET', '/api/units').catch(() => ({ units: [] })),
+    ]);
+    mlWaveState.configs = configsData.configs || [];
+    mlWaveState.unitTypes = (unitsData.units || [])
+      .filter(u => u.behavior_mode === 'moving' || u.behavior_mode === 'both')
+      .map(u => u.key);
+    mlWaveState.editingId = null;
+    renderMLWaveConfigList();
   } catch (err) {
     setContent(`<p class="err">Failed to load: ${err.message}</p>`);
   }
 }
 
-function renderWaveSetsPage() {
+
+function renderMLWaveConfigList() {
   const canWrite = can('config.write');
-  const sets = survivalState.sets;
-  const cards = sets.map(s => `
+  const configs = mlWaveState.configs;
+  const cards = configs.map(c => `
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div>
-          <strong>${esc(s.name)}</strong>
-          ${s.is_active ? '<span style="color:#4ade80;font-size:12px;margin-left:6px">[ACTIVE]</span>' : ''}
-          ${!s.enabled   ? '<span style="color:#f87171;font-size:12px;margin-left:6px">[DISABLED]</span>' : ''}
-          <br><small style="color:#94a3b8">${esc(s.description || '')} &nbsp;·&nbsp; ${s.wave_count || 0} waves &nbsp;·&nbsp; Lives: ${s.starting_lives} &nbsp;·&nbsp; Gold: ${s.starting_gold}</small>
+          <strong>${esc(c.name)}</strong>
+          ${c.is_default ? '<span style="color:#4ade80;font-size:12px;margin-left:6px">[DEFAULT]</span>' : ''}
+          <br><small style="color:#94a3b8">${esc(c.description || '')} &nbsp;·&nbsp; ${c.wave_count || 0} waves</small>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${canWrite ? `<button onclick="openWaveBuilder(${s.id})">Edit</button>` : ''}
-          ${canWrite && !s.is_active ? `<button onclick="activateWaveSet(${s.id})">Activate</button>` : ''}
-          ${canWrite ? `<button onclick="duplicateWaveSet(${s.id})">Duplicate</button>` : ''}
-          ${canWrite ? `<button style="background:#ef4444" onclick="deleteWaveSet(${s.id})">Delete</button>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          ${canWrite && !c.is_default ? `<button style="font-size:11px;padding:3px 8px" onclick="mlWaveSetDefault(${c.id})">Set Default</button>` : ''}
+          <button style="font-size:11px;padding:3px 8px" onclick="mlWaveOpenEditor(${c.id})">Edit Waves</button>
+          ${canWrite ? `<button style="font-size:11px;padding:3px 8px;background:#ef4444" onclick="mlWaveDeleteConfig(${c.id})">Delete</button>` : ''}
         </div>
       </div>
-    </div>`).join('');
+    </div>
+  `).join('');
+
+  const createForm = canWrite ? `
+    <div class="card" style="margin-top:16px">
+      <strong>New Wave Config</strong>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input id="new-wave-cfg-name" class="inp" placeholder="Config name" style="flex:1;min-width:150px">
+        <input id="new-wave-cfg-desc" class="inp" placeholder="Description (optional)" style="flex:2;min-width:150px">
+        <button onclick="mlWaveCreateConfig()">Create</button>
+      </div>
+    </div>
+  ` : '';
 
   setContent(`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h2 style="margin:0">Survival Wave Sets</h2>
-      ${canWrite ? `<button onclick="openCreateWaveSet()">+ New Wave Set</button>` : ''}
-    </div>
-    ${sets.length ? cards : '<p style="color:#94a3b8">No wave sets yet. Create one to get started.</p>'}
+    <h2>ML Wave Configs</h2>
+    <p style="color:#94a3b8;font-size:13px">Manage wave configs for Forge Wars wave defense mode. The default config is loaded at match start.</p>
+    ${configs.length ? cards : '<p style="color:#94a3b8">No configs yet.</p>'}
+    ${createForm}
   `);
 }
 
-async function openCreateWaveSet() {
-  openModal('New Wave Set', `
-    <label>Name<br><input id="sv-ws-name" class="inp" style="width:100%" placeholder="Wave Set Name"></label>
-    <label style="margin-top:8px;display:block">Description<br><input id="sv-ws-desc" class="inp" style="width:100%" placeholder="Optional description"></label>
-    <div style="display:flex;gap:12px;margin-top:8px">
-      <label>Starting Gold<br><input id="sv-ws-gold" type="number" class="inp" value="150" min="0" style="width:80px"></label>
-      <label>Starting Lives<br><input id="sv-ws-lives" type="number" class="inp" value="20" min="1" style="width:80px"></label>
-    </div>
-    <label style="display:flex;align-items:center;gap:6px;margin-top:8px">
-      <input type="checkbox" id="sv-ws-autoscale" checked> Auto-scale waves past last configured
-    </label>
-  `, `
-    <button onclick="submitCreateWaveSet()">Create</button>
-    <button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
-  `);
-}
-window.openCreateWaveSet = openCreateWaveSet;
-
-async function submitCreateWaveSet() {
-  const name = document.getElementById('sv-ws-name')?.value?.trim();
-  if (!name) return toast('Name is required', 'err');
+async function mlWaveCreateConfig() {
+  const name = document.getElementById('new-wave-cfg-name')?.value?.trim();
+  if (!name) return toast('Name required', 'err');
+  const description = document.getElementById('new-wave-cfg-desc')?.value?.trim() || '';
   try {
-    await api('POST', '/admin/survival/wave-sets', {
-      name,
-      description: document.getElementById('sv-ws-desc')?.value?.trim() || '',
-      starting_gold: Number(document.getElementById('sv-ws-gold')?.value) || 150,
-      starting_lives: Number(document.getElementById('sv-ws-lives')?.value) || 20,
-      auto_scale: document.getElementById('sv-ws-autoscale')?.checked ?? true,
-    });
-    document.getElementById('modal-overlay').classList.add('hidden');
-    toast('Wave set created');
-    loadSurvival();
+    await api('POST', '/admin/ml-waves/configs', { name, description });
+    toast('Config created');
+    await loadSurvival();
   } catch (err) {
     toast(`Error: ${err.message}`, 'err');
   }
 }
-window.submitCreateWaveSet = submitCreateWaveSet;
+window.mlWaveCreateConfig = mlWaveCreateConfig;
 
-async function activateWaveSet(id) {
+async function mlWaveSetDefault(id) {
   try {
-    await api('POST', `/admin/survival/wave-sets/${id}/activate`);
-    toast('Wave set activated');
-    loadSurvival();
+    await api('POST', `/admin/ml-waves/configs/${id}/set-default`);
+    toast('Default updated');
+    await loadSurvival();
   } catch (err) {
     toast(`Error: ${err.message}`, 'err');
   }
 }
-window.activateWaveSet = activateWaveSet;
+window.mlWaveSetDefault = mlWaveSetDefault;
 
-async function duplicateWaveSet(id) {
+async function mlWaveDeleteConfig(id) {
+  if (!confirm('Delete this wave config?')) return;
   try {
-    await api('POST', `/admin/survival/wave-sets/${id}/duplicate`);
-    toast('Wave set duplicated');
-    loadSurvival();
+    await api('DELETE', `/admin/ml-waves/configs/${id}`);
+    toast('Config deleted');
+    await loadSurvival();
   } catch (err) {
     toast(`Error: ${err.message}`, 'err');
   }
 }
-window.duplicateWaveSet = duplicateWaveSet;
+window.mlWaveDeleteConfig = mlWaveDeleteConfig;
 
-async function deleteWaveSet(id) {
-  if (!confirm('Delete this wave set and all its waves?')) return;
+async function mlWaveOpenEditor(id) {
   try {
-    await api('DELETE', `/admin/survival/wave-sets/${id}`);
-    toast('Wave set deleted');
-    loadSurvival();
+    const data = await api('GET', `/admin/ml-waves/configs/${id}`);
+    mlWaveState.editingId = id;
+    mlWaveState.editingWaves = (data.waves || []).map(w => ({ ...w }));
+    renderMLWaveEditor(data.config);
   } catch (err) {
     toast(`Error: ${err.message}`, 'err');
   }
 }
-window.deleteWaveSet = deleteWaveSet;
+window.mlWaveOpenEditor = mlWaveOpenEditor;
 
-// ── Wave Builder (full-screen modal-like section) ──────────────────────
-async function openWaveBuilder(setId) {
-  try {
-    const data = await api('GET', `/admin/survival/wave-sets/${setId}`);
-    survivalState.builderSetId = setId;
-    survivalState.builderWaves = data.waveSet.waves || [];
-    survivalState.selectedWaveNum = survivalState.builderWaves[0]?.wave_number ?? null;
-    survivalState.builderSetMeta = data.waveSet;
-    renderWaveBuilder();
-  } catch (err) {
-    toast(`Error loading wave set: ${err.message}`, 'err');
-  }
-}
-window.openWaveBuilder = openWaveBuilder;
-
-function renderWaveBuilder() {
+function renderMLWaveEditor(config) {
   const canWrite = can('config.write');
-  const meta = survivalState.builderSetMeta || {};
-  const waves = survivalState.builderWaves;
-  const selNum = survivalState.selectedWaveNum;
-  const selWave = waves.find(w => w.wave_number === selNum);
+  const waves = mlWaveState.editingWaves;
+  const unitTypes = mlWaveState.unitTypes;
+  const unitOpts = unitTypes.map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join('');
 
-  const waveList = waves.map(w => `
-    <div onclick="selectWave(${w.wave_number})" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:4px;background:${w.wave_number === selNum ? '#334155' : '#1e293b'};display:flex;justify-content:space-between;align-items:center">
-      <span>
-        <strong>W${w.wave_number}</strong>
-        ${w.is_boss  ? ' <span style="color:#f97316">BOSS</span>'  : ''}
-        ${w.is_rush  ? ' <span style="color:#facc15">RUSH</span>'  : ''}
-        ${w.is_elite ? ' <span style="color:#c084fc">ELITE</span>' : ''}
-        <span style="color:#64748b;font-size:11px"> +${w.gold_bonus}g</span>
-      </span>
-      ${canWrite ? `<button style="font-size:10px;padding:2px 6px;background:#ef4444" onclick="event.stopPropagation();deleteWave(${survivalState.builderSetId},${w.wave_number})">×</button>` : ''}
-    </div>`).join('');
-
-  const spawnGroupsHtml = selWave ? renderSpawnGroups(selWave, canWrite) : '<p style="color:#64748b">Select a wave</p>';
-  const waveDetailHtml  = selWave ? renderWaveDetail(selWave, canWrite) : '';
-
-  setContent(`
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <button onclick="loadSurvival()">← Wave Sets</button>
-      <h2 style="margin:0">${esc(meta.name || 'Wave Builder')}</h2>
-      <small style="color:#94a3b8">Lives: ${meta.starting_lives} &nbsp;·&nbsp; Gold: ${meta.starting_gold} &nbsp;·&nbsp; Auto-scale: ${meta.auto_scale ? 'yes' : 'no'}</small>
-    </div>
-    <div style="display:flex;gap:12px">
-      <!-- Left: wave list -->
-      <div style="width:200px;flex-shrink:0">
-        ${waveList}
-        ${canWrite ? `<button style="width:100%;margin-top:6px" onclick="addWave(${survivalState.builderSetId})">+ Add Wave</button>` : ''}
-        ${canWrite ? `<button style="width:100%;margin-top:6px" onclick="openBulkScale(${survivalState.builderSetId})">Bulk Scale</button>` : ''}
-      </div>
-      <!-- Right: wave detail -->
-      <div style="flex:1;min-width:0">
-        ${waveDetailHtml}
-        ${spawnGroupsHtml}
-      </div>
-    </div>
-  `);
-}
-
-function renderWaveDetail(wave, canWrite) {
-  return `
-    <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
-        <label>Gold Bonus<br>
-          <input id="wd-gold" type="number" class="inp" value="${wave.gold_bonus}" min="0" style="width:80px">
-        </label>
-        <label>Duration (ms, blank=until cleared)<br>
-          <input id="wd-duration" type="number" class="inp" value="${wave.duration_ms || ''}" min="0" style="width:100px" placeholder="–">
-        </label>
-        <label>Notes<br>
-          <input id="wd-notes" class="inp" value="${esc(wave.notes || '')}" style="width:160px">
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
-          <input type="checkbox" id="wd-boss"  ${wave.is_boss  ? 'checked' : ''}> Boss
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
-          <input type="checkbox" id="wd-rush"  ${wave.is_rush  ? 'checked' : ''}> Rush
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
-          <input type="checkbox" id="wd-elite" ${wave.is_elite ? 'checked' : ''}> Elite
-        </label>
-        ${canWrite ? `<button onclick="saveWaveDetail(${survivalState.builderSetId},${wave.wave_number})">Save Wave</button>` : ''}
-        ${canWrite ? `<button onclick="copyGroupsFromPrev(${survivalState.builderSetId},${wave.wave_number})">Copy from prev</button>` : ''}
-        <button onclick="previewWave(${survivalState.builderSetId})">Preview</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderSpawnGroups(wave, canWrite) {
-  const groups = wave.spawn_groups || [];
-  const UNIT_TYPES = ['runner','footman','ironclad','warlock','golem'];
-  const rows = groups.map(g => `
+  const rows = waves.map((w, i) => `
     <tr>
+      <td style="text-align:center;color:#94a3b8;font-size:12px">${w.wave_number}</td>
       <td>
-        ${canWrite
-          ? `<select onchange="updateGroupField(${g.id},'unit_type',this.value)">${UNIT_TYPES.map(t => `<option ${t===g.unit_type?'selected':''}>${t}</option>`).join('')}</select>`
-          : g.unit_type}
+        <select class="inp" style="width:100%;font-size:12px" onchange="mlWaveRowChange(${i},'unit_type',this.value)" ${canWrite ? '' : 'disabled'}>
+          ${unitTypes.map(u => `<option value="${esc(u)}" ${u === w.unit_type ? 'selected' : ''}>${esc(u)}</option>`).join('')}
+        </select>
       </td>
-      <td><input type="number" value="${g.count}" min="1" style="width:60px" ${canWrite ? `onchange="updateGroupField(${g.id},'count',this.value)"` : 'disabled'}></td>
-      <td><input type="number" value="${g.spawn_interval_ms}" min="100" style="width:80px" ${canWrite ? `onchange="updateGroupField(${g.id},'spawn_interval_ms',this.value)"` : 'disabled'}></td>
-      <td><input type="number" value="${g.start_delay_ms}" min="0" style="width:70px" ${canWrite ? `onchange="updateGroupField(${g.id},'start_delay_ms',this.value)"` : 'disabled'}></td>
-      <td><input type="number" value="${g.randomize_pct}" min="0" max="100" style="width:60px" ${canWrite ? `onchange="updateGroupField(${g.id},'randomize_pct',this.value)"` : 'disabled'}></td>
-      <td>${canWrite ? `<button style="padding:2px 8px;background:#ef4444" onclick="deleteSpawnGroup(${g.id})">×</button>` : ''}</td>
-    </tr>`).join('');
+      <td><input type="number" class="inp" style="width:60px;font-size:12px" value="${w.spawn_qty}" min="1" max="200"
+        onchange="mlWaveRowChange(${i},'spawn_qty',this.value)" ${canWrite ? '' : 'disabled'}></td>
+      <td><input type="number" class="inp" style="width:60px;font-size:12px" value="${w.hp_mult}" min="0.1" max="100" step="0.05"
+        onchange="mlWaveRowChange(${i},'hp_mult',this.value)" ${canWrite ? '' : 'disabled'}></td>
+      <td><input type="number" class="inp" style="width:60px;font-size:12px" value="${w.dmg_mult}" min="0.1" max="100" step="0.05"
+        onchange="mlWaveRowChange(${i},'dmg_mult',this.value)" ${canWrite ? '' : 'disabled'}></td>
+      <td><input type="number" class="inp" style="width:60px;font-size:12px" value="${w.speed_mult}" min="0.1" max="10" step="0.05"
+        onchange="mlWaveRowChange(${i},'speed_mult',this.value)" ${canWrite ? '' : 'disabled'}></td>
+      ${canWrite ? `<td><button style="font-size:11px;padding:2px 6px;background:#ef4444" onclick="mlWaveRemoveRow(${i})">×</button></td>` : '<td></td>'}
+    </tr>
+  `).join('');
 
-  return `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong>Spawn Groups — Wave ${wave.wave_number}</strong>
-        ${canWrite ? `<button onclick="addSpawnGroup(${wave.id})">+ Add Group</button>` : ''}
-      </div>
-      ${groups.length ? `
-        <table style="width:100%;font-size:13px">
-          <thead><tr><th>Unit</th><th>Count</th><th>Interval(ms)</th><th>Delay(ms)</th><th>Jitter%</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      ` : '<p style="color:#64748b">No spawn groups yet.</p>'}
+  const isDefault = config && config.is_default;
+  setContent(`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <button onclick="mlWaveBackToList()">← Back</button>
+      <h2 style="margin:0">${esc(config ? config.name : 'Wave Editor')}</h2>
+      ${isDefault ? '<span style="color:#4ade80;font-size:12px">[DEFAULT]</span>' : ''}
     </div>
-  `;
-}
-
-function selectWave(waveNum) {
-  survivalState.selectedWaveNum = waveNum;
-  renderWaveBuilder();
-}
-window.selectWave = selectWave;
-
-async function addWave(setId) {
-  const waves = survivalState.builderWaves;
-  const nextNum = waves.length ? (Math.max(...waves.map(w => w.wave_number)) + 1) : 1;
-  try {
-    await api('POST', `/admin/survival/wave-sets/${setId}/waves`, { wave_number: nextNum });
-    toast(`Wave ${nextNum} added`);
-    await openWaveBuilder(setId);
-    selectWave(nextNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.addWave = addWave;
-
-async function deleteWave(setId, waveNum) {
-  if (!confirm(`Delete wave ${waveNum}?`)) return;
-  try {
-    await api('DELETE', `/admin/survival/wave-sets/${setId}/waves/${waveNum}`);
-    toast(`Wave ${waveNum} deleted`);
-    if (survivalState.selectedWaveNum === waveNum) survivalState.selectedWaveNum = null;
-    await openWaveBuilder(setId);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.deleteWave = deleteWave;
-
-async function saveWaveDetail(setId, waveNum) {
-  try {
-    await api('PATCH', `/admin/survival/wave-sets/${setId}/waves/${waveNum}`, {
-      gold_bonus:  Number(document.getElementById('wd-gold')?.value) || 0,
-      duration_ms: document.getElementById('wd-duration')?.value ? Number(document.getElementById('wd-duration').value) : null,
-      notes:       document.getElementById('wd-notes')?.value?.trim() || '',
-      is_boss:     document.getElementById('wd-boss')?.checked || false,
-      is_rush:     document.getElementById('wd-rush')?.checked || false,
-      is_elite:    document.getElementById('wd-elite')?.checked || false,
-    });
-    toast('Wave saved');
-    await openWaveBuilder(setId);
-    selectWave(waveNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.saveWaveDetail = saveWaveDetail;
-
-async function addSpawnGroup(waveId) {
-  try {
-    await api('POST', `/admin/survival/waves/${waveId}/spawn-groups`, {
-      unit_type: 'runner', count: 5, spawn_interval_ms: 1000, start_delay_ms: 0, randomize_pct: 0,
-    });
-    toast('Spawn group added');
-    await openWaveBuilder(survivalState.builderSetId);
-    selectWave(survivalState.selectedWaveNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.addSpawnGroup = addSpawnGroup;
-
-// Debounced patch for inline spawn group edits
-const _sgPatchQueue = {};
-function updateGroupField(groupId, field, value) {
-  if (!_sgPatchQueue[groupId]) _sgPatchQueue[groupId] = {};
-  _sgPatchQueue[groupId][field] = field === 'unit_type' ? value : Number(value);
-  clearTimeout(_sgPatchQueue[groupId]._timer);
-  _sgPatchQueue[groupId]._timer = setTimeout(async () => {
-    const updates = { ..._sgPatchQueue[groupId] };
-    delete updates._timer;
-    delete _sgPatchQueue[groupId];
-    try {
-      await api('PATCH', `/admin/survival/spawn-groups/${groupId}`, updates);
-    } catch (err) {
-      toast(`Save failed: ${err.message}`, 'err');
-    }
-  }, 600);
-}
-window.updateGroupField = updateGroupField;
-
-async function deleteSpawnGroup(groupId) {
-  try {
-    await api('DELETE', `/admin/survival/spawn-groups/${groupId}`);
-    toast('Spawn group deleted');
-    await openWaveBuilder(survivalState.builderSetId);
-    selectWave(survivalState.selectedWaveNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.deleteSpawnGroup = deleteSpawnGroup;
-
-async function copyGroupsFromPrev(setId, waveNum) {
-  const waves = survivalState.builderWaves;
-  const prevWave = waves.slice().sort((a,b) => a.wave_number - b.wave_number)
-    .reverse().find(w => w.wave_number < waveNum);
-  if (!prevWave) return toast('No previous wave to copy from', 'err');
-  const groups = prevWave.spawn_groups || [];
-  if (!groups.length) return toast('Previous wave has no spawn groups', 'err');
-  const currentWave = waves.find(w => w.wave_number === waveNum);
-  if (!currentWave) return;
-  try {
-    for (const g of groups) {
-      await api('POST', `/admin/survival/waves/${currentWave.id}/spawn-groups`, {
-        unit_type: g.unit_type, count: g.count,
-        spawn_interval_ms: g.spawn_interval_ms,
-        start_delay_ms: g.start_delay_ms,
-        randomize_pct: g.randomize_pct,
-      });
-    }
-    toast(`Copied ${groups.length} groups from wave ${prevWave.wave_number}`);
-    await openWaveBuilder(setId);
-    selectWave(waveNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.copyGroupsFromPrev = copyGroupsFromPrev;
-
-async function previewWave(setId) {
-  try {
-    const data = await api('GET', `/admin/survival/wave-sets/${setId}/preview`);
-    const waves = data.waves || [];
-    const rows = waves.map(w =>
-      `<tr><td>${w.waveNum}</td><td>${w.totalUnits}</td><td>${fmt(w.totalHp)}</td><td>${fmt(w.goldValue)}</td></tr>`
-    ).join('');
-    openModal('Wave Preview', `
-      <table style="width:100%;font-size:13px">
-        <thead><tr><th>Wave</th><th>Total Units</th><th>Est. HP</th><th>Gold Value</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4">No waves</td></tr>'}</tbody>
+    <p style="color:#94a3b8;font-size:13px;margin-top:0">
+      Each row = one round. Wave enemies are spawned in <strong>spawn_qty</strong> batches with the given stat multipliers.<br>
+      After the last configured wave, enemies repeat the last wave with +10% HP/DMG per extra round.
+    </p>
+    <div style="overflow-x:auto">
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <thead>
+          <tr style="color:#94a3b8;text-align:left">
+            <th style="padding:6px 8px">#</th>
+            <th style="padding:6px 8px">Unit Type</th>
+            <th style="padding:6px 8px">Qty</th>
+            <th style="padding:6px 8px">HP×</th>
+            <th style="padding:6px 8px">DMG×</th>
+            <th style="padding:6px 8px">Speed×</th>
+            <th style="padding:6px 8px"></th>
+          </tr>
+        </thead>
+        <tbody id="ml-wave-rows">
+          ${rows || '<tr><td colspan="7" style="color:#94a3b8;padding:12px">No waves yet. Add one below.</td></tr>'}
+        </tbody>
       </table>
-    `, `<button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Close</button>`);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
-  }
-}
-window.previewWave = previewWave;
-
-function openBulkScale(setId) {
-  openModal('Bulk Scale Waves', `
-    <p>Multiply enemy counts in a wave range by a percentage.</p>
-    <div style="display:flex;gap:12px;flex-wrap:wrap">
-      <label>From Wave<br><input id="bs-from" type="number" class="inp" value="1" min="1" style="width:70px"></label>
-      <label>To Wave<br><input id="bs-to" type="number" class="inp" value="5" min="1" style="width:70px"></label>
-      <label>Scale % (e.g. 20 = +20%)<br><input id="bs-pct" type="number" class="inp" value="20" style="width:80px"></label>
     </div>
-  `, `
-    <button onclick="submitBulkScale(${setId})">Apply</button>
-    <button onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
+    ${canWrite ? `
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button onclick="mlWaveAddRow()">+ Add Wave</button>
+      <button onclick="mlWaveSaveAll()" style="background:rgba(40,208,96,0.15);border-color:rgba(40,208,96,0.4);color:#28d060">Save All</button>
+    </div>
+    ` : ''}
   `);
 }
-window.openBulkScale = openBulkScale;
 
-async function submitBulkScale(setId) {
-  try {
-    const res = await api('POST', `/admin/survival/wave-sets/${setId}/waves/bulk-scale`, {
-      fromWave: Number(document.getElementById('bs-from')?.value),
-      toWave:   Number(document.getElementById('bs-to')?.value),
-      scalePct: Number(document.getElementById('bs-pct')?.value),
-    });
-    document.getElementById('modal-overlay').classList.add('hidden');
-    toast(`Scaled ${res.wavesUpdated} waves`);
-    await openWaveBuilder(setId);
-    selectWave(survivalState.selectedWaveNum);
-  } catch (err) {
-    toast(`Error: ${err.message}`, 'err');
+function mlWaveRowChange(i, field, value) {
+  const w = mlWaveState.editingWaves[i];
+  if (!w) return;
+  if (field === 'unit_type') {
+    w.unit_type = value;
+  } else {
+    w[field] = Number(value);
   }
 }
-window.submitBulkScale = submitBulkScale;
+window.mlWaveRowChange = mlWaveRowChange;
+
+function mlWaveAddRow() {
+  const waves = mlWaveState.editingWaves;
+  const lastNum = waves.length > 0 ? waves[waves.length - 1].wave_number : 0;
+  const lastWave = waves[waves.length - 1];
+  waves.push({
+    wave_number: lastNum + 1,
+    unit_type: (lastWave && lastWave.unit_type) || (mlWaveState.unitTypes[0] || ''),
+    spawn_qty: (lastWave && lastWave.spawn_qty) || 8,
+    hp_mult: (lastWave && lastWave.hp_mult) || 1.0,
+    dmg_mult: (lastWave && lastWave.dmg_mult) || 1.0,
+    speed_mult: (lastWave && lastWave.speed_mult) || 1.0,
+  });
+  // Re-render editor (we need the config name — fetch it from configs list)
+  const config = mlWaveState.configs.find(c => c.id === mlWaveState.editingId) || null;
+  renderMLWaveEditor(config);
+}
+window.mlWaveAddRow = mlWaveAddRow;
+
+function mlWaveRemoveRow(i) {
+  mlWaveState.editingWaves.splice(i, 1);
+  // Renumber
+  mlWaveState.editingWaves.forEach((w, idx) => { w.wave_number = idx + 1; });
+  const config = mlWaveState.configs.find(c => c.id === mlWaveState.editingId) || null;
+  renderMLWaveEditor(config);
+}
+window.mlWaveRemoveRow = mlWaveRemoveRow;
+
+async function mlWaveSaveAll() {
+  const id = mlWaveState.editingId;
+  if (!id) return;
+  try {
+    await api('PUT', `/admin/ml-waves/configs/${id}/waves`, { waves: mlWaveState.editingWaves });
+    toast('Waves saved');
+    // Refresh configs list in background
+    api('GET', '/admin/ml-waves/configs').then(d => { mlWaveState.configs = d.configs || []; }).catch(() => {});
+  } catch (err) {
+    toast(`Save failed: ${err.message}`, 'err');
+  }
+}
+window.mlWaveSaveAll = mlWaveSaveAll;
+
+function mlWaveBackToList() {
+  mlWaveState.editingId = null;
+  mlWaveState.editingWaves = [];
+  renderMLWaveConfigList();
+}
+window.mlWaveBackToList = mlWaveBackToList;
+
 
 // ═══════════════════════════════════════════════════════════════════════
 // UNITS TAB (Phase A — Core Reuse Architecture)

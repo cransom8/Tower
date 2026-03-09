@@ -2,9 +2,9 @@
 // Matches server event names and payload schemas exactly.
 //
 // Usage:
-//   ActionSender.PlaceWall(col, row);
+//   ActionSender.PlaceUnit(col, row, "goblin");
 //   ActionSender.SpawnUnit("footman");
-//   ActionSender.SetAutosend(true, enabledUnits, "normal");
+//   ActionSender.SetAutosend(true, enabledUnits, loadoutKeys);
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -25,15 +25,16 @@ namespace CastleDefender.Game
 
         // ── ML Actions ────────────────────────────────────────────────────────
 
-        public static void PlaceWall(int col, int row)
-            => SendAction("place_wall", new { gridX = col, gridY = row });
+        /// <summary>
+        /// Place a loadout defender on the player's build grid.
+        /// Payload: { gridX, gridY, unitTypeKey } — canonical contract, no aliases.
+        /// </summary>
+        /// <param name="unitTypeKey">Unit type key from the match loadout, e.g. "goblin"</param>
+        public static void PlaceUnit(int col, int row, string unitTypeKey)
+            => SendAction("place_unit", new { gridX = col, gridY = row, unitTypeKey });
 
-        public static void RemoveWall(int col, int row)
-            => SendAction("remove_wall", new { gridX = col, gridY = row });
-
-        /// <param name="unitTypeKey">archer|fighter|mage|ballista|cannon</param>
-        public static void UpgradeWall(int col, int row, string unitTypeKey)
-            => SendAction("upgrade_wall", new { x = col, y = row, unitTypeKey });
+        public static void SellTower(int col, int row)
+            => SendAction("sell_tower", new { gridX = col, gridY = row });
 
         public static void UpgradeTower(int col, int row, string towerType = null)
             => SendAction("upgrade_tower", new
@@ -54,10 +55,10 @@ namespace CastleDefender.Game
         public static void SpawnUnit(string unitType)
             => SendAction("spawn_unit", new { unitType });
 
-        /// <param name="enabledUnits">unitType → bool</param>
-        /// <param name="rate">slow|normal|fast</param>
-        public static void SetAutosend(bool enabled, Dictionary<string, bool> enabledUnits, string rate)
-            => SendAction("set_autosend", new { enabled, enabledUnits, rate });
+        /// <param name="enabledUnits">unitType → bool (which units are in the autosend set)</param>
+        /// <param name="loadoutKeys">ordered unit keys from the match loadout (sets fill priority)</param>
+        public static void SetAutosend(bool enabled, Dictionary<string, bool> enabledUnits, string[] loadoutKeys)
+            => SendAction("set_autosend", new { enabled, enabledUnits, loadoutKeys });
 
         // ── Classic Actions ───────────────────────────────────────────────────
         // Server uses session.side to determine whose action; just send type+data.
@@ -112,20 +113,20 @@ namespace CastleDefender.Game
 
         // ── Queue System (Phase U5) ───────────────────────────────────────────
 
-        /// <param name="gameType">line_wars|survival</param>
+        /// <param name="gameType">line_wars (Forge Wars) or other game type</param>
         /// <param name="matchFormat">1v1|2v2|ffa</param>
-        public static void QueueEnter(string gameType, string matchFormat, bool ranked, int? loadoutSlot = null)
+        public static void QueueEnter(string gameType, string matchFormat, bool ranked, int? loadoutSlot = null, int[] unitTypeIds = null)
             => NetworkManager.Instance.Emit("queue:enter_v2",
-               new { gameType, matchFormat, ranked, loadoutSlot });
+               new { gameType, matchFormat, ranked, loadoutSlot, unitTypeIds });
 
         public static void QueueLeave()
             => NetworkManager.Instance.Emit("queue:leave", null);
 
         // ── Private Lobby System (Phase U5) ──────────────────────────────────
 
-        public static void LobbyCreate(string gameType, string matchFormat, string pvpMode = "teams", string displayName = "Player")
+        public static void LobbyCreate(string gameType, string matchFormat, string pvpMode = "teams", string displayName = "Player", int[] unitTypeIds = null)
             => NetworkManager.Instance.Emit("lobby:create",
-               new { gameType, matchFormat, pvpMode, displayName });
+               new { gameType, matchFormat, pvpMode, displayName, unitTypeIds });
 
         public static void LobbyJoin(string code, string displayName = "Player")
             => NetworkManager.Instance.Emit("lobby:join",

@@ -3,6 +3,7 @@
 // Field names are camelCase to match server JSON. All classes are [Serializable].
 
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace CastleDefender.Net
@@ -94,9 +95,7 @@ namespace CastleDefender.Net
         public int          livesStart;
         public int          gridW;
         public int          gridH;
-        public int          wallCost;
-        public int          maxWalls;
-        public LoadoutEntry[] loadout;       // Phase C — 5 unit types for this match
+        public LoadoutEntry[] loadout;       // 5 unit types for this match
         public string       reconnectToken;  // Phase U8 — store for disconnect recovery
         public bool         ranked;
         public MLBattlefieldTopology battlefieldTopology;
@@ -165,24 +164,16 @@ namespace CastleDefender.Net
 
     // ─── Queue Update ─────────────────────────────────────────────────────────
     // Server emits "queue_update" each tick when send queue changes (Phase D).
-
-    [Serializable]
-    public class QueueCounts
-    {
-        public int runner;
-        public int footman;
-        public int ironclad;
-        public int warlock;
-        public int golem;
-    }
+    // queues is a dynamic { key: count } dict matching whatever unit keys are in
+    // the current match (HF creatures, etc.) — not hardcoded classic unit names.
 
     [Serializable]
     public class QueueUpdatePayload
     {
-        public QueueCounts queues;
-        public float       drainProgress;  // 0..1 progress toward next drain tick
-        public int         totalQueued;
-        public int         queueCap;       // 200
+        public Dictionary<string, int> queues;   // key → count in send queue
+        public float                   drainProgress;
+        public int                     totalQueued;
+        public int                     queueCap;
     }
 
     [Serializable]
@@ -195,12 +186,28 @@ namespace CastleDefender.Net
     // Server emits as "ml_state_snapshot" at 10hz.
 
     [Serializable]
+    public class MLTeamHp
+    {
+        public int left;
+        public int right;
+    }
+
+    [Serializable]
     public class MLSnapshot
     {
         public int          tick;
         public string       phase;                  // "playing"|"ended"
         public int          winner;                 // lane index when ended; 0 when null (check phase)
         public int          incomeTicksRemaining;   // global, shared by all lanes
+        // ── Forge Wars wave defense ──────────────────────────────────────────
+        public string       roundState;             // "build"|"combat"|"transition"
+        public int          roundNumber;
+        public int          roundStateTicks;
+        public int          buildPhaseTotal;
+        public int          transitionPhaseTotal;
+        public MLTeamHp     teamHp;                 // { left, right }
+        public int          teamHpMax;
+        // ─────────────────────────────────────────────────────────────────────
         public MLBattlefieldTopology battlefieldTopology;
         public MLLaneSnap[] lanes;
     }
@@ -221,10 +228,9 @@ namespace CastleDefender.Net
         public float          income;
         public int            lives;
         public int            barracksLevel;
-        public int            wallCount;
-        public MLWall[]       walls;           // only wall tiles
-        public MLTowerCell[]  towerCells;      // only tower tiles
-        public MLGridPos[]    path;            // BFS path as [{x,y}] array
+        public MLTowerCell[]  towerCells;      // active defender tiles
+        public MLDeadCell[]   deadCells;       // dead defender tiles (inactive until next build phase)
+        public MLGridPos[]    path;            // wave path as [{x,y}] array
         public MLUnit[]       units;
         public int            spawnQueueLength;
         public MLProjectile[] projectiles;
@@ -259,9 +265,11 @@ namespace CastleDefender.Net
         public int    gridY;
         public int    col;
         public int    row;
-        public string type;     // "archer"|"fighter"|"mage"|"ballista"|"cannon"
+        public string type;     // unit type key, e.g. "goblin"|"orc"|"cyclops"
         public int    level;
         public bool   debuffed;
+        public float  hp;       // current HP (wave defense)
+        public float  maxHp;    // max HP (wave defense)
 
         public int X => (x != 0 || y != 0) ? x
                     : (gridX != 0 || gridY != 0) ? gridX
@@ -269,6 +277,15 @@ namespace CastleDefender.Net
         public int Y => (x != 0 || y != 0) ? y
                     : (gridX != 0 || gridY != 0) ? gridY
                     : row;
+    }
+
+    // Dead defender tile — unit died this round; tile reserved until next build phase.
+    [Serializable]
+    public class MLDeadCell
+    {
+        public int    x;
+        public int    y;
+        public string type;     // unit type key (for rendering the inactive unit sprite)
     }
 
     [Serializable]
@@ -282,15 +299,16 @@ namespace CastleDefender.Net
     public class MLUnit
     {
         public string id;
-        public int    ownerLane;
-        public string type;         // "runner"|"footman"|"ironclad"|"warlock"|"golem"
+        public int    ownerLane;    // -1 for wave enemies
+        public string type;         // unit type key
         public string skinKey;      // null = default skin; otherwise overrides prefab lookup
         public float  pathIdx;
         public int    gridX;
         public int    gridY;
-        public float  normProgress; // 0..1 along BFS path
+        public float  normProgress; // 0..1 along wave path
         public float  hp;
         public float  maxHp;
+        public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
     }
 
     [Serializable]
@@ -446,7 +464,7 @@ namespace CastleDefender.Net
     {
         public string   roomCode;
         public int      laneIndex;
-        public string   gameType;           // "line_wars" | "survival" | null (legacy)
+        public string   gameType;           // "line_wars" (Forge Wars) | null (legacy)
         public bool     autoStart;
         public string[] teammates;
         public string[] opponents;
@@ -478,7 +496,7 @@ namespace CastleDefender.Net
         public string         lobbyId;
         public string         code;
         public string         hostSocketId;
-        public string         gameType;       // "line_wars" | "survival"
+        public string         gameType;       // "line_wars" (Forge Wars)
         public string         matchFormat;    // "1v1" | "2v2" | "ffa"
         public string         pvpMode;        // "teams" | "ffa"
         public LobbyMember[]  members;
@@ -525,9 +543,11 @@ namespace CastleDefender.Net
     [Serializable]
     public class UnitCatalogEntry
     {
-        public string key;          // "runner"|"footman"|etc.
+        public int    id;           // DB primary key — used for inline loadout selection
+        public string key;          // "goblin"|"orc"|etc.
         public string name;         // display name
         public int    send_cost;
+        public int    build_cost;   // gold cost to place as a fixed defender / tower
         public float  hp;
         public float  path_speed;
         public bool   enabled;
@@ -550,92 +570,6 @@ namespace CastleDefender.Net
         public int   req_income;
         public float hp_multiplier;
         public float dmg_multiplier;
-    }
-
-    // ─── Survival Mode (Phase U6) ─────────────────────────────────────────────
-
-    [Serializable]
-    public class SurvivalLaneAssignment
-    {
-        public int    laneIndex;
-        public string displayName;
-    }
-
-    [Serializable]
-    public class SurvivalMatchReadyPayload
-    {
-        public string                   code;
-        public int                      playerCount;
-        public SurvivalLaneAssignment[] laneAssignments;
-        public string                   waveSetName;
-    }
-
-    // Unit in a survival lane snap — has isEnemy/isBoss + tile position instead of normProgress.
-    [Serializable]
-    public class SurvivalUnit
-    {
-        public string id;
-        public string type;
-        public bool   isEnemy;
-        public bool   isBoss;
-        public float  hp;
-        public float  maxHp;
-        public int    x;    // tile column
-        public int    y;    // tile row
-    }
-
-    [Serializable]
-    public class SurvivalLaneSnap
-    {
-        public int            laneIndex;
-        public float          gold;
-        public float          income;
-        public int            wallCount;
-        public int            barracksLevel;
-        public MLWall[]       walls;
-        public MLTowerCell[]  towerCells;
-        public MLGridPos[]    path;
-        public SurvivalUnit[] units;
-        public MLProjectile[] projectiles;
-    }
-
-    // Top-level survival snapshot (emitted as "survival_state_snapshot").
-    [Serializable]
-    public class SurvivalSnapshot
-    {
-        public int               tick;
-        public int               waveNumber;
-        public string            wavePhase;          // "PREP"|"SPAWNING"|"CLEARING"|"COMPLETE"|"GAME_OVER"
-        public int               prepTicksRemaining;
-        public int               lives;
-        public int               maxLives;
-        public int               killCount;
-        public int               totalWavesCleared;
-        public float             goldEarned;
-        public int               timeSurvived;       // seconds
-        public string            phase;              // "playing"|"ended"
-        public SurvivalLaneSnap[] lanes;
-    }
-
-    // Emitted as "survival_wave_start" when wavePhase transitions to SPAWNING.
-    [Serializable]
-    public class SurvivalWaveStartPayload
-    {
-        public int  waveNumber;
-        public bool isBoss;
-        public bool isRush;
-        public bool isElite;
-    }
-
-    // Emitted as "survival_ended" when the run ends (lives depleted or waves cleared).
-    [Serializable]
-    public class SurvivalEndedPayload
-    {
-        public int    wavesCleared;
-        public int    killCount;
-        public int    timeSurvived;
-        public float  goldEarned;
-        public string wavePhase;
     }
 
     // ─── Rating Update (Phase U8) ─────────────────────────────────────────────

@@ -47,6 +47,12 @@ namespace CastleDefender.Net
             nm.OnMLStateSnapshot      += HandleMLSnapshot;
             nm.OnClassicMatchReady    += HandleClassicMatchReady;
             nm.OnClassicStateSnapshot += HandleClassicSnapshot;
+
+            // Catch up: ml_match_config events fire before Game_ML loads, so
+            // NetworkManager caches the loadout. Seed LatestMLMatchConfig here
+            // so anything that reads it in Start() gets the right data.
+            if (LatestMLMatchConfig == null && nm.LastMatchLoadout != null && nm.LastMatchLoadout.Length > 0)
+                LatestMLMatchConfig = new MLMatchConfig { loadout = nm.LastMatchLoadout };
         }
 
         void OnDisable()
@@ -172,16 +178,6 @@ namespace CastleDefender.Net
                     color = Color.white;
                     return false;
             }
-        }
-
-        /// <summary>
-        /// Called by SurvivalManager to inject a synthesized ML snapshot so that
-        /// LaneRenderer, InfoBar, TileGrid, and other ML-mode scripts work in the
-        /// Game_Survival scene without modification.
-        /// </summary>
-        public void InjectML(MLSnapshot snap)
-        {
-            HandleMLSnapshot(snap);
         }
     }
 }

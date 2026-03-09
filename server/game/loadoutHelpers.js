@@ -50,17 +50,23 @@ function createLoadoutHelpers({ db, unitTypes }) {
       ids = inlineUnitTypeIds;
     }
 
+    // Units are sendable if behavior_mode is 'moving' (HF creatures) or 'both' (legacy dual-role).
+    const isSendable = (ut) => ut && ut.enabled && (ut.behavior_mode === "moving" || ut.behavior_mode === "both");
+
     if (ids) {
       const resolved = ids
         .map((id) => byId[id])
-        .filter((ut) => ut && ut.enabled && ut.behavior_mode === "both");
+        .filter(isSendable);
       if (resolved.length === 5) return resolved.map(loadoutEntry);
     }
 
-    return all
-      .filter((ut) => ut.enabled && ut.behavior_mode === "both")
-      .sort((a, b) => (Number(a.send_cost) || 0) - (Number(b.send_cost) || 0))
-      .slice(0, 5)
+    // Default loadout: one unit from each tier for a balanced starting experience.
+    const DEFAULT_KEYS = ["goblin", "orc", "troll", "vampire", "wyvern"];
+    const byKey = {};
+    for (const ut of all) byKey[ut.key] = ut;
+    return DEFAULT_KEYS
+      .map((k) => byKey[k])
+      .filter(isSendable)
       .map(loadoutEntry);
   }
 
@@ -69,7 +75,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
     const allowedIds = new Set(
       unitTypes
         .getAllUnitTypes()
-        .filter((ut) => ut.enabled && ut.behavior_mode === "both")
+        .filter((ut) => ut.enabled && (ut.behavior_mode === "moving" || ut.behavior_mode === "both"))
         .map((ut) => ut.id)
     );
     return unitTypeIds.every((id) => {

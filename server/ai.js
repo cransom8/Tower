@@ -8,6 +8,7 @@
 
 const simMl = require("./sim-multilane");
 const { DAMAGE_MULTIPLIERS } = require("./sim-core");
+const { getOpponents } = require("./ai/targeting");
 
 const TICK_INTERVALS = { easy: 800, medium: 380, hard: 180 };
 
@@ -45,9 +46,9 @@ const TOWER_PLANS = {
 
 // Unit send priorities per difficulty.
 const UNIT_PRIORITIES = {
-  easy: ["footman", "runner"],
-  medium: ["footman", "ironclad", "runner", "warlock"],
-  hard: ["ironclad", "warlock", "golem", "footman", "runner"],
+  easy:   ["goblin", "kobold", "giant_rat", "ghoul"],
+  medium: ["orc", "hobgoblin", "troll", "ghoul", "fantasy_wolf", "goblin"],
+  hard:   ["ogre", "troll", "werewolf", "cyclops", "orc", "vampire", "goblin"],
 };
 
 const DIFFICULTY_PROFILE = {
@@ -120,7 +121,7 @@ function computeThreatScore(lane) {
   for (const u of lane.units) {
     if (u.ownerLane === lane.laneIndex) continue;
     const progress = pathLen > 1 ? (u.pathIdx / (pathLen - 1)) : 0;
-    const unitDef = simMl.UNIT_DEFS[u.type];
+    const unitDef = simMl.resolveUnitDef(u.type);
     const hpNorm = Math.max(0.35, Math.min(1.8, (u.hp || 0) / ((unitDef && unitDef.hp) || 100)));
     if (progress >= 0.80) score += 2.4 * hpNorm;
     else if (progress >= 0.65) score += 1.5 * hpNorm;
@@ -129,14 +130,43 @@ function computeThreatScore(lane) {
   return score;
 }
 
-function isDangerous(lane) {
-  return computeThreatScore(lane) >= 2.5;
+// Sums threat across a lane and its teammates (50% weight) to model shared castle pressure.
+function computeSharedCastleThreat(game, laneIndex) {
+  const lane = game.lanes[laneIndex];
+  if (!lane) return 0;
+  let total = computeThreatScore(lane);
+  for (let i = 0; i < game.lanes.length; i++) {
+    if (i === laneIndex) continue;
+    const other = game.lanes[i];
+    if (other && other.team === lane.team) {
+      total += computeThreatScore(other) * 0.5;
+    }
+  }
+  return total;
 }
 
-function getOutgoingTargetLane(game, laneIndex) {
+function isDangerous(game, laneIndex) {
+  return computeSharedCastleThreat(game, laneIndex) >= 2.5;
+}
+
+// Returns an opponent lane to evaluate for adaptive tower/unit decisions.
+// Uses team-based side logic (left vs right) rather than round-robin indexing.
+// Falls back to round-robin when team data is absent (1v1 or legacy configs).
+function getOpponentTargetLane(game, laneIndex) {
   if (!game || !game.lanes || game.lanes.length === 0) return null;
-  const idx = (laneIndex + 1) % game.lanes.length;
-  return game.lanes[idx] || null;
+  const opponents = getOpponents(game, laneIndex);
+  if (opponents.length === 0) {
+    // Fallback: round-robin (1v1 or no team metadata)
+    return game.lanes[(laneIndex + 1) % game.lanes.length] || null;
+  }
+  // Prefer the opponent with the most active units (most immediate threat to our side).
+  let best = opponents[0];
+  let bestPressure = (best.units || []).length;
+  for (let i = 1; i < opponents.length; i++) {
+    const pressure = (opponents[i].units || []).length;
+    if (pressure > bestPressure) { best = opponents[i]; bestPressure = pressure; }
+  }
+  return best;
 }
 
 function estimateTowerDamageProfile(lane) {
@@ -148,7 +178,7 @@ function estimateTowerDamageProfile(lane) {
     for (let y = 0; y < GRID_H; y++) {
       const tile = lane.grid[x][y];
       if (tile.type !== "tower" || !tile.towerType) continue;
-      const base = simMl.TOWER_DEFS[tile.towerType];
+      const base = simMl.resolveTowerDef(tile.towerType);
       if (!base) continue;
       const lvl = Math.max(1, Math.min(MAX_TOWER_LEVEL, Number(tile.towerLevel) || 1));
       const scaledDmg = base.dmg * (1 + 0.12 * (lvl - 1));
@@ -162,14 +192,19 @@ function estimateTowerDamageProfile(lane) {
 function chooseAdaptiveTowerType(targetLane, fallbackType, difficulty) {
   if (difficulty === "easy" || !targetLane) return fallbackType;
   const enemyUnits = targetLane.units || [];
-  const counts = { runner: 0, footman: 0, ironclad: 0, warlock: 0, golem: 0 };
+  const counts = { swarm: 0, heavy: 0, caster: 0 };
+  const swarmTypes  = new Set(["goblin","kobold","giant_rat","ghoul","harpy","fantasy_wolf"]);
+  const heavyTypes  = new Set(["ogre","troll","cyclops","hydra","oak_tree_ent","ice_golem","demon_lord","manticora","mountain_dragon"]);
+  const casterTypes = new Set(["vampire","chimera","evil_watcher","ice_golem","demon_lord"]);
   for (const u of enemyUnits) {
     if (u.ownerLane === targetLane.laneIndex) continue;
-    if (counts[u.type] !== undefined) counts[u.type] += 1;
+    if (swarmTypes.has(u.type))  counts.swarm  += 1;
+    if (heavyTypes.has(u.type))  counts.heavy  += 1;
+    if (casterTypes.has(u.type)) counts.caster += 1;
   }
-  const swarm = (counts.runner + counts.footman) >= 7;
-  const heavy = (counts.ironclad + counts.golem) >= 4;
-  const caster = counts.warlock >= 3;
+  const swarm  = counts.swarm  >= 7;
+  const heavy  = counts.heavy  >= 4;
+  const caster = counts.caster >= 3;
 
   if (swarm) return "cannon";
   if (heavy) return "ballista";
@@ -182,8 +217,9 @@ function chooseTowerTargetMode(lane) {
   if (enemies.length === 0) return "first";
   let heavy = 0;
   let lowHp = 0;
+  const heavyTargetTypes = new Set(["ogre","troll","cyclops","hydra","oak_tree_ent","ice_golem","demon_lord","manticora","mountain_dragon"]);
   for (const u of enemies) {
-    if (u.type === "ironclad" || u.type === "golem") heavy += 1;
+    if (heavyTargetTypes.has(u.type)) heavy += 1;
     if ((u.hp || 0) < 40) lowHp += 1;
   }
   if (heavy >= Math.ceil(enemies.length * 0.35)) return "strongest";
@@ -408,10 +444,10 @@ function ensureAutosend(game, laneIndex, difficulty, profile, shouldEnable) {
 
   // Hard AI keeps pressure by autosending sturdy units.
   const desired = difficulty === "hard"
-    ? ["ironclad", "warlock", "footman", "runner"]
-    : ["footman", "runner"];
+    ? ["orc", "troll", "ogre", "goblin"]
+    : ["goblin", "kobold"];
 
-  for (const ut of Object.keys(simMl.UNIT_DEFS)) {
+  for (const ut of Object.keys(simMl.getMovingUnitDefMap())) {
     const shouldEnable = desired.includes(ut);
     if (!!enabledUnits[ut] !== shouldEnable) {
       enabledUnits[ut] = shouldEnable;
@@ -437,7 +473,7 @@ function getTowerBuildReserve(lane, plan) {
     const tile = lane.grid[target.x] && lane.grid[target.x][target.y];
     if (!tile) continue;
     if (tile.type === "tower") continue;
-    const tdef = simMl.TOWER_DEFS[target.type];
+    const tdef = simMl.resolveTowerDef(target.type);
     if (!tdef) continue;
     if (tile.type === "wall") return tdef.cost;
     if (tile.type === "empty") return WALL_COST + tdef.cost;
@@ -448,7 +484,7 @@ function getTowerBuildReserve(lane, plan) {
 // Try each tower in the plan: place wall -> convert wall.
 function tryBuildFromPlan(game, laneIndex, plan, difficulty) {
   const lane = game.lanes[laneIndex];
-  const targetLane = getOutgoingTargetLane(game, laneIndex);
+  const targetLane = getOpponentTargetLane(game, laneIndex);
 
   for (const target of plan) {
     const tile = lane.grid[target.x] && lane.grid[target.x][target.y];
@@ -487,7 +523,7 @@ function tryUpgradeBestTower(game, laneIndex, danger) {
       const tile = lane.grid[x][y];
       if (tile.type !== "tower" || tile.towerLevel >= MAX_TOWER_LEVEL) continue;
 
-      const base = simMl.TOWER_DEFS[tile.towerType];
+      const base = simMl.resolveTowerDef(tile.towerType);
       if (!base) continue;
       const nextLevel = (tile.towerLevel || 1) + 1;
       const upgradeCost = Math.ceil(base.cost * (0.75 + 0.25 * nextLevel));
@@ -514,7 +550,7 @@ function tryUpgradeBestTower(game, laneIndex, danger) {
 }
 
 function scoreUnitChoice(unitType, targetLane, profile, difficulty) {
-  const def = simMl.UNIT_DEFS[unitType];
+  const def = simMl.resolveUnitDef(unitType);
   if (!def) return -Infinity;
 
   const incomeValue = def.income * (difficulty === "hard" ? 1.0 : 1.2);
@@ -531,24 +567,19 @@ function scoreUnitChoice(unitType, targetLane, profile, difficulty) {
   );
   const survivability = (def.hp / Math.max(1, towerThreat + 10)) * 20;
 
-  let specialty = 0;
-  if (unitType === "golem" && profile.towers >= 4) specialty += 4;
-  if (unitType === "warlock" && profile.towers >= 3) specialty += 3;
-  if (unitType === "runner" && (!targetLane || (targetLane.units || []).length <= 3)) specialty += 1.5;
-
-  return incomeValue + pressureValue + goldEfficiency + survivability + specialty;
+  return incomeValue + pressureValue + goldEfficiency + survivability;
 }
 
 function pickBestAffordableUnit(game, laneIndex, difficulty) {
   const lane = game.lanes[laneIndex];
-  const targetLane = getOutgoingTargetLane(game, laneIndex);
+  const targetLane = getOpponentTargetLane(game, laneIndex);
   const towerProfile = estimateTowerDamageProfile(targetLane);
   const list = UNIT_PRIORITIES[difficulty] || UNIT_PRIORITIES.easy;
 
   let bestType = null;
   let bestScore = -Infinity;
   for (const unitType of list) {
-    const def = simMl.UNIT_DEFS[unitType];
+    const def = simMl.resolveUnitDef(unitType);
     if (!def || lane.gold < def.cost) continue;
     const score = scoreUnitChoice(unitType, targetLane, towerProfile, difficulty);
     if (score > bestScore) {
@@ -572,7 +603,7 @@ function trySpawnBurst(game, laneIndex, difficulty, profile) {
   for (let i = 0; i < attempts; i++) {
     const nextType = pickBestAffordableUnit(game, laneIndex, difficulty);
     if (!nextType) break;
-    const nextDef = simMl.UNIT_DEFS[nextType];
+    const nextDef = simMl.resolveUnitDef(nextType);
     if (!nextDef) break;
     if (lane.gold - nextDef.cost < reserve && i >= (profile.maxSkipsWhenRich || 0)) break;
 
@@ -596,7 +627,7 @@ function aiDecide(game, laneIndex, difficulty) {
 
   while (actions < maxActions) {
     const dangerScore = computeThreatScore(lane);
-    const danger = isDangerous(lane);
+    const danger = isDangerous(game, laneIndex);
     const towerReserve = getTowerBuildReserve(lane, plan);
     const pendingTowerPlan = towerReserve > 0;
     const builtPlanTowers = countBuiltPlanTowers(lane, plan);
@@ -628,7 +659,7 @@ function aiDecide(game, laneIndex, difficulty) {
         continue;
       }
 
-      const targetLane = getOutgoingTargetLane(game, laneIndex);
+      const targetLane = getOpponentTargetLane(game, laneIndex);
       let converted = false;
       for (const target of plan) {
         const tile = lane.grid[target.x] && lane.grid[target.x][target.y];

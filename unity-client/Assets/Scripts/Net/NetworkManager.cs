@@ -34,6 +34,14 @@ namespace CastleDefender.Net
         public string MyRoomCode   { get; private set; }
         public bool   IsConnected  { get; private set; }
 
+        // ── Cross-scene loadout cache ─────────────────────────────────────────
+        // Populated as soon as the per-player ml_match_config arrives, which
+        // typically happens before Game_ML finishes loading.  CmdBar and
+        // TileMenuUI read this on Start() / EnsureInitialized() to avoid the
+        // race condition where OnMLMatchConfig fires before any scene subscriber
+        // has a chance to hook in.
+        public LoadoutEntry[] LastMatchLoadout { get; private set; }
+
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
         public event Action<MLRoomJoinedPayload>      OnMLRoomJoined;
@@ -72,12 +80,6 @@ namespace CastleDefender.Net
         public event Action<LobbyUpdatePayload>  OnLobbyUpdate;
         public event Action<LobbyLeftPayload>    OnLobbyLeft;
         public event Action<LobbyErrorPayload>   OnLobbyError;
-
-        // ── Survival events (Phase U6) ────────────────────────────────────────
-        public event Action<SurvivalMatchReadyPayload> OnSurvivalMatchReady;
-        public event Action<SurvivalSnapshot>          OnSurvivalSnapshot;
-        public event Action<SurvivalWaveStartPayload>  OnSurvivalWaveStart;
-        public event Action<SurvivalEndedPayload>      OnSurvivalEnded;
 
         // ── Competitive events (Phase U8) ─────────────────────────────────────
         public event Action<RatingUpdatePayload> OnRatingUpdate;
@@ -184,11 +186,6 @@ namespace CastleDefender.Net
             JSIO_On("lobby_update");
             JSIO_On("lobby_left");
             JSIO_On("lobby_error");
-            // Survival (Phase U6)
-            JSIO_On("survival_match_ready");
-            JSIO_On("survival_state_snapshot");
-            JSIO_On("survival_wave_start");
-            JSIO_On("survival_ended");
             // Competitive (Phase U8)
             JSIO_On("rating_update");
         }
@@ -261,8 +258,13 @@ namespace CastleDefender.Net
                     break;
                 }
                 case "ml_match_config":
-                    OnMLMatchConfig?.Invoke(JsonUtility.FromJson<MLMatchConfig>(json));
+                {
+                    var cfg = JsonUtility.FromJson<MLMatchConfig>(json);
+                    if (cfg.loadout != null && cfg.loadout.Length > 0)
+                        LastMatchLoadout = cfg.loadout;
+                    OnMLMatchConfig?.Invoke(cfg);
                     break;
+                }
                 case "room_created":
                 {
                     var p = JsonUtility.FromJson<ClassicRoomCreatedPayload>(json);
@@ -381,31 +383,6 @@ namespace CastleDefender.Net
                     OnLobbyError?.Invoke(p);
                     break;
                 }
-                // ── Survival (Phase U6) ──────────────────────────────────────
-                case "survival_match_ready":
-                {
-                    var p = JsonUtility.FromJson<SurvivalMatchReadyPayload>(json);
-                    Debug.Log($"[NM] survival_match_ready: {p.code} playerCount={p.playerCount}");
-                    OnSurvivalMatchReady?.Invoke(p);
-                    break;
-                }
-                case "survival_state_snapshot":
-                    OnSurvivalSnapshot?.Invoke(JsonUtility.FromJson<SurvivalSnapshot>(json));
-                    break;
-                case "survival_wave_start":
-                {
-                    var p = JsonUtility.FromJson<SurvivalWaveStartPayload>(json);
-                    Debug.Log($"[NM] survival_wave_start: wave={p.waveNumber} boss={p.isBoss}");
-                    OnSurvivalWaveStart?.Invoke(p);
-                    break;
-                }
-                case "survival_ended":
-                {
-                    var p = JsonUtility.FromJson<SurvivalEndedPayload>(json);
-                    Debug.Log($"[NM] survival_ended: waves={p.wavesCleared} kills={p.killCount}");
-                    OnSurvivalEnded?.Invoke(p);
-                    break;
-                }
                 // ── Competitive (Phase U8) ────────────────────────────────────
                 case "rating_update":
                 {
@@ -517,7 +494,10 @@ namespace CastleDefender.Net
 
             _socket.OnUnityThread("ml_match_config", resp =>
             {
-                OnMLMatchConfig?.Invoke(FromResp<MLMatchConfig>(resp));
+                var cfg = FromResp<MLMatchConfig>(resp);
+                if (cfg.loadout != null && cfg.loadout.Length > 0)
+                    LastMatchLoadout = cfg.loadout;
+                OnMLMatchConfig?.Invoke(cfg);
             });
 
             // ── Classic Lobby ─────────────────────────────────────────────────
@@ -651,33 +631,6 @@ namespace CastleDefender.Net
                 var p = FromResp<LobbyErrorPayload>(resp);
                 Debug.LogWarning($"[NM] lobby_error: {p?.message}");
                 OnLobbyError?.Invoke(p);
-            });
-
-            // ── Survival (Phase U6) ───────────────────────────────────────────
-            _socket.OnUnityThread("survival_match_ready", resp =>
-            {
-                var p = FromResp<SurvivalMatchReadyPayload>(resp);
-                Debug.Log($"[NM] survival_match_ready: {p.code} playerCount={p.playerCount}");
-                OnSurvivalMatchReady?.Invoke(p);
-            });
-
-            _socket.OnUnityThread("survival_state_snapshot", resp =>
-            {
-                OnSurvivalSnapshot?.Invoke(FromResp<SurvivalSnapshot>(resp));
-            });
-
-            _socket.OnUnityThread("survival_wave_start", resp =>
-            {
-                var p = FromResp<SurvivalWaveStartPayload>(resp);
-                Debug.Log($"[NM] survival_wave_start: wave={p.waveNumber} boss={p.isBoss}");
-                OnSurvivalWaveStart?.Invoke(p);
-            });
-
-            _socket.OnUnityThread("survival_ended", resp =>
-            {
-                var p = FromResp<SurvivalEndedPayload>(resp);
-                Debug.Log($"[NM] survival_ended: waves={p.wavesCleared} kills={p.killCount}");
-                OnSurvivalEnded?.Invoke(p);
             });
 
             // ── Competitive (Phase U8) ────────────────────────────────────────

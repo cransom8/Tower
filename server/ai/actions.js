@@ -73,11 +73,10 @@ function normalizeAction(action) {
 
 function validateActionShape(action, defs) {
   const normalized = normalizeAction(action);
-  const unitDefs = (defs && defs.unitDefs) || simMl.UNIT_DEFS;
-  const towerDefs = (defs && defs.towerDefs) || simMl.TOWER_DEFS;
+  const unitDefs = (defs && defs.unitDefs) || simMl.getMovingUnitDefMap();
 
   if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    const towerResolved = (towerDefs && towerDefs[normalized.towerType]) || simMl.resolveTowerDef(normalized.towerType);
+    const towerResolved = simMl.resolveTowerDef(normalized.towerType);
     if (!towerResolved) {
       return { ok: false, reason: "Unknown tower type", normalized };
     }
@@ -118,8 +117,8 @@ function getUnitCostForLane(lane, unitType, unitDefs) {
   return Math.ceil(def.cost * getUnitCostMultiplierForLane(lane));
 }
 
-function getTowerUpgradeCost(towerType, nextLevel, towerDefs) {
-  const def = towerDefs[towerType];
+function getTowerUpgradeCost(towerType, nextLevel) {
+  const def = simMl.resolveTowerDef(towerType);
   if (!def) return Infinity;
   return Math.ceil(def.cost * (0.75 + 0.25 * nextLevel));
 }
@@ -141,9 +140,7 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
   if (!game || game.phase !== "playing") return { ok: false, reason: "Game not active", normalized };
   const lane = game.lanes && game.lanes[laneIndex];
   if (!lane || lane.eliminated) return { ok: false, reason: "Lane inactive", normalized };
-  const unitDefs = (defs && defs.unitDefs) || simMl.UNIT_DEFS;
-  const towerDefs = (defs && defs.towerDefs) || simMl.TOWER_DEFS;
-  const wallCost = Number((defs && defs.wallCost) || 2);
+  const unitDefs = (defs && defs.unitDefs) || simMl.getMovingUnitDefMap();
 
   if (normalized.type === AI_ACTION_TYPE.DO_NOTHING) return { ok: true, normalized };
 
@@ -158,23 +155,21 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
   }
 
   if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
+    // In wave defense: direct placement — tile must be empty, cost = towerDef.cost
+    if (game.roundState && game.roundState !== "build") {
+      return { ok: false, reason: "Can only place units during build phase", normalized };
+    }
     const pos = parseGridId(normalized.tileId);
     const tile = lane.grid && lane.grid[pos.x] && lane.grid[pos.x][pos.y];
     if (!tile) return { ok: false, reason: "Tile out of bounds", normalized };
     if (tile.type === "spawn" || tile.type === "castle") {
       return { ok: false, reason: "Cannot build on spawn/castle", normalized };
     }
-    if (tile.type === "empty") {
-      if (lane.gold < wallCost) return { ok: false, reason: "Not enough gold for wall", normalized };
-      return { ok: true, normalized };
-    }
-    if (tile.type === "wall") {
-      const towerResolved = (towerDefs && towerDefs[normalized.towerType]) || simMl.resolveTowerDef(normalized.towerType);
-      const cost = towerResolved ? towerResolved.cost : 0;
-      if (lane.gold < cost) return { ok: false, reason: "Not enough gold for conversion", normalized };
-      return { ok: true, normalized };
-    }
-    return { ok: false, reason: "Tile not buildable", normalized };
+    if (tile.type !== "empty") return { ok: false, reason: "Tile not empty", normalized };
+    const towerResolved = simMl.resolveTowerDef(normalized.towerType);
+    const cost = towerResolved ? towerResolved.cost : Infinity;
+    if (lane.gold < cost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
   }
 
   if (normalized.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
@@ -186,7 +181,7 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
     if (tile.towerLevel >= TOWER_MAX_LEVEL) {
       return { ok: false, reason: "Tower maxed", normalized };
     }
-    const cost = getTowerUpgradeCost(tile.towerType, tile.towerLevel + 1, towerDefs);
+    const cost = getTowerUpgradeCost(tile.towerType, tile.towerLevel + 1);
     if (lane.gold < cost) return { ok: false, reason: "Not enough gold", normalized };
     return { ok: true, normalized };
   }
@@ -215,25 +210,14 @@ function translateActionToCommands(game, laneIndex, action, defs) {
 
   if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
     const pos = parseGridId(normalized.tileId);
-    const tile = lane.grid[pos.x][pos.y];
-    if (tile.type === "empty") {
-      return {
-        ok: true,
-        commands: [{ type: "place_wall", data: { gridX: pos.x, gridY: pos.y } }],
-        normalized,
-      };
-    }
-    if (tile.type === "wall") {
-      return {
-        ok: true,
-        commands: [{
-          type: "upgrade_wall",
-          data: { gridX: pos.x, gridY: pos.y, unitTypeKey: normalized.towerType },
-        }],
-        normalized,
-      };
-    }
-    return { ok: false, reason: "Tile not buildable now", commands: [], normalized };
+    return {
+      ok: true,
+      commands: [{
+        type: "place_unit",
+        data: { gridX: pos.x, gridY: pos.y, unitTypeKey: normalized.towerType },
+      }],
+      normalized,
+    };
   }
 
   if (normalized.type === AI_ACTION_TYPE.UPGRADE_TOWER) {

@@ -3,15 +3,12 @@
 // SCENE SETUP (Lobby.unity):
 //
 //   Canvas
-//   ├── Panel_Step1_Mode
-//   │   ├── Btn_LineWars              — "Line Wars" card button
-//   │   └── Btn_Survival             — "Survival" card button
-//   ├── Panel_Step2_Format
-//   │   ├── Btn_1v1 / Btn_2v2 / Btn_FFA / Btn_Solo / Btn_Back_Step2
-//   ├── Panel_Step3_Type
+//   ├── Panel_Step3_Type              — shown first: pick Ranked / Casual / Private
 //   │   ├── Btn_Ranked / Btn_Casual / Btn_PrivateLobby
 //   │   ├── Btn_JoinByCode / Input_JoinCode / Btn_JoinConfirm
 //   │   └── Btn_Back_Step3
+//   ├── Panel_Step2_Format            — shown second: pick 1v1 or 2v2
+//   │   ├── Btn_1v1 / Btn_2v2 / Btn_Back_Step2
 //   ├── Panel_Loadout                 — Phase U7: loadout slot picker (LoadoutUI component)
 //   ├── Panel_Step4A_Queue
 //   │   ├── Txt_QueueStatus
@@ -44,20 +41,13 @@ namespace CastleDefender.UI
     public class LobbyUI : MonoBehaviour
     {
         // ── Inspector ─────────────────────────────────────────────────────────
-        [Header("Step 1 — Mode")]
-        public GameObject Panel_Step1_Mode;
-        public Button     Btn_LineWars;
-        public Button     Btn_Survival;
-
-        [Header("Step 2 — Format")]
+        [Header("Step 2 — Format (shown second)")]
         public GameObject Panel_Step2_Format;
         public Button     Btn_1v1;
         public Button     Btn_2v2;
-        public Button     Btn_FFA;
-        public Button     Btn_Solo;
         public Button     Btn_Back_Step2;
 
-        [Header("Step 3 — Type")]
+        [Header("Step 3 — Type (shown first)")]
         public GameObject     Panel_Step3_Type;
         public Button         Btn_Ranked;
         public Button         Btn_Casual;
@@ -101,9 +91,11 @@ namespace CastleDefender.UI
         public TMP_Text Txt_DisplayName;
 
         // ── Wizard state ──────────────────────────────────────────────────────
-        string _gameType    = "line_wars";
+        const  string _gameType = "line_wars";
         string _matchFormat = "1v1";
         bool   _pendingRanked;
+        bool   _pendingPrivateLobby;
+        int[]  _pendingUnitTypeIds;
 
         // ── Lobby state ───────────────────────────────────────────────────────
         bool          _isHost;
@@ -132,24 +124,17 @@ namespace CastleDefender.UI
                 nm.OnErrorMsg       += HandleError;
             }
 
-            // Step 1
-            Btn_LineWars.onClick.AddListener(() => SelectMode("line_wars"));
-            Btn_Survival.onClick.AddListener(() => SelectMode("survival"));
-
-            // Step 2
-            Btn_1v1.onClick.AddListener(() => SelectFormat("1v1"));
-            Btn_2v2.onClick.AddListener(() => SelectFormat("2v2"));
-            Btn_FFA.onClick.AddListener(() => SelectFormat("ffa"));
-            Btn_Solo.onClick.AddListener(() => SelectFormat("1v1")); // survival solo → 1v1 bucket
-            Btn_Back_Step2.onClick.AddListener(() => GoToStep(1));
-
-            // Step 3
+            // Step 3 — Type (shown first)
             Btn_Ranked.onClick.AddListener(OnQueueRanked);
             Btn_Casual.onClick.AddListener(OnQueueCasual);
             Btn_PrivateLobby.onClick.AddListener(OnCreatePrivateLobby);
             Btn_JoinByCode.onClick.AddListener(OnShowJoinInput);
             Btn_JoinConfirm.onClick.AddListener(OnJoinByCode);
-            Btn_Back_Step3.onClick.AddListener(() => GoToStep(2));
+
+            // Step 2 — Format (shown second, back returns to Type)
+            Btn_1v1.onClick.AddListener(() => SelectFormat("1v1"));
+            Btn_2v2.onClick.AddListener(() => SelectFormat("2v2"));
+            Btn_Back_Step2.onClick.AddListener(() => GoToStep(2));
 
             // Step 4A
             Btn_CancelQueue.onClick.AddListener(OnCancelQueue);
@@ -178,8 +163,8 @@ namespace CastleDefender.UI
             if (Txt_DisplayName != null)
                 Txt_DisplayName.text = AuthManager.IsAuthenticated ? AuthManager.DisplayName : "Guest";
 
-            GoToStep(1);
-            SetStatus(nm?.IsConnected == true ? "Choose a game mode." : "Connecting...");
+            GoToStep(2);
+            SetStatus(nm?.IsConnected == true ? "Choose a type." : "Connecting...");
 
             // Fetch leaderboard + season info in background
             StartCoroutine(FetchLeaderboard());
@@ -215,12 +200,11 @@ namespace CastleDefender.UI
         }
 
         // ── Step navigation ───────────────────────────────────────────────────
-        // Steps: 1=Mode, 2=Format, 3=Type, 4=Queue, 5=Lobby, 6=Loadout
+        // Steps: 2=Type (first), 3=Format (second), 4=Queue, 5=Lobby, 6=Loadout
         void GoToStep(int step)
         {
-            Panel_Step1_Mode.SetActive(step == 1);
-            Panel_Step2_Format.SetActive(step == 2);
-            Panel_Step3_Type.SetActive(step == 3);
+            Panel_Step3_Type.SetActive(step == 2);
+            Panel_Step2_Format.SetActive(step == 3);
             Panel_Step4A_Queue.SetActive(step == 4);
             Panel_Step4B_Lobby.SetActive(step == 5);
             if (LoadoutStep != null)
@@ -229,50 +213,15 @@ namespace CastleDefender.UI
                 if (step == 6) LoadoutStep.Refresh();
             }
 
-            if (step == 2) RefreshFormatButtons();
-            if (step == 3) RefreshTypeButtons();
+            if (step == 2) RefreshTypeButtons();
+            if (step == 3) RefreshFormatButtons();
         }
 
-        // ── Step 1 — Mode ─────────────────────────────────────────────────────
-        void SelectMode(string gameType)
-        {
-            _gameType = gameType;
-            Play(AudioManager.SFX.ButtonClick);
-            // Survival skips format step; goes straight to type
-            if (gameType == "survival")
-            {
-                _matchFormat = "1v1";
-                GoToStep(3);
-            }
-            else
-            {
-                GoToStep(2);
-            }
-        }
-
-        // ── Step 2 — Format ───────────────────────────────────────────────────
-        void SelectFormat(string format)
-        {
-            _matchFormat = format;
-            Play(AudioManager.SFX.ButtonClick);
-            GoToStep(3);
-        }
-
-        void RefreshFormatButtons()
-        {
-            bool linewars = _gameType == "line_wars";
-            Btn_1v1.gameObject.SetActive(linewars);
-            Btn_2v2.gameObject.SetActive(true);
-            Btn_FFA.gameObject.SetActive(linewars);
-            Btn_Solo.gameObject.SetActive(!linewars);
-        }
-
-        // ── Step 3 — Type ─────────────────────────────────────────────────────
+        // ── Step 3 — Type (shown first) ───────────────────────────────────────
         void RefreshTypeButtons()
         {
-            bool survival = _gameType == "survival";
-            Btn_Ranked.gameObject.SetActive(!survival);
-            Btn_Casual.gameObject.SetActive(!survival);
+            Btn_Ranked.gameObject.SetActive(true);
+            Btn_Casual.gameObject.SetActive(true);
             if (Input_JoinCode != null)  Input_JoinCode.gameObject.SetActive(false);
             if (Btn_JoinConfirm != null) Btn_JoinConfirm.gameObject.SetActive(false);
         }
@@ -282,42 +231,63 @@ namespace CastleDefender.UI
             if (!AuthManager.IsAuthenticated) { SetStatus("Sign in to use ranked queue."); Play(AudioManager.SFX.Error); return; }
             Play(AudioManager.SFX.ButtonClick);
             _pendingRanked = true;
-            // If loadout step is configured, show it first; else go straight to queue
-            if (LoadoutStep != null)
-            {
-                GoToStep(6);
-                SetStatus("Choose a loadout (optional).");
-            }
-            else
-            {
-                EnterQueue(-1);
-            }
+            GoToStep(3);
+            SetStatus("Choose a format.");
         }
 
         void OnQueueCasual()
         {
             Play(AudioManager.SFX.ButtonClick);
             _pendingRanked = false;
+            GoToStep(3);
+            SetStatus("Choose a format.");
+        }
+
+        // ── Step 2 — Format (shown second) ───────────────────────────────────
+        void SelectFormat(string format)
+        {
+            _matchFormat = format;
+            Play(AudioManager.SFX.ButtonClick);
             if (LoadoutStep != null)
             {
                 GoToStep(6);
                 SetStatus("Choose a loadout (optional).");
             }
+            else if (_pendingPrivateLobby)
+            {
+                _pendingPrivateLobby = false;
+                CreatePrivateLobby();
+            }
             else
             {
-                EnterQueue(-1);
+                EnterQueue();
             }
         }
 
-        void OnLoadoutConfirmed(int slot)
+        void RefreshFormatButtons()
         {
-            EnterQueue(slot);
+            Btn_1v1.gameObject.SetActive(true);
+            Btn_2v2.gameObject.SetActive(true);
         }
 
-        void EnterQueue(int loadoutSlot)
+        void OnLoadoutConfirmed(int[] unitTypeIds)
         {
-            int? slotArg = loadoutSlot >= 0 ? (int?)loadoutSlot : null;
-            ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked, loadoutSlot: slotArg);
+            _pendingUnitTypeIds = unitTypeIds;
+            if (_pendingPrivateLobby)
+            {
+                _pendingPrivateLobby = false;
+                CreatePrivateLobby();
+            }
+            else
+            {
+                EnterQueue();
+            }
+        }
+
+        void EnterQueue()
+        {
+            ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked, unitTypeIds: _pendingUnitTypeIds);
+            _pendingUnitTypeIds = null;
             _inQueue      = true;
             _queueElapsed = 0f;
             GoToStep(4);
@@ -328,8 +298,16 @@ namespace CastleDefender.UI
         void OnCreatePrivateLobby()
         {
             Play(AudioManager.SFX.ButtonClick);
+            _pendingPrivateLobby = true;
+            GoToStep(3);
+            SetStatus("Choose a format.");
+        }
+
+        void CreatePrivateLobby()
+        {
             string pvpMode = _matchFormat == "ffa" ? "ffa" : "teams";
-            ActionSender.LobbyCreate(_gameType, _matchFormat, pvpMode, DisplayName);
+            ActionSender.LobbyCreate(_gameType, _matchFormat, pvpMode, DisplayName, _pendingUnitTypeIds);
+            _pendingUnitTypeIds = null;
             SetStatus("Creating lobby...");
         }
 
@@ -445,16 +423,16 @@ namespace CastleDefender.UI
             ActionSender.LobbyLeave();
             _currentLobby = null;
             _isReady = false;
-            GoToStep(1);
+            GoToStep(2);
             SetStatus("Left lobby.");
         }
 
         // ── NetworkManager event handlers ─────────────────────────────────────
-        void HandleConnected()   => SetStatus("Choose a game mode.");
+        void HandleConnected()   => SetStatus("Choose a type.");
         void HandleDisconnected()
         {
             _inQueue = false;
-            GoToStep(1);
+            GoToStep(2);
             SetStatus("Disconnected. Reconnecting...");
         }
 
@@ -486,11 +464,7 @@ namespace CastleDefender.UI
                 Debug.Log("[Lobby] Stored reconnect token");
             }
 
-            string gameType = string.IsNullOrEmpty(p.gameType) ? _gameType : p.gameType;
-            if (gameType == "survival")
-                LoadingScreen.LoadScene("Game_Survival");
-            else
-                LoadingScreen.LoadScene("Game_ML");
+            LoadingScreen.LoadScene("Game_ML");
         }
 
         void HandleLobbyCreated(LobbyCreatedPayload p)
@@ -518,7 +492,7 @@ namespace CastleDefender.UI
         {
             _currentLobby = null;
             _isReady = false;
-            GoToStep(1);
+            GoToStep(2);
         }
 
         void HandleLobbyError(LobbyErrorPayload p)

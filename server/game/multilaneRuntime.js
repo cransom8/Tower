@@ -1,5 +1,21 @@
 "use strict";
 
+async function loadDefaultWaveConfig(db) {
+  if (!db) return [];
+  try {
+    const cr = await db.query(`SELECT id FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`);
+    if (!cr.rows[0]) return [];
+    const wr = await db.query(
+      `SELECT wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult
+       FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`,
+      [cr.rows[0].id]
+    );
+    return wr.rows;
+  } catch {
+    return [];
+  }
+}
+
 function createMultilaneRuntime({
   aiRuntime,
   db,
@@ -119,6 +135,12 @@ function createMultilaneRuntime({
     return `${roomId}:${code}:${parts.join("|")}`;
   }
 
+  function getSlotDefinition(simMl, playerCount, laneIndex, laneTeams) {
+    const config = simMl.createMLPublicConfig({ playerCount, laneTeams });
+    const defs = config && Array.isArray(config.slotDefinitions) ? config.slotDefinitions : [];
+    return defs.find((slot) => Number(slot.laneIndex) === Number(laneIndex)) || null;
+  }
+
   function resolveDefaultMultilaneTarget(game, sourceLaneIndex) {
     if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1) return null;
     const sourceLane = game.lanes[sourceLaneIndex];
@@ -204,21 +226,42 @@ function createMultilaneRuntime({
       }
     }
 
+    for (const assignment of laneAssignments) {
+      const slot = getSlotDefinition(simMl, playerCount, assignment.laneIndex, laneTeams);
+      if (!slot) continue;
+      assignment.side = slot.side;
+      assignment.slotKey = slot.slotKey;
+      assignment.slotColor = slot.slotColor;
+      assignment.branchId = slot.branchId;
+      assignment.branchLabel = slot.branchLabel;
+      assignment.castleSide = slot.castleSide;
+    }
+
     const matchSeedStr = buildMlMatchSeed(roomId, code, laneAssignments);
     const matchSeedNum = stringToSeed(matchSeedStr);
+    const publicConfig = simMl.createMLPublicConfig({ ...room.settings, playerCount, laneTeams });
     const game = simMl.createMLGame(playerCount, {
       ...room.settings,
       laneTeams,
       matchSeed: matchSeedNum,
     });
 
+    // Load wave config from DB (async; game starts with empty config then gets populated)
+    loadDefaultWaveConfig(db).then(waves => {
+      game.waveConfig = waves;
+      log.info(`[ml-game] wave config loaded: ${waves.length} waves`, { roomId });
+    }).catch(err => {
+      log.error('[ml-game] failed to load wave config', { err: err.message });
+    });
+
     io.to(roomId).emit("ml_match_ready", {
       code,
       playerCount,
       laneAssignments,
+      battlefieldTopology: publicConfig.battlefieldTopology,
       aiEngine: "new_bot_controller_v1",
     });
-    io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig(room.settings));
+    io.to(roomId).emit("ml_match_config", publicConfig);
 
     if (!room.loadoutByLane) room.loadoutByLane = [];
     Promise.all([
@@ -234,6 +277,20 @@ function createMultilaneRuntime({
           const keys = loadout.map((ut) => ut.key);
           game.lanes[laneIdx].autosend.loadoutKeys = keys;
           game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map(k => [k, false]));
+          // Load equipped skins for this player
+          if (db && sock.playerId) {
+            try {
+              const skinRows = await db.query(
+                'SELECT unit_type, skin_key FROM player_skin_equip WHERE player_id = $1',
+                [sock.playerId]
+              );
+              game.lanes[laneIdx].equippedSkins = Object.fromEntries(
+                skinRows.rows.map(r => [r.unit_type, r.skin_key])
+              );
+            } catch (err) {
+              log.error('[skins] failed to load equipped skins', { err: err.message });
+            }
+          }
         }
         sock.emit("ml_match_config", { loadout });
       }),
@@ -283,7 +340,7 @@ function createMultilaneRuntime({
     const matchIdPromise = logMatchStart(roomId, dbMode);
     const eliminatedNotified = new Set();
     let localTick = 0;
-    const snapshotEveryNTicks = 10;
+    const snapshotEveryNTicks = 2; // 10 Hz at 20 Hz tick rate (was 10 = 2 Hz, too laggy)
 
     const tickHandle = setInterval(() => {
       const entry = gamesByRoomId.get(roomId);
@@ -316,29 +373,15 @@ function createMultilaneRuntime({
         }
       }
 
-      if (localTick % snapshotEveryNTicks === 0) {
-        io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+      // Drain pending round events from sim
+      const pendingEvents = entry.game._pendingEvents || [];
+      entry.game._pendingEvents = [];
+      for (const evt of pendingEvents) {
+        io.to(roomId).emit(evt.type, evt);
       }
 
-      if (localTick % 5 === 0) {
-        for (const sid of room.players) {
-          const laneIdx = room.laneBySocketId.get(sid);
-          if (laneIdx === undefined) continue;
-          const qLane = entry.game.lanes[laneIdx];
-          if (!qLane) continue;
-          const qSock = io.sockets.sockets.get(sid);
-          if (!qSock) continue;
-          const queues = {};
-          for (const key of qLane.sendQueue) queues[key] = (queues[key] || 0) + 1;
-          qSock.emit("queue_update", {
-            queues,
-            drainProgress: simMl.SEND_INTERVAL_TICKS > 0
-              ? qLane.sendDrainCounter / simMl.SEND_INTERVAL_TICKS
-              : 0,
-            totalQueued: qLane.sendQueue.length,
-            queueCap: simMl.QUEUE_CAP,
-          });
-        }
+      if (localTick % snapshotEveryNTicks === 0) {
+        io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
       }
 
       if (entry.game.phase === "ended") {

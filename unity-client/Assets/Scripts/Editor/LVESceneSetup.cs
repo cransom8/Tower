@@ -1,9 +1,7 @@
-// LVESceneSetup.cs — Builds the volcanic lava-lake environment for Game_ML and Game_Survival.
+// LVESceneSetup.cs — Builds the volcanic lava-lake environment for Game_ML.
 //
 // Menu: Castle Defender → Setup → Build LVE Background
-//       Castle Defender → Setup → Build LVE Background (Both Scenes)
 //       Castle Defender → Setup → Setup LVE Lighting
-//       Castle Defender → Setup → Setup LVE Lighting (Both Scenes)
 //
 // LVE shaders ARE URP Shader Graph ("RenderPipeline"="UniversalPipeline") — no conversion needed.
 // The cinematic look comes from post-processing + skybox, applied by "Setup LVE Lighting".
@@ -58,6 +56,14 @@ namespace CastleDefender.Editor
 
         // ── Menu items ────────────────────────────────────────────────────────
 
+        [MenuItem("Castle Defender/Setup/Apply Lava Stone Materials")]
+        static void ApplyLavaStoneMaterials()
+        {
+            ApplyMaterials();
+            Debug.Log("[LVESetup] Lava stone materials applied.");
+        }
+
+
         [MenuItem("Castle Defender/Setup/Build LVE Background")]
         static void BuildCurrentScene()
         {
@@ -65,21 +71,6 @@ namespace CastleDefender.Editor
             Debug.Log("[LVESetup] Done. Run 'Setup LVE Lighting' for bloom + skybox.");
         }
 
-        [MenuItem("Castle Defender/Setup/Build LVE Background (Both Scenes)")]
-        static void BuildBothScenes()
-        {
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
-
-            var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
-            Build();
-            EditorSceneManager.SaveScene(sceneML);
-
-            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
-            Build();
-            EditorSceneManager.SaveScene(sceneSurv);
-
-            Debug.Log("[LVESetup] Both scenes built and saved.");
-        }
 
         [MenuItem("Castle Defender/Setup/Setup LVE Lighting")]
         static void SetupLightingCurrentScene()
@@ -88,21 +79,6 @@ namespace CastleDefender.Editor
             Debug.Log("[LVESetup] Lighting set up. Check scene for Global Volume and Directional Light.");
         }
 
-        [MenuItem("Castle Defender/Setup/Setup LVE Lighting (Both Scenes)")]
-        static void SetupLightingBothScenes()
-        {
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
-
-            var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
-            SetupLighting();
-            EditorSceneManager.SaveScene(sceneML);
-
-            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
-            SetupLighting();
-            EditorSceneManager.SaveScene(sceneSurv);
-
-            Debug.Log("[LVESetup] Lighting applied to both scenes.");
-        }
 
         // ── Lighting / post-processing setup ─────────────────────────────────
         // Applies the LVE demo scene's look: lava sky, warm directional light,
@@ -215,10 +191,14 @@ namespace CastleDefender.Editor
 
             Object.DestroyImmediate(go.GetComponent<MeshCollider>());
 
-            var mat = MakeUrpMaterial("Lava_Floor_Mat",
-                baseColor: new Color(0.9f, 0.25f, 0.05f),
-                emissiveColor: new Color(1.2f, 0.3f, 0f),
-                metallic: 0f, smoothness: 0.6f);
+            // Prefer the LVE animated lava lake Shader Graph material.
+            // Fall back to a custom proxy only if the LVE asset is missing.
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(EditorPaths.LVE_LAVA_LAKE_MAT);
+            if (mat == null)
+                mat = MakeUrpMaterial("Lava_Floor_Mat",
+                    baseColor: new Color(0.9f, 0.25f, 0.05f),
+                    emissiveColor: new Color(1.2f, 0.3f, 0f),
+                    metallic: 0f, smoothness: 0.6f);
             go.GetComponent<Renderer>().sharedMaterial = mat;
         }
 
@@ -503,6 +483,77 @@ namespace CastleDefender.Editor
                 go.name = $"{prefix}_{i}";
                 go.transform.position = positions[i];
             }
+        }
+
+        // ── Lava stone material patcher ──────────────────────────────────────
+        // Applies dark-stone / lava-glow values to the three key materials so
+        // the tile bridges look like volcanic cobblestone over glowing lava.
+
+        static void ApplyMaterials()
+        {
+            // Floor tiles → dark volcanic cobblestone
+            PatchMat("Assets/Materials/Tiles/MatFloor.mat",
+                baseColor:     new Color(0.10f, 0.08f, 0.07f),
+                emissiveColor: new Color(0.07f, 0.018f, 0f),
+                metallic: 0f, smoothness: 0.06f);
+
+            // Bridge deck undersides → dark stone with faint lava glow
+            PatchMat("Assets/Materials/LVE/BridgeDeck_Mat.mat",
+                baseColor:     new Color(0.22f, 0.18f, 0.16f),
+                emissiveColor: new Color(0.12f, 0.03f, 0f),
+                metallic: 0.1f, smoothness: 0.15f);
+
+            // Lava floor → assign the LVE animated lava lake material directly
+            // to the Lava_Floor object already in the scene.
+            var lavaLakeMat = AssetDatabase.LoadAssetAtPath<Material>(EditorPaths.LVE_LAVA_LAKE_MAT);
+            if (lavaLakeMat != null)
+            {
+                var lavaFloor = GameObject.Find("Lava_Floor");
+                if (lavaFloor != null)
+                {
+                    var r = lavaFloor.GetComponent<Renderer>();
+                    if (r != null)
+                    {
+                        r.sharedMaterial = lavaLakeMat;
+                        EditorUtility.SetDirty(lavaFloor);
+                        EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+                        Debug.Log("[LVESetup] Lava_Floor assigned LVE lake material.");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("[LVESetup] Lava_Floor not found in scene — run 'Build LVE Background' first.");
+                }
+            }
+            else
+            {
+                // LVE asset missing — fall back to patching the proxy material
+                PatchMat("Assets/Materials/LVE/Lava_Floor_Mat.mat",
+                    baseColor:     new Color(1.0f, 0.35f, 0.04f),
+                    emissiveColor: new Color(1.8f, 0.4f, 0f),
+                    metallic: 0f, smoothness: 0.6f);
+            }
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+        }
+
+        static void PatchMat(string path, Color baseColor, Color emissiveColor,
+                              float metallic, float smoothness)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null) { Debug.LogWarning("[LVESetup] Material not found: " + path); return; }
+
+            mat.SetColor("_BaseColor",     baseColor);
+            mat.SetColor("_Color",         baseColor);
+            mat.SetColor("_EmissionColor", emissiveColor);
+            mat.EnableKeyword("_EMISSION");
+            mat.SetFloat("_Metallic",    metallic);
+            mat.SetFloat("_Smoothness",  smoothness);
+            mat.SetFloat("_Glossiness",  smoothness);
+
+            EditorUtility.SetDirty(mat);
+            Debug.Log("[LVESetup] Patched: " + path);
         }
 
         // ── URP material helpers ──────────────────────────────────────────────

@@ -600,9 +600,17 @@
 
         <!-- ML Info Bar (shown only in ML mode) -->
         <div id="ml-info-bar" style="display:none">
-          <div class="mib-group mib-lives-group">
+          <div class="mib-group mib-teamhp-group">
             <span class="mib-icon">&#x2764;</span>
-            <span id="mib-lives">20</span>
+            <span id="mib-teamhp">20</span><span class="mib-sep">/</span><span id="mib-teamhp-max">20</span>
+          </div>
+          <div class="mib-group mib-round-group">
+            <span class="mib-icon">&#x25CB;</span>
+            <span id="mib-round-label">Round <span id="mib-round-num">1</span></span>
+          </div>
+          <div class="mib-group mib-phase-group">
+            <span id="mib-phase-label" class="mib-phase-badge mib-phase-build">BUILD</span>
+            <span id="mib-phase-timer">30s</span>
           </div>
           <div class="mib-group mib-gold-group">
             <span class="mib-icon">&#x2B21;</span>
@@ -618,6 +626,14 @@
             <span id="mib-timer">12s</span>
           </div>
           <button class="mib-barracks-btn" id="mib-barracks-btn">&#x1F3F0; Lv<span id="mib-barracks-lv">1</span></button>
+        </div>
+
+        <!-- Survival HUD (shown only in survival mode) -->
+        <div id="survival-hud" style="display:none">
+          <span id="sv-hud-wave">Wave <span id="sv-wave-num">-</span></span>
+          <span id="sv-hud-lives">&#x2764; <span id="sv-lives">20</span> / <span id="sv-max-lives">20</span></span>
+          <span id="sv-hud-gold">&#x1FA99; <span id="sv-gold">0</span></span>
+          <span id="sv-hud-phase"><span id="sv-phase-text">Get Ready</span></span>
         </div>
 
         <div id="matchup-panel" class="expanded"></div>
@@ -636,17 +652,6 @@
       <div id="tower-popout" style="display:none"></div>
       <div id="action-feedback"></div>
       <div id="game-over-banner" style="display:none"></div>
-
-      <!-- SURVIVAL HUD (shown only in survival mode) -->
-      <div id="survival-hud" style="display:none;position:absolute;top:6px;left:50%;transform:translateX(-50%);display:none;flex-direction:row;gap:14px;align-items:center;background:rgba(15,20,30,0.88);border:1px solid #334155;border-radius:8px;padding:6px 14px;z-index:90;font-size:14px;font-weight:600;pointer-events:none">
-        <span id="sv-hud-wave" style="color:#e8a828">Wave <span id="sv-wave-num">-</span></span>
-        <span style="color:#64748b">|</span>
-        <span id="sv-hud-lives" style="color:#f87171">&#x2764; <span id="sv-lives">20</span> / <span id="sv-max-lives">20</span></span>
-        <span style="color:#64748b">|</span>
-        <span id="sv-hud-gold" style="color:#4ade80">&#x1FA99; <span id="sv-gold">0</span></span>
-        <span style="color:#64748b">|</span>
-        <span id="sv-hud-phase" style="color:#94a3b8"><span id="sv-phase-text">Get Ready</span></span>
-      </div>
 
       <!-- SURVIVAL BOSS WARNING banner -->
       <div id="sv-boss-banner" style="display:none;position:absolute;top:50px;left:50%;transform:translateX(-50%);background:#ef4444;color:#fff;font-weight:700;font-size:18px;padding:8px 24px;border-radius:8px;z-index:91;animation:svBossFlash 0.6s infinite alternate">
@@ -684,13 +689,6 @@
 
       <!-- ML Command Bar (bottom bar, shown only in ML mode) -->
       <div id="ml-cmd-bar" style="display:none">
-        <div class="cmd-build-zone">
-          <button class="cmd-wall-btn" id="cmd-wall-btn">
-            <span class="cwb-icon">&#x25A6;</span>
-            <span class="cwb-label">Wall</span>
-            <span class="cwb-cost" id="cmd-wall-cost">2g</span>
-          </button>
-        </div>
         <div class="cmd-units-zone" id="cmd-units-zone">
           <button class="cmd-unit-btn" data-unit-type="runner" id="cmd-unit-runner">
             <span class="cub-auto" data-unit-type="runner" id="cub-auto-runner">A</span>
@@ -740,7 +738,6 @@
             <button class="cmd-rate-btn cmd-rate-on" data-rate="normal">N</button>
             <button class="cmd-rate-btn" data-rate="fast">F</button>
           </div>          </div>
-        <div id="queue-drain-bar-wrap" title="Send queue drain progress"><div id="queue-drain-bar"></div></div>
       </div>
 
       <!-- Enemy lane tint overlay (shown when viewing enemy lane) -->

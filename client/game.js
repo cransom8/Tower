@@ -218,8 +218,7 @@ let mlActiveTile = null; // { gx, gy } of the currently-open tower upgrade menu
 let mlSelectedTiles = []; // [{ gx, gy }]
 let mlSelectionKind = null; // "wall" | "tower" | null
 let mlSelectionTowerType = null;
-let mlWallCost = 2;
-let mlMaxWalls = null;
+let mlPlacementUnit = null; // unit type key currently selected for grid placement (drag/multi)
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Auto-send state ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 let autosendEnabled = {};       // { runner: bool, footman: bool, ... }
@@ -511,11 +510,17 @@ function handleMlSnapshotSfx(prevState, nextState) {
 
 bindSfxUnlockHandlers();
 
-function canPreviewWallAt(lane, gx, gy) {
+function canBuildAt(lane, gx, gy) {
   if (!lane) return false;
-  const isWall  = lane.walls      && lane.walls.some(w => w.x === gx && w.y === gy);
-  const isTower = lane.towerCells && lane.towerCells.some(t => t.x === gx && t.y === gy);
-  return !isWall && !isTower;
+  const isTower   = lane.towerCells && lane.towerCells.some(t => t.x === gx && t.y === gy);
+  const isDeadTower = lane.deadCells && lane.deadCells.some(d => d.x === gx && d.y === gy);
+  // Derive spawn/castle from path rather than hardcoding coordinates.
+  const path = lane.path || [];
+  const spawnTile  = path[0];
+  const castleTile = path[path.length - 1];
+  const isSpawn  = spawnTile  && spawnTile.x  === gx && spawnTile.y  === gy;
+  const isCastle = castleTile && castleTile.x === gx && castleTile.y === gy;
+  return !isTower && !isDeadTower && !isSpawn && !isCastle;
 }
 
 function getMLGridTileFromClient(clientX, clientY) {
@@ -547,10 +552,22 @@ function getAffordableTowerUpgrades(selectedTowers, towerType, gold) {
   return { affordable: out, totalUpgradeable, totalCost };
 }
 
-function commitDragPreviewWalls() {
+function commitDragPreviewUnits() {
   if (!mlDragPlacedSet || mlDragPlacedSet.size === 0) return false;
   if ((gameMode !== 'multilane' && gameMode !== 'survival') || viewingLaneIndex !== myLaneIndex || isSpectator) {
     mlDragPlacedSet.clear();
+    return false;
+  }
+  if (!mlPlacementUnit) {
+    // No unit selected — open picker on the first dragged tile instead.
+    const firstKey = mlDragPlacedSet.values().next().value;
+    mlDragPlacedSet.clear();
+    if (firstKey) {
+      const parts = firstKey.split(',');
+      const gx = Number(parts[0]);
+      const gy = Number(parts[1]);
+      if (Number.isInteger(gx) && Number.isInteger(gy)) showMLPlaceUnitMenu(gx, gy);
+    }
     return false;
   }
   for (const key of mlDragPlacedSet) {
@@ -558,7 +575,7 @@ function commitDragPreviewWalls() {
     const gx = Number(parts[0]);
     const gy = Number(parts[1]);
     if (!Number.isInteger(gx) || !Number.isInteger(gy)) continue;
-    sendAction('place_wall', { gridX: gx, gridY: gy });
+    sendAction('place_unit', { gridX: gx, gridY: gy, unitTypeKey: mlPlacementUnit });
   }
   mlDragPlacedSet.clear();
   return true;
@@ -571,7 +588,7 @@ function updateStraightWallDragPreview(gx, gy) {
   if (!lane) return;
 
   if (!mlDragAnchorTile) {
-    if (!canPreviewWallAt(lane, gx, gy)) return;
+    if (!canBuildAt(lane, gx, gy)) return;
     mlDragAnchorTile = { gx, gy };
     mlDragAxis = null;
     mlDragPlacedSet = new Set([gx + ',' + gy]);
@@ -596,7 +613,7 @@ function updateStraightWallDragPreview(gx, gy) {
     const endX = gx;
     const step = endX >= anchorX ? 1 : -1;
     for (let x = anchorX; ; x += step) {
-      if (!canPreviewWallAt(lane, x, anchorY)) break;
+      if (!canBuildAt(lane, x, anchorY)) break;
       nextSet.add(x + ',' + anchorY);
       if (x === endX) break;
     }
@@ -604,7 +621,7 @@ function updateStraightWallDragPreview(gx, gy) {
     const endY = gy;
     const step = endY >= anchorY ? 1 : -1;
     for (let y = anchorY; ; y += step) {
-      if (!canPreviewWallAt(lane, anchorX, y)) break;
+      if (!canBuildAt(lane, anchorX, y)) break;
       nextSet.add(anchorX + ',' + y);
       if (y === endY) break;
     }
@@ -750,7 +767,11 @@ const autosendRateSelect = document.getElementById('autosend-rate');
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ ML mobile UI DOM refs ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const hudBar          = document.getElementById('hud-bar');
 const mlInfoBar       = document.getElementById('ml-info-bar');
-const mibLives        = document.getElementById('mib-lives');
+const mibTeamHp       = document.getElementById('mib-teamhp');
+const mibTeamHpMax    = document.getElementById('mib-teamhp-max');
+const mibRoundNum     = document.getElementById('mib-round-num');
+const mibPhaseLabel   = document.getElementById('mib-phase-label');
+const mibPhaseTimer   = document.getElementById('mib-phase-timer');
 const mibGold         = document.getElementById('mib-gold');
 const mibIncome       = document.getElementById('mib-income');
 const mibTimer        = document.getElementById('mib-timer');
@@ -759,8 +780,8 @@ const mibBarracksBtn  = document.getElementById('mib-barracks-btn');
 const mibBarracksLv   = document.getElementById('mib-barracks-lv');
 const mlLaneTabs      = document.getElementById('ml-lane-tabs');
 const mlCmdBar        = document.getElementById('ml-cmd-bar');
-const cmdWallBtn      = document.getElementById('cmd-wall-btn');
-const cmdWallCost     = document.getElementById('cmd-wall-cost');
+const cmdWallBtn      = null; // removed — wave defense has no wall button
+const cmdWallCost     = null;
 const cmdUnitsZone    = document.getElementById('cmd-units-zone');
 const cmdUnitBtns     = Array.from(document.querySelectorAll('.cmd-unit-btn'));
 const cmdAutoIndicators = Array.from(document.querySelectorAll('.cub-auto'));
@@ -1052,8 +1073,7 @@ function applyMatchConfig(config) {
   }
   if (Number.isFinite(config.barracksCostBase)) mlBarracksCostBase = config.barracksCostBase;
   if (Number.isFinite(config.barracksReqIncomeBase)) mlBarracksReqIncomeBase = config.barracksReqIncomeBase;
-  if (Number.isFinite(config.wallCost)) mlWallCost = config.wallCost;
-  mlMaxWalls = Number.isFinite(config.maxWalls) ? config.maxWalls : null;
+  mlPlacementUnit = null; // clear placement selection at match start
   if (Number.isFinite(config.queueCap)) mlQueueCap = config.queueCap;
   if (Array.isArray(config.loadout) && config.loadout.length === 5) {
     applyLoadout(config.loadout);
@@ -1338,12 +1358,6 @@ function updateStatsPanel() {
   let bodyHtml = '';
 
   if (isML) {
-    bodyHtml += '<div class="stats-section-hdr">Wall</div>';
-    bodyHtml += '<div class="stats-wall-row">'
-      + '<span class="stats-name">Wall</span>'
-      + '<span class="stats-cost">' + mlWallCost + 'g</span>'
-      + '<span class="stats-max">max ' + (Number.isFinite(mlMaxWalls) ? mlMaxWalls : 'Unlimited') + '</span>'
-      + '</div>';
     bodyHtml += '<div class="stats-divider"></div>';
   }
 
@@ -3000,8 +3014,7 @@ function getTowerSellValue(type, level) {
   for (let lvl = 2; lvl <= level; lvl++) {
     upgradeTotal += getTowerUpgradeCost(type, lvl);
   }
-  // wall_placeholder has 100% refund; tower cost + upgrades have 70%
-  return Math.floor(mlWallCost * 1.0 + (base + upgradeTotal) * 0.7);
+  return Math.floor((base + upgradeTotal) * 0.7);
 }
 
 function getTowerStatsAtLevel(type, level) {
@@ -4341,18 +4354,13 @@ window.addEventListener('keydown', e => {
       const selected = getSelectionWallTiles(lane, mlActiveTile?.gx ?? 0, mlActiveTile?.gy ?? 0);
       if (selected.length > 0) target = selected[0];
     }
-    if (!target && mlActiveTile && lane.walls && lane.walls.some(w => w.x === mlActiveTile.gx && w.y === mlActiveTile.gy)) {
-      target = { x: mlActiveTile.gx, y: mlActiveTile.gy };
-    }
-    if (!target && mlHoverTile && lane.walls && lane.walls.some(w => w.x === mlHoverTile.gx && w.y === mlHoverTile.gy)) {
-      target = { x: mlHoverTile.gx, y: mlHoverTile.gy };
-    }
+    if (!target && mlActiveTile) target = { x: mlActiveTile.gx, y: mlActiveTile.gy };
+    if (!target && mlHoverTile)  target = { x: mlHoverTile.gx,  y: mlHoverTile.gy };
     if (!target) {
-      showActionFeedback('Select or hover a wall tile, then press H to convert it into a tower.');
+      showActionFeedback('Hover an empty tile, then press H to place a defender.');
       return;
     }
-    setMLSingleSelection('wall', target.x, target.y, null);
-    showMLWallConvertMenu(target.x, target.y);
+    showMLPlaceUnitMenu(target.x, target.y);
     e.preventDefault();
     return;
   }
@@ -5092,18 +5100,37 @@ function updateAndDrawFloatingTexts() {
 function updateMLInfoBar(myLane, state) {
   if (!myLane) return;
 
-  // Lives â€" detect loss to spawn floating text
-  const lives = Math.max(0, myLane.lives);
-  if (mibLives) mibLives.textContent = String(lives);
-  if (mlPrevLives !== -1 && lives < mlPrevLives) {
+  // Team HP — detect loss to spawn floating text
+  const mySide = myLane.side || 'left';
+  const teamHpObj = state && state.teamHp;
+  const teamHpMax = (state && state.teamHpMax) || 20;
+  const hp = teamHpObj ? Math.max(0, teamHpObj[mySide] || 0) : Math.max(0, myLane.lives || 0);
+  if (mibTeamHp) mibTeamHp.textContent = String(hp);
+  if (mibTeamHpMax) mibTeamHpMax.textContent = String(teamHpMax);
+  if (mlPrevLives !== -1 && hp < mlPrevLives) {
     const { offsetX, offsetY, tileSize } = getMLGridLayout();
     spawnFloatingText(
       offsetX + (ML_CASTLE_X + 0.5) * tileSize,
       offsetY + ML_CASTLE_YG * tileSize,
-      '-' + (mlPrevLives - lives), '#ff5050'
+      '-' + (mlPrevLives - hp), '#ff5050'
     );
   }
-  mlPrevLives = lives;
+  mlPrevLives = hp;
+
+  // Round state display
+  const roundState = (state && state.roundState) || 'build';
+  const roundNumber = (state && state.roundNumber) || 1;
+  const roundStateTicks = (state && state.roundStateTicks) || 0;
+  const tickHzVal = (state && state.tickHz) || 20;
+  if (mibRoundNum) mibRoundNum.textContent = String(roundNumber);
+  if (mibPhaseLabel) {
+    mibPhaseLabel.className = 'mib-phase-badge mib-phase-' + roundState;
+    mibPhaseLabel.textContent = roundState === 'build' ? 'BUILD' : roundState === 'combat' ? 'COMBAT' : 'PREP';
+  }
+  if (mibPhaseTimer) {
+    const secs = Math.max(0, Math.ceil(roundStateTicks / tickHzVal));
+    mibPhaseTimer.textContent = secs + 's';
+  }
 
   // Gold with flash animation
   const goldVal = myLane.gold;
@@ -5205,19 +5232,6 @@ function updateCmdBar(myLane) {
   if (!myLane) return;
   const gold = myLane.gold;
   const canAct = lobbyState === 'playing' && !isSpectator && viewingLaneIndex === myLaneIndex;
-
-  // Wall button
-  if (cmdWallBtn) {
-    cmdWallBtn.disabled = !canAct;
-    if (cmdWallCost) cmdWallCost.textContent = mlWallCost + 'g';
-  }
-  if (sideWallBtn) {
-    sideWallBtn.disabled = !canAct;
-    sideWallBtn.textContent = 'Wall\n'
-      + 'Cost ' + mlWallCost + 'g\n'
-      + 'Place on grid\n'
-      + 'Remove for refund';
-  }
 
   // Unit buttons
   // NOTE: disabled is only set based on canAct (not gold) so the .cub-auto badge
@@ -5552,12 +5566,6 @@ socket.on('ml_state_snapshot', state => {
   mlCurrentStateReceivedAt = performance.now();
 
   const lane = state.lanes && state.lanes[myLaneIndex];
-  // Phase D: sync send queue counts from snapshot (handles reconnect case)
-  if (lane && lane.sendQueue && typeof lane.sendQueue === 'object') {
-    mlSendQueueCounts = Object.assign({}, lane.sendQueue);
-    mlQueueDrainProgress = typeof lane.sendDrainProgress === 'number' ? lane.sendDrainProgress : 0;
-    updateQueueDisplay();
-  }
   normalizeMLSelectionForLane(lane);
   if (mlActiveTile && mlTileMenu && mlTileMenu.style.display !== 'none' && lane) {
     if (mlSelectionKind === 'wall') {
@@ -5651,6 +5659,24 @@ socket.on('ml_game_over', data => {
   } else {
     showGameOverBanner((data.winnerName || 'Opponent') + ' WINS');
   }
+});
+
+socket.on('ml_round_start', data => {
+  const round = data && data.roundNumber ? data.roundNumber : '';
+  showActionFeedback('Round ' + round + ' — BUILD PHASE', false);
+});
+
+socket.on('ml_wave_start', data => {
+  const round = data && data.roundNumber ? data.roundNumber : '';
+  const unitType = data && data.unitType ? data.unitType : 'enemy';
+  const qty = data && data.qty ? data.qty : '';
+  const label = qty ? qty + 'x ' + unitType : unitType;
+  showActionFeedback('Wave ' + round + ': ' + label, true);
+});
+
+socket.on('ml_round_end', data => {
+  const round = data && data.roundNumber ? data.roundNumber : '';
+  showActionFeedback('Round ' + round + ' cleared!', false);
 });
 
 function shortTower(type) {
@@ -5804,9 +5830,6 @@ function applyMLDragSelection() {
       showMLTowerUpgradeMenu(active.gx, active.gy, tower.type, tower.level, tower.targetMode);
       return true;
     }
-  } else if (mlSelectionKind === 'wall') {
-    showMLWallConvertMenu(active.gx, active.gy);
-    return true;
   }
   return false;
 }
@@ -5828,19 +5851,9 @@ function handleMLCanvasClick(clientX, clientY) {
   const lane = mlCurrentState.lanes[myLaneIndex];
   if (!lane) return;
 
-  const isWall = lane.walls && lane.walls.some(w => w.x === gx && w.y === gy);
   const towerCell = lane.towerCells && lane.towerCells.find(t => t.x === gx && t.y === gy);
-
-  if (!towerCell && !isWall) {
-    if (lane.gold < mlWallCost) {
-      showActionFeedback(`Need ${mlWallCost}g to place a wall (you have ${lane.gold}g).`);
-      return;
-    }
-    clearMLSelection();
-    closeMLTileMenu();
-    sendAction('place_wall', { gridX: gx, gridY: gy });
-    return;
-  }
+  const deadCell  = lane.deadCells  && lane.deadCells.find(d => d.x === gx && d.y === gy);
+  const roundState = mlCurrentState.roundState || 'build';
 
   if (towerCell) {
     const sameSelection = mlSelectionKind === 'tower' && mlSelectionTowerType === towerCell.type;
@@ -5854,14 +5867,18 @@ function handleMLCanvasClick(clientX, clientY) {
     return;
   }
 
-  const sameSelection = mlSelectionKind === 'wall';
-  if (!sameSelection) {
-    setMLSingleSelection('wall', gx, gy, null);
-  } else {
-    toggleMLSelectionTile(gx, gy);
+  if (deadCell) {
+    showActionFeedback('Inactive — restores next build phase');
+    return;
   }
-  mlActiveTile = { gx, gy };
-  showMLWallConvertMenu(gx, gy);
+
+  if (roundState !== 'build') {
+    showActionFeedback(roundState === 'combat' ? 'Cannot build during combat' : 'Preparing next round…');
+    return;
+  }
+
+  clearMLSelection();
+  showMLPlaceUnitMenu(gx, gy);
 }
 function positionMLTileMenu(gx, gy) {
   if (!mlTileMenu) return;
@@ -5898,48 +5915,40 @@ function positionMLTileMenu(gx, gy) {
   mlTileMenu.style.top = my + 'px';
 }
 
-function showMLWallConvertMenu(gx, gy) {
+function showMLPlaceUnitMenu(gx, gy) {
   if (!mlTileMenu) return;
   const lane = mlCurrentState && mlCurrentState.lanes[myLaneIndex];
   if (!lane) return;
-  normalizeMLSelectionForLane(lane);
   mlActiveTile = { gx, gy };
 
   const gold = lane.gold;
-  const selectedWalls = getSelectionWallTiles(lane, gx, gy);
-  const selectedCount = selectedWalls.length;
-
-  let html = '<div class="ml-menu-title">Place Defender</div>';
-  if (selectedCount > 1) {
-    html += `<div class="ml-menu-stat" data-selected-walls>Selected walls: ${selectedCount}</div>`;
-  }
   const _loadoutSet = new Set(activeUnitTypes);
-  let towerTypes;
+  let unitTypes;
   if (mlFixedUnitTypes.length > 0) {
     const filtered = mlFixedUnitTypes.filter(ut => _loadoutSet.has(ut.key));
-    towerTypes = (filtered.length > 0 ? filtered : mlFixedUnitTypes).map(ut => ut.key);
+    unitTypes = (filtered.length > 0 ? filtered : mlFixedUnitTypes).map(ut => ut.key);
   } else {
-    towerTypes = activeUnitTypes.length > 0 ? [...activeUnitTypes] : ['archer', 'fighter', 'mage', 'ballista', 'cannon'];
+    unitTypes = activeUnitTypes.length > 0 ? [...activeUnitTypes] : [];
   }
-  for (const t of towerTypes) {
+
+  let html = '<div class="ml-menu-title">Place Defender</div>';
+  for (const t of unitTypes) {
     const m = towerMeta[t] || DEFAULT_TOWER_META[t];
     const unitCost = m ? m.cost : 0;
-    const totalCost = unitCost * selectedCount;
-    const disabled = (!m || gold < totalCost) ? ' disabled' : '';
+    const disabled = (!m || gold < unitCost) ? ' disabled' : '';
     const displayName = (m && m.label) || cap(t);
-    const label = selectedCount > 1 ? `${displayName} x${selectedCount} (${totalCost}g)` : `${displayName} (${unitCost}g)`;
-    html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-tower="${t}"${disabled}>${label}</button>`;
+    html += `<button class="ml-tile-btn" data-gx="${gx}" data-gy="${gy}" data-place-unit="${t}"${disabled}>${displayName} (${unitCost}g)</button>`;
   }
-  const cheapestTowerCost = towerTypes.reduce((minCost, t) => {
+  if (unitTypes.length === 0) {
+    html += '<div class="ml-menu-stat">No loadout units available.</div>';
+  }
+  const cheapestCost = unitTypes.reduce((min, t) => {
     const m = towerMeta[t] || DEFAULT_TOWER_META[t];
-    const unitCost = m ? m.cost : Infinity;
-    return Math.min(minCost, unitCost);
+    return Math.min(min, m ? m.cost : Infinity);
   }, Infinity);
-  if (Number.isFinite(cheapestTowerCost) && gold < (cheapestTowerCost * selectedCount)) {
-    const needed = (cheapestTowerCost * selectedCount) - gold;
-    html += `<div class="ml-menu-stat">Need +${needed}g to convert selected wall${selectedCount > 1 ? 's' : ''}.</div>`;
+  if (Number.isFinite(cheapestCost) && gold < cheapestCost) {
+    html += `<div class="ml-menu-stat">Need ${cheapestCost - gold}g more to place.</div>`;
   }
-  html += `<button class="ml-tile-btn danger" data-gx="${gx}" data-gy="${gy}" data-remove-wall>Remove Wall (+${mlWallCost}g)</button>`;
   html += '<button class="ml-tile-btn secondary" data-close>Cancel</button>';
   mlTileMenu.innerHTML = html;
 
@@ -5948,34 +5957,18 @@ function showMLWallConvertMenu(gx, gy) {
   mlTileMenuJustOpened = true;
   requestAnimationFrame(() => { mlTileMenuJustOpened = false; });
 
-  mlTileMenu.querySelectorAll('[data-tower]').forEach(btn => {
+  mlTileMenu.querySelectorAll('[data-place-unit]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const towerType = btn.getAttribute('data-tower');
-      if (!towerType) return;
+      const unitTypeKey = btn.getAttribute('data-place-unit');
+      if (!unitTypeKey) return;
       btn.disabled = true;
-      btn.textContent = 'Applying...';
-      if (selectedCount > 1) {
-        sendAction('bulk_upgrade_walls', {
-          unitTypeKey: towerType,
-          tiles: selectedWalls.map(t => ({ gridX: t.x, gridY: t.y })),
-        });
-        playTowerBuildSfx(towerType);
-      } else {
-        sendAction('upgrade_wall', { gridX: gx, gridY: gy, unitTypeKey: towerType });
-        playTowerBuildSfx(towerType);
-      }
+      btn.textContent = 'Placing...';
+      mlPlacementUnit = unitTypeKey; // remember for subsequent drag placements
+      sendAction('place_unit', { gridX: gx, gridY: gy, unitTypeKey });
+      playTowerBuildSfx(unitTypeKey);
       closeMLTileMenu();
     });
   });
-  const removeWallBtn = mlTileMenu.querySelector('[data-remove-wall]');
-  if (removeWallBtn) {
-    removeWallBtn.addEventListener('click', () => {
-      const bx = Number(removeWallBtn.getAttribute('data-gx'));
-      const by = Number(removeWallBtn.getAttribute('data-gy'));
-      sendAction('remove_wall', { gridX: bx, gridY: by });
-      closeMLTileMenu();
-    });
-  }
   const closeBtn = mlTileMenu.querySelector('[data-close]');
   if (closeBtn) closeBtn.addEventListener('click', closeMLTileMenu);
 }
@@ -6198,7 +6191,7 @@ canvas.addEventListener('click', function (e) {
 canvas.addEventListener('touchend', function (e) {
   if (gameMode !== 'multilane' && gameMode !== 'survival') return;
   e.preventDefault();
-  const didCommit = commitDragPreviewWalls();
+  const didCommit = commitDragPreviewUnits();
   mlDragPlacing = false;
   mlDragSelecting = false;
   mlDragSelectAnchor = null;
@@ -6317,12 +6310,7 @@ if (cmdWallBtn) {
 if (sideWallBtn) {
   sideWallBtn.addEventListener('click', () => {
     if ((gameMode !== 'multilane' && gameMode !== 'survival') || viewingLaneIndex !== myLaneIndex || isSpectator) return;
-    const lane = mlCurrentState && mlCurrentState.lanes && mlCurrentState.lanes[myLaneIndex];
-    if (lane && lane.gold < mlWallCost) {
-      showActionFeedback(`Need ${mlWallCost}g to place a wall (you have ${lane.gold}g).`);
-      return;
-    }
-    showActionFeedback('Click an empty grid tile to place a wall (' + mlWallCost + 'g)', true);
+    showActionFeedback('Click an empty grid tile to place a defender.', true);
   });
 }
 
@@ -6384,7 +6372,7 @@ canvas.addEventListener('mouseup', () => {
       const didSelect = applyMLDragSelection();
       if (didSelect) mlWasDrag = true;
     } else {
-      const didCommit = commitDragPreviewWalls();
+      const didCommit = commitDragPreviewUnits();
       if (didCommit) mlWasDrag = true;
     }
   }

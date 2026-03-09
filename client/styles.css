@@ -2072,10 +2072,57 @@ html, body {
   opacity: 0.75;
 }
 
-.mib-lives-group #mib-lives {
+.mib-teamhp-group #mib-teamhp {
   font-size: 1rem;
   color: #ff7070;
   font-weight: bold;
+}
+
+.mib-sep {
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.mib-teamhp-group #mib-teamhp-max {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.mib-round-group #mib-round-label {
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.mib-phase-badge {
+  font-size: 0.6rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.mib-phase-build {
+  background: rgba(40, 208, 96, 0.18);
+  color: #28d060;
+  border: 1px solid rgba(40, 208, 96, 0.35);
+}
+
+.mib-phase-combat {
+  background: rgba(239, 68, 68, 0.18);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.mib-phase-transition {
+  background: rgba(250, 180, 40, 0.18);
+  color: #fab428;
+  border: 1px solid rgba(250, 180, 40, 0.35);
+}
+
+.mib-phase-group #mib-phase-timer {
+  font-size: 0.7rem;
+  color: var(--muted);
+  min-width: 24px;
 }
 
 .mib-gold-group #mib-gold {
@@ -2490,6 +2537,7 @@ html, body {
 #right-rail #auth-bar,
 #right-rail #hud-bar,
 #right-rail #ml-info-bar,
+#right-rail #survival-hud,
 #right-rail #defense-bar,
 #right-rail #matchup-panel,
 #right-rail #stats-panel,
@@ -2728,25 +2776,72 @@ html, body {
 
 #right-rail #ml-info-bar {
   display: none;
+  flex-direction: column;
+  align-items: stretch;
   height: auto;
   left: auto;
   right: auto;
   padding: 0;
   border: 1px solid var(--muted2);
   border-left: 2px solid var(--gold2);
-  border-bottom: 1px solid var(--muted2);
   border-radius: 6px;
   background: rgba(8, 11, 18, 0.88);
+  overflow: hidden;
 }
 
 #right-rail #ml-info-bar .mib-group {
   height: auto;
+  width: 100%;
   padding: 7px 8px;
+  border-right: none;
+  border-bottom: 1px solid var(--muted2);
+}
+
+#right-rail #ml-info-bar .mib-group:last-child {
+  border-bottom: none;
 }
 
 #right-rail #ml-info-bar .mib-barracks-btn {
-  display: none;
+  display: flex;
+  margin: 6px 8px;
+  margin-left: auto;
+  width: calc(100% - 16px);
+  justify-content: center;
 }
+
+/* ── Survival HUD in right rail ───────────────────────────────────────────── */
+
+#right-rail #survival-hud {
+  display: none;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--muted2);
+  border-left: 2px solid #ef4444;
+  border-radius: 6px;
+  background: rgba(8, 11, 18, 0.88);
+  overflow: hidden;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.62rem;
+  pointer-events: auto;
+}
+
+#right-rail #survival-hud > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--muted2);
+  color: var(--text);
+}
+
+#right-rail #survival-hud > span:last-child {
+  border-bottom: none;
+}
+
+#right-rail #sv-hud-wave { color: var(--gold); }
+#right-rail #sv-hud-lives { color: #ff7070; }
+#right-rail #sv-hud-gold { color: var(--green); }
+#right-rail #sv-hud-phase { color: var(--muted); }
 
 #right-rail #matchup-panel,
 #right-rail #stats-panel,

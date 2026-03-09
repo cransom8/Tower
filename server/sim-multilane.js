@@ -3,8 +3,8 @@
 
 /**
  * Multi-lane PvP simulation — 10×28 tile grid per player lane.
- * Units follow a BFS path from spawn tile to castle tile.
- * Wall placement requires BFS validation + combat lock.
+ * Units follow a straight path from spawn tile (5,0) to castle tile (5,27).
+ * Forge Wars wave defense: defenders placed on tile grid fight incoming wave enemies.
  * Barracks provides global unit-tech upgrades.
  *
  * Wired to sim-core (computeDamage, fireProjectile, resolveProjectile, mulberry32 RNG)
@@ -46,14 +46,64 @@ const SPAWN_X = 5;
 const SPAWN_YG = 0;
 const CASTLE_X = 5;
 const CASTLE_YG = 27;
-const MAX_PATH_LEN = GRID_W * GRID_H; // max possible BFS path in a 11×28 grid
-const MAX_WALLS = null; // unlimited
-const WALL_COST = 2;
+const MAX_PATH_LEN = GRID_W * GRID_H; // kept for reference; path is always GRID_H steps
 const SPLASH_RADIUS_TILES = 1.5;
 const SEND_INTERVAL_TICKS = 5;     // ticks between send-queue drains (0.25s at 20Hz)
 const QUEUE_CAP = 200;             // max units in send queue per lane
 const MIN_UNIT_SPACING = 0.15;     // minimum pathIdx gap enforced by applySeparation
 const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
+
+// Wave defense constants (Forge Wars Wave Rework Phase 1)
+const TEAM_HP_START = 20;
+const BUILD_PHASE_TICKS = 600;       // 30 s at 20 Hz
+const TRANSITION_PHASE_TICKS = 200;  // 10 s at 20 Hz
+const ESCALATION_PER_EXTRA_ROUND = 0.10; // +10% HP/DMG per round beyond last wave
+
+// Shared path suffix appended after each branch's BFS path.
+// Represents the outer shared bridge leading to the enemy base:
+//   Left side  (lanes 0,1): Bridge_A → Dwarf Base
+//   Right side (lanes 2,3): Bridge_F → Goblin Base
+// Both lanes on the same side share this bridge. Towers cannot target units here
+// (virtual coordinates are outside the private build grid).
+const SHARED_SUFFIX_LENGTH = 28; // matches private branch grid length (GRID_H)
+
+function buildFullPath(branchPath) {
+  if (!branchPath || branchPath.length === 0) return [];
+  const last = branchPath[branchPath.length - 1];
+  const suffix = [];
+  for (let i = 1; i <= SHARED_SUFFIX_LENGTH; i++) {
+    suffix.push({ x: last.x, y: last.y + i });
+  }
+  return branchPath.concat(suffix);
+}
+
+const FIXED_SLOT_LAYOUT = [
+  { laneIndex: 0, slotKey: "left_a", side: "left",  slotColor: "red",   branchId: "left_branch_a",  branchLabel: "Red Branch",   castleSide: "right" },
+  { laneIndex: 1, slotKey: "left_b", side: "left",  slotColor: "gold",  branchId: "left_branch_b",  branchLabel: "Gold Branch",  castleSide: "right" },
+  { laneIndex: 2, slotKey: "right_a", side: "right", slotColor: "blue",  branchId: "right_branch_a", branchLabel: "Blue Branch",  castleSide: "left" },
+  { laneIndex: 3, slotKey: "right_b", side: "right", slotColor: "green", branchId: "right_branch_b", branchLabel: "Green Branch", castleSide: "left" },
+];
+
+const BATTLEFIELD_TOPOLOGY = Object.freeze({
+  mapType: "lava_lake_funnel",
+  centerIslandId: "center_spawn_island",
+  sideOrder: ["left", "right"],
+  castles: [
+    { side: "left", castleId: "left_castle", bridgeId: "left_castle_bridge" },
+    { side: "right", castleId: "right_castle", bridgeId: "right_castle_bridge" },
+  ],
+  mergeZones: [
+    { side: "left", landmassId: "left_merge_landmass", bridgeId: "left_castle_bridge" },
+    { side: "right", landmassId: "right_merge_landmass", bridgeId: "right_castle_bridge" },
+  ],
+  buildZones: [
+    { branchId: "left_branch_a", ownerLaneIndex: 0, buildable: true },
+    { branchId: "left_branch_b", ownerLaneIndex: 1, buildable: true },
+    { branchId: "right_branch_a", ownerLaneIndex: 2, buildable: true },
+    { branchId: "right_branch_b", ownerLaneIndex: 3, buildable: true },
+  ],
+  sharedZonesBuildable: false,
+});
 
 // Warlock debuff constants (3-second window at 20 hz)
 const WARLOCK_DEBUFF_CD    = 60;  // ticks between debuff attempts
@@ -61,26 +111,10 @@ const WARLOCK_DEBUFF_TICKS = 60;  // debuff duration in ticks
 const WARLOCK_DEBUFF_MULT  = 0.75; // -25% tower damage
 const WARLOCK_DEBUFF_RANGE = 3.5;  // tile radius
 
-// ── Hardcoded fallback definitions ────────────────────────────────────────────
-// Used when DB unit types are not loaded. Fields now include armorType,
-// damageType, and damageReductionPct explicitly for use with sim-core.
-const UNIT_DEFS = {
-  runner:   { cost: 8,  income: 0.5, hp: 60,  dmg: 7,  atkCdTicks: 7,  pathSpeed: 0.060375, bounty: 2, range: 0, ranged: false, armorType: "UNARMORED", damageType: "NORMAL", damageReductionPct: 0 },
-  footman:  { cost: 10, income: 1,   hp: 90,  dmg: 8,  atkCdTicks: 8,  pathSpeed: 0.036225, bounty: 3, range: 0, ranged: false, armorType: "MEDIUM",    damageType: "NORMAL", damageReductionPct: 0 },
-  ironclad: { cost: 16, income: 2,   hp: 160, dmg: 9,  atkCdTicks: 10, pathSpeed: 0.036225, bounty: 4, range: 0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL", damageReductionPct: 20, warlockDebuff: false },
-  warlock:  { cost: 18, income: 2,   hp: 80,  dmg: 12, atkCdTicks: 11, pathSpeed: 0.036225, bounty: 5, range: 0, ranged: false, armorType: "MAGIC",     damageType: "MAGIC",  damageReductionPct: 0,  warlockDebuff: true },
-  golem:    { cost: 25, income: 3,   hp: 240, dmg: 14, atkCdTicks: 13, pathSpeed: 0.024150, bounty: 6, range: 0, ranged: false, armorType: "HEAVY",     damageType: "NORMAL", damageReductionPct: 0,  structBonus: 0.25 },
-};
-// Default auto-send priority: loadout slot order is used when set; cost-descending as fallback
-const AUTOSEND_PRIORITY = Object.keys(UNIT_DEFS).sort((a, b) => UNIT_DEFS[b].cost - UNIT_DEFS[a].cost);
-
-const TOWER_DEFS = {
-  archer:   { cost: 10, range: 4.2,  dmg: 8.5,  atkCdTicks: 11, projectileTicks: 7, damageType: "PIERCE", isSplash: false },
-  fighter:  { cost: 12, range: 2.5,  dmg: 10.0, atkCdTicks: 10, projectileTicks: 6, damageType: "NORMAL", isSplash: false },
-  mage:     { cost: 24, range: 4.0,  dmg: 15.0, atkCdTicks: 13, projectileTicks: 7, damageType: "MAGIC",  isSplash: false },
-  ballista: { cost: 20, range: 5.0,  dmg: 12.1, atkCdTicks: 14, projectileTicks: 8, damageType: "SIEGE",  isSplash: false },
-  cannon:   { cost: 30, range: 3.84, dmg: 8,    atkCdTicks: 16, projectileTicks: 9, damageType: "SPLASH", isSplash: true  },
-};
+// Unit and tower definitions are DB-driven via unitTypes.js.
+// These empty objects are kept for backward-compat exports only.
+const UNIT_DEFS  = {};
+const TOWER_DEFS = {};
 
 const BARRACKS_COST_BASE = 100;
 const BARRACKS_REQ_INCOME_BASE = 8;
@@ -207,16 +241,15 @@ function buildAbilitiesForUnitType(unitTypeKey) {
 // ── DB-first unit/tower resolution ────────────────────────────────────────────
 
 /**
- * Resolve a unit definition — DB-first, falls back to UNIT_DEFS.
- * DB is authoritative; UNIT_DEFS used only as last-resort fallback.
+ * Resolve a unit definition from the DB (authoritative).
+ * Returns null if the unit type is unknown or fixed-only.
  */
 function resolveUnitDef(key) {
   const ut = getUnitType(key);
-  if (!ut) return UNIT_DEFS[key] || null;
-  // Fixed-only units (e.g. archer, wall_placeholder) cannot be sent as attackers
+  if (!ut) return null;
+  // Fixed-only units cannot be sent as attackers
   if (ut.behavior_mode === "fixed") return null;
-  const base = UNIT_DEFS[key] || {};
-  const sp   = (ut.special_props && typeof ut.special_props === "object") ? ut.special_props : {};
+  const sp = (ut.special_props && typeof ut.special_props === "object") ? ut.special_props : {};
   const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
   return {
     cost:               Number(ut.send_cost),
@@ -225,27 +258,26 @@ function resolveUnitDef(key) {
     dmg:                Number(ut.attack_damage),
     atkCdTicks:         Math.max(1, Math.round(TICK_HZ / attackSpeed)),
     pathSpeed:          Number(ut.path_speed),
-    bounty:             Number(ut.bounty) || base.bounty || 1,
+    bounty:             Number(ut.bounty) || 1,
     range:              Number(ut.range),
     ranged:             Number(ut.range) > 0,
     armorType:          ut.armor_type   || "MEDIUM",
     damageType:         ut.damage_type  || "NORMAL",
     damageReductionPct: Number(ut.damage_reduction_pct) || 0,
-    warlockDebuff:      sp.warlockDebuff  != null ? !!sp.warlockDebuff  : !!base.warlockDebuff,
-    structBonus:        sp.structBonus    != null ?  +sp.structBonus    : (base.structBonus || 0),
+    warlockDebuff:      sp.warlockDebuff != null ? !!sp.warlockDebuff : false,
+    structBonus:        sp.structBonus   != null ?  +sp.structBonus   : 0,
     barracks_scales_hp:  ut.barracks_scales_hp  === true,
     barracks_scales_dmg: ut.barracks_scales_dmg === true,
   };
 }
 
 /**
- * Resolve a tower definition — DB-first, falls back to TOWER_DEFS.
+ * Resolve a tower definition from the DB (authoritative).
  * DB range is stored normalised to [0,1] × GRID_W.
  */
 function resolveTowerDef(key) {
   const ut = getUnitType(key);
-  if (!ut) return TOWER_DEFS[key] || null;
-  const base = TOWER_DEFS[key] || {};
+  if (!ut) return null;
   const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
   const dbBehavior = ut.proj_behavior || null;
   const dbBehaviorParams = (ut.proj_behavior_params && typeof ut.proj_behavior_params === "object")
@@ -258,7 +290,7 @@ function resolveTowerDef(key) {
     range:           Number(ut.range) * GRID_W,   // DB range normalised to [0,1] × GRID_W
     dmg:             Number(ut.attack_damage),
     atkCdTicks:      Math.max(1, Math.round(TICK_HZ / attackSpeed)),
-    projectileTicks: Number(ut.projectile_travel_ticks) || base.projectileTicks || 7,
+    projectileTicks: Number(ut.projectile_travel_ticks) || 7,
     damageType:      ut.damage_type || "NORMAL",
     projBehavior:       dbBehavior       || fallbackBehavior,
     projBehaviorParams: dbBehaviorParams || fallbackParams,
@@ -327,7 +359,7 @@ function getTowerUpgradeCost(type, nextLevel) {
 function getTowerTotalCost(type, level) {
   const base = resolveTowerDef(type);
   if (!base) return 0;
-  let total = WALL_COST + base.cost; // wall placement + level-1 conversion
+  let total = base.cost; // direct placement cost (no wall step)
   for (let lvl = 2; lvl <= level; lvl++) {
     total += getTowerUpgradeCost(type, lvl);
   }
@@ -370,52 +402,13 @@ function makeGrid() {
   return grid;
 }
 
-// 4-directional BFS from spawn to castle; walls and towers are obstacles.
-// Returns [{x,y}] path (length ≤ MAX_PATH_LEN) or null if blocked/too long.
-function bfsPath(grid) {
-  const visited = [];
-  const parent = [];
-  for (let x = 0; x < GRID_W; x++) {
-    visited[x] = new Array(GRID_H).fill(false);
-    parent[x] = new Array(GRID_H).fill(null);
-  }
-
-  const sx = SPAWN_X, sy = SPAWN_YG;
-  const ex = CASTLE_X, ey = CASTLE_YG;
-  const queue = [[sx, sy]];
-  visited[sx][sy] = true;
-
-  const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-  let found = false;
-
-  while (queue.length > 0) {
-    const [cx, cy] = queue.shift();
-    if (cx === ex && cy === ey) { found = true; break; }
-    for (const [dx, dy] of dirs) {
-      const nx = cx + dx, ny = cy + dy;
-      if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-      if (visited[nx][ny]) continue;
-      const tile = grid[nx][ny];
-      if (tile.type === "wall" || tile.type === "tower") continue;
-      visited[nx][ny] = true;
-      parent[nx][ny] = [cx, cy];
-      queue.push([nx, ny]);
-    }
-  }
-
-  if (!found) return null;
-
-  // Reconstruct path
+// Straight-line path from spawn (SPAWN_X, 0) to castle (CASTLE_X, CASTLE_YG).
+// Walls no longer exist; path is always the fixed vertical centre column.
+function straightLinePath() {
   const path = [];
-  let cx = ex, cy = ey;
-  while (!(cx === sx && cy === sy)) {
-    path.unshift({ x: cx, y: cy });
-    const p = parent[cx][cy];
-    cx = p[0]; cy = p[1];
+  for (let y = SPAWN_YG; y <= CASTLE_YG; y++) {
+    path.push({ x: SPAWN_X, y });
   }
-  path.unshift({ x: sx, y: sy });
-
-  if (path.length > MAX_PATH_LEN) return null;
   return path;
 }
 
@@ -428,6 +421,62 @@ function clampNum(v, min, max, fallback) {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function cloneSlotDef(slot, laneTeam) {
+  return {
+    laneIndex: slot.laneIndex,
+    slotKey: slot.slotKey,
+    side: slot.side,
+    slotColor: slot.slotColor,
+    branchId: slot.branchId,
+    branchLabel: slot.branchLabel,
+    castleSide: slot.castleSide,
+    team: laneTeam || (slot.side === "left" ? "red" : "blue"),
+  };
+}
+
+// For 2-player, pick one branch from each side so both castles are contested:
+//   lane 0 → Red Branch (left side, attacks right castle)
+//   lane 1 → Blue Branch (right side, attacks left castle) — remapped from FIXED_SLOT_LAYOUT[2]
+const TWO_PLAYER_SLOT_BASES = [
+  FIXED_SLOT_LAYOUT[0],
+  Object.assign({}, FIXED_SLOT_LAYOUT[2], { laneIndex: 1 }),
+];
+
+function getDefaultSlotDefinitions(playerCount, laneTeams) {
+  const safeCount = Math.max(0, Math.floor(Number(playerCount) || 0));
+  const defs = [];
+  for (let i = 0; i < safeCount; i++) {
+    const base = safeCount === 2
+      ? (TWO_PLAYER_SLOT_BASES[i] || FIXED_SLOT_LAYOUT[i])
+      : (FIXED_SLOT_LAYOUT[i] || {
+          laneIndex: i,
+          slotKey: `slot_${i}`,
+          side: i % 2 === 0 ? "left" : "right",
+          slotColor: `slot-${i}`,
+          branchId: `branch_${i}`,
+          branchLabel: `Branch ${i + 1}`,
+          castleSide: i % 2 === 0 ? "right" : "left",
+        });
+    defs.push(cloneSlotDef(base, laneTeams && laneTeams[i]));
+  }
+  return defs;
+}
+
+function getBattlefieldTopology(playerCount, laneTeams) {
+  return {
+    mapType: BATTLEFIELD_TOPOLOGY.mapType,
+    centerIslandId: BATTLEFIELD_TOPOLOGY.centerIslandId,
+    sideOrder: BATTLEFIELD_TOPOLOGY.sideOrder.slice(),
+    castles: BATTLEFIELD_TOPOLOGY.castles.map((castle) => Object.assign({}, castle)),
+    mergeZones: BATTLEFIELD_TOPOLOGY.mergeZones.map((zone) => Object.assign({}, zone)),
+    buildZones: BATTLEFIELD_TOPOLOGY.buildZones
+      .filter((zone) => zone.ownerLaneIndex < playerCount)
+      .map((zone) => Object.assign({}, zone)),
+    sharedZonesBuildable: !!BATTLEFIELD_TOPOLOGY.sharedZonesBuildable,
+    slotDefinitions: getDefaultSlotDefinitions(playerCount, laneTeams),
+  };
 }
 
 function normalizeGameOptions(options) {
@@ -443,6 +492,7 @@ function normalizeGameOptions(options) {
     startIncome: clampNum(src.startIncome, 0, 1000, START_INCOME),
     laneTeams,
     matchSeed: typeof src.matchSeed === "number" ? (src.matchSeed >>> 0) : undefined,
+    battlefieldTopology: getBattlefieldTopology(Number(src.playerCount) || laneTeams.length || 4, laneTeams),
   };
 }
 
@@ -457,13 +507,30 @@ function getUnitTilePos(unit, path) {
 
 function createMLGame(playerCount, options) {
   const opt = normalizeGameOptions(options);
+  const battlefieldTopology = getBattlefieldTopology(playerCount, opt.laneTeams);
+  const slotDefinitions = battlefieldTopology.slotDefinitions;
   const lanes = [];
   for (let i = 0; i < playerCount; i++) {
     const grid = makeGrid();
-    const path = bfsPath(grid); // straight line (5,0)→(5,27)
+    const path = straightLinePath(); // fixed centre column (5,0)→(5,27)
+    const slot = slotDefinitions[i] || cloneSlotDef({
+      laneIndex: i,
+      slotKey: `slot_${i}`,
+      side: i % 2 === 0 ? "left" : "right",
+      slotColor: `slot-${i}`,
+      branchId: `branch_${i}`,
+      branchLabel: `Branch ${i + 1}`,
+      castleSide: i % 2 === 0 ? "right" : "left",
+    }, opt.laneTeams[i]);
     lanes.push({
       laneIndex: i,
-      team: opt.laneTeams[i] || (i % 2 === 0 ? "red" : "blue"),
+      team: slot.team,
+      side: slot.side,
+      slotKey: slot.slotKey,
+      slotColor: slot.slotColor,
+      branchId: slot.branchId,
+      branchLabel: slot.branchLabel,
+      castleSide: slot.castleSide,
       eliminated: false,
       gold: opt.startGold,
       income: opt.startIncome,
@@ -471,13 +538,11 @@ function createMLGame(playerCount, options) {
       lives: LIVES_START,
       grid,
       path,
-      wallCount: 0,
+      fullPath: buildFullPath(path),
       barracks: Object.assign({ level: 1 }, getBarracksLevelDef(1)),
       units: [],
       spawnQueue: [],
       projectiles: [],
-      sendQueue: [],        // flat array of unit-type keys pending drain
-      sendDrainCounter: 0,  // ticks until next drain
       autosend: {
         enabled: false,
         enabledUnits: {},  // populated from loadout keys when match starts
@@ -494,6 +559,15 @@ function createMLGame(playerCount, options) {
     incomeTickCounter: 0,
     playerCount,
     lanes,
+    battlefieldTopology,
+    // Wave defense state
+    teamHp: { left: TEAM_HP_START, right: TEAM_HP_START },
+    roundState: "build",
+    roundNumber: 1,
+    roundStateTicks: 0,
+    pendingSends: {},    // targetLaneIdx → [{unitType, count}]
+    waveConfig: [],      // loaded at match start by multilaneRuntime
+    _pendingEvents: [],  // drained by runtime each tick
     nextUnitId: 1,
     nextProjectileId: 1,
     // Phase B: seeded RNG + versioning + action sequencing
@@ -556,6 +630,7 @@ function applyMLAction(game, laneIndex, action) {
   const { type, data } = action;
 
   if (type === "spawn_unit") {
+    if (game.roundState !== "build") return { ok: false, reason: "Can only send units during build phase" };
     const unitType = String((data && data.unitType) || "").toLowerCase();
     const def = resolveUnitDef(unitType);
     if (!def) return { ok: false, reason: "Unknown unitType" };
@@ -564,109 +639,47 @@ function applyMLAction(game, laneIndex, action) {
       return { ok: false, reason: "Unit not in loadout" };
     }
     if (lane.gold < def.cost) return { ok: false, reason: "Not enough gold" };
-    if (lane.sendQueue.length >= QUEUE_CAP) return { ok: false, reason: "Send queue full" };
 
-    // Phase D: deduct gold/income immediately; unit drained every SEND_INTERVAL_TICKS
-    // Phase F: send_cost and income are NOT affected by barracks level
+    // Resolve target lane (opponent)
+    let targetLaneIdx = Number.isInteger(data && data.targetLaneIndex) ? data.targetLaneIndex : null;
+    if (targetLaneIdx === null || !isOpponentLane(game, laneIndex, targetLaneIdx)) {
+      targetLaneIdx = findNextActiveOpponentLaneIndex(game, laneIndex);
+    }
+    if (targetLaneIdx === null) return { ok: false, reason: "No valid target lane" };
+
     lane.gold -= def.cost;
     lane.income += def.income;
-    lane.sendQueue.push(unitType);
+    if (!game.pendingSends[targetLaneIdx]) game.pendingSends[targetLaneIdx] = [];
+    game.pendingSends[targetLaneIdx].push({ unitType, count: 1 });
     return { ok: true };
   }
 
-  if (type === "place_wall") {
+  if (type === "place_unit") {
+    if (game.roundState !== "build") return { ok: false, reason: "Can only place units during build phase" };
     const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
     const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
+    const unitTypeKey = String((data && data.unitTypeKey) || "").toLowerCase();
     if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
       return { ok: false, reason: "Invalid grid position" };
     }
-    if (gx === SPAWN_X && gy === SPAWN_YG) return { ok: false, reason: "Cannot wall spawn tile" };
-    if (gx === CASTLE_X && gy === CASTLE_YG) return { ok: false, reason: "Cannot wall castle tile" };
+    if (gx === SPAWN_X && gy === SPAWN_YG) return { ok: false, reason: "Cannot place on spawn tile" };
+    if (gx === CASTLE_X && gy === CASTLE_YG) return { ok: false, reason: "Cannot place on castle tile" };
     const tile = lane.grid[gx][gy];
     if (tile.type !== "empty") return { ok: false, reason: "Tile not empty" };
-    if (lane.gold < WALL_COST) return { ok: false, reason: "Not enough gold" };
-
-    tile.type = "wall";
-    const newPath = bfsPath(lane.grid);
-    if (!newPath) {
-      tile.type = "empty";
-      return { ok: false, reason: "Wall would block all paths" };
-    }
-
-    lane.gold -= WALL_COST;
-    lane.wallCount += 1;
-    tile.costHistory = [{ cost: WALL_COST, refundPct: 100 }];
-    lane.path = newPath;
-    return { ok: true };
-  }
-
-  if (type === "convert_wall") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    const towerType = String((data && data.towerType) || "").toLowerCase();
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "wall") return { ok: false, reason: "Tile is not a wall" };
-    if (!resolveTowerDef(towerType)) return { ok: false, reason: "Unknown towerType" };
-    const _lkConvert = lane.autosend && lane.autosend.loadoutKeys;
-    if (_lkConvert && _lkConvert.length > 0 && !_lkConvert.includes(towerType)) {
-      return { ok: false, reason: "Unit not in loadout" };
-    }
-    const cost = resolveTowerDef(towerType).cost;
-    if (lane.gold < cost) return { ok: false, reason: "Not enough gold" };
-
-    tile.type = "tower";
-    tile.towerType = towerType;
-    tile.towerLevel = 1;
-    tile.atkCd = 0;
-    tile.targetMode = "first";
-    tile.debuffEndTick = 0;
-    tile.debuffMult = 1.0;
-    tile.abilities = buildAbilitiesForUnitType(towerType);
-    lane.wallCount -= 1; // wall→tower: no longer counts toward wall limit
-
-    // Tower blocks same as wall so path is unchanged — re-verify to be safe
-    const newPath = bfsPath(lane.grid);
-    if (!newPath) {
-      tile.type = "wall";
-      tile.towerType = null;
-      tile.towerLevel = 0;
-      tile.abilities = null;
-      lane.wallCount += 1;
-      return { ok: false, reason: "Would block path" };
-    }
-
-    lane.gold -= cost;
-    lane.path = newPath;
-    if (!tile.costHistory) tile.costHistory = [{ cost: WALL_COST, refundPct: 100 }];
-    tile.costHistory.push({ cost, refundPct: 70 });
-    return { ok: true };
-  }
-
-  if (type === "upgrade_wall") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    const unitTypeKey = String((data && (data.unitTypeKey || data.towerType)) || "").toLowerCase();
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "wall") return { ok: false, reason: "Tile is not a wall" };
     const ut = getUnitType(unitTypeKey);
-    if (ut && ut.behavior_mode !== "fixed" && ut.behavior_mode !== "both") {
-      return { ok: false, reason: "Unit type is not a fixed defender" };
+    if (!ut || ut.enabled === false) return { ok: false, reason: "Unknown unit type" };
+    if (ut.behavior_mode !== "fixed" && ut.behavior_mode !== "both") {
+      return { ok: false, reason: "Unit cannot be placed as a defender" };
     }
-    const _lkUpgrade = lane.autosend && lane.autosend.loadoutKeys;
-    if (_lkUpgrade && _lkUpgrade.length > 0 && !_lkUpgrade.includes(unitTypeKey)) {
+    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
+    if (loadoutKeys && loadoutKeys.length > 0 && !loadoutKeys.includes(unitTypeKey)) {
       return { ok: false, reason: "Unit not in loadout" };
     }
-    const def = resolveTowerDef(unitTypeKey);
-    if (!def) return { ok: false, reason: "Unknown unit type" };
-    const cost = def.cost;
-    if (lane.gold < cost) return { ok: false, reason: "Not enough gold" };
+    const towerDef = resolveTowerDef(unitTypeKey);
+    if (!towerDef) return { ok: false, reason: "Cannot resolve unit as defender" };
+    if (lane.gold < towerDef.cost) return { ok: false, reason: "Not enough gold" };
 
+    const hp = Number(ut.hp) || 100;
     tile.type = "tower";
     tile.towerType = unitTypeKey;
     tile.towerLevel = 1;
@@ -675,169 +688,10 @@ function applyMLAction(game, laneIndex, action) {
     tile.debuffEndTick = 0;
     tile.debuffMult = 1.0;
     tile.abilities = buildAbilitiesForUnitType(unitTypeKey);
-    lane.wallCount -= 1;
-
-    const newPath = bfsPath(lane.grid);
-    if (!newPath) {
-      tile.type = "wall";
-      tile.towerType = null;
-      tile.towerLevel = 0;
-      tile.atkCd = 0;
-      tile.targetMode = "first";
-      tile.debuffEndTick = 0;
-      tile.debuffMult = 1.0;
-      tile.abilities = null;
-      lane.wallCount += 1;
-      return { ok: false, reason: "Would block path" };
-    }
-
-    lane.gold -= cost;
-    lane.path = newPath;
-    if (!tile.costHistory) tile.costHistory = [{ cost: WALL_COST, refundPct: 100 }];
-    tile.costHistory.push({ cost, refundPct: 70 });
-    return { ok: true };
-  }
-
-  if (type === "bulk_convert_walls") {
-    const towerType = String((data && data.towerType) || "").toLowerCase();
-    if (!resolveTowerDef(towerType)) return { ok: false, reason: "Unknown towerType" };
-    const _lkBulkConvert = lane.autosend && lane.autosend.loadoutKeys;
-    if (_lkBulkConvert && _lkBulkConvert.length > 0 && !_lkBulkConvert.includes(towerType)) {
-      return { ok: false, reason: "Unit not in loadout" };
-    }
-    const parsed = parseBulkTiles(data && data.tiles);
-    if (!parsed.ok) return { ok: false, reason: parsed.reason };
-
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      if (tile.type !== "wall") return { ok: false, reason: "One or more selected tiles are not walls" };
-    }
-
-    const totalCost = parsed.tiles.length * resolveTowerDef(towerType).cost;
-    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold" };
-
-    const unitCost = resolveTowerDef(towerType).cost;
-    const bulkConvertAbilities = buildAbilitiesForUnitType(towerType);
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      tile.type = "tower";
-      tile.towerType = towerType;
-      tile.towerLevel = 1;
-      tile.atkCd = 0;
-      tile.targetMode = "first";
-      tile.debuffEndTick = 0;
-      tile.debuffMult = 1.0;
-      tile.abilities = bulkConvertAbilities;
-      lane.wallCount -= 1;
-    }
-
-    const newPath = bfsPath(lane.grid);
-    if (!newPath) {
-      for (const pos of parsed.tiles) {
-        const tile = lane.grid[pos.gx][pos.gy];
-        tile.type = "wall";
-        tile.towerType = null;
-        tile.towerLevel = 0;
-        tile.atkCd = 0;
-        tile.targetMode = "first";
-        tile.debuffEndTick = 0;
-        tile.debuffMult = 1.0;
-        tile.abilities = null;
-        lane.wallCount += 1;
-      }
-      return { ok: false, reason: "Would block path" };
-    }
-
-    lane.gold -= totalCost;
-    lane.path = newPath;
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      if (!tile.costHistory) tile.costHistory = [{ cost: WALL_COST, refundPct: 100 }];
-      tile.costHistory.push({ cost: unitCost, refundPct: 70 });
-    }
-    return { ok: true };
-  }
-
-  if (type === "bulk_upgrade_walls") {
-    const unitTypeKey = String((data && (data.unitTypeKey || data.towerType)) || "").toLowerCase();
-    if (!resolveTowerDef(unitTypeKey)) return { ok: false, reason: "Unknown unit type" };
-    const ut = getUnitType(unitTypeKey);
-    if (ut && ut.behavior_mode !== "fixed" && ut.behavior_mode !== "both") {
-      return { ok: false, reason: "Unit type is not a fixed defender" };
-    }
-    const _lkBulk = lane.autosend && lane.autosend.loadoutKeys;
-    if (_lkBulk && _lkBulk.length > 0 && !_lkBulk.includes(unitTypeKey)) {
-      return { ok: false, reason: "Unit not in loadout" };
-    }
-    const parsed = parseBulkTiles(data && data.tiles);
-    if (!parsed.ok) return { ok: false, reason: parsed.reason };
-
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      if (tile.type !== "wall") return { ok: false, reason: "One or more selected tiles are not walls" };
-    }
-
-    const unitCostBulk = resolveTowerDef(unitTypeKey).cost;
-    const totalCostBulk = parsed.tiles.length * unitCostBulk;
-    if (lane.gold < totalCostBulk) return { ok: false, reason: "Not enough gold" };
-
-    const bulkUpgradeAbilities = buildAbilitiesForUnitType(unitTypeKey);
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      tile.type = "tower";
-      tile.towerType = unitTypeKey;
-      tile.towerLevel = 1;
-      tile.atkCd = 0;
-      tile.targetMode = "first";
-      tile.debuffEndTick = 0;
-      tile.debuffMult = 1.0;
-      tile.abilities = bulkUpgradeAbilities;
-      lane.wallCount -= 1;
-    }
-
-    const newPathBulk = bfsPath(lane.grid);
-    if (!newPathBulk) {
-      for (const pos of parsed.tiles) {
-        const tile = lane.grid[pos.gx][pos.gy];
-        tile.type = "wall";
-        tile.towerType = null;
-        tile.towerLevel = 0;
-        tile.atkCd = 0;
-        tile.targetMode = "first";
-        tile.debuffEndTick = 0;
-        tile.debuffMult = 1.0;
-        tile.abilities = null;
-        lane.wallCount += 1;
-      }
-      return { ok: false, reason: "Would block path" };
-    }
-
-    lane.gold -= totalCostBulk;
-    lane.path = newPathBulk;
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      if (!tile.costHistory) tile.costHistory = [{ cost: WALL_COST, refundPct: 100 }];
-      tile.costHistory.push({ cost: unitCostBulk, refundPct: 70 });
-    }
-    return { ok: true };
-  }
-
-  if (type === "remove_wall") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "wall") return { ok: false, reason: "Tile is not a wall" };
-    const refund = (tile.costHistory && tile.costHistory.length > 0)
-      ? Math.floor(tile.costHistory[0].cost * tile.costHistory[0].refundPct / 100)
-      : WALL_COST;
-    tile.type = "empty";
-    tile.costHistory = null;
-    lane.gold += refund;
-    lane.wallCount -= 1;
-    lane.path = bfsPath(lane.grid) || lane.path;
+    tile.hp = hp;
+    tile.maxHp = hp;
+    tile.costHistory = [{ cost: towerDef.cost, refundPct: 70 }];
+    lane.gold -= towerDef.cost;
     return { ok: true };
   }
 
@@ -951,8 +805,6 @@ function applyMLAction(game, laneIndex, action) {
     tile.costHistory = null;
     tile.abilities = null;
 
-    const newPath = bfsPath(lane.grid);
-    lane.path = newPath; // removing an obstacle can only open paths, never block
     lane.gold += sellValue;
     return { ok: true };
   }
@@ -964,7 +816,7 @@ function applyMLAction(game, laneIndex, action) {
       as.enabled = enabled;
     }
     if (enabledUnits && typeof enabledUnits === "object") {
-      for (const ut of Object.keys(UNIT_DEFS)) {
+      for (const ut of getAllUnitTypes().filter(u => u.enabled).map(u => u.key)) {
         as.enabledUnits[ut] = !!enabledUnits[ut];
       }
     }
@@ -979,127 +831,218 @@ function applyMLAction(game, laneIndex, action) {
   return { ok: false, reason: "Unknown action type" };
 }
 
-/**
- * Phase D: fill lane.sendQueue from loadout slot order using available gold.
- * Runs each tick for auto-send-enabled lanes. Drain at SEND_INTERVAL_TICKS
- * is handled in mlTick per-lane loop.
- */
-function runLaneAutosendFill(game, lane) {
-  if (!game || !lane || lane.eliminated) return;
+// ── Wave defense helpers ──────────────────────────────────────────────────────
+
+function _pickTowerTarget(tile, unitsInRange) {
+  const mode = TOWER_TARGET_MODES.has(tile.targetMode) ? tile.targetMode : "first";
+  let target = unitsInRange[0];
+  if (mode === "strongest") {
+    for (const u of unitsInRange) { if (u.hp > target.hp) target = u; }
+    return target;
+  }
+  if (mode === "weakest") {
+    for (const u of unitsInRange) { if (u.hp < target.hp) target = u; }
+    return target;
+  }
+  if (mode === "last") {
+    for (const u of unitsInRange) { if (u.pathIdx < target.pathIdx) target = u; }
+    return target;
+  }
+  for (const u of unitsInRange) { if (u.pathIdx > target.pathIdx) target = u; }
+  return target;
+}
+
+function _resolveWave(game) {
+  const cfg = Array.isArray(game.waveConfig) ? game.waveConfig : [];
+  const round = game.roundNumber;
+  if (cfg.length === 0) {
+    // No config — use a minimal fallback so the game still runs
+    return { unit_type: "goblin", spawn_qty: 8, hp_mult: 1, dmg_mult: 1, speed_mult: 1 };
+  }
+  // Find exact wave row; if past the last, use last row with escalation
+  const exact = cfg.find(w => Number(w.wave_number) === round);
+  if (exact) return exact;
+  const last = cfg.reduce((a, b) => Number(a.wave_number) >= Number(b.wave_number) ? a : b);
+  const extra = round - Number(last.wave_number);
+  const esc = 1 + extra * ESCALATION_PER_EXTRA_ROUND;
+  return {
+    unit_type: last.unit_type,
+    spawn_qty: last.spawn_qty,
+    hp_mult:    Number(last.hp_mult)    * esc,
+    dmg_mult:   Number(last.dmg_mult)   * esc,
+    speed_mult: Number(last.speed_mult),
+  };
+}
+
+function _spawnWaveUnit(game, lane, waveDef) {
+  const unitType = waveDef.unit_type;
+  const def = resolveUnitDef(unitType);
+  if (!def) return;
+  if (lane.units.length + lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return;
+  const hp  = Math.ceil(def.hp    * Number(waveDef.hp_mult    || 1));
+  const dmg =           def.dmg   * Number(waveDef.dmg_mult   || 1);
+  const spd =           def.pathSpeed * Number(waveDef.speed_mult || 1);
+  lane.spawnQueue.push({
+    id: `wu${game.nextUnitId++}`,
+    ownerLane: -1,  // wave unit — no player owner
+    type: unitType,
+    skinKey: null,
+    pathIdx: 0,
+    hp,
+    maxHp: hp,
+    baseDmg: dmg,
+    baseSpeed: spd,
+    atkCd: 0,
+    atkCdTicks: def.atkCdTicks,
+    armorType: def.armorType || "MEDIUM",
+    damageReductionPct: def.damageReductionPct || 0,
+    abilities: buildAbilitiesForUnitType(unitType),
+    isWaveUnit: true,
+  });
+}
+
+function _startCombat(game) {
+  const waveDef = _resolveWave(game);
+  const waveSizes = {};
+  for (const lane of game.lanes) {
+    if (lane.eliminated) continue;
+    waveSizes[lane.laneIndex] = waveDef.spawn_qty;
+    // Base wave
+    for (let i = 0; i < waveDef.spawn_qty; i++) _spawnWaveUnit(game, lane, waveDef);
+    // Flush pendingSends (units sent by opponent during build phase)
+    for (const entry of (game.pendingSends[lane.laneIndex] || [])) {
+      const sendDef = resolveUnitDef(entry.unitType);
+      if (sendDef) {
+        for (let i = 0; i < entry.count; i++) {
+          _spawnWaveUnit(game, lane, {
+            unit_type: entry.unitType, spawn_qty: 1,
+            hp_mult: 1, dmg_mult: 1, speed_mult: 1,
+          });
+        }
+      }
+    }
+    game.pendingSends[lane.laneIndex] = [];
+  }
+  game.roundState = "combat";
+  game.roundStateTicks = 0;
+  game._pendingEvents.push({ type: "ml_wave_start", roundNumber: game.roundNumber, waveSizes });
+}
+
+function _startTransition(game) {
+  game._pendingEvents.push({
+    type: "ml_round_end",
+    roundNumber: game.roundNumber,
+    teamHp: Object.assign({}, game.teamHp),
+  });
+  game.roundState = "transition";
+  game.roundStateTicks = 0;
+}
+
+function _startBuild(game) {
+  game.roundNumber += 1;
+  game.roundState = "build";
+  game.roundStateTicks = 0;
+  game.incomeTickCounter = 0;
+  // Respawn dead defenders; restore HP on surviving defenders
+  for (const lane of game.lanes) {
+    if (lane.eliminated) continue;
+    lane.units = [];
+    lane.spawnQueue = [];
+    for (let tx = 0; tx < GRID_W; tx++) {
+      for (let ty = 0; ty < GRID_H; ty++) {
+        const tile = lane.grid[tx][ty];
+        if (tile.type === "dead_tower" && tile.towerType) {
+          tile.type = "tower";
+          tile.hp = tile.maxHp || 100;
+          tile.atkCd = 0;
+        } else if (tile.type === "tower" && tile.towerType) {
+          tile.hp = tile.maxHp || tile.hp || 100;
+          tile.atkCd = 0;
+        }
+      }
+    }
+  }
+  game._pendingEvents.push({
+    type: "ml_round_start",
+    roundNumber: game.roundNumber,
+    teamHp: Object.assign({}, game.teamHp),
+  });
+}
+
+function _runAutosendBuild(game, lane) {
   const as = lane.autosend;
   if (!as || !as.enabled) return;
-  const enabledUnits = as.enabledUnits || {};
-  // Use loadout-ordered keys if set; otherwise fall back to cost-descending priority
-  const allKeys = (Array.isArray(as.loadoutKeys) && as.loadoutKeys.length > 0)
-    ? as.loadoutKeys : AUTOSEND_PRIORITY;
-  const priority = allKeys.filter(ut => !!enabledUnits[ut]);
+  const keys = Array.isArray(as.loadoutKeys) && as.loadoutKeys.length > 0 ? as.loadoutKeys : [];
+  const priority = keys.filter(k => !!as.enabledUnits[k]);
   if (priority.length === 0) return;
-
-  // Phase F: send_cost and income NOT affected by barracks
   let iterations = 0;
-  while (lane.sendQueue.length < QUEUE_CAP && iterations < QUEUE_CAP) {
+  while (iterations < 200) {
     iterations++;
     let bought = false;
     for (const ut of priority) {
       const def = resolveUnitDef(ut);
-      if (!def) continue;
-      if (lane.gold < def.cost) continue;
+      if (!def || lane.gold < def.cost) continue;
+      const targetIdx = findNextActiveOpponentLaneIndex(game, lane.laneIndex);
+      if (targetIdx === null) break;
       lane.gold -= def.cost;
       lane.income += def.income;
-      lane.sendQueue.push(ut);
+      if (!game.pendingSends[targetIdx]) game.pendingSends[targetIdx] = [];
+      game.pendingSends[targetIdx].push({ unitType: ut, count: 1 });
       bought = true;
-      break; // restart from slot 0 each time
+      break;
     }
     if (!bought) break;
   }
 }
 
-/**
- * Phase D: drain one unit from lane.sendQueue into the target opponent's spawnQueue.
- * Called every SEND_INTERVAL_TICKS from mlTick.
- * Unit stats are computed at drain time so barracks upgrades apply to queued units.
- */
-function drainOneSendQueueUnit(game, lane) {
-  if (!lane.sendQueue || lane.sendQueue.length === 0) return;
-  const unitType = lane.sendQueue.shift();
-  const def = resolveUnitDef(unitType);
-  if (!def) return; // unknown type; discard silently
-  const targetLaneIndex = findNextActiveOpponentLaneIndex(game, lane.laneIndex);
-  if (targetLaneIndex === null) return; // no active opponents; unit lost
-  const targetLane = game.lanes[targetLaneIndex];
-  if (!targetLane || targetLane.spawnQueue.length >= MAX_UNITS_PER_LANE) return;
-  // Phase F: DB-backed barracks multiplier, applied per unit type scaling flags
-  const barracksMult = getCurrentBarracksMult(lane.barracks ? lane.barracks.level : 1);
-  const scaledHp  = Math.ceil(def.hp  * (def.barracks_scales_hp  ? barracksMult : 1));
-  const scaledDmg = def.dmg * (def.barracks_scales_dmg ? barracksMult : 1);
-  const newUnit = {
-    id: `u${game.nextUnitId++}`,
-    ownerLane: lane.laneIndex,
-    type: unitType,
-    pathIdx: 0,
-    hp: scaledHp,
-    maxHp: scaledHp,
-    baseDmg: scaledDmg,
-    baseSpeed: def.pathSpeed,
-    atkCd: 0,
-    armorType: def.armorType || "MEDIUM",
-    damageReductionPct: def.damageReductionPct || 0,
-    abilities: buildAbilitiesForUnitType(unitType),
-  };
-  if (def.warlockDebuff) newUnit.warlockCd = WARLOCK_DEBUFF_CD;
-  targetLane.spawnQueue.push(newUnit);
-}
-
 function mlTick(game) {
   if (!game || game.phase !== "playing") return;
   game.tick += 1;
+  game.roundStateTicks = (game.roundStateTicks || 0) + 1;
 
-  // Income
-  game.incomeTickCounter += 1;
-  if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
-    game.incomeTickCounter = 0;
+  // ── BUILD PHASE ──────────────────────────────────────────────────────────────
+  if (game.roundState === "build") {
+    game.incomeTickCounter += 1;
+    if (game.incomeTickCounter >= INCOME_INTERVAL_TICKS) {
+      game.incomeTickCounter = 0;
+      for (const lane of game.lanes) {
+        if (lane.eliminated) continue;
+        lane.gold += lane.income;
+      }
+    }
     for (const lane of game.lanes) {
       if (lane.eliminated) continue;
-      lane.gold += lane.income;
+      _runAutosendBuild(game, lane);
     }
+    if (game.roundStateTicks >= BUILD_PHASE_TICKS) _startCombat(game);
+    return;
   }
 
-  // Phase D: auto-send fill — fill sendQueue from loadout slot order
-  for (const lane of game.lanes) {
-    if (lane.eliminated) continue;
-    const as = lane.autosend;
-    if (!as || !as.enabled) continue;
-    runLaneAutosendFill(game, lane);
+  // ── TRANSITION PHASE ─────────────────────────────────────────────────────────
+  if (game.roundState === "transition") {
+    if (game.roundStateTicks >= TRANSITION_PHASE_TICKS) _startBuild(game);
+    return;
   }
 
+  // ── COMBAT PHASE ─────────────────────────────────────────────────────────────
   for (const lane of game.lanes) {
     if (lane.eliminated) continue;
 
-    // Phase D: drain one unit from sendQueue every SEND_INTERVAL_TICKS
-    lane.sendDrainCounter = (lane.sendDrainCounter || 0) + 1;
-    if (lane.sendDrainCounter >= SEND_INTERVAL_TICKS) {
-      lane.sendDrainCounter = 0;
-      drainOneSendQueueUnit(game, lane);
-    }
-
-    // Drain spawn queue (units ready to enter the field)
+    // Drain spawn queue
     while (lane.spawnQueue.length > 0) {
       const unit = lane.spawnQueue.shift();
       unit.pathIdx = 0;
       lane.units.push(unit);
-      // Phase G: trigger onSpawn (aura registration, etc.)
       if (unit.abilities && unit.abilities.length > 0) {
         resolveAbilityHook(game, lane, unit, "onSpawn", {});
       }
     }
 
-    // Decrement unit cooldowns
+    // Decrement cooldowns
     for (const u of lane.units) {
       if (u.atkCd > 0) u.atkCd -= 1;
       if (u.warlockCd !== undefined && u.warlockCd > 0) u.warlockCd -= 1;
     }
-
-    // Decrement tower cooldowns
     for (let tx = 0; tx < GRID_W; tx++) {
       for (let ty = 0; ty < GRID_H; ty++) {
         const tile = lane.grid[tx][ty];
@@ -1107,34 +1050,7 @@ function mlTick(game) {
       }
     }
 
-    function pickTowerTarget(tile, unitsInRange) {
-      const mode = TOWER_TARGET_MODES.has(tile.targetMode) ? tile.targetMode : "first";
-      let target = unitsInRange[0];
-      if (mode === "strongest") {
-        for (const u of unitsInRange) {
-          if (u.hp > target.hp) target = u;
-        }
-        return target;
-      }
-      if (mode === "weakest") {
-        for (const u of unitsInRange) {
-          if (u.hp < target.hp) target = u;
-        }
-        return target;
-      }
-      if (mode === "last") {
-        for (const u of unitsInRange) {
-          if (u.pathIdx < target.pathIdx) target = u;
-        }
-        return target;
-      }
-      for (const u of unitsInRange) {
-        if (u.pathIdx > target.pathIdx) target = u;
-      }
-      return target;
-    }
-
-    // Phase G: refresh aura state — collect from units + tower tiles
+    // Aura refresh
     const towerAuraSources = [];
     for (let ax = 0; ax < GRID_W; ax++) {
       for (let ay = 0; ay < GRID_H; ay++) {
@@ -1147,38 +1063,32 @@ function mlTick(game) {
     applyAuras(game, lane, towerAuraSources);
     const activeAuras = lane.activeAuras || {};
 
-    // Tower attacks — Phase B/G: use fireProjectile + ability onAttack context
+    // Tower attacks on wave units
     for (let tx = 0; tx < GRID_W; tx++) {
       for (let ty = 0; ty < GRID_H; ty++) {
         const tile = lane.grid[tx][ty];
         if (tile.type !== "tower" || !tile.towerType || tile.atkCd > 0) continue;
         const stats = getTowerStats(tile.towerType, tile.towerLevel || 1);
         if (!stats) continue;
-
-        // Phase G: apply aura bonuses to effective range and attack cooldown
-        const auraRange = activeAuras.range_bonus    || 0;
-        const auraSpd   = (activeAuras.atk_speed_bonus || 0) + (activeAuras.cooldown_reduction || 0);
-        const effRange  = stats.range * (1 + auraRange / 100);
-        const effAtkCd  = auraSpd > 0 ? Math.max(1, Math.round(stats.atkCdTicks * (1 - auraSpd / 100))) : stats.atkCdTicks;
-
+        const auraRange = activeAuras.range_bonus || 0;
+        const auraSpd = (activeAuras.atk_speed_bonus || 0) + (activeAuras.cooldown_reduction || 0);
+        const effRange = stats.range * (1 + auraRange / 100);
+        const effAtkCd = auraSpd > 0
+          ? Math.max(1, Math.round(stats.atkCdTicks * (1 - auraSpd / 100)))
+          : stats.atkCdTicks;
         const unitsInRange = [];
         for (const u of lane.units) {
           if (u.hp <= 0) continue;
           const pos = getUnitTilePos(u, lane.path);
           if (!pos) continue;
-          if (tileDist(tx, ty, pos.x, pos.y) <= effRange) {
-            unitsInRange.push(u);
-          }
+          if (tileDist(tx, ty, pos.x, pos.y) <= effRange) unitsInRange.push(u);
         }
         if (unitsInRange.length === 0) continue;
-        const target = pickTowerTarget(tile, unitsInRange);
-
+        const target = _pickTowerTarget(tile, unitsInRange);
         const debuffMult = (tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick)
           ? (tile.debuffMult || 1.0) : 1.0;
         const auraDmgMult = 1 + (activeAuras.dmg_bonus || 0) / 100;
         const effDmg = stats.dmg * debuffMult * auraDmgMult;
-
-        // onAttack abilities may override behavior (e.g. splash_damage ability)
         const attackCtx = {
           target,
           behavior:       stats.projBehavior,
@@ -1187,7 +1097,6 @@ function mlTick(game) {
         if (tile.abilities && tile.abilities.length > 0) {
           resolveAbilityHook(game, lane, { abilities: tile.abilities }, "onAttack", attackCtx);
         }
-
         fireProjectile(game, lane,
           { id: `tower_${tx}_${ty}`, kind: "tower", x: tx, y: ty },
           target.id,
@@ -1206,68 +1115,90 @@ function mlTick(game) {
       }
     }
 
-    // Unit movement
-    const pathLen = lane.path ? lane.path.length : 1;
-    const dotDeadIds = new Set(); // Phase G: units killed by DoT this tick
+    // Wave unit movement, defender attacks, and leaks
+    const fullPath = lane.fullPath || lane.path || [];
+    const pathLen = fullPath.length || 1;
+    const dotDeadIds = new Set();
 
     for (const u of lane.units) {
       if (u.hp <= 0) continue;
-
-      // Phase G: apply status effects (DoT, expiry)
       resolveStatuses(u, game.tick);
       if (u.hp <= 0) { dotDeadIds.add(u.id); continue; }
 
-      const def = resolveUnitDef(u.type);
-
-      // Reached castle — remove 1 life and despawn
+      // Reached end → leak; damages this lane's side's teamHp
       if (u.pathIdx >= pathLen - 1) {
-        lane.lives -= 1;
-        u.hp = 0; // despawn immediately
-        if (lane.lives <= 0) {
-          lane.lives = 0;
-          lane.eliminated = true;
-          if (isOpponentLane(game, lane.laneIndex, u.ownerLane)) {
-            const ownerLane = game.lanes[u.ownerLane];
-            if (ownerLane) ownerLane.gold += GATE_KILL_BOUNTY;
+        u.hp = 0;
+        const side = lane.side;
+        if (side && game.teamHp && game.teamHp[side] !== undefined) {
+          game.teamHp[side] = Math.max(0, game.teamHp[side] - 1);
+          for (const l of game.lanes) {
+            if (l.side === side) l.lives = game.teamHp[side];
+          }
+          if (game.teamHp[side] <= 0) {
+            for (const l of game.lanes) {
+              if (l.side === side && !l.eliminated) l.eliminated = true;
+            }
           }
         }
         continue;
       }
 
-      // Warlock: attempt to debuff nearby tower every WARLOCK_DEBUFF_CD ticks
+      // Warlock debuff on nearby tower
+      const def = resolveUnitDef(u.type);
       if (def && def.warlockDebuff && (u.warlockCd === undefined || u.warlockCd <= 0)) {
         u.warlockCd = WARLOCK_DEBUFF_CD;
         const pos = getUnitTilePos(u, lane.path);
         if (pos) {
-          let bestTile = null;
-          let bestDist = Infinity;
+          let bestTile = null, bestDist = Infinity;
           for (let dtx = 0; dtx < GRID_W; dtx++) {
             for (let dty = 0; dty < GRID_H; dty++) {
               const dtile = lane.grid[dtx][dty];
               if (dtile.type !== "tower") continue;
               const d = tileDist(pos.x, pos.y, dtx, dty);
-              if (d <= WARLOCK_DEBUFF_RANGE && d < bestDist) {
-                bestDist = d;
-                bestTile = dtile;
-              }
+              if (d <= WARLOCK_DEBUFF_RANGE && d < bestDist) { bestDist = d; bestTile = dtile; }
             }
           }
           if (bestTile) {
-            // Non-stacking: refresh timer only
             bestTile.debuffEndTick = game.tick + WARLOCK_DEBUFF_TICKS;
             bestTile.debuffMult = WARLOCK_DEBUFF_MULT;
           }
         }
       }
 
-      // Advance along path
-      u.pathIdx = Math.min(u.pathIdx + u.baseSpeed, pathLen - 1);
+      // Wave enemy attacks nearest defender in range
+      let attackedDefender = false;
+      if (u.atkCd <= 0) {
+        const uPos = getUnitTilePos(u, lane.path);
+        if (uPos) {
+          const atkRange = def && def.range > 0 ? def.range * GRID_W : 1.5;
+          let bestDef = null, bestDist = Infinity;
+          for (let tx = 0; tx < GRID_W; tx++) {
+            for (let ty = 0; ty < GRID_H; ty++) {
+              const tile = lane.grid[tx][ty];
+              if (tile.type !== "tower" || !tile.towerType) continue;
+              const d = tileDist(uPos.x, uPos.y, tx, ty);
+              if (d <= atkRange && d < bestDist) { bestDist = d; bestDef = tile; }
+            }
+          }
+          if (bestDef) {
+            const dmg = def ? def.dmg : (u.baseDmg || 1);
+            bestDef.hp = Math.max(0, (bestDef.hp != null ? bestDef.hp : bestDef.maxHp || 100) - dmg);
+            if (bestDef.hp <= 0) bestDef.type = "dead_tower";
+            u.atkCd = def ? (def.atkCdTicks || 20) : 20;
+            attackedDefender = true;
+          }
+        }
+      }
+
+      // Move only if not attacking a defender this tick
+      if (!attackedDefender) {
+        u.pathIdx = Math.min(u.pathIdx + u.baseSpeed, pathLen - 1);
+      }
     }
 
-    // Phase H: push overlapping units apart so they don't stack on the same tile
     applySeparation(lane.units.filter(u => u.hp > 0), MIN_UNIT_SPACING);
 
-    // Resolve projectiles — Phase B/G: use resolveProjectile; apply onHit abilities
+    // Resolve projectiles
     const killedById = new Set();
     const stillFlying = [];
     for (const p of lane.projectiles) {
@@ -1275,11 +1206,10 @@ function mlTick(game) {
       if (p.ticksRemaining > 0) { stillFlying.push(p); continue; }
       const { dead, hit } = resolveProjectile(game, lane, p);
       for (const id of dead) killedById.add(id);
-      // Phase G: onHit abilities for each unit that received damage and survived
       if (p.abilities && p.abilities.length > 0 && hit.length > 0) {
         const attacker = { abilities: p.abilities };
         for (const hitId of hit) {
-          if (killedById.has(hitId)) continue; // skip dead units
+          if (killedById.has(hitId)) continue;
           const hitUnit = lane.units.find(u => u.id === hitId && u.hp > 0);
           if (hitUnit) resolveAbilityHook(game, lane, attacker, "onHit", { target: hitUnit });
         }
@@ -1287,42 +1217,38 @@ function mlTick(game) {
     }
     lane.projectiles = stillFlying;
 
-    // Phase G: merge DoT kills into combined dead set
-    const allDeadIds = killedById;
-    for (const id of dotDeadIds) allDeadIds.add(id);
+    for (const id of dotDeadIds) killedById.add(id);
 
-    // Apply kill bounties to defending lane
-    if (allDeadIds.size > 0 && !lane.eliminated) {
-      for (const u of lane.units) {
-        if (!allDeadIds.has(u.id)) continue;
-        const def = resolveUnitDef(u.type);
-        lane.gold += (def && def.bounty) ? def.bounty : 1;
-      }
-    }
-
-    // Phase G: onDeath hook before removing dead units
+    // onDeath hooks
     for (const u of lane.units) {
       if (u.hp > 0) continue;
       if (u.abilities && u.abilities.length > 0) {
         resolveAbilityHook(game, lane, u, "onDeath", {});
       }
     }
-
-    // Remove dead units
     lane.units = lane.units.filter(u => u.hp > 0);
   }
 
-  // Win condition
-  const activeLanes = game.lanes.filter(l => !l.eliminated);
-  if (activeLanes.length === 0) {
-    game.phase = "ended";
-    game.winner = null;
-  } else {
-    const aliveTeams = new Set(activeLanes.map(l => l.team));
-    if (aliveTeams.size === 1) {
+  // Win condition: teamHp elimination
+  if (game.phase === "playing") {
+    const activeLanes = game.lanes.filter(l => !l.eliminated);
+    if (activeLanes.length === 0) {
       game.phase = "ended";
-      game.winner = activeLanes[0].laneIndex;
+      game.winner = null;
+    } else {
+      const aliveTeams = new Set(activeLanes.map(l => l.team));
+      if (aliveTeams.size === 1) {
+        game.phase = "ended";
+        game.winner = activeLanes[0].laneIndex;
+      }
     }
+  }
+
+  // Combat end: if all lanes clear, move to transition
+  if (game.phase === "playing" && game.roundState === "combat") {
+    const activeLanes = game.lanes.filter(l => !l.eliminated);
+    const allClear = activeLanes.every(l => l.units.length === 0 && l.spawnQueue.length === 0);
+    if (allClear) _startTransition(game);
   }
 }
 
@@ -1331,22 +1257,32 @@ function createMLSnapshot(game) {
     tick: game.tick,
     phase: game.phase,
     winner: game.winner,
-    incomeTicksRemaining: INCOME_INTERVAL_TICKS - game.incomeTickCounter,
+    incomeTicksRemaining: INCOME_INTERVAL_TICKS - (game.incomeTickCounter || 0),
+    // Round state
+    roundState: game.roundState || "build",
+    roundNumber: game.roundNumber || 1,
+    roundStateTicks: game.roundStateTicks || 0,
+    buildPhaseTotal: BUILD_PHASE_TICKS,
+    transitionPhaseTotal: TRANSITION_PHASE_TICKS,
+    teamHp: game.teamHp || { left: TEAM_HP_START, right: TEAM_HP_START },
+    teamHpMax: TEAM_HP_START,
     lanes: game.lanes.map(lane => {
-      const walls = [];
       const towerCells = [];
-      // Phase D: sendQueue histogram
-      const sendQueueHist = {};
-      for (const k of lane.sendQueue) sendQueueHist[k] = (sendQueueHist[k] || 0) + 1;
+      const deadCells = [];
       for (let x = 0; x < GRID_W; x++) {
         for (let y = 0; y < GRID_H; y++) {
           const tile = lane.grid[x][y];
-          if (tile.type === "wall") walls.push({ x, y });
-          else if (tile.type === "tower") towerCells.push({
-            x, y, type: tile.towerType, level: tile.towerLevel,
-            targetMode: tile.targetMode || "first",
-            debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
-          });
+          if (tile.type === "tower") {
+            towerCells.push({
+              x, y, type: tile.towerType, level: tile.towerLevel,
+              targetMode: tile.targetMode || "first",
+              debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
+              hp: tile.hp != null ? tile.hp : tile.maxHp,
+              maxHp: tile.maxHp || null,
+            });
+          } else if (tile.type === "dead_tower") {
+            deadCells.push({ x, y, type: tile.towerType });
+          }
         }
       }
 
@@ -1362,37 +1298,43 @@ function createMLSnapshot(game) {
         progress: 1 - p.ticksRemaining / p.ticksTotal,
       }));
 
+      const snapFullPath = lane.fullPath || lane.path || [];
       return {
         laneIndex: lane.laneIndex,
         team: lane.team || "red",
+        side: lane.side || null,
+        slotKey: lane.slotKey || null,
+        slotColor: lane.slotColor || null,
+        branchId: lane.branchId || null,
+        branchLabel: lane.branchLabel || null,
+        castleSide: lane.castleSide || null,
         eliminated: lane.eliminated,
         gold: lane.gold,
         income: lane.income,
         lives: lane.lives,
         barracksLevel: lane.barracks.level,
-        wallCount: lane.wallCount,
-        walls,
         towerCells,
+        deadCells,
         path: lane.path || [],
+        fullPathLength: snapFullPath.length,
         units: lane.units.map(u => {
           const pos = getUnitTilePos(u, lane.path);
           return {
             id: u.id,
             ownerLane: u.ownerLane,
             type: u.type,
+            skinKey: u.skinKey || null,
             pathIdx: u.pathIdx,
             gridX: pos ? pos.x : SPAWN_X,
             gridY: pos ? pos.y : SPAWN_YG,
-            normProgress: (lane.path && lane.path.length > 1) ? u.pathIdx / (lane.path.length - 1) : 0,
+            normProgress: snapFullPath.length > 1 ? u.pathIdx / (snapFullPath.length - 1) : 0,
             hp: u.hp,
             maxHp: u.maxHp,
+            isWaveUnit: u.isWaveUnit || false,
           };
         }),
         spawnQueueLength: lane.spawnQueue.length,
         projectiles,
-        sendQueue: sendQueueHist,
-        sendQueueTotal: lane.sendQueue.length,
-        sendDrainProgress: SEND_INTERVAL_TICKS > 0 ? lane.sendDrainCounter / SEND_INTERVAL_TICKS : 0,
         autosend: lane.autosend ? {
           enabled: !!lane.autosend.enabled,
           enabledUnits: Object.assign({}, lane.autosend.enabledUnits || {}),
@@ -1453,55 +1395,66 @@ function createMLPublicConfig(options) {
     livesStart: LIVES_START,
     gridW: GRID_W,
     gridH: GRID_H,
-    wallCost: WALL_COST,
-    maxWalls: null,
-    maxPathLen: MAX_PATH_LEN,
-    unitDefs: UNIT_DEFS,
-    towerDefs: TOWER_DEFS,
+    unitDefs: getMovingUnitDefMap(),
+    towerDefs: getFixedUnitDefMap(),
     towerMaxLevel: TOWER_MAX_LEVEL,
     barracksInfinite: true,
     barracksCostBase: BARRACKS_COST_BASE,
     barracksReqIncomeBase: BARRACKS_REQ_INCOME_BASE,
-    // retained for older clients; formula above is authoritative
     barracksLevels: [],
-    // Phase D
-    sendIntervalTicks: SEND_INTERVAL_TICKS,
-    queueCap: QUEUE_CAP,
-    // Phase E
+    // Wave defense
+    teamHpStart: TEAM_HP_START,
+    buildPhaseTicks: BUILD_PHASE_TICKS,
+    transitionPhaseTicks: TRANSITION_PHASE_TICKS,
+    escalationPerExtraRound: ESCALATION_PER_EXTRA_ROUND,
+    battlefieldTopology: opt.battlefieldTopology,
+    slotDefinitions: opt.battlefieldTopology.slotDefinitions,
     fixedUnitTypes,
-    // Phase H
     movingUnitTypes,
   };
 }
 
 /**
- * Returns a key→unitDef map for all sendable (moving/both-mode) units from the
- * DB cache. Falls back to the hardcoded UNIT_DEFS when the DB has no rows yet
- * (e.g. local dev without migrations).
+ * Returns a key→unitDef map for all sendable (moving/both-mode) units from the DB.
  */
 function getMovingUnitDefMap() {
-  const all = getAllUnitTypes();
-  if (all.length === 0) return Object.assign({}, UNIT_DEFS);
   const map = {};
-  for (const ut of all) {
+  for (const ut of getAllUnitTypes()) {
     if (!ut.enabled) continue;
     if (ut.behavior_mode !== "both" && ut.behavior_mode !== "moving") continue;
     const def = resolveUnitDef(ut.key);
     if (def) map[ut.key] = def;
   }
-  return Object.keys(map).length > 0 ? map : Object.assign({}, UNIT_DEFS);
+  return map;
+}
+
+/**
+ * Returns a key→towerDef map for all placeable (fixed/both-mode) units from the DB.
+ */
+function getFixedUnitDefMap() {
+  const map = {};
+  for (const ut of getAllUnitTypes()) {
+    if (!ut.enabled) continue;
+    if (ut.behavior_mode !== "both" && ut.behavior_mode !== "fixed") continue;
+    const def = resolveTowerDef(ut.key);
+    if (def) map[ut.key] = def;
+  }
+  return map;
 }
 
 module.exports = {
   TICK_HZ,
   TICK_MS,
   INCOME_INTERVAL_TICKS,
-  SEND_INTERVAL_TICKS,
-  QUEUE_CAP,
   UNIT_DEFS,
   TOWER_DEFS,
+  TEAM_HP_START,
+  BUILD_PHASE_TICKS,
+  TRANSITION_PHASE_TICKS,
   getBarracksLevelDef,
+  resolveUnitDef,
   getMovingUnitDefMap,
+  getFixedUnitDefMap,
   GRID_W,
   GRID_H,
   createMLGame,

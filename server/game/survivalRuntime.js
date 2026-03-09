@@ -104,7 +104,7 @@ function createSurvivalRuntime({
     io.to(roomId).emit("ml_match_config", simMl.createMLPublicConfig({}));
 
     let localTick = 0;
-    const snapshotEveryNTicks = 10;
+    const snapshotEveryNTicks = 2; // 10 Hz at 20 Hz tick rate (was 10 = 2 Hz, too laggy)
 
     const tickHandle = setInterval(() => {
       const entry = gamesByRoomId.get(roomId);

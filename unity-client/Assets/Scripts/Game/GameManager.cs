@@ -14,6 +14,8 @@
 
 using UnityEngine;
 using System.Collections;
+using TMPro;
+using CastleDefender.Net;
 
 namespace CastleDefender.Game
 {
@@ -52,6 +54,24 @@ namespace CastleDefender.Game
 
         int _cameraLockCountdown;
 
+        [Header("Wave Defense HUD (assign TMP_Text references)")]
+        [Tooltip("Shows 'Wave N' or 'Round N'.")]
+        public TMP_Text TxtRound;
+        [Tooltip("Shows BUILD / COMBAT / TRANSITION phase badge.")]
+        public TMP_Text TxtPhase;
+        [Tooltip("Seconds remaining in the current phase.")]
+        public TMP_Text TxtCountdown;
+        [Tooltip("Left-team HP display.")]
+        public TMP_Text TxtTeamHpLeft;
+        [Tooltip("Right-team HP display.")]
+        public TMP_Text TxtTeamHpRight;
+
+        const int TickHz = 20; // must match server TICK_HZ
+
+        string _playerSide;     // "left" | "right" — cached on first snapshot
+        string _prevRoundState; // tracks previous round state for transition detection
+        bool   _hudSubscribed;
+
         [Header("Legacy Single-Lane Camera (unused in battlefield mode)")]
         public float CameraBehind = 0f;
         public float CameraSide = 0f;
@@ -65,12 +85,103 @@ namespace CastleDefender.Game
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
+        void OnEnable()
+        {
+            var sa = SnapshotApplier.Instance;
+            if (sa != null && !_hudSubscribed)
+            {
+                sa.OnMLSnapshotApplied += OnMLSnapshot;
+                _hudSubscribed = true;
+            }
+        }
+
+        void OnDisable()
+        {
+            if (_hudSubscribed && SnapshotApplier.Instance != null)
+                SnapshotApplier.Instance.OnMLSnapshotApplied -= OnMLSnapshot;
+            _hudSubscribed = false;
+        }
+
+        void OnMLSnapshot(MLSnapshot snap)
+        {
+            if (snap == null) return;
+
+            // Derive player side once from authoritative snapshot data
+            if (_playerSide == null)
+            {
+                var sa = SnapshotApplier.Instance;
+                if (sa != null && sa.MyLaneIndex >= 0 &&
+                    snap.lanes != null && sa.MyLaneIndex < snap.lanes.Length)
+                {
+                    var myLane = snap.lanes[sa.MyLaneIndex];
+                    if (myLane != null)
+                        _playerSide = myLane.side; // "left" | "right"
+                }
+            }
+
+            UpdateWaveHUD(snap);
+        }
+
+        void UpdateWaveHUD(MLSnapshot snap)
+        {
+            // Round number
+            if (TxtRound != null)
+                TxtRound.text = $"Wave {snap.roundNumber}";
+
+            // Phase badge
+            if (TxtPhase != null)
+            {
+                TxtPhase.text = snap.roundState switch
+                {
+                    "build"      => "BUILD",
+                    "combat"     => "COMBAT",
+                    "transition" => "NEXT WAVE",
+                    _            => snap.roundState?.ToUpper() ?? ""
+                };
+            }
+
+            // Countdown (ticks → seconds, ceil so "0" only shows on exact zero)
+            if (TxtCountdown != null)
+            {
+                int secs = Mathf.CeilToInt((float)snap.roundStateTicks / TickHz);
+                TxtCountdown.text = secs > 0 ? $"{secs}s" : "";
+            }
+
+            // Wave-start audio cue: play a sound when build phase transitions to combat
+            if (_prevRoundState == "build" && snap.roundState == "combat")
+                AudioManager.I?.Play(AudioManager.SFX.UpgradeBarracks, 0.6f);
+            _prevRoundState = snap.roundState;
+
+            // Team HP — own team is emphasised via colour
+            // teamHp is a class and can be null if the server omits it on early snapshots
+            var hp = snap.teamHp;
+            if (hp != null)
+            {
+                if (TxtTeamHpLeft != null)
+                {
+                    TxtTeamHpLeft.text = $"♥ {hp.left}";
+                    TxtTeamHpLeft.color = _playerSide == "left"
+                        ? new Color(1f, 0.92f, 0.2f)   // gold — own team
+                        : new Color(1f, 1f, 1f, 0.6f);  // dim white — opponent
+                }
+
+                if (TxtTeamHpRight != null)
+                {
+                    TxtTeamHpRight.text = $"♥ {hp.right}";
+                    TxtTeamHpRight.color = _playerSide == "right"
+                        ? new Color(1f, 0.92f, 0.2f)
+                        : new Color(1f, 1f, 1f, 0.6f);
+                }
+            }
+        }
+
         void Awake()
         {
             InitPools();
             WireInfoBarAnchor();
             EnsureCameraPOV();
             _cameraLockCountdown = CameraLockFrames;
+            EnsureWaveHUD();   // auto-create phase/round labels if not wired
         }
 
         void Start()
@@ -79,6 +190,18 @@ namespace CastleDefender.Game
             // initialization after Awake; re-apply POV at Start and next frame.
             EnsureCameraPOV();
             StartCoroutine(EnsureCameraPOVNextFrame());
+
+            // SnapshotApplier may have initialised after OnEnable — subscribe if missed.
+            if (!_hudSubscribed)
+            {
+                var sa = SnapshotApplier.Instance;
+                if (sa != null)
+                {
+                    sa.OnMLSnapshotApplied += OnMLSnapshot;
+                    _hudSubscribed = true;
+                    if (sa.LatestML != null) OnMLSnapshot(sa.LatestML);
+                }
+            }
         }
 
         void LateUpdate()
@@ -131,14 +254,22 @@ namespace CastleDefender.Game
             var cam = Camera.main ?? FindFirstObjectByType<Camera>();
             if (cam == null) return;
 
-            cam.orthographic = true;
+            cam.orthographic     = true;
             cam.orthographicSize = CameraOrthoSize;
 
-            // Phase 3: frame the full 4-branch battlefield centered at world origin.
-            // BattlefieldCameraPosition and BattlefieldLookTarget are tunable in the Inspector.
-            // Default: camera at (0, 20, -10) looking at (0, 0, 0) gives a natural RTS angle.
-            cam.transform.position = BattlefieldCameraPosition;
-            cam.transform.LookAt(BattlefieldLookTarget);
+            // Position camera over the local player's assigned lane.
+            // Falls back to Inspector preset (Lane 0) if NetworkManager isn't ready yet.
+            int laneIndex = CastleDefender.Net.NetworkManager.Instance != null
+                ? CastleDefender.Net.NetworkManager.Instance.MyLaneIndex
+                : 0;
+
+            Vector3 castlePos  = TileGrid.TileToWorld(laneIndex, 5, 27);
+            Vector3 spawnPos   = TileGrid.TileToWorld(laneIndex, 5, 0);
+            Vector3 laneCenter = (castlePos + spawnPos) * 0.5f + new Vector3(0f, 0f, CameraFrameOffsetZ);
+            Vector3 camPos     = laneCenter + Vector3.up * CameraHeight;
+
+            cam.transform.position = camPos;
+            cam.transform.LookAt(laneCenter, Vector3.left); // −X up → lane runs vertically
 
             var ctrl = FindFirstObjectByType<global::CameraController>();
             if (ctrl == null)
@@ -153,6 +284,68 @@ namespace CastleDefender.Game
         {
             yield return null;
             EnsureCameraPOV();
+        }
+
+        // ── Auto-create Wave HUD if not wired in Inspector ────────────────────
+        void EnsureWaveHUD()
+        {
+            if (TxtRound != null) return; // already wired
+
+            var canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null) return;
+
+            var existing = canvas.transform.Find("WaveHUD");
+            GameObject hudGO = existing != null ? existing.gameObject : null;
+
+            if (hudGO == null)
+            {
+                hudGO = new GameObject("WaveHUD");
+                hudGO.transform.SetParent(canvas.transform, false);
+                var rt = hudGO.AddComponent<RectTransform>();
+                rt.anchorMin        = new Vector2(0.1f, 1f);
+                rt.anchorMax        = new Vector2(0.9f, 1f);
+                rt.pivot            = new Vector2(0.5f, 1f);
+                rt.anchoredPosition = new Vector2(0f, -4f);
+                rt.sizeDelta        = new Vector2(0f, 48f);
+
+                var bg = hudGO.AddComponent<UnityEngine.UI.Image>();
+                bg.color = new Color(0f, 0f, 0f, 0.5f);
+
+                var hlg = hudGO.AddComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+                hlg.spacing            = 16f;
+                hlg.childAlignment     = TextAnchor.MiddleCenter;
+                hlg.childForceExpandWidth  = false;
+                hlg.childForceExpandHeight = true;
+                hlg.padding = new RectOffset(12, 12, 4, 4);
+            }
+
+            TxtRound      = GetOrMakeLabel(hudGO, "Txt_Round",      "Wave 1",  100f, 18, Color.white);
+            TxtPhase      = GetOrMakeLabel(hudGO, "Txt_Phase",      "BUILD",    90f, 18, new Color(0.3f, 1f, 0.45f));
+            TxtCountdown  = GetOrMakeLabel(hudGO, "Txt_Countdown",  "30s",      64f, 18, new Color(1f, 0.9f, 0.3f));
+            TxtTeamHpLeft  = GetOrMakeLabel(hudGO, "Txt_HpLeft",   "♥ 20",     80f, 16, new Color(1f, 0.92f, 0.2f));
+            TxtTeamHpRight = GetOrMakeLabel(hudGO, "Txt_HpRight",  "♥ 20",     80f, 16, Color.white);
+            Debug.Log("[GameManager] Auto-created WaveHUD panel.");
+        }
+
+        static TMPro.TMP_Text GetOrMakeLabel(GameObject parent, string name, string defaultText, float width, int fontSize, Color color)
+        {
+            var existing = parent.transform.Find(name);
+            if (existing != null) return existing.GetComponent<TMPro.TMP_Text>();
+
+            var go = new GameObject(name);
+            go.transform.SetParent(parent.transform, false);
+            var rt = go.AddComponent<RectTransform>();
+            rt.sizeDelta = new Vector2(width, 40f);
+            var le = go.AddComponent<UnityEngine.UI.LayoutElement>();
+            le.preferredWidth  = width;
+            le.preferredHeight = 40f;
+            var txt = go.AddComponent<TMPro.TextMeshProUGUI>();
+            txt.text      = defaultText;
+            txt.fontSize  = fontSize;
+            txt.color     = color;
+            txt.alignment = TMPro.TextAlignmentOptions.Center;
+            txt.fontStyle = TMPro.FontStyles.Bold;
+            return txt;
         }
     }
 }

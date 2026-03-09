@@ -2,8 +2,8 @@
 
 const simMl = require("../sim-multilane");
 
-const UNIT_TYPES = Object.freeze(Object.keys(simMl.UNIT_DEFS));
-const TOWER_TYPES = Object.freeze(Object.keys(simMl.TOWER_DEFS));
+function getUnitTypes() { return Object.keys(simMl.getMovingUnitDefMap()); }
+function getTowerTypes() { return Object.keys(simMl.getFixedUnitDefMap()); }
 const COUNT_BUCKETS = Object.freeze([1, 3, 5, 10]);
 const MAX_LANES = 4;
 
@@ -33,10 +33,11 @@ function getWaveAndTime(game, runtime) {
 }
 
 function summarizeTowerStats(lane) {
-  const counts = Object.fromEntries(TOWER_TYPES.map((t) => [t, 0]));
-  const levelSums = Object.fromEntries(TOWER_TYPES.map((t) => [t, 0]));
+  const towerTypes = getTowerTypes();
+  const counts = Object.fromEntries(towerTypes.map((t) => [t, 0]));
+  const levelSums = Object.fromEntries(towerTypes.map((t) => [t, 0]));
   if (!lane || !lane.grid) {
-    return { counts, avgLevels: Object.fromEntries(TOWER_TYPES.map((t) => [t, 0])) };
+    return { counts, avgLevels: Object.fromEntries(towerTypes.map((t) => [t, 0])), towerTypes };
   }
   for (let x = 0; x < lane.grid.length; x++) {
     const col = lane.grid[x] || [];
@@ -49,10 +50,10 @@ function summarizeTowerStats(lane) {
     }
   }
   const avgLevels = {};
-  for (const t of TOWER_TYPES) {
+  for (const t of towerTypes) {
     avgLevels[t] = counts[t] > 0 ? levelSums[t] / counts[t] : 0;
   }
-  return { counts, avgLevels };
+  return { counts, avgLevels, towerTypes };
 }
 
 function estimateLaneThreat(lane, unitDefMap) {
@@ -61,7 +62,7 @@ function estimateLaneThreat(lane, unitDefMap) {
   let threat = 0;
   for (const u of lane.units || []) {
     if (u.ownerLane === lane.laneIndex || (u.hp || 0) <= 0) continue;
-    const base = (unitDefMap && unitDefMap[u.type]) || simMl.UNIT_DEFS[u.type];
+    const base = (unitDefMap && unitDefMap[u.type]) || simMl.resolveUnitDef(u.type);
     const maxHp = base ? base.hp : 100;
     const hpNorm = Math.max(0.2, Math.min(3, (Number(u.hp) || 0) / maxHp));
     const progress = Math.max(0, Math.min(1, (Number(u.pathIdx) || 0) / Math.max(1, pathLen - 1)));
@@ -78,7 +79,7 @@ function estimateLaneDefense(lane) {
     for (let y = 0; y < col.length; y++) {
       const tile = col[y];
       if (!tile || tile.type !== "tower" || !tile.towerType) continue;
-      const def = simMl.TOWER_DEFS[tile.towerType];
+      const def = simMl.resolveTowerDef(tile.towerType);
       if (!def) continue;
       const lvl = Math.max(1, Number(tile.towerLevel) || 1);
       const dps = (def.dmg * (1 + 0.12 * (lvl - 1))) / Math.max(1, def.atkCdTicks);
@@ -168,7 +169,6 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
     };
   }
 
-  const { waveNumber, timeInWave } = getWaveAndTime(game, runtime);
   const myTowerStats = summarizeTowerStats(lane);
   const targetLaneIndex = chooseObservationTarget(game, laneIndex, runtime);
   const targetLane = Number.isInteger(targetLaneIndex) ? game.lanes[targetLaneIndex] : null;
@@ -183,7 +183,8 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
   const laneThreatEstimate = new Array(MAX_LANES).fill(0);
   const laneDefenseEstimate = new Array(MAX_LANES).fill(0);
   const laneLeakRate = new Array(MAX_LANES).fill(0);
-  const localUnitTypes = unitDefMap ? Object.keys(unitDefMap) : UNIT_TYPES;
+  const localUnitTypes = unitDefMap ? Object.keys(unitDefMap) : getUnitTypes();
+  const localTowerTypes = myTowerStats.towerTypes;
 
   for (const l of game.lanes || []) {
     if (!l || !Number.isInteger(l.laneIndex) || l.laneIndex < 0 || l.laneIndex >= MAX_LANES) continue;
@@ -192,11 +193,11 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
     laneLeakRate[l.laneIndex] = norm(getLaneLeakRate(runtime, l.laneIndex), 6);
   }
 
-  const myTowerCountsByType = TOWER_TYPES.map((t) => norm(myTowerStats.counts[t], 18));
-  const avgTowerLevelByType = TOWER_TYPES.map((t) => norm(myTowerStats.avgLevels[t], 10));
+  const myTowerCountsByType = localTowerTypes.map((t) => norm(myTowerStats.counts[t] || 0, 18));
+  const avgTowerLevelByType = localTowerTypes.map((t) => norm(myTowerStats.avgLevels[t] || 0, 10));
 
-  const targetTowerTotal = TOWER_TYPES.reduce((sum, t) => sum + targetTowerStats.counts[t], 0);
-  const enemyTowerMixSummary = TOWER_TYPES.map((t) => {
+  const targetTowerTotal = localTowerTypes.reduce((sum, t) => sum + (targetTowerStats.counts[t] || 0), 0);
+  const enemyTowerMixSummary = localTowerTypes.map((t) => {
     if (targetTowerTotal <= 0) return 0;
     return clamp01(targetTowerStats.counts[t] / targetTowerTotal);
   });
@@ -204,11 +205,19 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
   const lastEnemySend = getLastEnemySendSummary(runtime, laneIndex, targetLaneIndex);
   const lastEnemySendSummary = buildLastSendVector(lastEnemySend, localUnitTypes);
 
+  const oppSide = lane.side === "left" ? "right" : "left";
   const named = {
     myGold: norm(lane.gold, 500),
     myIncome: norm(lane.income, 350),
-    waveNumber: norm(waveNumber, 100),
-    timeInWave: clamp01(timeInWave),
+    roundState: [
+      game.roundState === "build" ? 1 : 0,
+      game.roundState === "combat" ? 1 : 0,
+      game.roundState === "transition" ? 1 : 0,
+    ],
+    roundNumber: norm(game.roundNumber || 1, 20),
+    roundStateTicks: norm(game.roundStateTicks || 0, 600),
+    myTeamHp: norm((game.teamHp && game.teamHp[lane.side]) || 0, 20),
+    oppTeamHp: norm((game.teamHp && game.teamHp[oppSide]) || 0, 20),
     myLeaksLast3Waves: norm(myLeaksLast3, 20),
     enemyLeaksLast3Waves: norm(enemyLeaksLast3, 20),
     myTowerCountsByType,
@@ -225,8 +234,11 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
   const vector = [
     named.myGold,
     named.myIncome,
-    named.waveNumber,
-    named.timeInWave,
+    ...named.roundState,
+    named.roundNumber,
+    named.roundStateTicks,
+    named.myTeamHp,
+    named.oppTeamHp,
     named.myLeaksLast3Waves,
     named.enemyLeaksLast3Waves,
     ...named.myTowerCountsByType,
@@ -244,8 +256,8 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
 }
 
 module.exports = {
-  UNIT_TYPES,
-  TOWER_TYPES,
+  getUnitTypes,
+  getTowerTypes,
   COUNT_BUCKETS,
   buildObservation,
   estimateLaneThreat,

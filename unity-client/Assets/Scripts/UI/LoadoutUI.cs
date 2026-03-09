@@ -1,26 +1,30 @@
-// LoadoutUI.cs — Loadout slot selection panel + edit modal.
-// Place this component on Panel_Loadout in the Lobby scene.
-// LobbyUI references it and wires OnConfirmed / OnBack.
+// LoadoutUI.cs — Unit picker for match loadout.
+// Shows all catalog units as a compact grid of cards (no scroll).
+// Player selects up to 5. Hover shows 3D preview via UnitPortraitCamera.
+// LobbyUI subscribes: OnConfirmed(int[] unitTypeIds) — null means use server defaults.
 //
-// SCENE SETUP (Panel_Loadout):
-//   Panel_Loadout  (has LoadoutUI component)
-//   ├── Btn_Default          — "Default" card (always visible)
-//   ├── Btn_Slot0..3         — one per saved slot (hidden if slot doesn't exist)
-//   ├── Txt_SlotName0..3     — TMP_Text label inside each slot button
-//   ├── Btn_Edit0..3         — pencil icon per slot (opens edit modal)
-//   ├── Btn_Confirm          — confirm selection and proceed
-//   ├── Btn_Back             — go back to Type step
-//   └── Panel_Edit           — edit modal (inactive by default)
-//       ├── Input_LoadoutName — TMP_InputField for slot name
-//       ├── Dropdown_Unit0..4 — TMP_Dropdown for each of 5 unit slots
-//       ├── Btn_SaveEdit
-//       └── Btn_CancelEdit
+// SCENE SETUP (built by SetupLoadoutPanel + SetupPortraitStudio):
+//   Panel_Loadout  (LoadoutUI component)
+//   ├── Txt_Title
+//   ├── Panel_Body  (HorizontalLayoutGroup)
+//   │   ├── Panel_Catalog  (ScrollRect)
+//   │   │   └── Viewport / Content  (RectTransform + GridLayoutGroup — cards spawned at runtime)
+//   │   └── Panel_Preview
+//   │       ├── Img_Portrait  (RawImage — shows RenderTexture)
+//   │       ├── Txt_PreviewName
+//   │       └── Txt_PreviewStats
+//   ├── Panel_Slots  (HorizontalLayoutGroup — 5 slot buttons)
+//   │   └── Btn_Slot0..4
+//   └── Panel_Buttons
+//       ├── Btn_Confirm
+//       └── Btn_Back
 
 using System;
-using System.Linq;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 using CastleDefender.Net;
 
@@ -29,186 +33,380 @@ namespace CastleDefender.UI
     public class LoadoutUI : MonoBehaviour
     {
         // ── Inspector ─────────────────────────────────────────────────────────
-        [Header("Slot Buttons (0-3)")]
-        public Button[]   Btn_Slots;        // 4 buttons, show/hide based on Slots.Count
-        public TMP_Text[] Txt_SlotNames;    // label inside each slot button
-        public Button[]   Btn_EditSlots;    // pencil icon per slot
+        [Header("Portrait Camera")]
+        public UnitPortraitCamera PortraitCam;
+        public RawImage           Img_Portrait;
 
-        [Header("Default + Confirm + Back")]
-        public Button Btn_Default;
+        [Header("Preview Info")]
+        public TMP_Text Txt_PreviewName;
+        public TMP_Text Txt_PreviewStats;
+
+        [Header("Catalog Scroll View")]
+        public RectTransform CatalogContent;   // Content RectTransform inside ScrollRect
+
+        [Header("Selected Slots (5)")]
+        public Button[]   SlotButtons;         // 5 buttons
+        public TMP_Text[] SlotLabels;          // label inside each slot button
+
+        [Header("Action Buttons")]
         public Button Btn_Confirm;
         public Button Btn_Back;
 
-        [Header("Edit Modal (optional)")]
-        public GameObject     Panel_Edit;
-        public TMP_InputField Input_LoadoutName;
-        public TMP_Dropdown[] Dropdown_Units;   // 5 dropdowns, one per unit slot
-        public Button         Btn_SaveEdit;
-        public Button         Btn_CancelEdit;
-
         [Header("Colors")]
-        public Color ColorSelected   = new Color(0.2f, 0.7f, 0.3f);
-        public Color ColorUnselected = new Color(0.25f, 0.25f, 0.3f);
+        public Color ColorSelected   = new Color(0.20f, 0.70f, 0.30f);
+        public Color ColorUnselected = new Color(0.22f, 0.22f, 0.28f);
+        public Color ColorEmpty      = new Color(0.13f, 0.13f, 0.18f);
 
-        // ── Events (LobbyUI subscribes) ───────────────────────────────────────
-        public event Action<int> OnConfirmed;   // -1 = default, 0-3 = slot
-        public event Action      OnBack;
+        [Header("Card Grid Layout")]
+        public float CardWidth   = 130f;
+        public float CardHeight  = 72f;
+        public float CardSpacing = 6f;
+        public int   CardColumns = 3;
+
+        // ── Events ────────────────────────────────────────────────────────────
+        public event Action<int[]> OnConfirmed;   // null = use server defaults
+        public event Action        OnBack;
 
         // ── State ─────────────────────────────────────────────────────────────
-        int _selected  = -1;    // -1 = default
-        int _editSlot  = -1;
+        int[]                    _selected = new int[5] { -1, -1, -1, -1, -1 };
+        List<UnitCatalogEntry>   _units    = new();
+        readonly List<GameObject> _cards   = new();
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
-            Btn_Default.onClick.AddListener(() => SelectSlot(-1));
-            Btn_Confirm.onClick.AddListener(OnConfirmClick);
-            Btn_Back.onClick.AddListener(OnBackClick);
+            if (Btn_Confirm != null) Btn_Confirm.onClick.AddListener(OnConfirmClick);
+            if (Btn_Back    != null) Btn_Back.onClick.AddListener(OnBackClick);
 
-            for (int i = 0; i < Btn_Slots.Length; i++)
+            for (int i = 0; i < (SlotButtons?.Length ?? 0); i++)
             {
                 int idx = i;
-                if (Btn_Slots[i] != null)
-                    Btn_Slots[i].onClick.AddListener(() => SelectSlot(idx));
-                if (Btn_EditSlots != null && idx < Btn_EditSlots.Length && Btn_EditSlots[idx] != null)
-                    Btn_EditSlots[idx].onClick.AddListener(() => OpenEdit(idx));
+                if (SlotButtons[i] != null)
+                    SlotButtons[i].onClick.AddListener(() => ClearSlot(idx));
             }
-
-            if (Btn_SaveEdit   != null) Btn_SaveEdit.onClick.AddListener(OnSaveEdit);
-            if (Btn_CancelEdit != null) Btn_CancelEdit.onClick.AddListener(CloseEdit);
-
-            if (Panel_Edit != null) Panel_Edit.SetActive(false);
         }
 
         void OnEnable()
         {
-            _selected = LoadoutManager.SelectedSlot;
-            RefreshSlots();
+            _selected = new int[5] { -1, -1, -1, -1, -1 };
+
+            if (CatalogLoader.IsReady)
+                BuildCatalog();
+            else
+                CatalogLoader.OnCatalogReady += BuildCatalog;
+
+            RefreshSlotDisplay();
+        }
+
+        void OnDisable()
+        {
+            CatalogLoader.OnCatalogReady -= BuildCatalog;
+            PortraitCam?.Clear();
         }
 
         // ── Public ────────────────────────────────────────────────────────────
-
-        /// <summary>Call from LobbyUI when showing this panel to refresh slot labels.</summary>
         public void Refresh()
         {
-            _selected = LoadoutManager.SelectedSlot;
-            RefreshSlots();
+            _selected = new int[5] { -1, -1, -1, -1, -1 };
+            BuildCatalog();
+            RefreshSlotDisplay();
         }
 
-        // ── Slot selection ────────────────────────────────────────────────────
-        void SelectSlot(int idx)
+        // ── Catalog building ──────────────────────────────────────────────────
+        void BuildCatalog()
         {
-            _selected = idx;
-            LoadoutManager.SelectedSlot = idx;
-            RefreshSlots();
+            CatalogLoader.OnCatalogReady -= BuildCatalog;
+
+            foreach (var c in _cards) if (c != null) Destroy(c);
+            _cards.Clear();
+
+            if (CatalogContent == null) return;
+
+            _units = new List<UnitCatalogEntry>(CatalogLoader.Units);
+            var enabled = _units.FindAll(u => u.enabled);
+            if (enabled.Count > 0) _units = enabled;
+
+            // Ensure GridLayoutGroup exists on the content transform
+            var grid = CatalogContent.GetComponent<GridLayoutGroup>();
+            if (grid == null) grid = CatalogContent.gameObject.AddComponent<GridLayoutGroup>();
+            grid.cellSize         = new Vector2(CardWidth, CardHeight);
+            grid.spacing          = new Vector2(CardSpacing, CardSpacing);
+            grid.padding          = new RectOffset(4, 4, 4, 4);
+            grid.constraint       = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount  = CardColumns;
+            grid.childAlignment   = TextAnchor.UpperLeft;
+
+            // ContentSizeFitter so the content rect grows to fit all cards
+            var csf = CatalogContent.GetComponent<ContentSizeFitter>();
+            if (csf == null) csf = CatalogContent.gameObject.AddComponent<ContentSizeFitter>();
+            csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            csf.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
+
+            foreach (var unit in _units)
+            {
+                var card = CreateCard(unit);
+                card.transform.SetParent(CatalogContent, false);
+                _cards.Add(card);
+            }
+
+            RefreshCardColors();
+
+            if (PortraitCam != null)
+                StartCoroutine(FillCardIcons());
+        }
+
+        IEnumerator FillCardIcons()
+        {
+            // Give layout one frame to settle before rendering portraits
+            yield return null;
+
+            for (int i = 0; i < _cards.Count && i < _units.Count; i++)
+            {
+                var card = _cards[i];
+                if (card == null) continue;
+                var raw = card.transform.Find("Icon")?.GetComponent<RawImage>();
+                if (raw == null) continue;
+
+                string key = _units[i].key;
+                bool done = false;
+                PortraitCam.StartIconCapture(key, tex =>
+                {
+                    if (tex != null && raw != null)
+                    {
+                        raw.texture = tex;
+                        raw.color   = Color.white;
+                    }
+                    done = true;
+                });
+                while (!done) yield return null;
+            }
+        }
+
+        GameObject CreateCard(UnitCatalogEntry unit)
+        {
+            var go = new GameObject(unit.key);
+            go.AddComponent<RectTransform>();
+
+            // Rounded-corner look via a slightly darker border image behind
+            var border = go.AddComponent<Image>();
+            border.color = new Color(0.10f, 0.10f, 0.14f);
+
+            var btn = go.AddComponent<Button>();
+            // Disable the default button color transition so we control color manually
+            var colors = btn.colors;
+            colors.normalColor      = Color.white;
+            colors.highlightedColor = new Color(1f, 1f, 1f, 0.95f);
+            colors.pressedColor     = new Color(0.8f, 0.8f, 0.8f);
+            colors.fadeDuration     = 0.05f;
+            btn.colors = colors;
+
+            string key = unit.key;
+            int    id  = unit.id;
+            btn.onClick.AddListener(() => { SelectUnit(key, id); });
+
+            // Hover → update large preview
+            var trig = go.AddComponent<EventTrigger>();
+            var hoverEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
+            hoverEntry.callback.AddListener(_ => PreviewUnit(key));
+            trig.triggers.Add(hoverEntry);
+
+            // Inner fill (color changes with selection)
+            var fillGO = new GameObject("Fill");
+            fillGO.transform.SetParent(go.transform, false);
+            var fillRT = fillGO.AddComponent<RectTransform>();
+            fillRT.anchorMin = Vector2.zero;
+            fillRT.anchorMax = Vector2.one;
+            fillRT.offsetMin = new Vector2(2f, 2f);
+            fillRT.offsetMax = new Vector2(-2f, -2f);
+            var fillImg = fillGO.AddComponent<Image>();
+            fillImg.color = ColorUnselected;
+            fillImg.raycastTarget = false;
+
+            // Icon — left 38% of card, filled via UnitPortraitCamera capture coroutine
+            var iconGO = new GameObject("Icon");
+            iconGO.transform.SetParent(go.transform, false);
+            var iconRT = iconGO.AddComponent<RectTransform>();
+            iconRT.anchorMin = Vector2.zero;
+            iconRT.anchorMax = new Vector2(0.38f, 1f);
+            iconRT.offsetMin = new Vector2(4f, 4f);
+            iconRT.offsetMax = new Vector2(-2f, -4f);
+            var iconImg = iconGO.AddComponent<RawImage>();
+            iconImg.color        = new Color(0.3f, 0.3f, 0.4f, 0.5f); // placeholder until portrait is captured
+            iconImg.raycastTarget = false;
+
+            // Unit name (top-right portion of card)
+            var nameGO = new GameObject("Name");
+            nameGO.transform.SetParent(go.transform, false);
+            var nameRT = nameGO.AddComponent<RectTransform>();
+            nameRT.anchorMin = new Vector2(0.38f, 0.45f);
+            nameRT.anchorMax = new Vector2(1f, 1f);
+            nameRT.offsetMin = new Vector2(4f, 0f);
+            nameRT.offsetMax = new Vector2(-6f, -4f);
+            var nameTxt = nameGO.AddComponent<TextMeshProUGUI>();
+            nameTxt.text         = unit.name;
+            nameTxt.fontSize     = 13f;
+            nameTxt.fontStyle    = FontStyles.Bold;
+            nameTxt.color        = Color.white;
+            nameTxt.alignment    = TextAlignmentOptions.MidlineLeft;
+            nameTxt.overflowMode = TextOverflowModes.Ellipsis;
+            nameTxt.raycastTarget = false;
+
+            // Stats (bottom-right portion)
+            var statsGO = new GameObject("Stats");
+            statsGO.transform.SetParent(go.transform, false);
+            var statsRT = statsGO.AddComponent<RectTransform>();
+            statsRT.anchorMin = new Vector2(0.38f, 0f);
+            statsRT.anchorMax = new Vector2(1f, 0.48f);
+            statsRT.offsetMin = new Vector2(4f, 2f);
+            statsRT.offsetMax = new Vector2(-6f, 0f);
+            var statsTxt = statsGO.AddComponent<TextMeshProUGUI>();
+            statsTxt.text      = $"HP {unit.hp:0}  {unit.send_cost}g";
+            statsTxt.fontSize  = 10f;
+            statsTxt.color     = new Color(0.75f, 0.75f, 0.75f);
+            statsTxt.alignment = TextAlignmentOptions.MidlineLeft;
+            statsTxt.raycastTarget = false;
+
+            // Selected checkmark (top-right corner, over everything)
+            var selGO = new GameObject("SelMark");
+            selGO.transform.SetParent(go.transform, false);
+            var selRT = selGO.AddComponent<RectTransform>();
+            selRT.anchorMin = new Vector2(0.7f, 0.55f);
+            selRT.anchorMax = new Vector2(1f, 1f);
+            selRT.offsetMin = Vector2.zero;
+            selRT.offsetMax = new Vector2(-3f, -3f);
+            var selTxt = selGO.AddComponent<TextMeshProUGUI>();
+            selTxt.name          = "SelMark";
+            selTxt.text          = "";
+            selTxt.fontSize      = 16f;
+            selTxt.color         = ColorSelected;
+            selTxt.alignment     = TextAlignmentOptions.TopRight;
+            selTxt.raycastTarget = false;
+
+            return go;
+        }
+
+        // ── Selection logic ───────────────────────────────────────────────────
+        void SelectUnit(string key, int id)
+        {
+            // Toggle off if already selected
+            for (int i = 0; i < _selected.Length; i++)
+            {
+                if (_selected[i] == id) { ClearSlot(i); return; }
+            }
+            // Find first empty slot
+            for (int i = 0; i < _selected.Length; i++)
+            {
+                if (_selected[i] == -1)
+                {
+                    _selected[i] = id;
+                    RefreshSlotDisplay();
+                    RefreshCardColors();
+                    PreviewUnit(key);
+                    AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+                    return;
+                }
+            }
+            // All full — replace last slot
+            _selected[4] = id;
+            RefreshSlotDisplay();
+            RefreshCardColors();
+            PreviewUnit(key);
             AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
         }
 
-        void RefreshSlots()
+        void ClearSlot(int idx)
         {
-            // Show/hide slot buttons based on how many slots are saved
-            for (int i = 0; i < Btn_Slots.Length; i++)
-            {
-                if (Btn_Slots[i] == null) continue;
-                bool exists = i < LoadoutManager.Slots.Count;
-                Btn_Slots[i].gameObject.SetActive(exists);
+            if (idx < 0 || idx >= _selected.Length) return;
+            _selected[idx] = -1;
+            // Compact: shift left
+            for (int i = idx; i < _selected.Length - 1; i++)
+                _selected[i] = _selected[i + 1];
+            _selected[_selected.Length - 1] = -1;
+            RefreshSlotDisplay();
+            RefreshCardColors();
+            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+        }
 
-                if (exists && Txt_SlotNames != null && i < Txt_SlotNames.Length && Txt_SlotNames[i] != null)
+        // ── Display ───────────────────────────────────────────────────────────
+        void RefreshSlotDisplay()
+        {
+            for (int i = 0; i < (SlotButtons?.Length ?? 0); i++)
+            {
+                if (SlotButtons[i] == null) continue;
+                bool filled = _selected[i] != -1;
+
+                if (SlotLabels != null && i < SlotLabels.Length && SlotLabels[i] != null)
                 {
-                    var slot = LoadoutManager.Slots[i];
-                    Txt_SlotNames[i].text = string.IsNullOrEmpty(slot.name) ? $"Slot {i + 1}" : slot.name;
+                    if (filled)
+                    {
+                        var u = _units?.Find(x => x.id == _selected[i]);
+                        SlotLabels[i].text = u != null ? u.name : "?";
+                    }
+                    else
+                    {
+                        SlotLabels[i].text = $"Slot {i + 1}";
+                    }
                 }
 
-                if (Btn_EditSlots != null && i < Btn_EditSlots.Length && Btn_EditSlots[i] != null)
-                    Btn_EditSlots[i].gameObject.SetActive(exists);
-
-                Btn_Slots[i].image.color = (_selected == i) ? ColorSelected : ColorUnselected;
+                SlotButtons[i].image.color = filled ? ColorSelected : ColorEmpty;
             }
+        }
 
-            if (Btn_Default != null)
-                Btn_Default.image.color = (_selected == -1) ? ColorSelected : ColorUnselected;
+        void RefreshCardColors()
+        {
+            var selSet = new HashSet<int>(_selected);
+            for (int i = 0; i < _cards.Count && i < _units.Count; i++)
+            {
+                if (_cards[i] == null) continue;
+                bool selected = selSet.Contains(_units[i].id);
+
+                // Color the inner fill child
+                var fill = _cards[i].transform.Find("Fill")?.GetComponent<Image>();
+                if (fill != null)
+                    fill.color = selected ? ColorSelected : ColorUnselected;
+
+                // Fallback: color root image if no Fill child
+                else
+                {
+                    var img = _cards[i].GetComponent<Image>();
+                    if (img != null) img.color = selected ? ColorSelected : ColorUnselected;
+                }
+
+                // Update tick mark
+                var selMark = _cards[i].transform.Find("SelMark")?.GetComponent<TMP_Text>();
+                if (selMark != null)
+                    selMark.text = selected ? "✓" : "";
+            }
+        }
+
+        void PreviewUnit(string key)
+        {
+            PortraitCam?.ShowUnit(key);
+            if (!CatalogLoader.UnitByKey.TryGetValue(key, out var u)) return;
+            if (Txt_PreviewName  != null) Txt_PreviewName.text  = u.name;
+            if (Txt_PreviewStats != null)
+            {
+                Txt_PreviewStats.text =
+                    $"<b>HP:</b> {u.hp:0}\n" +
+                    $"<b>Send Cost:</b> {u.send_cost}\n" +
+                    $"<b>Build Cost:</b> {u.build_cost}\n" +
+                    $"<b>Speed:</b> {u.path_speed * 100f:0.0}";
+            }
         }
 
         // ── Confirm / Back ────────────────────────────────────────────────────
         void OnConfirmClick()
         {
             AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
-            OnConfirmed?.Invoke(_selected);
+            bool full = true;
+            foreach (int id in _selected) if (id == -1) { full = false; break; }
+            OnConfirmed?.Invoke(full ? (int[])_selected.Clone() : null);
         }
 
         void OnBackClick()
         {
             AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
             OnBack?.Invoke();
-        }
-
-        // ── Edit modal ────────────────────────────────────────────────────────
-        void OpenEdit(int slotIdx)
-        {
-            if (!AuthManager.IsAuthenticated) return;
-            if (Panel_Edit == null) return;
-
-            _editSlot = slotIdx;
-            var slot = slotIdx < LoadoutManager.Slots.Count ? LoadoutManager.Slots[slotIdx] : null;
-
-            if (Input_LoadoutName != null)
-                Input_LoadoutName.text = slot?.name ?? $"Slot {slotIdx + 1}";
-
-            // Populate unit dropdowns from catalog
-            if (Dropdown_Units != null && CatalogLoader.Units.Count > 0)
-            {
-                var options = CatalogLoader.Units.Select(u => u.name).ToList();
-                for (int d = 0; d < Dropdown_Units.Length; d++)
-                {
-                    if (Dropdown_Units[d] == null) continue;
-                    Dropdown_Units[d].ClearOptions();
-                    Dropdown_Units[d].AddOptions(options);
-
-                    // Select current unit for this dropdown position
-                    int value = 0;
-                    if (slot?.unit_type_ids != null && d < slot.unit_type_ids.Length)
-                    {
-                        // Find index in catalog by id
-                        int id = slot.unit_type_ids[d];
-                        // Unit catalog entries don't have an id field yet; default to 0
-                        value = 0;
-                    }
-                    Dropdown_Units[d].value = value;
-                }
-            }
-
-            Panel_Edit.SetActive(true);
-            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
-        }
-
-        void OnSaveEdit()
-        {
-            if (_editSlot < 0 || Panel_Edit == null) return;
-
-            string name = Input_LoadoutName != null ? Input_LoadoutName.text.Trim() : $"Slot {_editSlot + 1}";
-            if (string.IsNullOrEmpty(name)) name = $"Slot {_editSlot + 1}";
-
-            // Build unit_type_ids from dropdown selections
-            // (catalog-based ordering; real ids would need catalog id field — use index for now)
-            var ids = new int[5];
-            if (Dropdown_Units != null)
-            {
-                for (int d = 0; d < 5 && d < Dropdown_Units.Length; d++)
-                    ids[d] = Dropdown_Units[d] != null ? Dropdown_Units[d].value : 0;
-            }
-
-            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
-            StartCoroutine(LoadoutManager.SaveSlot(_editSlot, name, ids, ok =>
-            {
-                if (ok) RefreshSlots();
-                CloseEdit();
-            }));
-        }
-
-        void CloseEdit()
-        {
-            if (Panel_Edit != null) Panel_Edit.SetActive(false);
-            _editSlot = -1;
         }
     }
 }

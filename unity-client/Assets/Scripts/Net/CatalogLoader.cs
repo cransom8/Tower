@@ -227,11 +227,11 @@ namespace CastleDefender.Net
             Units.Clear(); UnitByKey.Clear();
             var defaults = new[]
             {
-                new UnitCatalogEntry { key="runner",   name="Runner",   send_cost= 8, hp= 60, path_speed=2.0f },
-                new UnitCatalogEntry { key="footman",  name="Footman",  send_cost=10, hp=100, path_speed=1.5f },
-                new UnitCatalogEntry { key="ironclad", name="Ironclad", send_cost=16, hp=200, path_speed=1.0f },
-                new UnitCatalogEntry { key="warlock",  name="Warlock",  send_cost=18, hp= 80, path_speed=1.8f },
-                new UnitCatalogEntry { key="golem",    name="Golem",    send_cost=25, hp=350, path_speed=0.8f },
+                new UnitCatalogEntry { key="goblin",  name="Goblin",  send_cost=1, build_cost= 8, hp= 55, path_speed=0.058f },
+                new UnitCatalogEntry { key="orc",     name="Orc",     send_cost=3, build_cost=14, hp=100, path_speed=0.038f },
+                new UnitCatalogEntry { key="troll",   name="Troll",   send_cost=4, build_cost=16, hp=160, path_speed=0.025f },
+                new UnitCatalogEntry { key="vampire", name="Vampire", send_cost=5, build_cost=20, hp=100, path_speed=0.038f },
+                new UnitCatalogEntry { key="wyvern",  name="Wyvern",  send_cost=6, build_cost=22, hp=130, path_speed=0.042f },
             };
             foreach (var e in defaults) { Units.Add(e); UnitByKey[e.key] = e; }
         }
@@ -241,11 +241,11 @@ namespace CastleDefender.Net
             Towers.Clear(); TowerByKey.Clear();
             var defaults = new[]
             {
-                new TowerCatalogEntry { key="archer",   name="Archer",   build_cost=10 },
-                new TowerCatalogEntry { key="fighter",  name="Fighter",  build_cost=12 },
-                new TowerCatalogEntry { key="mage",     name="Mage",     build_cost=24 },
-                new TowerCatalogEntry { key="ballista", name="Ballista", build_cost=20 },
-                new TowerCatalogEntry { key="cannon",   name="Cannon",   build_cost=30 },
+                new TowerCatalogEntry { key="goblin",  name="Goblin",  build_cost= 8 },
+                new TowerCatalogEntry { key="orc",     name="Orc",     build_cost=14 },
+                new TowerCatalogEntry { key="troll",   name="Troll",   build_cost=16 },
+                new TowerCatalogEntry { key="vampire", name="Vampire", build_cost=20 },
+                new TowerCatalogEntry { key="wyvern",  name="Wyvern",  build_cost=22 },
             };
             foreach (var e in defaults) { Towers.Add(e); TowerByKey[e.key] = e; }
         }

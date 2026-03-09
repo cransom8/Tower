@@ -35,8 +35,8 @@ public class LoadingScreen : MonoBehaviour
         "Runners take 25% less splash damage.",
         "Upgrade Barracks to boost your income on every unit spawn.",
         "Cannons have a 1.5-tile splash radius — great against clustered units.",
-        "Build walls early to funnel enemies into your tower kill zones.",
-        "Auto-send lets you queue units at Slow, Normal, or Fast rates.",
+        "Place defenders on your lane during the build phase — they respawn after each wave.",
+        "Send enemy units during the build phase to add pressure to opponents' waves.",
         "Ballistas outrange all other towers — great for back-line sniping.",
     };
 

@@ -28,8 +28,7 @@ const TICK_HZ    = simMl.TICK_HZ    || 20;
 const TICK_MS    = simMl.TICK_MS    || 50;
 const GRID_W     = simMl.GRID_W     || 11;
 const GRID_H     = simMl.GRID_H     || 28;
-const UNIT_DEFS  = simMl.UNIT_DEFS;
-const TOWER_DEFS = simMl.TOWER_DEFS;
+const { resolveUnitDef, resolveTowerDef } = simMl;
 const INCOME_INTERVAL_TICKS = simMl.INCOME_INTERVAL_TICKS || 240;
 
 const PREP_TICKS        = 60;   // 3 seconds at 20Hz
@@ -42,13 +41,12 @@ const WARLOCK_DEBUFF_RANGE = 3.5;
 
 const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 function isValidUnitType(key) {
-  return !!(getUnitType(key) || UNIT_DEFS[key]);
+  return !!getUnitType(key);
 }
 
-// ── Tower stats — delegates to sim-multilane (shared getTowerStats via resolveTowerDef)
-// Kept local for survival-only level cap and formula clarity.
+// ── Tower stats — delegates to sim-multilane resolveTowerDef for DB-driven stats.
 function getTowerStats(type, level) {
-  const base = TOWER_DEFS[type];
+  const base = resolveTowerDef(type);
   if (!base) return null;
   const lvl = Math.max(1, Math.min(TOWER_MAX_LEVEL, level));
   const s = lvl - 1;
@@ -191,16 +189,7 @@ function spawnEnemyUnit(game, unitType, laneIndex) {
   const lane = game.lanes[laneIndex];
   if (!lane) return;
 
-  const ut = getUnitType(unitType);
-  const fallback = UNIT_DEFS[unitType];
-  const def = ut ? {
-    hp:                 Number(ut.hp),
-    pathSpeed:          Number(ut.path_speed),
-    armorType:          ut.armor_type                   || "MEDIUM",
-    damageReductionPct: Number(ut.damage_reduction_pct) || 0,
-    bounty:             (fallback && fallback.bounty)      || 1,
-    warlockDebuff:      !!(fallback && fallback.warlockDebuff),
-  } : fallback;
+  const def = resolveUnitDef(unitType);
   if (!def) return;
 
   const isBossWave = game.wavePhase === 'SPAWNING' &&
@@ -413,7 +402,7 @@ function _tickLaneFull(game, lane) {
     if (pathLen === 0) continue;
 
     // Warlock: debuff nearest tower every WARLOCK_DEBUFF_CD ticks
-    const def = UNIT_DEFS[u.type];
+    const def = resolveUnitDef(u.type);
     if (def && def.warlockDebuff && (u.warlockCd === undefined || u.warlockCd <= 0)) {
       u.warlockCd = WARLOCK_DEBUFF_CD;
       const pos = getUnitTilePos(u, path);
@@ -460,7 +449,7 @@ function _tickLaneFull(game, lane) {
     for (const u of lane.units) {
       if (!killedById.has(u.id) || !u.isEnemy) continue;
       game.killCount++;
-      const bounty = (UNIT_DEFS[u.type] && UNIT_DEFS[u.type].bounty) || 1;
+      const bounty = (resolveUnitDef(u.type) || {}).bounty || 1;
       lane.gold += bounty;
       game.goldEarned += bounty;
     }

@@ -1693,423 +1693,185 @@ router.delete('/towers/:id/abilities/:abilityKey', requireAdmin, requirePermissi
   }
 });
 
-// ── Survival Wave Builder ─────────────────────────────────────────────────────
+// ── ML Wave Config ────────────────────────────────────────────────────────────
+// Replaces the old survival wave builder. Survival mode is retired.
+// Each ml_wave_config has a sequence of ml_waves (one unit type per wave,
+// with qty and stat multipliers). After the last wave, the last wave repeats
+// with +10% HP/DMG per extra round (escalation).
 
-const VALID_UNIT_TYPES_ADMIN = new Set(['runner','footman','ironclad','warlock','golem']);
-
-function validateWaveSetBody(body) {
-  const errors = [];
-  if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) errors.push('name is required');
-  if (body.starting_gold !== undefined && (Number(body.starting_gold) < 0 || !Number.isFinite(Number(body.starting_gold)))) errors.push('starting_gold must be >= 0');
-  if (body.starting_lives !== undefined && (Number(body.starting_lives) < 1 || !Number.isFinite(Number(body.starting_lives)))) errors.push('starting_lives must be >= 1');
-  return errors;
-}
-
-function validateSpawnGroupBody(body) {
-  const errors = [];
-  if (!VALID_UNIT_TYPES_ADMIN.has(body.unit_type)) errors.push('invalid unit_type');
-  if (body.count !== undefined && (Number(body.count) < 1 || !Number.isInteger(Number(body.count)))) errors.push('count must be integer >= 1');
-  if (body.spawn_interval_ms !== undefined && Number(body.spawn_interval_ms) < 100) errors.push('spawn_interval_ms must be >= 100');
-  if (body.start_delay_ms !== undefined && Number(body.start_delay_ms) < 0) errors.push('start_delay_ms must be >= 0');
-  if (body.randomize_pct !== undefined) {
-    const p = Number(body.randomize_pct);
-    if (p < 0 || p > 100) errors.push('randomize_pct must be 0-100');
-  }
-  return errors;
-}
-
-// GET /admin/survival/wave-sets
-router.get('/survival/wave-sets', requireAdmin, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ waveSets: [] });
+// GET /admin/ml-waves/configs — list all wave configs
+router.get('/ml-waves/configs', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ configs: [] });
   const db = require('../db');
   try {
     const r = await db.query(`
-      SELECT ws.*,
-        COUNT(DISTINCT w.id)::int  AS wave_count,
-        COUNT(DISTINCT sg.id)::int AS spawn_group_count
-      FROM survival_wave_sets ws
-      LEFT JOIN survival_waves w ON w.wave_set_id = ws.id
-      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
-      GROUP BY ws.id
-      ORDER BY ws.id DESC`
+      SELECT c.*, COUNT(w.id)::int AS wave_count
+      FROM ml_wave_configs c
+      LEFT JOIN ml_waves w ON w.config_id = c.id
+      GROUP BY c.id
+      ORDER BY c.id DESC`
     );
-    res.json({ waveSets: r.rows });
+    res.json({ configs: r.rows });
   } catch (err) {
-    log.error('[admin] GET /survival/wave-sets error', { err: err.message });
+    log.error('[admin] GET /ml-waves/configs error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// GET /admin/survival/wave-sets/:id
-router.get('/survival/wave-sets/:id', requireAdmin, async (req, res) => {
+// GET /admin/ml-waves/configs/:id — get one config with its waves
+router.get('/ml-waves/configs/:id', requireAdmin, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
   try {
-    const setRes = await db.query(`SELECT * FROM survival_wave_sets WHERE id=$1`, [id]);
-    if (!setRes.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
-    const waveSet = setRes.rows[0];
-    const wavesRes = await db.query(`
-      SELECT w.*,
-        COALESCE(json_agg(sg ORDER BY sg.start_delay_ms, sg.id) FILTER (WHERE sg.id IS NOT NULL), '[]') AS spawn_groups
-      FROM survival_waves w
-      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
-      WHERE w.wave_set_id = $1
-      GROUP BY w.id
-      ORDER BY w.wave_number`, [id]);
-    waveSet.waves = wavesRes.rows;
-    res.json({ waveSet });
+    const cr = await db.query(`SELECT * FROM ml_wave_configs WHERE id=$1`, [id]);
+    if (!cr.rows[0]) return res.status(404).json({ error: 'Config not found' });
+    const wr = await db.query(
+      `SELECT * FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`, [id]
+    );
+    res.json({ config: cr.rows[0], waves: wr.rows });
   } catch (err) {
-    log.error('[admin] GET /survival/wave-sets/:id error', { err: err.message });
+    log.error('[admin] GET /ml-waves/configs/:id error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /admin/survival/wave-sets
-router.post('/survival/wave-sets', requireAdmin, requirePermission('config.write'), async (req, res) => {
+// POST /admin/ml-waves/configs — create a new wave config
+router.post('/ml-waves/configs', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
-  const { name, description='', enabled=true, auto_scale=true, starting_gold=150, starting_lives=20 } = req.body;
-  const errs = validateWaveSetBody({ name, starting_gold, starting_lives });
-  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+  const { name, description } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
   try {
-    const adminRes = await db.query(`SELECT id FROM admin_users WHERE email=$1 LIMIT 1`, [req.adminEmail]);
-    const adminId = adminRes.rows[0]?.id || null;
     const r = await db.query(
-      `INSERT INTO survival_wave_sets (name,description,enabled,auto_scale,starting_gold,starting_lives,created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [name.trim(), description, !!enabled, !!auto_scale, Number(starting_gold), Number(starting_lives), adminId]
+      `INSERT INTO ml_wave_configs (name, description) VALUES ($1, $2) RETURNING *`,
+      [name.trim(), description || null]
     );
-    await audit(db, 'create_wave_set', 'wave_set', r.rows[0].id, { name }, req.adminEmail, req.ip);
-    res.status(201).json({ waveSet: r.rows[0] });
+    res.json({ config: r.rows[0] });
   } catch (err) {
-    log.error('[admin] POST /survival/wave-sets error', { err: err.message });
+    log.error('[admin] POST /ml-waves/configs error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// PATCH /admin/survival/wave-sets/:id
-router.patch('/survival/wave-sets/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+// PATCH /admin/ml-waves/configs/:id — update name/description
+router.patch('/ml-waves/configs/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
-  const allowed = ['name','description','enabled','auto_scale','starting_gold','starting_lives'];
-  const updates = {};
-  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-  const errs = validateWaveSetBody(updates);
-  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
-  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+  const { name, description } = req.body || {};
+  if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+    return res.status(400).json({ error: 'name must be a non-empty string' });
+  }
   try {
-    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+2}`).join(', ');
-    const vals = [id, ...Object.values(updates)];
+    const fields = [], vals = [];
+    if (name !== undefined) { fields.push(`name=$${vals.push(name.trim())}`); }
+    if (description !== undefined) { fields.push(`description=$${vals.push(description || null)}`); }
+    if (fields.length === 0) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id);
     const r = await db.query(
-      `UPDATE survival_wave_sets SET ${setClauses}, updated_at=NOW() WHERE id=$1 RETURNING *`, vals
+      `UPDATE ml_wave_configs SET ${fields.join(',')} WHERE id=$${vals.length} RETURNING *`, vals
     );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
-    await audit(db, 'update_wave_set', 'wave_set', id, updates, req.adminEmail, req.ip);
-    res.json({ waveSet: r.rows[0] });
+    if (!r.rows[0]) return res.status(404).json({ error: 'Config not found' });
+    res.json({ config: r.rows[0] });
   } catch (err) {
-    log.error('[admin] PATCH /survival/wave-sets/:id error', { err: err.message });
+    log.error('[admin] PATCH /ml-waves/configs/:id error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// DELETE /admin/survival/wave-sets/:id
-router.delete('/survival/wave-sets/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
+// DELETE /admin/ml-waves/configs/:id — delete a config (cascades to waves)
+router.delete('/ml-waves/configs/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
   try {
-    const r = await db.query(`DELETE FROM survival_wave_sets WHERE id=$1 RETURNING id`, [id]);
-    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
-    await audit(db, 'delete_wave_set', 'wave_set', id, {}, req.adminEmail, req.ip);
-    res.json({ deleted: true });
+    await db.query(`DELETE FROM ml_wave_configs WHERE id=$1`, [id]);
+    res.json({ ok: true });
   } catch (err) {
-    log.error('[admin] DELETE /survival/wave-sets/:id error', { err: err.message });
+    log.error('[admin] DELETE /ml-waves/configs/:id error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /admin/survival/wave-sets/:id/activate
-router.post('/survival/wave-sets/:id/activate', requireAdmin, requirePermission('config.write'), async (req, res) => {
+// POST /admin/ml-waves/configs/:id/set-default — mark one config as the default
+router.post('/ml-waves/configs/:id/set-default', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
   try {
-    // Clear all active flags, then set this one
-    await db.query(`UPDATE survival_wave_sets SET is_active=false, updated_at=NOW()`);
+    await db.query(`UPDATE ml_wave_configs SET is_default=FALSE`);
     const r = await db.query(
-      `UPDATE survival_wave_sets SET is_active=true, updated_at=NOW() WHERE id=$1 RETURNING *`, [id]
+      `UPDATE ml_wave_configs SET is_default=TRUE WHERE id=$1 RETURNING *`, [id]
     );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
-    await audit(db, 'activate_wave_set', 'wave_set', id, {}, req.adminEmail, req.ip);
-    res.json({ waveSet: r.rows[0] });
+    if (!r.rows[0]) return res.status(404).json({ error: 'Config not found' });
+    res.json({ config: r.rows[0] });
   } catch (err) {
-    log.error('[admin] POST /survival/wave-sets/:id/activate error', { err: err.message });
+    log.error('[admin] POST /ml-waves/configs/:id/set-default error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /admin/survival/wave-sets/:id/duplicate
-router.post('/survival/wave-sets/:id/duplicate', requireAdmin, requirePermission('config.write'), async (req, res) => {
+// PUT /admin/ml-waves/configs/:id/waves — bulk upsert full wave list for a config
+// Body: { waves: [{ wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult }] }
+router.put('/ml-waves/configs/:id/waves', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
-  try {
-    const srcRes = await db.query(`SELECT * FROM survival_wave_sets WHERE id=$1`, [id]);
-    if (!srcRes.rows[0]) return res.status(404).json({ error: 'Wave set not found' });
-    const src = srcRes.rows[0];
+  const { waves } = req.body || {};
+  if (!Array.isArray(waves)) return res.status(400).json({ error: 'waves must be an array' });
 
-    const newSet = await db.query(
-      `INSERT INTO survival_wave_sets (name,description,enabled,auto_scale,starting_gold,starting_lives)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [`${src.name} (Copy)`, src.description, src.enabled, src.auto_scale, src.starting_gold, src.starting_lives]
-    );
-    const newId = newSet.rows[0].id;
-
-    const waves = await db.query(
-      `SELECT * FROM survival_waves WHERE wave_set_id=$1 ORDER BY wave_number`, [id]
-    );
-    for (const w of waves.rows) {
-      const newWave = await db.query(
-        `INSERT INTO survival_waves (wave_set_id,wave_number,duration_ms,gold_bonus,is_boss,is_rush,is_elite,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-        [newId, w.wave_number, w.duration_ms, w.gold_bonus, w.is_boss, w.is_rush, w.is_elite, w.notes]
-      );
-      const newWaveId = newWave.rows[0].id;
-      const groups = await db.query(`SELECT * FROM survival_spawn_groups WHERE wave_id=$1`, [w.id]);
-      for (const g of groups.rows) {
-        await db.query(
-          `INSERT INTO survival_spawn_groups (wave_id,unit_type,count,spawn_interval_ms,start_delay_ms,randomize_pct)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-          [newWaveId, g.unit_type, g.count, g.spawn_interval_ms, g.start_delay_ms, g.randomize_pct]
-        );
-      }
+  for (const w of waves) {
+    if (!Number.isInteger(w.wave_number) || w.wave_number < 1) return res.status(400).json({ error: 'wave_number must be a positive integer' });
+    if (!w.unit_type || typeof w.unit_type !== 'string') return res.status(400).json({ error: 'unit_type required' });
+    if (!Number.isInteger(w.spawn_qty) || w.spawn_qty < 1) return res.status(400).json({ error: 'spawn_qty must be >= 1' });
+    for (const f of ['hp_mult', 'dmg_mult', 'speed_mult']) {
+      const v = Number(w[f]);
+      if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ error: `${f} must be > 0` });
     }
-    await audit(db, 'duplicate_wave_set', 'wave_set', newId, { source_id: id }, req.adminEmail, req.ip);
-    res.status(201).json({ waveSet: newSet.rows[0] });
-  } catch (err) {
-    log.error('[admin] POST /survival/wave-sets/:id/duplicate error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
   }
-});
 
-// POST /admin/survival/wave-sets/:id/waves
-router.post('/survival/wave-sets/:id/waves', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const waveSetId = parseInt(req.params.id, 10);
-  if (!Number.isFinite(waveSetId)) return res.status(400).json({ error: 'Invalid wave set id' });
-  const { wave_number, duration_ms=null, gold_bonus=0, is_boss=false, is_rush=false, is_elite=false, notes='' } = req.body;
-  if (!Number.isInteger(Number(wave_number)) || Number(wave_number) < 1) {
-    return res.status(400).json({ error: 'wave_number must be integer >= 1' });
-  }
-  if (Number(gold_bonus) < 0) return res.status(400).json({ error: 'gold_bonus must be >= 0' });
   try {
-    const r = await db.query(
-      `INSERT INTO survival_waves (wave_set_id,wave_number,duration_ms,gold_bonus,is_boss,is_rush,is_elite,notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [waveSetId, Number(wave_number), duration_ms ? Number(duration_ms) : null,
-       Number(gold_bonus), !!is_boss, !!is_rush, !!is_elite, String(notes)]
-    );
-    await audit(db, 'create_wave', 'wave', r.rows[0].id, { wave_set_id: waveSetId, wave_number }, req.adminEmail, req.ip);
-    res.status(201).json({ wave: { ...r.rows[0], spawn_groups: [] } });
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: `Wave ${wave_number} already exists in this set` });
-    log.error('[admin] POST /survival/wave-sets/:id/waves error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
+    const cfgCheck = await db.query(`SELECT id FROM ml_wave_configs WHERE id=$1`, [id]);
+    if (!cfgCheck.rows[0]) return res.status(404).json({ error: 'Config not found' });
 
-// PATCH /admin/survival/wave-sets/:id/waves/:waveNum
-router.patch('/survival/wave-sets/:id/waves/:waveNum', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const waveSetId = parseInt(req.params.id, 10);
-  const waveNum   = parseInt(req.params.waveNum, 10);
-  if (!Number.isFinite(waveSetId) || !Number.isFinite(waveNum)) return res.status(400).json({ error: 'Invalid params' });
-  const allowed = ['duration_ms','gold_bonus','is_boss','is_rush','is_elite','notes'];
-  const updates = {};
-  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
-  try {
-    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+3}`).join(', ');
-    const vals = [waveSetId, waveNum, ...Object.values(updates)];
-    const r = await db.query(
-      `UPDATE survival_waves SET ${setClauses} WHERE wave_set_id=$1 AND wave_number=$2 RETURNING *`, vals
-    );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Wave not found' });
-    await audit(db, 'update_wave', 'wave', r.rows[0].id, updates, req.adminEmail, req.ip);
-    res.json({ wave: r.rows[0] });
-  } catch (err) {
-    log.error('[admin] PATCH /survival/wave-sets/:id/waves/:waveNum error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// DELETE /admin/survival/wave-sets/:id/waves/:waveNum
-router.delete('/survival/wave-sets/:id/waves/:waveNum', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const waveSetId = parseInt(req.params.id, 10);
-  const waveNum   = parseInt(req.params.waveNum, 10);
-  if (!Number.isFinite(waveSetId) || !Number.isFinite(waveNum)) return res.status(400).json({ error: 'Invalid params' });
-  try {
-    const r = await db.query(
-      `DELETE FROM survival_waves WHERE wave_set_id=$1 AND wave_number=$2 RETURNING id`, [waveSetId, waveNum]
-    );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Wave not found' });
-    res.json({ deleted: true });
-  } catch (err) {
-    log.error('[admin] DELETE /survival/wave-sets/:id/waves/:waveNum error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// POST /admin/survival/wave-sets/:id/waves/bulk-scale
-router.post('/survival/wave-sets/:id/waves/bulk-scale', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const waveSetId = parseInt(req.params.id, 10);
-  if (!Number.isFinite(waveSetId)) return res.status(400).json({ error: 'Invalid wave set id' });
-  const fromWave = parseInt(req.body.fromWave, 10);
-  const toWave   = parseInt(req.body.toWave, 10);
-  const scalePct = Number(req.body.scalePct);
-  if (!Number.isFinite(fromWave) || !Number.isFinite(toWave) || fromWave > toWave) {
-    return res.status(400).json({ error: 'fromWave and toWave must be valid integers with fromWave <= toWave' });
-  }
-  if (!Number.isFinite(scalePct) || scalePct < -90 || scalePct > 1000) {
-    return res.status(400).json({ error: 'scalePct must be between -90 and 1000' });
-  }
-  const mult = 1 + scalePct / 100;
-  try {
-    const waves = await db.query(
-      `SELECT w.id FROM survival_waves w WHERE w.wave_set_id=$1 AND w.wave_number BETWEEN $2 AND $3`,
-      [waveSetId, fromWave, toWave]
-    );
-    if (waves.rows.length === 0) return res.status(404).json({ error: 'No waves found in that range' });
-    for (const w of waves.rows) {
+    await db.query(`DELETE FROM ml_waves WHERE config_id=$1`, [id]);
+    for (const w of waves) {
       await db.query(
-        `UPDATE survival_spawn_groups SET count=GREATEST(1, CEIL(count * $1::numeric)::int) WHERE wave_id=$2`,
-        [mult, w.id]
+        `INSERT INTO ml_waves (config_id, wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, w.wave_number, w.unit_type.toLowerCase().trim(),
+         w.spawn_qty, w.hp_mult || 1, w.dmg_mult || 1, w.speed_mult || 1]
       );
     }
-    await audit(db, 'bulk_scale_waves', 'wave_set', waveSetId, { fromWave, toWave, scalePct }, req.adminEmail, req.ip);
-    res.json({ ok: true, wavesUpdated: waves.rows.length });
+    const wr = await db.query(`SELECT * FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`, [id]);
+    res.json({ waves: wr.rows });
   } catch (err) {
-    log.error('[admin] POST /survival/wave-sets/:id/waves/bulk-scale error', { err: err.message });
+    log.error('[admin] PUT /ml-waves/configs/:id/waves error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// POST /admin/survival/waves/:waveId/spawn-groups
-router.post('/survival/waves/:waveId/spawn-groups', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+// GET /admin/ml-waves/default — get the default wave config with waves (used by sim at match start)
+router.get('/ml-waves/default', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ config: null, waves: [] });
   const db = require('../db');
-  const waveId = parseInt(req.params.waveId, 10);
-  if (!Number.isFinite(waveId)) return res.status(400).json({ error: 'Invalid wave id' });
-  const { unit_type, count=1, spawn_interval_ms=1000, start_delay_ms=0, randomize_pct=0 } = req.body;
-  const errs = validateSpawnGroupBody({ unit_type, count, spawn_interval_ms, start_delay_ms, randomize_pct });
-  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
   try {
-    const r = await db.query(
-      `INSERT INTO survival_spawn_groups (wave_id,unit_type,count,spawn_interval_ms,start_delay_ms,randomize_pct)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [waveId, unit_type, Number(count), Number(spawn_interval_ms), Number(start_delay_ms), Number(randomize_pct)]
+    const cr = await db.query(`SELECT * FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`);
+    if (!cr.rows[0]) return res.json({ config: null, waves: [] });
+    const wr = await db.query(
+      `SELECT * FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`, [cr.rows[0].id]
     );
-    await audit(db, 'create_spawn_group', 'spawn_group', r.rows[0].id, { waveId, unit_type }, req.adminEmail, req.ip);
-    res.status(201).json({ spawnGroup: r.rows[0] });
+    res.json({ config: cr.rows[0], waves: wr.rows });
   } catch (err) {
-    if (err.code === '23503') return res.status(404).json({ error: 'Wave not found' });
-    log.error('[admin] POST /survival/waves/:waveId/spawn-groups error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// PATCH /admin/survival/spawn-groups/:groupId
-router.patch('/survival/spawn-groups/:groupId', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const groupId = parseInt(req.params.groupId, 10);
-  if (!Number.isFinite(groupId)) return res.status(400).json({ error: 'Invalid group id' });
-  const allowed = ['unit_type','count','spawn_interval_ms','start_delay_ms','randomize_pct'];
-  const updates = {};
-  for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
-  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
-  const errs = validateSpawnGroupBody(updates);
-  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
-  try {
-    const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i+2}`).join(', ');
-    const vals = [groupId, ...Object.values(updates)];
-    const r = await db.query(
-      `UPDATE survival_spawn_groups SET ${setClauses} WHERE id=$1 RETURNING *`, vals
-    );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Spawn group not found' });
-    await audit(db, 'update_spawn_group', 'spawn_group', groupId, updates, req.adminEmail, req.ip);
-    res.json({ spawnGroup: r.rows[0] });
-  } catch (err) {
-    log.error('[admin] PATCH /survival/spawn-groups/:groupId error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// DELETE /admin/survival/spawn-groups/:groupId
-router.delete('/survival/spawn-groups/:groupId', requireAdmin, requirePermission('config.write'), async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
-  const db = require('../db');
-  const groupId = parseInt(req.params.groupId, 10);
-  if (!Number.isFinite(groupId)) return res.status(400).json({ error: 'Invalid group id' });
-  try {
-    const r = await db.query(`DELETE FROM survival_spawn_groups WHERE id=$1 RETURNING id`, [groupId]);
-    if (!r.rows[0]) return res.status(404).json({ error: 'Spawn group not found' });
-    res.json({ deleted: true });
-  } catch (err) {
-    log.error('[admin] DELETE /survival/spawn-groups/:groupId error', { err: err.message });
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// GET /admin/survival/wave-sets/:id/preview
-router.get('/survival/wave-sets/:id/preview', requireAdmin, async (req, res) => {
-  if (!process.env.DATABASE_URL) return res.json({ waves: [] });
-  const db = require('../db');
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
-
-  const UNIT_HP = { runner: 60, footman: 90, ironclad: 160, warlock: 80, golem: 240 };
-  const UNIT_BOUNTY = { runner: 2, footman: 3, ironclad: 4, warlock: 5, golem: 6 };
-
-  try {
-    const wavesRes = await db.query(`
-      SELECT w.wave_number, w.is_boss, w.gold_bonus,
-        COALESCE(json_agg(sg ORDER BY sg.start_delay_ms, sg.id) FILTER (WHERE sg.id IS NOT NULL), '[]') AS spawn_groups
-      FROM survival_waves w
-      LEFT JOIN survival_spawn_groups sg ON sg.wave_id = w.id
-      WHERE w.wave_set_id=$1
-      GROUP BY w.id
-      ORDER BY w.wave_number`, [id]);
-
-    const preview = wavesRes.rows.map(w => {
-      let totalUnits = 0, totalHp = 0, goldValue = w.gold_bonus || 0;
-      for (const g of (w.spawn_groups || [])) {
-        const n = Number(g.count) || 0;
-        const hp = UNIT_HP[g.unit_type] || 60;
-        const hpMult = w.is_boss ? 2 : 1;
-        const bounty = UNIT_BOUNTY[g.unit_type] || 2;
-        totalUnits += n;
-        totalHp    += n * hp * hpMult;
-        goldValue  += n * bounty;
-      }
-      return { waveNum: w.wave_number, totalUnits, totalHp: Math.round(totalHp), goldValue };
-    });
-    res.json({ waves: preview });
-  } catch (err) {
-    log.error('[admin] GET /survival/wave-sets/:id/preview error', { err: err.message });
+    log.error('[admin] GET /ml-waves/default error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

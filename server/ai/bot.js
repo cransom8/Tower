@@ -20,10 +20,9 @@ const CASTLE_X = 5;
 const CASTLE_Y = 27;
 const GRID_W = simMl.GRID_W;
 const GRID_H = simMl.GRID_H;
-const WALL_COST = 2;
 
-const TANK_UNITS = new Set(["ironclad", "golem"]);
-const SWARM_UNITS = new Set(["runner", "footman"]);
+const TANK_UNITS  = new Set(["ogre","troll","cyclops","hydra","oak_tree_ent","manticora","chimera","ice_golem","demon_lord"]);
+const SWARM_UNITS = new Set(["goblin","kobold","giant_rat","ghoul","harpy","fantasy_wolf"]);
 
 function getKnobs(difficulty) {
   return DIFFICULTY_KNOBS[difficulty] || DIFFICULTY_KNOBS.medium;
@@ -65,46 +64,18 @@ function getBarracksUpgradeCost(lane) {
 }
 
 function scanUnitMix(units, ownerLane) {
-  const mix = { runner: 0, footman: 0, ironclad: 0, warlock: 0, golem: 0 };
+  const mix = { swarm: 0, heavy: 0, magic: 0 };
   for (const u of units || []) {
     if (!u || (u.hp || 0) <= 0) continue;
     if (ownerLane !== null && ownerLane !== undefined && u.ownerLane === ownerLane) continue;
-    if (mix[u.type] !== undefined) mix[u.type] += 1;
+    if (SWARM_UNITS.has(u.type)) mix.swarm += 1;
+    if (TANK_UNITS.has(u.type))  mix.heavy += 1;
+    const def = simMl.resolveUnitDef(u.type);
+    if (def && def.damageType === "MAGIC") mix.magic += 1;
   }
   return mix;
 }
 
-function hasPathWithCandidateWall(lane, wallX, wallY) {
-  if (!lane || !lane.grid) return false;
-  if (wallX === SPAWN_X && wallY === SPAWN_Y) return false;
-  if (wallX === CASTLE_X && wallY === CASTLE_Y) return false;
-  const tile = lane.grid[wallX] && lane.grid[wallX][wallY];
-  if (!tile || tile.type !== "empty") return false;
-
-  const visited = Array.from({ length: GRID_W }, () => new Array(GRID_H).fill(false));
-  const q = [[SPAWN_X, SPAWN_Y]];
-  visited[SPAWN_X][SPAWN_Y] = true;
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  let head = 0;
-
-  while (head < q.length) {
-    const [x, y] = q[head++];
-    if (x === CASTLE_X && y === CASTLE_Y) return true;
-    for (const [dx, dy] of dirs) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-      if (visited[nx][ny]) continue;
-      if (nx === wallX && ny === wallY) continue;
-      const nt = lane.grid[nx] && lane.grid[nx][ny];
-      if (!nt) continue;
-      if (nt.type === "wall" || nt.type === "tower") continue;
-      visited[nx][ny] = true;
-      q.push([nx, ny]);
-    }
-  }
-  return false;
-}
 
 function estimateActionCost(game, laneIndex, action, unitDefs) {
   const lane = getLane(game, laneIndex);
@@ -114,18 +85,8 @@ function estimateActionCost(game, laneIndex, action, unitDefs) {
     return getBarracksUpgradeCost(lane).cost;
   }
   if (action.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    const parsed = String(action.tileId || "").split(",");
-    if (parsed.length !== 2) return 0;
-    const x = Number(parsed[0]);
-    const y = Number(parsed[1]);
-    const tile = lane.grid[x] && lane.grid[x][y];
-    if (!tile) return 0;
-    if (tile.type === "empty") return WALL_COST;
-    if (tile.type === "wall") {
-      const def = simMl.resolveTowerDef(action.towerType);
-      return def ? def.cost : 0;
-    }
-    return 0;
+    const def = simMl.resolveTowerDef(action.towerType);
+    return def ? def.cost : 0;
   }
   if (action.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
     const parsed = String(action.towerId || "").split(",");
@@ -165,7 +126,7 @@ class BotBrain {
 
     this.unitDefs = (cfg.unitDefMap && Object.keys(cfg.unitDefMap).length > 0)
       ? cfg.unitDefMap
-      : simMl.UNIT_DEFS;
+      : simMl.getMovingUnitDefMap();
     this.unitTypes = Object.freeze(Object.keys(this.unitDefs));
 
     this.memory = {
@@ -213,14 +174,12 @@ class BotBrain {
     };
 
     const incomingMix = scanUnitMix(lane.units, lane.laneIndex);
-    const swarmCount = incomingMix.runner + incomingMix.footman;
-    const heavyCount = incomingMix.ironclad + incomingMix.golem;
-    if (danger && swarmCount >= 4) { const t = pick("cannon"); if (t) return t; }
-    if (danger && heavyCount >= 3) { const t = pick("ballista"); if (t) return t; }
+    if (danger && incomingMix.swarm >= 4) { const t = pick("mountain_dragon"); if (t) return t; }
+    if (danger && incomingMix.heavy >= 3) { const t = pick("giant_viper");     if (t) return t; }
 
     const targetLane = getLane(game, targetLaneIndex);
     const targetMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
-    if (targetMix.warlock >= 3) { const t = pick("mage"); if (t) return t; }
+    if (targetMix.magic >= 3) { const t = pick("evil_watcher"); if (t) return t; }
 
     if (this.memory.tankPressureBias > 1.0) { const t = pick("ballista"); if (t) return t; }
 
@@ -235,38 +194,17 @@ class BotBrain {
   }
 
   findBuildTowerAction(game, lane, targetLaneIndex, danger) {
+    if (game.roundState && game.roundState !== "build") return null;
     const towerType = this.chooseTowerType(game, lane, targetLaneIndex, danger);
-
-    // First convert a valid existing wall.
-    const wallCandidates = [];
-    for (let x = 0; x < GRID_W; x++) {
-      for (let y = 1; y < GRID_H - 1; y++) {
-        const tile = lane.grid[x][y];
-        if (tile.type !== "wall") continue;
-        let score = danger ? y : Math.abs(14 - y);
-        if (x === 0 || x === GRID_W - 1) score += 0.5;
-        wallCandidates.push({ x, y, score });
-      }
-    }
-    wallCandidates.sort((a, b) => b.score - a.score);
-    for (const c of wallCandidates) {
-      const action = { type: AI_ACTION_TYPE.BUILD_TOWER, towerType, tileId: makeTileId(c.x, c.y) };
-      const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
-      if (legal.ok) return legal.normalized;
-    }
-
-    // Else place a wall at a path-safe tile (conversion will happen on a future tick).
     const candidates = [];
     for (let x = 0; x < GRID_W; x++) {
       for (let y = 1; y < GRID_H - 1; y++) {
-        if ((x === SPAWN_X && y === SPAWN_Y) || (x === CASTLE_X && y === CASTLE_Y)) continue;
+        if (x === SPAWN_X && y === SPAWN_Y) continue;
+        if (x === CASTLE_X && y === CASTLE_Y) continue;
         const tile = lane.grid[x][y];
         if (!tile || tile.type !== "empty") continue;
-        if (!hasPathWithCandidateWall(lane, x, y)) continue;
-
-        const castleDist = Math.abs(CASTLE_Y - y);
         const centerBias = 1 - Math.abs(x - CASTLE_X) / CASTLE_X;
-        let score = danger ? (GRID_H - castleDist) : (14 - Math.abs(14 - y));
+        let score = danger ? y : Math.abs(14 - y);
         score += centerBias * 0.6;
         candidates.push({ x, y, score });
       }
@@ -324,13 +262,13 @@ class BotBrain {
     const preference = this.personalityProfile.preferredUnits.slice();
 
     if (this.memory.tankPressureBias > 0.8) {
-      preference.unshift("golem", "ironclad");
+      preference.unshift("ogre", "troll");
     }
     if (danger) {
-      preference.unshift("footman");
+      preference.unshift("goblin");
     }
-    if ((unitMix.runner + unitMix.footman) >= 6) {
-      preference.unshift("cannon");
+    if (unitMix.swarm >= 6) {
+      preference.unshift("mountain_dragon");
     }
 
     const dedup = [];
@@ -340,7 +278,7 @@ class BotBrain {
     for (const fallback of this.unitTypes) {
       if (!dedup.includes(fallback)) dedup.push(fallback);
     }
-    return dedup[0] || "footman";
+    return dedup[0] || "goblin";
   }
 
   chooseSendBucket(lane, unitType, reserveGold, spikePlan) {

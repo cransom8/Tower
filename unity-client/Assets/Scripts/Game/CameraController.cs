@@ -1,6 +1,8 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 using CastleDefender.Game;
 using CastleDefender.Net;
+using CastleDefender.UI;
 
 /// <summary>
 /// Isometric camera pan + zoom — no Cinemachine API dependency.
@@ -11,7 +13,7 @@ using CastleDefender.Net;
 ///   3. Attach this script to any persistent GameObject (e.g. GameManager).
 ///   4. Assign CameraTarget and MainCam in the Inspector.
 ///
-/// Desktop  : scroll wheel to zoom, middle-mouse-drag to pan
+/// Desktop  : scroll wheel to zoom, left-mouse-drag to pan (non-wall mode), middle-mouse-drag to pan (always)
 /// Mobile   : one-finger drag to pan, two-finger pinch to zoom
 /// </summary>
 public class CameraController : MonoBehaviour
@@ -44,6 +46,16 @@ public class CameraController : MonoBehaviour
     float   _pinchStartDist;
     float   _pinchStartOrtho;
 
+    // LMB drag pan (non-wall mode only)
+    bool    _lmbDragStarted;
+    bool    _lmbBlocked;
+    Vector2 _lmbDownPos;
+    Vector2 _lastLmbPos;
+    const float LmbDragThreshold = 12f;
+
+    /// <summary>True while a left-mouse drag pan is in progress.</summary>
+    public static bool IsLmbPanning { get; private set; }
+
     // ─────────────────────────────────────────────────────────────────────────
 
     void Start()
@@ -69,6 +81,7 @@ public class CameraController : MonoBehaviour
         ScrollZoom();
         TouchInput();
         RmbPan();
+        LmbPan();
         ApplySmoothing();
     }
 
@@ -80,6 +93,42 @@ public class CameraController : MonoBehaviour
         if (Mathf.Abs(scroll) > 0.001f)
             _targetOrtho = Mathf.Clamp(_targetOrtho - scroll * ZoomSpeed,
                                        OrthoSizeMin, OrthoSizeMax);
+    }
+
+    // ── Desktop LMB pan (non-wall mode only) ─────────────────────────────────
+
+    void LmbPan()
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            _lmbDownPos     = Input.mousePosition;
+            _lmbDragStarted = false;
+            IsLmbPanning    = false;
+
+            // Block LMB pan if wall mode is active or the click landed on a UI element.
+            _lmbBlocked = CmdBar.WallModeActive
+                       || (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject());
+        }
+
+        if (!_lmbBlocked && Input.GetMouseButton(0))
+        {
+            if (!_lmbDragStarted && Vector2.Distance(Input.mousePosition, _lmbDownPos) > LmbDragThreshold)
+                _lmbDragStarted = true;
+
+            if (_lmbDragStarted)
+            {
+                IsLmbPanning = true;
+                Pan((Vector2)Input.mousePosition - _lastLmbPos);
+            }
+        }
+
+        if (Input.GetMouseButtonUp(0))
+        {
+            _lmbDragStarted = false;
+            IsLmbPanning    = false;
+        }
+
+        _lastLmbPos = Input.mousePosition;
     }
 
     // ── Desktop RMB pan ───────────────────────────────────────────────────────
@@ -160,6 +209,17 @@ public class CameraController : MonoBehaviour
     {
         _targetPos   = new Vector3(0f, CameraTarget.position.y, 0f);
         _targetOrtho = (OrthoSizeMin + OrthoSizeMax) * 0.5f;
+    }
+
+    /// <summary>
+    /// Smoothly pan the camera to the given world position.
+    /// Bounds clamping is applied; smoothing is handled by ApplySmoothing each frame.
+    /// </summary>
+    public void PanTo(Vector3 worldPos)
+    {
+        worldPos.x = Mathf.Clamp(worldPos.x, BoundsMin.x, BoundsMax.x);
+        worldPos.z = Mathf.Clamp(worldPos.z, BoundsMin.y, BoundsMax.y);
+        _targetPos = worldPos;
     }
 
     void ConfigureBoundsFromGrid()

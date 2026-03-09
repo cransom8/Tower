@@ -1,12 +1,11 @@
-// MultiLaneSceneBuilder.cs — Ensures Game_ML and Game_Survival scenes have the correct
-// GameObjects for the 4-lane H-shaped battlefield.
+// MultiLaneSceneBuilder.cs — Ensures Game_ML has the correct GameObjects for the
+// 4-lane H-shaped battlefield.
 //
 // Menu: Castle Defender → Setup → Build 4-Lane Scene
-//       Castle Defender → Setup → Apply to Both Game Scenes
+//       Castle Defender → Setup → Apply to Game_ML Scene
 //
 // "Build 4-Lane Scene" operates on the currently open scene.
-// "Apply to Both Game Scenes" saves current scene, then opens Game_ML + Game_Survival
-// in sequence, runs the build on each, and saves them.
+// "Apply to Game_ML Scene" saves current scene, opens Game_ML, runs the build, and saves it.
 //
 // What it creates / wires:
 //   • TileGrid        — single instance; handles the player's viewed branch interactively
@@ -38,7 +37,7 @@ namespace CastleDefender.Editor
             Debug.Log("[MultiLane] Done. Run 'Wire Registry and Scene' next if prefabs are unassigned.");
         }
 
-        [MenuItem("Castle Defender/Setup/Apply to Both Game Scenes")]
+        [MenuItem("Castle Defender/Setup/Apply to Game_ML Scene")]
         static void ApplyToBothScenes()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
@@ -46,14 +45,7 @@ namespace CastleDefender.Editor
             var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
             BuildScene();
             EditorSceneManager.SaveScene(sceneML);
-            Debug.Log("[MultiLane] Game_ML built and saved.");
-
-            var sceneSurv = EditorSceneManager.OpenScene(EditorPaths.SCENE_SURVIVAL, OpenSceneMode.Single);
-            BuildScene();
-            EditorSceneManager.SaveScene(sceneSurv);
-            Debug.Log("[MultiLane] Game_Survival built and saved.");
-
-            Debug.Log("[MultiLane] Both scenes ready. Run 'Wire Registry and Scene' on each to assign prefabs.");
+            Debug.Log("[MultiLane] Game_ML built and saved. Run 'Wire Registry and Scene' to assign prefabs.");
         }
 
         // ── Core builder ──────────────────────────────────────────────────────

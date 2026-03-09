@@ -180,6 +180,7 @@ app.use("/matches", require("./routes/matches"));
 app.use("/leaderboard", require("./routes/leaderboard"));
 app.use("/admin", require("./routes/admin"));
 app.use("/api/loadouts", require("./routes/loadouts"));
+app.use("/api/skins",   require("./routes/skins"));
 
 app.get("/config", async (_req, res) => {
   const uiBranding = await branding.getBranding(db);
