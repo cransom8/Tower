@@ -1463,8 +1463,18 @@ function mlTick(game) {
 
     const splitUnits = lane.units.filter(u => u.hp > 0 && (u.posY !== undefined ? u.posY < GRID_H : u.pathIdx < GRID_H));
     const mergeUnits = lane.units.filter(u => u.hp > 0 && (u.posY !== undefined ? u.posY >= GRID_H : u.pathIdx >= GRID_H));
-    applySeparation2D(splitUnits, MIN_UNIT_SPACING, 0, GRID_W - 1, 0, GRID_H - 1);
+    applySeparation2D(splitUnits, MIN_UNIT_SPACING, 0, GRID_W - 1, 0, GRID_H);
     applySeparation2D(mergeUnits, MIN_UNIT_SPACING, 0, GRID_W - 1, GRID_H, GRID_H + SHARED_SUFFIX_LENGTH - 1);
+
+    // DEBUG: log max pathIdx once per second (every 20 ticks) so we can see if units enter suffix
+    if (game.tick % 20 === 0 && lane.units.length > 0) {
+      const waveUnits = lane.units.filter(u => u.isWaveUnit && u.hp > 0);
+      if (waveUnits.length > 0) {
+        const maxIdx = Math.max(...waveUnits.map(u => u.pathIdx));
+        const minIdx = Math.min(...waveUnits.map(u => u.pathIdx));
+        console.log(`[DEBUG lane${lane.laneIndex} tick${game.tick}] wave units=${waveUnits.length} pathIdx min=${minIdx.toFixed(2)} max=${maxIdx.toFixed(2)} GRID_H=${GRID_H}`);
+      }
+    }
 
     // Resolve projectiles
     const killedById = new Set();
@@ -1602,7 +1612,11 @@ function createMLSnapshot(game) {
             pathIdx: u.pathIdx,
             gridX: gx,
             gridY: gy,
-            normProgress: snapFullPath.length > 1 ? u.pathIdx / (snapFullPath.length - 1) : 0,
+            // normProgress is suffix-relative: 0 = grid end (pt2), 1 = castle (pt5).
+            // On-branch units (pathIdx < GRID_H) report 0; Unity uses TileToWorld for those.
+            // This makes the on-branch → suffix transition seamless (TileToWorld at row GRID_H === pt2).
+            normProgress: u.pathIdx <= GRID_H ? 0
+                : Math.min(1, (u.pathIdx - GRID_H) / (SHARED_SUFFIX_LENGTH - 1)),
             hp: u.hp,
             maxHp: u.maxHp,
             isWaveUnit:   u.isWaveUnit  || false,
