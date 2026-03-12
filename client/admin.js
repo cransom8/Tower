@@ -1158,7 +1158,10 @@ window.pageMatches = function(dir) {
 async function openMatchModal(id) {
   openModal('Match Detail', '<p class="load">Loading…</p>');
   try {
-    const d = await api('GET', `/admin/matches/${id}`);
+    const [d, cl] = await Promise.all([
+      api('GET', `/admin/matches/${id}`),
+      api('GET', `/admin/matches/${id}/combat-log`).catch(() => ({ events: [] })),
+    ]);
     const m = d.match;
     const playerRows = d.players.map(p => `
       <tr>
@@ -1167,6 +1170,33 @@ async function openMatchModal(id) {
         <td>${statusBadge(p.result)}</td>
         <td>${statusBadge(p.player_status)}</td>
       </tr>`).join('');
+
+    const events = cl.events || [];
+    let combatHtml = '';
+    if (events.length === 0) {
+      combatHtml = '<p class="text-muted" style="font-size:13px">No combat log (enable COMBAT_LOG=true on the server to record events).</p>';
+    } else {
+      const typeIcon = { defender_killed: '🏚️', wave_unit_killed: '💀', leak: '🌊' };
+      const rows = events.map(e => `
+        <tr>
+          <td class="mono" style="font-size:11px">R${e.round} T${e.tick}</td>
+          <td>${typeIcon[e.type] || ''} ${esc(e.type)}</td>
+          <td>${e.type === 'defender_killed'
+            ? `${esc(e.defenderType)} @ (${e.x},${e.y}) by ${esc(e.killedByType)}`
+            : e.type === 'wave_unit_killed'
+            ? `${esc(e.unitType)} (${esc(e.unitId)})`
+            : e.type === 'leak'
+            ? `${esc(e.unitType)} (${esc(e.unitId)}) lane ${e.lane}`
+            : JSON.stringify(e)}</td>
+        </tr>`).join('');
+      combatHtml = `
+        <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
+          <table>
+            <thead><tr><th>Time</th><th>Event</th><th>Detail</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
 
     document.getElementById('modal-body').innerHTML = `
       <div class="stat-row">
@@ -1181,7 +1211,9 @@ async function openMatchModal(id) {
       <div class="tbl-wrap"><table>
         <thead><tr><th>Lane</th><th>Player</th><th>Result</th><th>Status</th></tr></thead>
         <tbody>${playerRows || '<tr><td colspan="4" class="text-muted">No players logged</td></tr>'}</tbody>
-      </table></div>`;
+      </table></div>
+      <h3 class="mt16">Combat Log <span class="text-muted" style="font-size:12px;font-weight:normal">${events.length} events</span></h3>
+      ${combatHtml}`;
     document.getElementById('modal-footer').innerHTML = `<button onclick="closeModal()">Close</button>`;
   } catch (err) {
     document.getElementById('modal-body').innerHTML = `<p class="text-danger">Error: ${esc(err.message)}</p>`;

@@ -380,6 +380,13 @@ function createMultilaneRuntime({
         io.to(roomId).emit(evt.type, evt);
       }
 
+      // Drain combat log events (buffered by combatLog.js when COMBAT_LOG=true)
+      if (entry.game._combatLog && entry.game._combatLog.length > 0) {
+        if (!entry.combatEvents) entry.combatEvents = [];
+        entry.combatEvents.push(...entry.game._combatLog);
+        entry.game._combatLog = [];
+      }
+
       if (localTick % snapshotEveryNTicks === 0) {
         io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
       }
@@ -408,6 +415,14 @@ function createMultilaneRuntime({
         }));
 
         const endPromise = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
+        if (db && entry.combatEvents && entry.combatEvents.length > 0) {
+          Promise.resolve(entry.matchIdPromise).then(matchId => {
+            if (matchId) db.query(
+              'UPDATE matches SET combat_log=$1 WHERE id=$2',
+              [JSON.stringify(entry.combatEvents), matchId]
+            ).catch(() => {});
+          });
+        }
         if (ratingService && db && entry.dbMode && entry.dbMode.endsWith("_ranked")) {
           Promise.all([endPromise, entry.matchIdPromise])
             .then(([, matchId]) =>

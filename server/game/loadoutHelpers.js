@@ -50,8 +50,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
       ids = inlineUnitTypeIds;
     }
 
-    // Units are sendable if behavior_mode is 'moving' (HF creatures) or 'both' (legacy dual-role).
-    const isSendable = (ut) => ut && ut.enabled && (ut.behavior_mode === "moving" || ut.behavior_mode === "both");
+    const isSendable = (ut) => ut && ut.enabled && Number(ut.send_cost) > 0;
 
     if (ids) {
       const resolved = ids
@@ -75,7 +74,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
     const allowedIds = new Set(
       unitTypes
         .getAllUnitTypes()
-        .filter((ut) => ut.enabled && (ut.behavior_mode === "moving" || ut.behavior_mode === "both"))
+        .filter((ut) => ut.enabled && Number(ut.send_cost) > 0)
         .map((ut) => ut.id)
     );
     return unitTypeIds.every((id) => {

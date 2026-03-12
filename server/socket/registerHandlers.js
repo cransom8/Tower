@@ -7,7 +7,6 @@ function registerSocketHandlers({
   checkActionRateLimit,
   checkLobbyRateLimit,
   createMLRoom,
-  createSurvivalRoom,
   db,
   disconnectGrace,
   ffaTeamForLane,
@@ -27,13 +26,9 @@ function registerSocketHandlers({
   sanitizeDisplayName,
   sessionBySocketId,
   simMl,
-  simSurvival,
   socketByPlayerId,
   startMLGame,
-  startSurvivalGame,
   stopMLGame,
-  stopSurvivalGame,
-  survivalRoomsByCode,
   validateLoadoutSelection,
   validateMlTeamSetup,
   verifyReconnectToken,
@@ -194,36 +189,6 @@ function registerSocketHandlers({
           opponents: enemies,
         });
       });
-    } else if (gameType === "survival") {
-      const coopMode = allSocketIds.length > 1;
-      const host = allSocketIds[0];
-      const { code, roomId } = createSurvivalRoom(host.sid, sanitizeDisplayName(host.name), coopMode);
-      const room = survivalRoomsByCode.get(code);
-
-      sessionBySocketId.set(host.sid, { code, roomId, laneIndex: 0, mode: "survival" });
-      const hostSock = io.sockets.sockets.get(host.sid);
-      if (hostSock) hostSock.join(roomId);
-
-      for (let i = 1; i < allSocketIds.length; i += 1) {
-        const { sid, name } = allSocketIds[i];
-        room.players.push(sid);
-        room.laneBySocketId.set(sid, i);
-        room.playerNames.set(sid, sanitizeDisplayName(name));
-        sessionBySocketId.set(sid, { code, roomId, laneIndex: i, mode: "survival" });
-        const sock = io.sockets.sockets.get(sid);
-        if (sock) sock.join(roomId);
-      }
-
-      allSocketIds.forEach(({ sid }, laneIndex) => {
-        io.to(sid).emit("match_found", {
-          roomCode: code,
-          laneIndex,
-          gameType: "survival",
-          autoStart: true,
-        });
-      });
-
-      startSurvivalGame(roomId, code);
     }
 
     const seenParties = new Set();
@@ -914,8 +879,6 @@ function registerSocketHandlers({
         return socket.emit("error_message", { message: "Ranked queue is currently disabled." });
       if (!isRankedReq && !isEnabled("casual_queue_enabled"))
         return socket.emit("error_message", { message: "Casual queue is currently disabled." });
-      if (gameType === "survival" && !isEnabled("survival_public_enabled"))
-        return socket.emit("error_message", { message: "Public survival queue is currently disabled." });
       if (matchFormat === "ffa" && !isEnabled("public_ffa_enabled"))
         return socket.emit("error_message", { message: "Public FFA matchmaking is currently disabled." });
       if (matchFormat === "1v1" && isRankedReq && !isEnabled("1v1_ranked_enabled"))
@@ -1180,45 +1143,6 @@ function registerSocketHandlers({
 
       const hostName = sanitizeDisplayName(launchLobby.members.get(socket.id)?.name || "Player");
 
-      if (launchLobby.gameType === "survival") {
-        const coopMode = launchLobby.members.size > 1;
-        const { code: svCode, roomId: svRoomId } = createSurvivalRoom(socket.id, hostName, coopMode);
-        const svRoom = survivalRoomsByCode.get(svCode);
-        sessionBySocketId.set(socket.id, { code: svCode, roomId: svRoomId, laneIndex: 0, mode: "survival" });
-        socket.join(svRoomId);
-
-        let svLaneIdx = 1;
-        for (const [memberSid, metadata] of launchLobby.members) {
-          if (memberSid === socket.id) continue;
-          svRoom.players.push(memberSid);
-          svRoom.laneBySocketId.set(memberSid, svLaneIdx);
-          svRoom.playerNames.set(memberSid, sanitizeDisplayName(metadata.name));
-          sessionBySocketId.set(memberSid, { code: svCode, roomId: svRoomId, laneIndex: svLaneIdx, mode: "survival" });
-          const memberSock = io.sockets.sockets.get(memberSid);
-          if (memberSock) memberSock.join(svRoomId);
-          svLaneIdx += 1;
-        }
-
-        let svIdx = 0;
-        for (const [memberSid] of launchLobby.members) {
-          io.to(memberSid).emit("match_found", {
-            roomCode: svCode,
-            laneIndex: svIdx,
-            gameType: "survival",
-            autoStart: true,
-          });
-          svIdx += 1;
-        }
-
-        startSurvivalGame(svRoomId, svCode);
-        log.info("lobby launched (survival)", {
-          lobbyId: launchLobby.lobbyId,
-          code: svCode,
-          humans: launchLobby.members.size,
-        });
-        matchmaker.disbandLobby(launchLobby.lobbyId);
-        return;
-      }
 
       const { code, roomId } = createMLRoom(socket.id, hostName, normalizeMatchSettings(launchLobby.settings));
       const room = mlRoomsByCode.get(code);
@@ -1521,21 +1445,6 @@ function registerSocketHandlers({
         return;
       }
 
-      if (session.mode === "survival") {
-        const entry = gamesByRoomId.get(session.roomId);
-        if (!entry) return socket.emit("error_message", { message: "Game not started" });
-        const result = simSurvival.applySurvivalAction(entry.game, session.laneIndex, { type, data });
-        if (!result.ok) return socket.emit("error_message", { message: result.reason || "Action rejected" });
-        const lane = entry.game.lanes[session.laneIndex];
-        socket.emit("action_applied", {
-          type,
-          laneIndex: session.laneIndex,
-          tick: entry.game.tick,
-          gold: lane ? lane.gold : 0,
-          income: lane ? lane.income : 0,
-        });
-        return;
-      }
 
       if (session.mode === "multilane") {
         const entry = gamesByRoomId.get(session.roomId);
@@ -1611,29 +1520,6 @@ function registerSocketHandlers({
         return;
       }
 
-      if (session.mode === "survival") {
-        const room = survivalRoomsByCode.get(session.code);
-        if (!room) {
-          sessionBySocketId.delete(socket.id);
-          socket.emit("left_game_ack");
-          return;
-        }
-
-        const idx = room.players.indexOf(socket.id);
-        if (idx !== -1) room.players.splice(idx, 1);
-        room.laneBySocketId.delete(socket.id);
-        room.playerNames.delete(socket.id);
-        room.readySet.delete(socket.id);
-        sessionBySocketId.delete(socket.id);
-        socket.leave(room.roomId);
-        socket.emit("left_game_ack");
-
-        if (room.players.length === 0) {
-          stopSurvivalGame(room.roomId, session.code);
-          survivalRoomsByCode.delete(session.code);
-        }
-        return;
-      }
 
       sessionBySocketId.delete(socket.id);
       socket.emit("left_game_ack");
@@ -1677,20 +1563,6 @@ function registerSocketHandlers({
         if (partyId) {
           _leaveParty(socket, partyId);
         }
-      }
-
-      for (const [code, room] of survivalRoomsByCode.entries()) {
-        const idx = room.players.indexOf(socket.id);
-        if (idx === -1) continue;
-        room.players.splice(idx, 1);
-        room.laneBySocketId.delete(socket.id);
-        room.playerNames.delete(socket.id);
-        room.readySet.delete(socket.id);
-        if (room.players.length === 0) {
-          stopSurvivalGame(room.roomId, code);
-          survivalRoomsByCode.delete(code);
-        }
-        break;
       }
 
       for (const [code, room] of mlRoomsByCode.entries()) {

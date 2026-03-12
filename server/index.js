@@ -17,13 +17,11 @@ const gameConfig = require("./gameConfig");
 const log = require("./logger");
 const matchmaker = require("./services/matchQueueManager");
 const simMl = require("./sim-multilane");
-const simSurvival = require("./sim-survival");
 const unitTypes = require("./unitTypes");
 const { stringToSeed } = require("./sim-core");
 const { createLoadoutHelpers } = require("./game/loadoutHelpers");
 const { createMatchPersistence } = require("./game/matchPersistence");
 const { createMultilaneRuntime } = require("./game/multilaneRuntime");
-const { createSurvivalRuntime } = require("./game/survivalRuntime");
 const {
   createCodeGenerator,
   createRateLimiters,
@@ -332,28 +330,11 @@ const multilaneRuntime = createMultilaneRuntime({
   RECONNECT_GRACE_MS: runtimeState.RECONNECT_GRACE_MS,
 });
 
-const survivalRuntime = createSurvivalRuntime({
-  db,
-  generateCode,
-  gamesByRoomId: runtimeState.gamesByRoomId,
-  io,
-  log,
-  logMatchEnd,
-  logMatchStart,
-  mlRoomsByCode: runtimeState.mlRoomsByCode,
-  sanitizeDisplayName,
-  simMl,
-  simSurvival,
-  stringToSeed,
-  survivalRoomsByCode: runtimeState.survivalRoomsByCode,
-});
-
 const { onMatchFound } = registerSocketHandlers({
   authService,
   checkActionRateLimit,
   checkLobbyRateLimit,
   createMLRoom: multilaneRuntime.createMLRoom,
-  createSurvivalRoom: survivalRuntime.createSurvivalRoom,
   db,
   disconnectGrace: runtimeState.disconnectGrace,
   ffaTeamForLane: multilaneRuntime.ffaTeamForLane,
@@ -373,13 +354,9 @@ const { onMatchFound } = registerSocketHandlers({
   sanitizeDisplayName,
   sessionBySocketId: runtimeState.sessionBySocketId,
   simMl,
-  simSurvival,
   socketByPlayerId: runtimeState.socketByPlayerId,
   startMLGame: multilaneRuntime.startMLGame,
-  startSurvivalGame: survivalRuntime.startSurvivalGame,
   stopMLGame: multilaneRuntime.stopMLGame,
-  stopSurvivalGame: survivalRuntime.stopSurvivalGame,
-  survivalRoomsByCode: runtimeState.survivalRoomsByCode,
   validateLoadoutSelection,
   validateMlTeamSetup: multilaneRuntime.validateMlTeamSetup,
   verifyReconnectToken,

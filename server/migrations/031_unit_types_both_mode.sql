@@ -6,7 +6,6 @@
 --   4. Adding income matching existing defender tiers
 
 UPDATE unit_types SET
-  behavior_mode = 'both',
   range         = 0.25,
   build_cost    = 10,
   income        = 1,
@@ -14,7 +13,6 @@ UPDATE unit_types SET
 WHERE key = 'runner';
 
 UPDATE unit_types SET
-  behavior_mode = 'both',
   range         = 0.20,
   build_cost    = 12,
   income        = 1,
@@ -22,7 +20,6 @@ UPDATE unit_types SET
 WHERE key = 'footman';
 
 UPDATE unit_types SET
-  behavior_mode = 'both',
   range         = 0.18,
   build_cost    = 20,
   income        = 2,
@@ -30,7 +27,6 @@ UPDATE unit_types SET
 WHERE key = 'ironclad';
 
 UPDATE unit_types SET
-  behavior_mode = 'both',
   range         = 0.32,
   build_cost    = 24,
   income        = 2,
@@ -38,7 +34,6 @@ UPDATE unit_types SET
 WHERE key = 'warlock';
 
 UPDATE unit_types SET
-  behavior_mode = 'both',
   range         = 0.14,
   build_cost    = 30,
   income        = 3,

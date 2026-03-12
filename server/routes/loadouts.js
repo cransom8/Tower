@@ -39,12 +39,12 @@ router.put('/:slot', requireAuth, async (req, res) => {
   }
 
   try {
-    // Loadouts allow enabled attacker unit types (moving or both).
+    // Loadouts allow enabled attacker unit types (send_cost > 0).
     const validRows = await db.query(
       `SELECT id
          FROM unit_types
         WHERE enabled = true
-          AND behavior_mode IN ('moving', 'both')
+          AND send_cost > 0
           AND id = ANY($1::int[])`,
       [unitTypeIds]
     );

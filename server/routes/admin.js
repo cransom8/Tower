@@ -963,6 +963,21 @@ router.get('/matches/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /admin/matches/:id/combat-log
+router.get('/matches/:id/combat-log', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid match ID' });
+  try {
+    const r = await db.query(`SELECT combat_log FROM matches WHERE id = $1`, [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Match not found' });
+    res.json({ events: r.rows[0].combat_log || [] });
+  } catch (err) {
+    log.error('[admin] combat-log route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /admin/matches/:id/terminate
 router.post('/matches/:id/terminate', requireAdmin, requirePermission('match.terminate'), async (req, res) => {
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid match ID' });
@@ -1879,7 +1894,7 @@ router.get('/ml-waves/default', requireAdmin, async (req, res) => {
 // ── Unit Types CRUD ────────────────────────────────────────────────────────────
 
 const UNIT_TYPE_FIELDS = [
-  'key','name','description','behavior_mode','enabled','display_to_players',
+  'key','name','description','enabled','display_to_players',
   'hp','attack_damage','attack_speed','range','path_speed',
   'damage_type','armor_type','damage_reduction_pct',
   'send_cost','build_cost','income','refund_pct',
@@ -1892,7 +1907,6 @@ const UNIT_TYPE_FIELDS = [
   'sound_spawn','sound_attack','sound_hit','sound_death',
 ];
 const UNIT_KEY_RE       = /^[a-z_][a-z0-9_]{0,63}$/;
-const VALID_BEHAVIOR    = ['fixed','moving','both'];
 const VALID_DAMAGE_TYPES = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
 const VALID_ARMOR_TYPES  = ['UNARMORED','LIGHT','MEDIUM','HEAVY','MAGIC'];
 
@@ -1900,8 +1914,6 @@ function validateUnitTypeBody(body) {
   const errs = [];
   if (body.key !== undefined && !UNIT_KEY_RE.test(body.key))
     errs.push('key must be lowercase letters/numbers/underscores, 1–64 chars');
-  if (body.behavior_mode !== undefined && !VALID_BEHAVIOR.includes(body.behavior_mode))
-    errs.push('invalid behavior_mode');
   if (body.damage_type !== undefined && !VALID_DAMAGE_TYPES.includes(body.damage_type))
     errs.push('invalid damage_type');
   if (body.armor_type !== undefined && !VALID_ARMOR_TYPES.includes(body.armor_type))
