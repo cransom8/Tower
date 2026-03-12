@@ -20,7 +20,7 @@ using CastleDefender.Game;
 
 namespace CastleDefender.UI
 {
-    public class TileMenuUI : MonoBehaviour
+    public class TileMenuUI : MonoBehaviour, CastleDefender.Game.ITileMenu
     {
         public GameObject PanelTileMenu;
         public TMP_Text   TxtTileInfo;
@@ -41,18 +41,13 @@ namespace CastleDefender.UI
         public Button BtnRemove;
         public Button BtnClose;
 
+        [Header("Tower Icons (assign in Inspector)")]
+        [SerializeField] Sprite[] TowerIcons;
+
         // Fallback tower data (used until match config / catalog loads)
         static readonly string[] FallbackTowerKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
         static readonly int[]    FallbackTowerCosts  = {       8,    14,      16,        20,       22 };
         static readonly int[]    UpgradeCostPerLevel = { 12, 18, 26, 36, 50, 65, 82, 100, 120 };
-        static readonly string[] TowerIconPaths =
-        {
-            "Icons/towers/archer_icon",
-            "Icons/towers/fighter_icon",
-            "Icons/towers/mage_icon",
-            "Icons/towers/ballista_icon",
-            "Icons/towers/cannon_icon"
-        };
 
         // Catalog-driven (populated in ApplyCatalog)
         string[] _towerKeys;
@@ -62,6 +57,7 @@ namespace CastleDefender.UI
         string _tileType;
         string _towerType;
         bool   _initialized;
+        Coroutine _scaleCoroutine;
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -217,26 +213,15 @@ namespace CastleDefender.UI
 
         void ApplyTowerButtonIcons()
         {
+            if (TowerIcons == null || TowerIcons.Length == 0) return;
             var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
-            for (int i = 0; i < buttons.Length && i < TowerIconPaths.Length; i++)
-                ApplyIcon(buttons[i], TowerIconPaths[i]);
+            for (int i = 0; i < buttons.Length && i < TowerIcons.Length; i++)
+                ApplyIcon(buttons[i], TowerIcons[i]);
         }
 
-        static void ApplyIcon(Button button, string resourcePath)
+        static void ApplyIcon(Button button, Sprite sprite)
         {
-            if (button == null || button.image == null || string.IsNullOrEmpty(resourcePath))
-                return;
-
-            Sprite sprite = Resources.Load<Sprite>(resourcePath);
-            if (sprite == null)
-            {
-                var tex = Resources.Load<Texture2D>(resourcePath);
-                if (tex != null)
-                    sprite = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height),
-                                           new Vector2(0.5f, 0.5f), 100f);
-            }
-
-            if (sprite == null) return;
+            if (button == null || button.image == null || sprite == null) return;
             button.image.sprite = sprite;
             button.image.preserveAspect = true;
             button.image.type = Image.Type.Simple;
@@ -314,8 +299,9 @@ namespace CastleDefender.UI
             PanelTileMenu.SetActive(true);
             if (isActiveAndEnabled)
             {
+                if (_scaleCoroutine != null) StopCoroutine(_scaleCoroutine);
                 PanelTileMenu.transform.localScale = Vector3.zero;
-                StartCoroutine(ScaleIn(PanelTileMenu.transform, 0.15f));
+                _scaleCoroutine = StartCoroutine(ScaleIn(PanelTileMenu.transform, 0.15f));
             }
             else
             {
@@ -327,9 +313,14 @@ namespace CastleDefender.UI
         public void Close()
         {
             if (isActiveAndEnabled)
-                StartCoroutine(ScaleOut(PanelTileMenu.transform, 0.1f));
+            {
+                if (_scaleCoroutine != null) StopCoroutine(_scaleCoroutine);
+                _scaleCoroutine = StartCoroutine(ScaleOut(PanelTileMenu.transform, 0.1f));
+            }
             else if (PanelTileMenu != null)
+            {
                 PanelTileMenu.SetActive(false);
+            }
         }
 
         void PositionMenuNearTile(int col, int row)
@@ -431,6 +422,8 @@ namespace CastleDefender.UI
             }
             t.localScale = Vector3.zero;
             PanelTileMenu.SetActive(false);
+            // Deactivate the whole container so the outer Image doesn't linger on screen.
+            gameObject.SetActive(false);
         }
 
         static float EaseOutBack(float t)

@@ -1,0 +1,26 @@
+{
+    "name": "CastleDefender.Editor",
+    "rootNamespace": "CastleDefender.Editor",
+    "references": [
+        "CastleDefender.Net",
+        "CastleDefender.Game",
+        "CastleDefender.UI",
+        "CastleDefender.FX",
+        "CastleDefender.Audio",
+        "CastleDefender.Utils",
+        "Unity.TextMeshPro",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

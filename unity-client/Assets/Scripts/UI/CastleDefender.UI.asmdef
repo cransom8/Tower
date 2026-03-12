@@ -1,0 +1,20 @@
+{
+    "name": "CastleDefender.UI",
+    "rootNamespace": "CastleDefender.UI",
+    "references": [
+        "CastleDefender.Net",
+        "CastleDefender.Game",
+        "CastleDefender.Audio",
+        "CastleDefender.FX",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -33,8 +33,6 @@ namespace CastleDefender.UI
     public class CmdBar : MonoBehaviour
     {
         // ── Inspector ─────────────────────────────────────────────────────────
-        [Header("Wall")]
-        public Button BtnWall;
 
         [Header("Unit Buttons (Runner … Golem)")]
         public Button[]   UnitButtons;       // main send button per unit
@@ -57,20 +55,13 @@ namespace CastleDefender.UI
         public Color ColorPhaseOff = new Color(0.35f, 0.35f, 0.35f, 0.50f); // buttons during combat/transition
 
         // ── Static state ──────────────────────────────────────────────────────
-        public static bool WallModeActive { get; private set; }
-        public static event System.Action<bool> OnWallModeChanged;
+
+        [Header("Unit Icons (assign in Inspector)")]
+        [SerializeField] public Sprite[] UnitIcons;
 
         // ── Fallbacks ─────────────────────────────────────────────────────────
         static readonly string[] FallbackUnitKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
         static readonly int[]    FallbackUnitCosts  = { 1, 3, 4, 5, 6 };
-        static readonly string[] UnitIconPaths =
-        {
-            "Icons/units/goblin_send_icon",
-            "Icons/units/orc_send_icon",
-            "Icons/units/troll_send_icon",
-            "Icons/units/vampire_send_icon",
-            "Icons/units/wyvern_send_icon",
-        };
 
         // ── Catalog-driven state ──────────────────────────────────────────────
         string[] _unitKeys;
@@ -124,10 +115,6 @@ namespace CastleDefender.UI
             }
 
             ApplyUnitButtonIcons();
-            BtnWall.onClick.AddListener(OnWallClick);
-            // Wall mode removed from wave defense — keep the GO/event for legacy subscribers
-            // (CameraController reads WallModeActive) but hide the button from players.
-            if (BtnWall != null) BtnWall.gameObject.SetActive(false);
 
             // Wire unit buttons
             for (int i = 0; i < UnitButtons.Length; i++)
@@ -252,23 +239,14 @@ namespace CastleDefender.UI
 
         void ApplyUnitButtonIcons()
         {
-            if (UnitButtons == null) return;
-            for (int i = 0; i < UnitButtons.Length && i < UnitIconPaths.Length; i++)
-                ApplyIcon(UnitButtons[i], UnitIconPaths[i]);
+            if (UnitButtons == null || UnitIcons == null || UnitIcons.Length == 0) return;
+            for (int i = 0; i < UnitButtons.Length && i < UnitIcons.Length; i++)
+                ApplyIcon(UnitButtons[i], UnitIcons[i]);
         }
 
-        static void ApplyIcon(Button btn, string resourcePath)
+        static void ApplyIcon(Button btn, Sprite sprite)
         {
-            if (btn == null || btn.image == null || string.IsNullOrEmpty(resourcePath)) return;
-            Sprite sprite = Resources.Load<Sprite>(resourcePath);
-            if (sprite == null)
-            {
-                var tex = Resources.Load<Texture2D>(resourcePath);
-                if (tex != null)
-                    sprite = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height),
-                                           new Vector2(0.5f, 0.5f), 100f);
-            }
-            if (sprite == null) return;
+            if (btn == null || btn.image == null || sprite == null) return;
             btn.image.sprite = sprite;
             btn.image.preserveAspect = true;
             btn.image.type = Image.Type.Simple;
@@ -307,13 +285,6 @@ namespace CastleDefender.UI
         }
 
         // ── Click handlers ────────────────────────────────────────────────────
-        void OnWallClick()
-        {
-            WallModeActive = !WallModeActive;
-            BtnWall.image.color = WallModeActive ? ColorWallOn : Color.white;
-            OnWallModeChanged?.Invoke(WallModeActive);
-            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
-        }
 
         void OnUnitClick(int idx)
         {

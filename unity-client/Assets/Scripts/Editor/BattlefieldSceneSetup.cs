@@ -30,7 +30,7 @@ namespace CastleDefender.Editor
                 if (tileGrid.CastlePrefab == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.CastlePrefab not assigned."); warnings++; }
                 if (tileGrid.Registry     == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.Registry not assigned.");     warnings++; }
                 if (tileGrid.Cam          == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.Cam not assigned.");          warnings++; }
-                if (tileGrid.TileMenu     == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.TileMenu not assigned.");     warnings++; }
+                if (tileGrid.TileMenuBehaviour     == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.TileMenu not assigned.");     warnings++; }
                 else Debug.Log("[BattlefieldSetup] TileGrid OK.");
             }
 

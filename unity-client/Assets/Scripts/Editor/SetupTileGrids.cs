@@ -90,7 +90,7 @@ namespace CastleDefender.Editor
                 tg.CastlePrefab  = castlePrefab;
                 tg.Registry      = registry;
                 tg.Cam           = cam;
-                tg.TileMenu      = allMenus[lane];
+                tg.TileMenuBehaviour      = allMenus[lane];
 
                 Debug.Log($"[SetupTileGrids] Lane {lane} ({laneNames[lane]}) → TileMenuUI '{allMenus[lane].name}'");
             }

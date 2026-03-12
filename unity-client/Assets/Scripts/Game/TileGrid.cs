@@ -24,7 +24,6 @@
 using System.Collections.Generic;
 using UnityEngine;
 using CastleDefender.Net;
-using CastleDefender.UI;
 
 namespace CastleDefender.Game
 {
@@ -53,7 +52,8 @@ namespace CastleDefender.Game
         public Camera Cam;
 
         [Header("Tile interaction")]
-        public TileMenuUI TileMenu;
+        public MonoBehaviour TileMenuBehaviour;
+        ITileMenu TileMenu => TileMenuBehaviour as ITileMenu;
 
         [Header("Spawn offsets")]
         [Tooltip("Vertical lift for towers so they sit on top of floor tiles.")]
@@ -113,6 +113,17 @@ namespace CastleDefender.Game
             return TileToWorld(col, row);
         }
 
+        /// <summary>Float overload — used by mobile defenders with sub-tile positions.</summary>
+        public static Vector3 TileToWorld(int laneIndex, float col, float row)
+        {
+            if ((uint)laneIndex < (uint)_branchConfigs.Length)
+            {
+                var bc = _branchConfigs[laneIndex];
+                return bc.origin + bc.colDir * (col * TileW) + bc.rowDir * (row * TileH);
+            }
+            return new Vector3(col * TileW, 0f, row * TileH);
+        }
+
 static readonly Vector3[][] _lanePathWaypoints =
         {
             // 6 waypoints per lane — units must pass through each in sequence.
@@ -167,6 +178,14 @@ static readonly Vector3[][] _lanePathWaypoints =
         }
 
 
+        /// <summary>Returns the world-space forward direction units travel along a lane (rowDir).</summary>
+        public static Vector3 GetLaneForwardDir(int laneIndex)
+        {
+            if ((uint)laneIndex < (uint)_branchConfigs.Length)
+                return _branchConfigs[laneIndex].rowDir;
+            return Vector3.forward;
+        }
+
         /// <summary>Legacy single-lane mapping (straight +Z). Prefer the 3-arg overload.</summary>
         public static Vector3 TileToWorld(int col, int row)
             => new Vector3(col * TileW, 0f, row * TileH);
@@ -177,7 +196,15 @@ static readonly Vector3[][] _lanePathWaypoints =
         string[]     _towerTypes;
         int          _currentLaneIndex = -1;
         bool         _subscribed;
-        readonly Dictionary<int, Transform> _towerHpFills = new(); // tileIdx → HP bar fill Transform
+        readonly Dictionary<int, Transform>    _towerHpFills       = new(); // tileIdx → HP bar fill Transform
+        readonly Dictionary<int, Animator>     _towerAnimators      = new(); // tileIdx → tower Animator
+        readonly HashSet<string>               _activeProjectileIds = new(); // projectile IDs seen last snapshot
+        // Reused each snapshot to avoid 10Hz GC allocs (P2)
+        readonly Dictionary<int, MLTowerCell>  _towerMapBuf         = new();
+        readonly Dictionary<int, MLDeadCell>   _deadMapBuf          = new();
+        readonly HashSet<string>               _currentIdsBuf       = new();
+        // Static attack state table (avoids per-call array alloc)
+        static readonly string[] s_attackStates = { "Attack1", "Attack", "AttackSwordShield", "AttackDaggers", "Shoot", "Cast" };
 
         Vector3              _mouseDownPos;
         bool                 _wasDrag;
@@ -213,6 +240,7 @@ static readonly Vector3[][] _lanePathWaypoints =
         void OnSnapshot(MLSnapshot snap)
         {
             if (snap?.lanes == null || LaneIndex >= snap.lanes.Length) return;
+            if (LaneIndex == 0) Debug.Log($"[TileGrid] snap roundState={snap.roundState} round={snap.roundNumber} lane={LaneIndex}");
 
             BuildFloorGridForLane(LaneIndex);
             UpdateTiles(snap.lanes[LaneIndex]);
@@ -225,6 +253,8 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             // Destroy all existing tile objects
             _towerHpFills.Clear();
+            _towerAnimators.Clear();
+            _activeProjectileIds.Clear();
             for (int i = 0; i < _tileObjects.Length; i++)
             {
                 if (_tileObjects[i] != null) { Destroy(_tileObjects[i]); _tileObjects[i] = null; }
@@ -301,8 +331,10 @@ static readonly Vector3[][] _lanePathWaypoints =
         // ── Tile sync ─────────────────────────────────────────────────────────
         void UpdateTiles(MLLaneSnap lane)
         {
-            var towerMap = new Dictionary<int, MLTowerCell>();
-            var deadMap  = new Dictionary<int, MLDeadCell>();
+            var towerMap = _towerMapBuf;
+            var deadMap  = _deadMapBuf;
+            towerMap.Clear();
+            deadMap.Clear();
 
             if (lane.towerCells != null)
                 foreach (var t in lane.towerCells)
@@ -334,6 +366,7 @@ static readonly Vector3[][] _lanePathWaypoints =
 
                 if (_tileObjects[idx] != null && _tileTypes[idx] != "floor")
                 {
+                    _towerAnimators.Remove(idx);
                     Destroy(_tileObjects[idx]);
                     _tileObjects[idx] = null;
                 }
@@ -352,9 +385,13 @@ static readonly Vector3[][] _lanePathWaypoints =
 
                     if (wanted == "tower")
                     {
-                        UpgradeToURP(_tileObjects[idx]);
                         AudioManager.I?.Play(AudioManager.SFX.BuildTower, 0.8f);
                         ApplyDebuffTint(_tileObjects[idx], tc.debuffed);
+
+                        // Cache animator for attack triggers
+                        var towerAnim = _tileObjects[idx].GetComponentInChildren<Animator>();
+                        if (towerAnim != null) _towerAnimators[idx] = towerAnim;
+                        else _towerAnimators.Remove(idx);
 
                         // Spawn HP bar for this tower slot
                         _towerHpFills.Remove(idx);
@@ -368,8 +405,9 @@ static readonly Vector3[][] _lanePathWaypoints =
                     }
                     else if (wanted == "dead_tower")
                     {
-                        // Dead defenders have no HP bar — remove any existing one
+                        // Dead defenders have no HP bar or animator
                         _towerHpFills.Remove(idx);
+                        _towerAnimators.Remove(idx);
                         ApplyDeadTint(_tileObjects[idx]);
                     }
                 }
@@ -394,6 +432,8 @@ static readonly Vector3[][] _lanePathWaypoints =
                     }
                 }
             }
+
+            TriggerTowerAttacks(lane);
         }
 
         static void ApplyDebuffTint(GameObject go, bool debuffed)
@@ -402,7 +442,7 @@ static readonly Vector3[][] _lanePathWaypoints =
             {
                 var bridge = r.GetComponent<ToonShaderBridge>();
                 if (bridge != null) bridge.SetDebuffed(debuffed);
-                else r.material.color = debuffed ? new Color(0.7f, 0.4f, 1f) : Color.white;
+                else r.material.SetColor("_BaseColor", debuffed ? new Color(0.7f, 0.4f, 1f) : Color.white);
             }
         }
 
@@ -414,7 +454,7 @@ static readonly Vector3[][] _lanePathWaypoints =
             {
                 var bridge = r.GetComponent<ToonShaderBridge>();
                 if (bridge != null) bridge.SetDebuffed(true);
-                else r.material.color = grey;
+                else r.material.SetColor("_BaseColor", grey);
             }
         }
 
@@ -460,7 +500,9 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             if (Input.GetMouseButtonUp(0))
             {
-                if (!_wasDrag && TryPickTile(Input.mousePosition, out int cc, out int rr))
+                bool overUI = UnityEngine.EventSystems.EventSystem.current != null
+                    && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+                if (!_wasDrag && !overUI && TryPickTile(Input.mousePosition, out int cc, out int rr))
                     HandleTileClick(cc, rr);
             }
         }
@@ -471,6 +513,7 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             // Gate: placement only valid during build phase
             var snap = SnapshotApplier.Instance?.LatestML;
+            Debug.Log($"[TileGrid] tap ({col},{row}) roundState={snap?.roundState ?? "NULL"} snapNull={snap == null}");
             if (snap == null || snap.roundState != "build") return;
 
             int idx = row * Cols + col;
@@ -539,34 +582,47 @@ static readonly Vector3[][] _lanePathWaypoints =
             return WallPrefab;
         }
 
-        static void UpgradeToURP(GameObject go)
+        // ── Tower attack animations ───────────────────────────────────────────
+        void TriggerTowerAttacks(MLLaneSnap lane)
         {
-            var urpLit = Shader.Find("Universal Render Pipeline/Lit");
-            if (urpLit == null) return;
-            foreach (var r in go.GetComponentsInChildren<Renderer>())
+            if (lane.projectiles == null || lane.projectiles.Length == 0)
             {
-                if (r.GetComponent<ToonShaderBridge>() != null) continue;
-                var shared    = r.sharedMaterials;
-                var instanced = r.materials;
-                bool changed  = false;
-                for (int mi = 0; mi < instanced.Length; mi++)
-                {
-                    var mat = instanced[mi];
-                    if (mat == null) continue;
-                    if (mat.shader != null && mat.shader.name.StartsWith("Universal Render Pipeline")) continue;
-                    var upgraded = new Material(urpLit);
-                    var orig = mi < shared.Length ? shared[mi] : null;
-                    if (orig != null)
-                    {
-                        if (orig.HasProperty("_MainTex")) { var t = orig.GetTexture("_MainTex"); if (t != null) upgraded.SetTexture("_BaseMap", t); }
-                        var c = orig.HasProperty("_Color") ? orig.GetColor("_Color") : Color.white;
-                        upgraded.SetColor("_BaseColor", c);
-                    }
-                    instanced[mi] = upgraded;
-                    changed = true;
-                }
-                if (changed) r.materials = instanced;
+                _activeProjectileIds.Clear();
+                return;
             }
+
+            var currentIds = _currentIdsBuf;
+            currentIds.Clear();
+            foreach (var p in lane.projectiles)
+            {
+                if (p == null || p.id == null) continue;
+                currentIds.Add(p.id);
+
+                // Only trigger once per projectile (on first appearance)
+                if (_activeProjectileIds.Contains(p.id)) continue;
+                if (p.fromX < 0 || p.fromX >= Cols || p.fromY < 0 || p.fromY >= Rows) continue;
+
+                int tileIdx = (int)p.fromY * Cols + (int)p.fromX;
+                if (_towerAnimators.TryGetValue(tileIdx, out var anim) && anim != null)
+                    TriggerAttackAnim(anim, p.projectileType);
+            }
+
+            _activeProjectileIds.Clear();
+            foreach (var id in currentIds) _activeProjectileIds.Add(id);
         }
+
+        static void TriggerAttackAnim(Animator anim, string projType)
+        {
+            // Try "Attack" trigger parameter first
+            foreach (var p in anim.parameters)
+                if (p.type == AnimatorControllerParameterType.Trigger && p.name == "Attack")
+                { anim.SetTrigger("Attack"); return; }
+
+            // Fall back to CrossFade into a known attack state (table defined at class level)
+            foreach (var s in s_attackStates)
+                if (anim.HasState(0, Animator.StringToHash(s)))
+                { anim.CrossFade(s, 0.05f, 0, 0); return; }
+        }
+
     }
 }

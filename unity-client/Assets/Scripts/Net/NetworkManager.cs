@@ -334,7 +334,7 @@ namespace CastleDefender.Net
                     break;
                 }
                 case "queue_update":
-                    OnQueueUpdate?.Invoke(JsonUtility.FromJson<QueueUpdatePayload>(json));
+                    OnQueueUpdate?.Invoke(JsonConvert.DeserializeObject<QueueUpdatePayload>(json));
                     break;
                 case "error_message":
                 {

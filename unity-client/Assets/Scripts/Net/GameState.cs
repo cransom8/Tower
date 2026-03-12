@@ -303,12 +303,14 @@ namespace CastleDefender.Net
         public string type;         // unit type key
         public string skinKey;      // null = default skin; otherwise overrides prefab lookup
         public float  pathIdx;
-        public int    gridX;
-        public int    gridY;
+        public float  gridX;        // float: 2D tile X for defenders; path-derived for wave units
+        public float  gridY;        // float: 2D tile Y for defenders; path-derived for wave units
         public float  normProgress; // 0..1 along wave path
         public float  hp;
         public float  maxHp;
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
+        public bool   isDefender;   // true = mobile defender unit
+        public bool   isAttacking;  // true when unit has a combat target (stops advancing)
     }
 
     [Serializable]
@@ -320,10 +322,10 @@ namespace CastleDefender.Net
         public string projectileType;   // which tower type fired
         public string damageType;       // "PIERCE"|"NORMAL"|"MAGIC"|"SIEGE"|"SPLASH"
         public bool   isSplash;
-        public int    fromX;
-        public int    fromY;
-        public int    toX;
-        public int    toY;
+        public float  fromX;
+        public float  fromY;
+        public float  toX;
+        public float  toY;
         public float  progress;         // 0=at tower, 1=at target
     }
 

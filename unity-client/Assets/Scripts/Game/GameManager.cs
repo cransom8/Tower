@@ -143,7 +143,10 @@ namespace CastleDefender.Game
             // Countdown (ticks → seconds, ceil so "0" only shows on exact zero)
             if (TxtCountdown != null)
             {
-                int secs = Mathf.CeilToInt((float)snap.roundStateTicks / TickHz);
+                int ticksLeft = snap.roundState == "build" && snap.buildPhaseTotal > 0
+                    ? (snap.buildPhaseTotal - snap.roundStateTicks)
+                    : snap.roundStateTicks;
+                int secs = Mathf.CeilToInt((float)ticksLeft / TickHz);
                 TxtCountdown.text = secs > 0 ? $"{secs}s" : "";
             }
 
@@ -178,7 +181,6 @@ namespace CastleDefender.Game
         void Awake()
         {
             InitPools();
-            WireInfoBarAnchor();
             EnsureCameraPOV();
             _cameraLockCountdown = CameraLockFrames;
             EnsureWaveHUD();   // auto-create phase/round labels if not wired
@@ -238,15 +240,6 @@ namespace CastleDefender.Game
                 Debug.LogWarning("[GameManager] FloatingTextPrefab not assigned.");
         }
 
-        void WireInfoBarAnchor()
-        {
-            if (CastleTileTransform == null) return;
-
-            var infoBar = FindFirstObjectByType<CastleDefender.UI.InfoBar>();
-            if (infoBar != null)
-                infoBar.FloatTextAnchor = CastleTileTransform;
-        }
-
         void EnsureCameraPOV()
         {
             if (!ForceCameraPreset) return;
@@ -278,6 +271,10 @@ namespace CastleDefender.Game
             ctrl.MainCam = cam;
             if (ctrl.CameraTarget == null)
                 ctrl.CameraTarget = cam.transform;
+
+            // Sync the controller's internal state to the freshly-placed camera so
+            // pan/zoom takes over from exactly this position (not the old _targetPos).
+            ctrl.SnapToCurrentPosition();
         }
 
         IEnumerator EnsureCameraPOVNextFrame()

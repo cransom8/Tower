@@ -11,6 +11,7 @@
 //     Registry       — UnitPrefabRegistry ScriptableObject with key→prefab mappings.
 //     HpBarPrefab    — optional world-space Image prefab for HP bars above units.
 
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using CastleDefender.Net;
@@ -43,13 +44,73 @@ namespace CastleDefender.Game
 
             // Kept for backward compat / shared-suffix units
             public float normProgress;
+
+            // Damage flash
+            public float      lastHp       = -1f;
+            public float      flashTimer   =  0f;
+            public Color      baseColor    = Color.white;
+            public Renderer[] renderers;          // cached at spawn (P3)
+
+            // Animation
+            public Animator anim;
+            public bool     wasMoving;
+            public bool     wasAttacking;
         }
 
         readonly Dictionary<string, UnitView> _units    = new();
         readonly HashSet<string>              _seenIds  = new();
         readonly List<string>                 _toRemove = new();
-        float _lastSnapTime = -1f;
-        bool  _subscribed;
+        float  _lastSnapTime = -1f;
+        bool   _subscribed;
+        string _roundState   = "build";   // "build" | "combat" | "transition"
+
+        // State name tables — covers PascalCase (Orc/Ghoul style), camelCase (Goblin/Werewolf/Cyclops),
+        // and animal variants (Wolf/GiantRat/Spider). Order = priority (first match wins).
+        static readonly string[] _walkStates = {
+            // PascalCase generics
+            "Walk", "Walk_RM", "Run", "Run_RM",
+            // Goblin weapon-variant camelCase
+            "walkForwardSwordShield", "walkNormalSwordShield",
+            "walkForwardDaggers",     "walkNormalDaggers",
+            "walkForwardSlingshot",   "walkNormalSlingshot",
+            // Other camelCase generics (Werewolf, Cyclops, animals)
+            "walk", "walk_RM", "run", "run_RM",
+        };
+
+        static readonly string[] _idleStates = {
+            // PascalCase
+            "IdleNormal", "IdleCombat", "IdleBlock", "Idle",
+            "IdleLookAround", "IdleAggressive", "IdleBreathe",
+            // Goblin camelCase
+            "idleSwordShield", "idleDaggers", "idleSlingshot",
+            // camelCase generics
+            "idleLookAround", "idleBreathe", "idle",
+        };
+
+        static readonly string[] _attackStates = {
+            // PascalCase (Orc, Ghoul, Vampire, etc.)
+            "Attack1", "Attack1Forward", "Attack2", "Attack2Forward",
+            // Animal attacks
+            "Bite", "JumpBite", "RunBite", "GrabBite",
+            // Goblin camelCase
+            "attack1SwordShield", "attack1ForwardSwordShield",
+            "attack1Daggers",     "attack1ForwardDaggers",
+            "shootSlingshot",
+            // camelCase generics (Werewolf, Cyclops)
+            "clawsAttack", "clawsAttackLeft", "clawsAttackRight",
+            "rightHandAttack", "leftHandAttack",
+            // Misc
+            "Attack", "attack",
+        };
+
+        static readonly string[] _deathStates = {
+            // PascalCase
+            "Death", "Die",
+            // Goblin camelCase
+            "deathSwordShield", "deathDaggers", "deathSlingshot",
+            // camelCase generics
+            "death",
+        };
 
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()  => TrySubscribeSnapshots();
@@ -70,10 +131,34 @@ namespace CastleDefender.Game
             {
                 if (view?.go == null) continue;
                 view.timeSinceSnap += dt;
-                // Extrapolate forward using world-space velocity estimated between snapshots.
-                // worldVelocity is zeroed for shared-suffix units (they use normProgress).
                 if (view.hadSnapshot)
                     view.go.transform.position = view.worldPos + view.worldVelocity * view.timeSinceSnap;
+
+                // Drive damage flash: lerp from red back to base colour over 0.25 s
+                if (view.flashTimer > 0f)
+                {
+                    view.flashTimer -= dt;
+                    float t = Mathf.Clamp01(view.flashTimer / 0.25f);
+                    Color flash = Color.Lerp(view.baseColor, Color.red, t);
+                    ApplyTintToRenderers(view.renderers, flash);
+                }
+            }
+        }
+
+        static void ApplyTintToRenderers(Renderer[] renderers, Color col)
+        {
+            if (renderers == null) return;
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                var bridge = r.GetComponent<ToonShaderBridge>();
+                if (bridge != null) { bridge.SetBaseColor(col); continue; }
+                foreach (var mat in r.materials)
+                {
+                    if (mat == null) continue;
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", col);
+                    else mat.color = col;
+                }
             }
         }
 
@@ -98,6 +183,12 @@ namespace CastleDefender.Game
             float now      = Time.time;
             float snapDt   = _lastSnapTime >= 0f ? now - _lastSnapTime : 0.1f;
             _lastSnapTime  = now;
+
+            // Track round state so stopped units know whether to idle or attack
+            string prevRoundState = _roundState;
+            _roundState = snap.roundState ?? "build";
+            bool roundStateChanged = _roundState != prevRoundState;
+
             _seenIds.Clear();
 
             foreach (var lane in snap.lanes)
@@ -115,41 +206,89 @@ namespace CastleDefender.Game
                     // Determine world position: use actual tile coords for branch units so
                     // they visually respect wall placement. Fall back to the polyline for
                     // units on the shared suffix (beyond the private build grid).
+                    // Wave units have ownerLane=-1 (no player owner); use the lane they
+                    // belong to in the snapshot so they render on the correct branch.
+                    int renderLane = u.ownerLane >= 0 ? u.ownerLane : lane.laneIndex;
+
                     MLLaneSnap ownerLaneSnap = null;
                     foreach (var ls in snap.lanes)
-                        if (ls != null && ls.laneIndex == u.ownerLane) { ownerLaneSnap = ls; break; }
+                        if (ls != null && ls.laneIndex == renderLane) { ownerLaneSnap = ls; break; }
 
                     int branchLen = ownerLaneSnap?.path?.Length ?? 0;
                     bool onBranch = branchLen > 0 && u.pathIdx < branchLen;
 
                     Vector3 newWorldPos;
-                    if (onBranch)
+                    if (u.isDefender || (u.isWaveUnit && onBranch))
                     {
-                        // Place at the exact tile the server says the unit occupies.
-                        // Dead-reckoning will extrapolate in world space, matching the
-                        // visual path through walls rather than the centerline polyline.
-                        newWorldPos = TileGrid.TileToWorld(u.ownerLane, u.gridX, u.gridY);
+                        // Defenders and wave units on the branch grid use direct 2D tile coords
+                        // so the full rectangle spawn spread is rendered correctly.
+                        newWorldPos = TileGrid.TileToWorld(renderLane, u.gridX, u.gridY);
+                    }
+                    else if (onBranch && ownerLaneSnap.path != null && ownerLaneSnap.path.Length >= 2)
+                    {
+                        // Player-sent units: interpolate along the centre path using pathIdx.
+                        int   p0 = Mathf.Clamp(Mathf.FloorToInt(u.pathIdx), 0, branchLen - 1);
+                        int   p1 = Mathf.Clamp(p0 + 1,                       0, branchLen - 1);
+                        float ft = u.pathIdx - p0;
+                        var  t0  = ownerLaneSnap.path[p0];
+                        var  t1  = ownerLaneSnap.path[p1];
+                        newWorldPos = Vector3.Lerp(
+                            TileGrid.TileToWorld(renderLane, t0.x, t0.y),
+                            TileGrid.TileToWorld(renderLane, t1.x, t1.y),
+                            ft);
                     }
                     else
                     {
-                        // Shared suffix — no wall geometry here, centerline polyline is fine.
-                        newWorldPos = TileGrid.NormProgressToWorld(u.ownerLane, u.normProgress);
+                        // Shared suffix or no path data — use normalized polyline.
+                        newWorldPos = TileGrid.NormProgressToWorld(renderLane, u.normProgress);
                     }
 
                     // Estimate world-space velocity from position delta between snapshots.
                     if (view.hadSnapshot && snapDt > 0f)
+                    {
                         view.worldVelocity = (newWorldPos - view.worldPos) / snapDt;
+                        // Update facing to match travel direction
+                        if (view.worldVelocity.sqrMagnitude > 0.01f && view.go != null)
+                            view.go.transform.rotation = Quaternion.LookRotation(view.worldVelocity.normalized, Vector3.up);
+                    }
                     else
                         view.worldVelocity = Vector3.zero;
 
                     view.worldPos      = newWorldPos;
                     view.normProgress  = u.normProgress;
                     view.timeSinceSnap = 0f;
-                    view.ownerLane     = u.ownerLane;
+                    view.ownerLane     = renderLane;
                     view.hadSnapshot   = true;
+
+                    // Drive animation using authoritative server state:
+                    //   isAttacking (combatTarget set) → attack
+                    //   moving (position advancing)    → walk
+                    //   otherwise                      → idle
+                    if (view.anim != null)
+                    {
+                        bool attacking = u.isAttacking;
+                        bool moving    = !attacking && view.worldVelocity.sqrMagnitude > 0.01f;
+
+                        if (attacking != view.wasAttacking || moving != view.wasMoving || roundStateChanged)
+                        {
+                            if (attacking)
+                                TryCrossFade(view.anim, _attackStates, 0.10f);
+                            else if (moving)
+                                TryCrossFade(view.anim, _walkStates, 0.15f);
+                            else
+                                TryCrossFade(view.anim, _idleStates, 0.20f);
+                            view.wasAttacking = attacking;
+                            view.wasMoving    = moving;
+                        }
+                    }
 
                     if (view.hpBarFill != null && u.maxHp > 0f)
                         view.hpBarFill.localScale = new Vector3(Mathf.Clamp01(u.hp / u.maxHp), 1f, 1f);
+
+                    // Trigger red flash when HP drops
+                    if (view.lastHp >= 0f && u.hp < view.lastHp)
+                        view.flashTimer = 0.25f;
+                    view.lastHp = u.hp;
                 }
             }
 
@@ -164,7 +303,7 @@ namespace CastleDefender.Game
                 if (v?.go != null)
                 {
                     AudioManager.I?.Play(AudioManager.SFX.UnitDeath, 0.4f);
-                    Destroy(v.go);
+                    StartCoroutine(PlayDeathThenDestroy(v.go, v.anim));
                 }
                 _units.Remove(id);
             }
@@ -184,7 +323,8 @@ namespace CastleDefender.Game
             }
 
             Vector3 spawnPos = TileGrid.NormProgressToWorld(u.ownerLane, u.normProgress);
-            var go = Instantiate(prefab, spawnPos, Quaternion.identity, transform);
+            Vector3 spawnFwd = TileGrid.GetLaneForwardDir(u.ownerLane >= 0 ? u.ownerLane : 0);
+            var go = Instantiate(prefab, spawnPos, Quaternion.LookRotation(spawnFwd, Vector3.up), transform);
             go.name = $"Unit_{u.id}_{u.type}_{u.skinKey ?? "default"}";
 
             float scale = Registry != null ? Registry.GetScaleForSkin(u.type, u.skinKey) : 1f;
@@ -210,47 +350,18 @@ namespace CastleDefender.Game
                         : Color.Lerp(col, Color.black, 0.25f);
             }
 
-            var urpLit = Shader.Find("Universal Render Pipeline/Lit");
             foreach (var r in go.GetComponentsInChildren<Renderer>())
             {
                 var bridge = r.GetComponent<ToonShaderBridge>();
                 if (bridge != null) { bridge.SetBaseColor(col); bridge.SetRimColor(rim); continue; }
 
-                var shared    = r.sharedMaterials;
-                var instanced = r.materials;          // per-instance copies
+                var instanced = r.materials;
                 for (int mi = 0; mi < instanced.Length; mi++)
                 {
                     var mat = instanced[mi];
                     if (mat == null) continue;
-                    bool isURP = mat.shader != null &&
-                                 mat.shader.name.StartsWith("Universal Render Pipeline");
-                    if (!isURP && urpLit != null)
-                    {
-                        var upgraded = new Material(urpLit);
-                        var orig = mi < shared.Length ? shared[mi] : null;
-                        if (orig != null)
-                        {
-                            if (orig.HasProperty("_MainTex"))
-                            {
-                                var tex = orig.GetTexture("_MainTex");
-                                if (tex != null) upgraded.SetTexture("_BaseMap", tex);
-                            }
-                            var baseCol = orig.HasProperty("_Color") ? orig.GetColor("_Color") : Color.white;
-                            upgraded.SetColor("_BaseColor", new Color(
-                                baseCol.r * col.r, baseCol.g * col.g,
-                                baseCol.b * col.b, baseCol.a));
-                        }
-                        else
-                        {
-                            upgraded.SetColor("_BaseColor", col);
-                        }
-                        instanced[mi] = upgraded;
-                    }
-                    else
-                    {
-                        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", col);
-                        else                               mat.color = col;
-                    }
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", col);
+                    else                               mat.color = col;
                 }
                 r.materials = instanced;
             }
@@ -263,10 +374,22 @@ namespace CastleDefender.Game
                 hpFill = bar.transform.Find("Fill");
             }
 
+            var unitAnim = go.GetComponentInChildren<Animator>();
+            if (unitAnim != null)
+            {
+                // Force Animator to fully initialize before we drive any state.
+                // Without this, CrossFade/Play called in the same frame as Instantiate
+                // gets silently overridden by the controller's default entry state.
+                unitAnim.Rebind();
+                unitAnim.Update(0f);
+            }
+
             var view = new UnitView
             {
                 go             = go,
                 hpBarFill      = hpFill,
+                anim           = unitAnim,
+                wasMoving      = false,
                 typeKey        = u.type,
                 isMine         = isMine,
                 ownerLane      = u.ownerLane,
@@ -275,11 +398,50 @@ namespace CastleDefender.Game
                 worldVelocity  = Vector3.zero,
                 timeSinceSnap  = 0f,
                 hadSnapshot    = false,
+                baseColor      = col,
+                renderers      = go.GetComponentsInChildren<Renderer>(),
             };
+            if (unitAnim != null) SetAnimIdle(unitAnim);   // idle until first snapshot velocity known
             _units[u.id] = view;
 
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, isMine ? 0.6f : 0.3f);
             return view;
+        }
+
+        // ── Animation helpers ─────────────────────────────────────────────────
+        static void SetAnimIdle(Animator anim)
+        {
+            if (anim == null) return;
+            foreach (var p in anim.parameters)
+                if (p.name == "Speed" && p.type == AnimatorControllerParameterType.Float)
+                { anim.SetFloat("Speed", 0f); return; }
+            TryCrossFade(anim, _idleStates, 0.20f);
+        }
+
+        static void TryCrossFade(Animator anim, string[] states, float transTime)
+        {
+            if (anim == null || anim.runtimeAnimatorController == null) return;
+
+            foreach (var s in states)
+            {
+                int hash = Animator.StringToHash(s);
+                if (anim.HasState(0, hash))
+                {
+                    // Use Play (not CrossFade) so the state is entered immediately,
+                    // preventing the controller's default-state from overriding us
+                    // on freshly instantiated Animators.
+                    anim.Play(hash, 0, 0f);
+                    return;
+                }
+            }
+        }
+
+        IEnumerator PlayDeathThenDestroy(GameObject go, Animator anim)
+        {
+            if (anim != null)
+                TryCrossFade(anim, _deathStates, 0.08f);
+            yield return new WaitForSeconds(1.8f);
+            if (go != null) Destroy(go);
         }
 
         void DestroyAll()

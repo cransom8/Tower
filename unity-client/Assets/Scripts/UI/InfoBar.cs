@@ -60,6 +60,13 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
+            // Wire FloatTextAnchor from GameManager's castle tile (avoids Game→UI dependency).
+            if (FloatTextAnchor == null)
+            {
+                var gm = FindFirstObjectByType<CastleDefender.Game.GameManager>();
+                if (gm != null) FloatTextAnchor = gm.CastleTileTransform;
+            }
+
             if (BtnBarracks != null)
             {
                 // Defensive: scene wiring can drift; keep barracks button usable.
