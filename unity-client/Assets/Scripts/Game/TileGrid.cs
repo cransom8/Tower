@@ -186,6 +186,53 @@ static readonly Vector3[][] _lanePathWaypoints =
             return Vector3.forward;
         }
 
+        /// <summary>
+        /// Maps suffixProgress (0..1) to world space along the suffix portion of the lane's polyline.
+        /// suffixProgress=0 → pt2 (grid end = TileToWorld(branchCfg, 5, 28)), suffixProgress=1 → pt5 (castle).
+        /// This avoids the position jump that occurs when using NormProgressToWorld with the full polyline.
+        /// </summary>
+        public static Vector3 SuffixProgressToWorld(int branchCfg, float suffixProgress)
+        {
+            var pts = (uint)branchCfg < (uint)_lanePathWaypoints.Length
+                ? _lanePathWaypoints[branchCfg]
+                : _lanePathWaypoints[0];
+
+            // Suffix uses pt2..pt5 (indices 2..5)
+            const int suffixStart = 2;
+            float t = Mathf.Clamp01(suffixProgress);
+
+            float totalLen = 0f;
+            for (int i = suffixStart; i < pts.Length - 1; i++)
+                totalLen += Vector3.Distance(pts[i], pts[i + 1]);
+
+            float target = t * totalLen;
+            float walked = 0f;
+            for (int i = suffixStart; i < pts.Length - 1; i++)
+            {
+                float segLen = Vector3.Distance(pts[i], pts[i + 1]);
+                if (walked + segLen >= target)
+                {
+                    float segT = segLen > 0f ? (target - walked) / segLen : 0f;
+                    return Vector3.Lerp(pts[i], pts[i + 1], segT);
+                }
+                walked += segLen;
+            }
+            return pts[pts.Length - 1];
+        }
+
+        /// <summary>Maps branchId from server snapshot to the local _branchConfigs index.</summary>
+        public static int GetBranchConfigIndex(string branchId)
+        {
+            switch (branchId)
+            {
+                case "left_branch_a":  return 0;
+                case "left_branch_b":  return 1;
+                case "right_branch_a": return 2;
+                case "right_branch_b": return 3;
+                default:               return -1;
+            }
+        }
+
         /// <summary>Legacy single-lane mapping (straight +Z). Prefer the 3-arg overload.</summary>
         public static Vector3 TileToWorld(int col, int row)
             => new Vector3(col * TileW, 0f, row * TileH);
@@ -194,13 +241,14 @@ static readonly Vector3[][] _lanePathWaypoints =
         GameObject[] _tileObjects;
         string[]     _tileTypes;
         string[]     _towerTypes;
-        int          _currentLaneIndex = -1;
+        int          _currentBranchCfg = -1;
         bool         _subscribed;
         readonly Dictionary<int, Transform>    _towerHpFills       = new(); // tileIdx → HP bar fill Transform
         readonly Dictionary<int, Animator>     _towerAnimators      = new(); // tileIdx → tower Animator
         readonly HashSet<string>               _activeProjectileIds = new(); // projectile IDs seen last snapshot
         // Reused each snapshot to avoid 10Hz GC allocs (P2)
         readonly Dictionary<int, MLTowerCell>  _towerMapBuf         = new();
+        readonly Dictionary<int, MLTowerCell>  _mobilizedMapBuf     = new();
         readonly Dictionary<int, MLDeadCell>   _deadMapBuf          = new();
         readonly HashSet<string>               _currentIdsBuf       = new();
         // Static attack state table (avoids per-call array alloc)
@@ -242,14 +290,18 @@ static readonly Vector3[][] _lanePathWaypoints =
             if (snap?.lanes == null || LaneIndex >= snap.lanes.Length) return;
             if (LaneIndex == 0) Debug.Log($"[TileGrid] snap roundState={snap.roundState} round={snap.roundNumber} lane={LaneIndex}");
 
-            BuildFloorGridForLane(LaneIndex);
-            UpdateTiles(snap.lanes[LaneIndex]);
+            var laneSnap = snap.lanes[LaneIndex];
+            int branchCfg = GetBranchConfigIndex(laneSnap?.branchId);
+            if (branchCfg < 0) branchCfg = LaneIndex;   // fallback: identity mapping
+
+            BuildFloorGridForLane(branchCfg);
+            UpdateTiles(laneSnap);
         }
 
         // ── Grid rebuild ──────────────────────────────────────────────────────
-        void BuildFloorGridForLane(int laneIndex)
+        void BuildFloorGridForLane(int branchCfg)
         {
-            if (laneIndex == _currentLaneIndex) return;
+            if (branchCfg == _currentBranchCfg) return;
 
             // Destroy all existing tile objects
             _towerHpFills.Clear();
@@ -269,14 +321,14 @@ static readonly Vector3[][] _lanePathWaypoints =
                 int idx = row * Cols + col;
                 if (FloorPrefab == null) continue;
 
-                var go = Instantiate(FloorPrefab, TileToWorld(laneIndex, col, row), Quaternion.identity, transform);
+                var go = Instantiate(FloorPrefab, TileToWorld(branchCfg, col, row), Quaternion.identity, transform);
                 go.name           = $"Tile_{col}_{row}";
                 _tileObjects[idx] = go;
                 _tileTypes[idx]   = "floor";
             }
 
-            _currentLaneIndex = laneIndex;
-            BuildWaypointMarkers(laneIndex);
+            _currentBranchCfg = branchCfg;
+            BuildWaypointMarkers(branchCfg);
         }
 
         // ── Waypoint markers ──────────────────────────────────────────────────
@@ -331,9 +383,11 @@ static readonly Vector3[][] _lanePathWaypoints =
         // ── Tile sync ─────────────────────────────────────────────────────────
         void UpdateTiles(MLLaneSnap lane)
         {
-            var towerMap = _towerMapBuf;
-            var deadMap  = _deadMapBuf;
+            var towerMap     = _towerMapBuf;
+            var mobilizedMap = _mobilizedMapBuf;
+            var deadMap      = _deadMapBuf;
             towerMap.Clear();
+            mobilizedMap.Clear();
             deadMap.Clear();
 
             if (lane.towerCells != null)
@@ -342,6 +396,14 @@ static readonly Vector3[][] _lanePathWaypoints =
                     int x = t.X, y = t.Y;
                     if (x >= 0 && x < Cols && y >= 0 && y < Rows)
                         towerMap[y * Cols + x] = t;
+                }
+
+            if (lane.mobilizedCells != null)
+                foreach (var t in lane.mobilizedCells)
+                {
+                    int x = t.X, y = t.Y;
+                    if (x >= 0 && x < Cols && y >= 0 && y < Rows)
+                        mobilizedMap[y * Cols + x] = t;
                 }
 
             if (lane.deadCells != null)
@@ -354,12 +416,15 @@ static readonly Vector3[][] _lanePathWaypoints =
             for (int row = 0; row < Rows; row++)
             for (int col = 0; col < Cols; col++)
             {
-                int         idx     = row * Cols + col;
-                bool        isTower = towerMap.TryGetValue(idx, out var tc);
-                MLDeadCell  dc      = null;
-                bool        isDead  = !isTower && deadMap.TryGetValue(idx, out dc);
-                string      wanted  = isTower ? "tower" : isDead ? "dead_tower" : "floor";
-                string      wantedType = isTower ? tc.type : (dc != null ? dc.type : null);
+                int         idx         = row * Cols + col;
+                bool        isTower     = towerMap.TryGetValue(idx, out var tc);
+                MLTowerCell mc          = default;
+                bool        isMobilized = !isTower && mobilizedMap.TryGetValue(idx, out mc);
+                MLDeadCell  dc          = null;
+                bool        isDead      = !isTower && !isMobilized && deadMap.TryGetValue(idx, out dc);
+                // "tower_mobilized" = defender walked out; renders as floor but stays selectable
+                string      wanted      = isTower ? "tower" : isMobilized ? "tower_mobilized" : isDead ? "dead_tower" : "floor";
+                string      wantedType  = isTower ? tc.type : isMobilized ? mc.type : (dc != null ? dc.type : null);
 
                 bool typeChanged = _towerTypes[idx] != wantedType;
                 if (_tileTypes[idx] == wanted && !typeChanged) continue;
@@ -377,8 +442,8 @@ static readonly Vector3[][] _lanePathWaypoints =
 
                 if (prefab != null)
                 {
-                    Vector3 pos = TileToWorld(_currentLaneIndex, col, row);
-                    if (wanted != "floor") pos.y += TowerSpawnYOffset;
+                    Vector3 pos = TileToWorld(_currentBranchCfg, col, row);
+                    if (wanted == "tower" || wanted == "dead_tower") pos.y += TowerSpawnYOffset;
 
                     _tileObjects[idx]      = Instantiate(prefab, pos, Quaternion.identity, transform);
                     _tileObjects[idx].name = $"Tile_{col}_{row}";
@@ -387,6 +452,12 @@ static readonly Vector3[][] _lanePathWaypoints =
                     {
                         AudioManager.I?.Play(AudioManager.SFX.BuildTower, 0.8f);
                         ApplyDebuffTint(_tileObjects[idx], tc.debuffed);
+
+                        // Scale tower based on its level (level 1 = small, grows with each level)
+                        int   towerLevel     = Mathf.Max(1, tc.level);
+                        float towerBaseScale = Registry != null ? Registry.GetScaleForSkin(wantedType, null) : 1f;
+                        float towerScale     = towerBaseScale * GetLevelScale(towerLevel);
+                        _tileObjects[idx].transform.localScale = Vector3.one * towerScale;
 
                         // Cache animator for attack triggers
                         var towerAnim = _tileObjects[idx].GetComponentInChildren<Animator>();
@@ -398,9 +469,12 @@ static readonly Vector3[][] _lanePathWaypoints =
                         if (HpBarPrefab != null)
                         {
                             var bar  = Instantiate(HpBarPrefab, _tileObjects[idx].transform);
-                            bar.transform.localPosition = Vector3.up * (TowerSpawnYOffset + 0.8f);
+                            // Keep bar at a fixed world-space height above tile regardless of tower scale
+                            const float worldBarHeight = 1.34f;
+                            bar.transform.localPosition = Vector3.up * (worldBarHeight / towerScale);
                             var fill = bar.transform.Find("Fill");
                             if (fill != null) _towerHpFills[idx] = fill;
+                            AddHpBarNotches(bar.transform, towerLevel);
                         }
                     }
                     else if (wanted == "dead_tower")
@@ -511,15 +585,26 @@ static readonly Vector3[][] _lanePathWaypoints =
         {
             if (!IsInteractive) return;
 
-            // Gate: placement only valid during build phase
             var snap = SnapshotApplier.Instance?.LatestML;
             Debug.Log($"[TileGrid] tap ({col},{row}) roundState={snap?.roundState ?? "NULL"} snapNull={snap == null}");
-            if (snap == null || snap.roundState != "build") return;
+            if (snap == null) return;
 
             int idx = row * Cols + col;
 
-            // Dead defenders: not buildable until next build phase
+            // Dead defenders: not selectable until next build phase
             if (_tileTypes[idx] == "dead_tower") return;
+
+            // Tower tile: upgrade/sell menu is always accessible (server allows upgrades any phase)
+            // Also handle mobilized towers (unit walked out during combat — tile looks like floor
+            // but defender still exists and can be upgraded/sold).
+            if (_tileTypes[idx] == "tower" || _tileTypes[idx] == "tower_mobilized")
+            {
+                TileMenu?.Show(col, row, "tower", _towerTypes[idx]);
+                return;
+            }
+
+            // Placement on empty tiles only valid during build phase
+            if (snap.roundState != "build") return;
 
             // Path endpoints (spawn / castle): never buildable
             if (snap.lanes != null && LaneIndex < snap.lanes.Length)
@@ -532,13 +617,6 @@ static readonly Vector3[][] _lanePathWaypoints =
                     if ((col == spawn.x  && row == spawn.y) ||
                         (col == castle.x && row == castle.y)) return;
                 }
-            }
-
-            // Tower tile: open upgrade/sell menu
-            if (_tileTypes[idx] == "tower")
-            {
-                TileMenu?.Show(col, row, "tower", _towerTypes[idx]);
-                return;
             }
 
             // Empty floor tile: open unit placement picker
@@ -559,10 +637,10 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             Vector3 hit = ray.GetPoint(enter);
 
-            if (_currentLaneIndex >= 0 && _currentLaneIndex < _branchConfigs.Length)
+            if (_currentBranchCfg >= 0 && _currentBranchCfg < _branchConfigs.Length)
             {
                 // Project hit onto branch local axes via dot product
-                var bc  = _branchConfigs[_currentLaneIndex];
+                var bc  = _branchConfigs[_currentBranchCfg];
                 var loc = hit - bc.origin;
                 col = Mathf.RoundToInt(Vector3.Dot(loc, bc.colDir) / TileW);
                 row = Mathf.RoundToInt(Vector3.Dot(loc, bc.rowDir) / TileH);
@@ -622,6 +700,37 @@ static readonly Vector3[][] _lanePathWaypoints =
             foreach (var s in s_attackStates)
                 if (anim.HasState(0, Animator.StringToHash(s)))
                 { anim.CrossFade(s, 0.05f, 0, 0); return; }
+        }
+
+        // ── Level helpers (mirrors LaneRenderer) ─────────────────────────────
+
+        static float GetLevelScale(int level)
+        {
+            int lvl = Mathf.Clamp(level, 1, 10);
+            return 1.55f + lvl * 0.10f;  // 1→1.65, 2→1.75, 3→1.85, 4→1.95 …
+        }
+
+        static void AddHpBarNotches(Transform barRoot, int level)
+        {
+            if (level <= 1) return;
+
+            for (int i = 1; i < level; i++)
+            {
+                float xPos = (float)i / level - 0.5f;
+
+                var notch = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                notch.name = "Notch";
+                notch.transform.SetParent(barRoot, false);
+                notch.transform.localPosition = new Vector3(xPos, 0f, -0.009f);
+                notch.transform.localScale    = new Vector3(0.018f, 0.14f, 0.07f);
+
+                var col = notch.GetComponent<Collider>();
+                if (col != null) Object.Destroy(col);
+
+                var rend = notch.GetComponent<Renderer>();
+                if (rend != null)
+                    rend.material.color = new Color(0.04f, 0.04f, 0.04f, 1f);
+            }
         }
 
     }

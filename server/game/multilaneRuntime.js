@@ -19,6 +19,7 @@ async function loadDefaultWaveConfig(db) {
 function createMultilaneRuntime({
   aiRuntime,
   db,
+  getAllUnitTypes,
   disconnectGrace,
   generateCode,
   gamesByRoomId,
@@ -193,7 +194,76 @@ function createMultilaneRuntime({
     return 'multilane';
   }
 
-  function startMLGame(roomId, code) {
+  // ── Loadout-phase helpers ────────────────────────────────────────────────
+
+  // Returns the full sendable unit catalog (same shape as loadoutEntry()).
+  function buildAvailableUnits() {
+    return getAllUnitTypes()
+      .filter(ut => ut && ut.enabled && Number(ut.send_cost) > 0)
+      .map(ut => ({
+        id:            ut.id,
+        key:           ut.key,
+        name:          ut.name,
+        send_cost:     Number(ut.send_cost)     || 0,
+        hp:            Number(ut.hp)            || 0,
+        attack_damage: Number(ut.attack_damage) || 0,
+        path_speed:    Number(ut.path_speed)    || 0,
+        income:        Number(ut.income)        || 0,
+        damage_type:   ut.damage_type  || "NORMAL",
+        armor_type:    ut.armor_type   || "UNARMORED",
+      }));
+  }
+
+  // Waits for all human players to emit ml_loadout_confirm, or until timeoutMs.
+  // Stores confirmed unit-type-ID arrays on sock.pendingUnitTypeIds so the
+  // existing resolveLoadout() call picks them up as inline selections.
+  // Emits ml_loadout_phase_end to the room when done.
+  function waitForLoadoutConfirms(room, roomId, timeoutMs) {
+    const humanSockets = room.players
+      .map(sid => io.sockets.sockets.get(sid))
+      .filter(Boolean);
+    if (humanSockets.length === 0) return Promise.resolve();
+
+    return new Promise(resolve => {
+      let resolved = false;
+      const handlers = new Map(); // sock → listener fn
+
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        room._loadoutPhaseResolve  = null;
+        room._loadoutPhaseDeadline = null;
+        for (const [sock, fn] of handlers) sock.removeListener("ml_loadout_confirm", fn);
+        io.to(roomId).emit("ml_loadout_phase_end", {
+          code:   room.code || "",
+          reason: reason || "all_confirmed",
+        });
+        resolve();
+      };
+
+      room._loadoutPhaseResolve  = () => done("all_confirmed");
+      room._loadoutPhaseDeadline = Date.now() + timeoutMs;
+
+      for (const sock of humanSockets) {
+        const fn = (data) => {
+          const ids = Array.isArray(data && data.unitTypeIds) ? data.unitTypeIds : null;
+          if (!ids || ids.length !== 5) return;
+          sock.pendingUnitTypeIds = ids.map(Number);
+          // Check if every human has now confirmed
+          const allDone = humanSockets.every(s => Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5);
+          if (allDone) done("all_confirmed");
+        };
+        handlers.set(sock, fn);
+        sock.on("ml_loadout_confirm", fn);
+      }
+
+      const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
+  async function startMLGame(roomId, code) {
     if (gamesByRoomId.has(roomId)) return;
     const room = mlRoomsByCode.get(code);
     if (!room) return;
@@ -263,8 +333,54 @@ function createMultilaneRuntime({
     });
     io.to(roomId).emit("ml_match_config", publicConfig);
 
+    // ── EARLY GAME ENTRY: register before loadout so rejoin_game works during scene transition ──
+    const playerSnapshot = room.players
+      .map((sid) => {
+        const sock = io.sockets.sockets.get(sid);
+        return sock?.playerId ? { playerId: sock.playerId, laneIndex: room.laneBySocketId.get(sid) } : null;
+      })
+      .filter(Boolean);
+    const dbMode = _bucketToDbMode(room.queueMode);
+    const eliminatedNotified = new Set();
+    const snapshotEveryNTicks = 2;
+    const gameEntry = {
+      game,
+      tickHandle: null,
+      mode: "multilane",
+      snapshotEveryNTicks,
+      eliminatedNotified,
+      botController: null,
+      matchIdPromise: null,
+      playerSnapshot,
+      dbMode,
+      partyASize: room.partyASize || 1,
+    };
+    gamesByRoomId.set(roomId, gameEntry);
+    for (const sid of room.players) {
+      const sock = io.sockets.sockets.get(sid);
+      if (!sock) continue;
+      const laneIdx = room.laneBySocketId.get(sid);
+      const token = issueReconnectToken(roomId, code, "multilane", String(laneIdx), sock);
+      sock.emit("reconnect_token", { token, gracePeriodMs: RECONNECT_GRACE_MS });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── LOADOUT SELECTION PHASE ──────────────────────────────────────────
+    const selectionMode = (room.settings && room.settings.selectionMode) || "manual";
+    room.loadoutConfirms = new Map();
+    io.to(roomId).emit("ml_loadout_phase_start", {
+      code,
+      timeoutSeconds: 25,
+      selectionMode,
+      availableUnits: buildAvailableUnits(),
+    });
+    if (selectionMode !== "random") {
+      await waitForLoadoutConfirms(room, roomId, 25_000);
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     if (!room.loadoutByLane) room.loadoutByLane = [];
-    Promise.all([
+    await Promise.all([
       ...room.players.map(async (sid) => {
         const sock = io.sockets.sockets.get(sid);
         if (!sock) return;
@@ -305,6 +421,7 @@ function createMultilaneRuntime({
         }
       }),
     ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
+    // ticks begin only after all loadouts are resolved (await above ensures this)
 
     const botController = aiList.length > 0
       ? aiRuntime.createBotController({
@@ -329,18 +446,10 @@ function createMultilaneRuntime({
       });
     }
 
-    const playerSnapshot = room.players
-      .map((sid) => {
-        const sock = io.sockets.sockets.get(sid);
-        return sock?.playerId ? { playerId: sock.playerId, laneIndex: room.laneBySocketId.get(sid) } : null;
-      })
-      .filter(Boolean);
-
-    const dbMode = _bucketToDbMode(room.queueMode);
-    const matchIdPromise = logMatchStart(roomId, dbMode);
-    const eliminatedNotified = new Set();
+    gameEntry.botController = botController;
+    gameEntry.matchIdPromise = logMatchStart(roomId, dbMode);
+    const matchIdPromise = gameEntry.matchIdPromise;
     let localTick = 0;
-    const snapshotEveryNTicks = 2; // 10 Hz at 20 Hz tick rate (was 10 = 2 Hz, too laggy)
 
     const tickHandle = setInterval(() => {
       const entry = gamesByRoomId.get(roomId);
@@ -404,7 +513,31 @@ function createMultilaneRuntime({
           }
         }
 
-        io.to(roomId).emit("ml_game_over", { winnerLaneIndex: winnerLane, winnerName });
+        const gameDurationSec = Math.round((Date.now() - (entry.game.startedAt || Date.now())) / 1000);
+        const finalStats = entry.game.lanes.map(lane => {
+          const sid = room.players.find(s => room.laneBySocketId.get(s) === lane.laneIndex);
+          const ai  = (room.aiPlayers || []).find(a => a.laneIndex === lane.laneIndex);
+          const displayName = sid ? (room.playerNames.get(sid) || "Player")
+                            : ai  ? `CPU (${capFirst(ai.difficulty)})` : "Player";
+          return {
+            laneIndex: lane.laneIndex, displayName, team: lane.team, side: lane.side,
+            income: lane.income,
+            buildValue: simMl.getLaneBuildValue(lane),
+            gold: Math.floor(lane.gold),
+            totalSendSpend: lane.totalSendSpend,
+            totalLeaksTaken: lane.totalLeaksTaken,
+            lives: lane.lives,
+            teamHp: entry.game.teamHp[lane.side],
+            eliminated: lane.eliminated,
+          };
+        });
+        io.to(roomId).emit("ml_game_over", {
+          winnerLaneIndex: winnerLane, winnerName,
+          gameDuration: gameDurationSec,
+          causeLoss: "Lives reduced to 0",
+          finalStats,
+          waveSnapshots: entry.game.roundSnapshots,
+        });
         const snapshots = entry.playerSnapshot.map((player) => ({
           ...player,
           result: winnerLane === null
@@ -420,6 +553,14 @@ function createMultilaneRuntime({
             if (matchId) db.query(
               'UPDATE matches SET combat_log=$1 WHERE id=$2',
               [JSON.stringify(entry.combatEvents), matchId]
+            ).catch(() => {});
+          });
+        }
+        if (db && entry.game.roundSnapshots && entry.game.roundSnapshots.length > 0) {
+          Promise.resolve(entry.matchIdPromise).then(matchId => {
+            if (matchId) db.query(
+              'UPDATE matches SET wave_stats=$1 WHERE id=$2',
+              [JSON.stringify(entry.game.roundSnapshots), matchId]
             ).catch(() => {});
           });
         }
@@ -462,27 +603,7 @@ function createMultilaneRuntime({
       }
     }, simMl.TICK_MS);
 
-    gamesByRoomId.set(roomId, {
-      game,
-      tickHandle,
-      mode: "multilane",
-      snapshotEveryNTicks,
-      eliminatedNotified,
-      botController,
-      matchIdPromise,
-      playerSnapshot,
-      dbMode,
-      partyASize: room.partyASize || 1,
-    });
-
-    for (const sid of room.players) {
-      const sock = io.sockets.sockets.get(sid);
-      if (!sock) continue;
-      const laneIdx = room.laneBySocketId.get(sid);
-      const token = issueReconnectToken(roomId, code, "multilane", String(laneIdx), sock);
-      sock.emit("reconnect_token", { token, gracePeriodMs: RECONNECT_GRACE_MS });
-    }
-
+    gameEntry.tickHandle = tickHandle;
     log.info(`[ml-game] started ${roomId}`);
   }
 
@@ -508,6 +629,7 @@ function createMultilaneRuntime({
   }
   return {
     applyMultilaneAction,
+    buildAvailableUnits,
     capFirst,
     countMlTeams,
     createMLRoom,

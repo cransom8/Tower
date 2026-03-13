@@ -105,11 +105,32 @@ namespace CastleDefender.Net
     [Serializable]
     public class LoadoutEntry
     {
+        public int    id;           // DB primary key — required by ml_loadout_confirm
         public string key;          // "runner"|"footman"|etc.
         public string name;         // display name
         public int    send_cost;    // gold cost to send
         public int    hp;
         public float  path_speed;
+        public float  income;        // gold-per-wave income bonus
+        public float  attack_damage;
+    }
+
+    // ─── Loadout Selection Phase ──────────────────────────────────────────────
+
+    [Serializable]
+    public class MLLoadoutPhaseStartPayload
+    {
+        public string         code;
+        public int            timeoutSeconds;   // countdown (25)
+        public string         selectionMode;    // "manual" | "random"
+        public LoadoutEntry[] availableUnits;   // full sendable catalog
+    }
+
+    [Serializable]
+    public class MLLoadoutPhaseEndPayload
+    {
+        public string code;
+        public string reason;   // "all_confirmed" | "timeout"
     }
 
     [Serializable]
@@ -229,6 +250,7 @@ namespace CastleDefender.Net
         public int            lives;
         public int            barracksLevel;
         public MLTowerCell[]  towerCells;      // active defender tiles
+        public MLTowerCell[]  mobilizedCells;  // mobilized during combat — render as floor but selectable for upgrade/sell
         public MLDeadCell[]   deadCells;       // dead defender tiles (inactive until next build phase)
         public MLGridPos[]    path;            // wave path as [{x,y}] array
         public MLUnit[]       units;
@@ -311,6 +333,7 @@ namespace CastleDefender.Net
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
         public bool   isDefender;   // true = mobile defender unit
         public bool   isAttacking;  // true when unit has a combat target (stops advancing)
+        public int    level;        // barracks level (1–4 for player units, 1 for wave units)
     }
 
     [Serializable]
@@ -387,10 +410,55 @@ namespace CastleDefender.Net
     // ML uses event "ml_game_over"; Classic uses "game_over".
 
     [Serializable]
+    public class MLFinalLaneStat
+    {
+        public int    laneIndex;
+        public string displayName;
+        public string team;
+        public string side;
+        public float  income;
+        public float  buildValue;
+        public int    gold;
+        public float  totalSendSpend;
+        public int    totalLeaksTaken;
+        public int    lives;
+        public int    teamHp;
+        public bool   eliminated;
+    }
+
+    [Serializable]
+    public class MLWaveLaneStat
+    {
+        public int   laneIndex;
+        public float income;
+        public float buildValue;
+        public int   gold;
+        public int   leaksTaken;
+        public float sendSpend;
+        public int   lives;
+        public int   teamHp;
+        public bool  eliminated;
+    }
+
+    [Serializable]
+    public class MLWaveSnapshot
+    {
+        public int              round;
+        public bool             terminal;
+        public MLWaveLaneStat[] lanes;
+    }
+
+    [Serializable]
     public class MLGameOverPayload
     {
         public int    winnerLaneIndex;
         public string winnerName;
+        // Phase 1 additions
+        public int    gameDuration;
+        public string causeLoss;
+        public MLFinalLaneStat[] finalStats;
+        // Phase 2 additions
+        public MLWaveSnapshot[]  waveSnapshots;
     }
 
     [Serializable]

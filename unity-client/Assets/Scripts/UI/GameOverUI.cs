@@ -24,6 +24,7 @@ namespace CastleDefender.UI
 {
     public class GameOverUI : MonoBehaviour
     {
+        private MLGameOverPayload _lastPayload;
         public GameObject PanelGameOver;
         public TMP_Text   TxtResult;
         public Button     BtnRematch;
@@ -33,6 +34,13 @@ namespace CastleDefender.UI
         [Header("Rating Panel (Phase U8 — ranked only)")]
         public GameObject Panel_Rating;
         public TMP_Text   Txt_Rating;
+
+        [Header("Phase 1 additions")]
+        public TMP_Text Txt_CauseLoss;
+        public TMP_Text Txt_Duration;
+        [Header("Stats Panel")]
+        public Button             BtnStats;
+        public PostGameStatsPanel StatsPanel;
 
         void OnEnable()
         {
@@ -62,15 +70,24 @@ namespace CastleDefender.UI
         {
             PanelGameOver.SetActive(false);
             if (Panel_Rating != null) Panel_Rating.SetActive(false);
+            if (BtnStats != null) BtnStats.gameObject.SetActive(false);
             BtnRematch.onClick.AddListener(OnRematch);
             BtnLobby.onClick.AddListener(OnLobby);
+            if (BtnStats != null && StatsPanel != null)
+                BtnStats.onClick.AddListener(() => StatsPanel.Show(_lastPayload));
         }
 
         // ─────────────────────────────────────────────────────────────────────
         void HandleMLGameOver(MLGameOverPayload p)
         {
+            _lastPayload = p;
             bool isWinner = p.winnerLaneIndex == SnapshotApplier.Instance.MyLaneIndex;
             ShowPanel(isWinner);
+            if (Txt_CauseLoss != null) Txt_CauseLoss.text = p.causeLoss ?? "";
+            if (Txt_Duration != null)
+                Txt_Duration.text = $"{p.gameDuration / 60}m {p.gameDuration % 60}s";
+            if (BtnStats != null)
+                BtnStats.gameObject.SetActive(p.waveSnapshots != null && p.waveSnapshots.Length > 0);
         }
 
         void HandleClassicGameOver(ClassicGameOverPayload p)
