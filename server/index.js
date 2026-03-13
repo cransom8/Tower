@@ -36,10 +36,10 @@ const { createRuntimeState } = require("./state/runtimeState");
 
 let aiRuntime;
 try {
-  aiRuntime = require("../ai/sim_runner");
+  aiRuntime = require("./ai/sim_runner");
 } catch (_err) {
   try {
-    aiRuntime = require("./ai/sim_runner");
+    aiRuntime = require("../ai/sim_runner");
   } catch (_err2) {
     const legacyAi = require("./ai");
     aiRuntime = {
@@ -225,17 +225,54 @@ app.get("/api/unit-types", async (_req, res) => {
   res.json({ unitTypes: all, displayFields });
 });
 
-// Web app client (root route)
-const clientDirCandidates = [
-  path.join(__dirname, "..", "client"),
-  path.join(__dirname, "client"),
-];
-const clientDir = clientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "index.html"))) || clientDirCandidates[0];
-log.info("static dir resolved", { clientDir });
+app.get("/api/barracks-levels", async (_req, res) => {
+  if (!db) return res.json([]);
+  try {
+    const rows = await db.query(
+      `SELECT level, multiplier, upgrade_cost, notes
+         FROM barracks_levels
+        ORDER BY level`
+    );
+    res.json(rows.rows);
+  } catch (err) {
+    log.error("[api] GET /api/barracks-levels error", { err: err.message });
+    res.json([]);
+  }
+});
 
-// Unity WebGL build lives at server/client/ — always use this fixed path for /client route.
-const unityClientDir = path.join(__dirname, "client");
+const unityClientDirCandidates = [
+  path.join(__dirname, "unity-client"),
+  path.join(__dirname, "client_backup_20260307_002446"),
+  path.join(__dirname, "client_backup_20260306_235052"),
+];
+
+const adminClientDirCandidates = [
+  path.join(__dirname, "..", "admin-client"),
+  path.join(__dirname, "admin-client"),
+  path.join(__dirname, "client_backup_20260306_233552"),
+];
+
+const adminAssetDirCandidates = [
+  path.join(__dirname, "..", "admin-client", "assets"),
+  path.join(__dirname, "admin-client", "assets"),
+  path.join(__dirname, "client_backup_20260306_233552", "assets"),
+];
+
+// Unity WebGL build is served from the dedicated Unity client path.
+const unityClientDir =
+  unityClientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "index.html"))) ||
+  unityClientDirCandidates[0];
 log.info("unity client dir", { unityClientDir });
+
+const adminClientDir =
+  adminClientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "admin.html"))) ||
+  adminClientDirCandidates[0];
+log.info("admin client dir", { adminClientDir });
+
+const adminAssetDir =
+  adminAssetDirCandidates.find((dir) => fs.existsSync(dir)) ||
+  adminAssetDirCandidates[0];
+log.info("admin asset dir", { adminAssetDir });
 
 // Unity WebGL Brotli middleware — must run BEFORE express.static.
 // Unity builds output .js.br / .wasm.br / .data.br files that need
@@ -269,11 +306,20 @@ function unityWebGLMiddleware(baseDir) {
   };
 }
 
-app.use(express.static(clientDir));
-app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir));
+app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
+app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
+app.use("/assets", express.static(adminAssetDir, { index: false }));
 
-function sendClientFile(res, filename) {
-  const candidate = [clientDir, ...clientDirCandidates]
+function sendUnityClientFile(res, filename) {
+  const candidate = [unityClientDir, ...unityClientDirCandidates]
+    .map((dir) => path.join(dir, filename))
+    .find((filePath) => fs.existsSync(filePath));
+  if (candidate) return res.sendFile(candidate);
+  return res.status(404).json({ error: `${filename} not found` });
+}
+
+function sendAdminClientFile(res, filename) {
+  const candidate = [adminClientDir, ...adminClientDirCandidates]
     .map((dir) => path.join(dir, filename))
     .find((filePath) => fs.existsSync(filePath));
   if (candidate) return res.sendFile(candidate);
@@ -296,7 +342,7 @@ const runtimeState = createRuntimeState(app);
 const generateCode = createCodeGenerator();
 const { checkLobbyRateLimit, checkActionRateLimit } = createRateLimiters(runtimeState);
 const { issueReconnectToken, verifyReconnectToken } = createReconnectTokenHelpers(process.env.JWT_SECRET);
-const { resolveLoadout, validateLoadoutSelection } = createLoadoutHelpers({ db, unitTypes });
+const { resolveLoadout, validateLoadoutSelection, hasValidInlineLoadoutIds } = createLoadoutHelpers({ db, unitTypes });
 const { logMatchStart, logMatchEnd } = createMatchPersistence({ db, log });
 
 installSocketAuth(io, {
@@ -309,6 +355,7 @@ installSocketAuth(io, {
 const multilaneRuntime = createMultilaneRuntime({
   aiRuntime,
   db,
+  getAllUnitTypes: unitTypes.getAllUnitTypes,
   disconnectGrace: runtimeState.disconnectGrace,
   generateCode,
   gamesByRoomId: runtimeState.gamesByRoomId,
@@ -355,6 +402,9 @@ const { onMatchFound } = registerSocketHandlers({
   sessionBySocketId: runtimeState.sessionBySocketId,
   simMl,
   socketByPlayerId: runtimeState.socketByPlayerId,
+  buildAvailableUnits: multilaneRuntime.buildAvailableUnits,
+  buildRematchStatus: multilaneRuntime.buildRematchStatus,
+  hasValidInlineLoadoutIds,
   startMLGame: multilaneRuntime.startMLGame,
   stopMLGame: multilaneRuntime.stopMLGame,
   validateLoadoutSelection,
@@ -389,12 +439,16 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
   return true;
 };
 
-app.get("/", (_req, res) => sendClientFile(res, "index.html"));
-app.get("/admin", (_req, res) => sendClientFile(res, "admin.html"));
-app.get("/terms", (_req, res) => sendClientFile(res, "terms.html"));
-app.get("/privacy", (_req, res) => sendClientFile(res, "privacy.html"));
-app.get("/terms-of-service", (_req, res) => res.redirect(302, "/terms"));
-app.get("/privacy-policy", (_req, res) => res.redirect(302, "/privacy"));
+app.get("/", (_req, res) => sendUnityClientFile(res, "index.html"));
+app.get("/admin", (_req, res) => sendAdminClientFile(res, "admin.html"));
+app.get("/admin.html", (_req, res) => sendAdminClientFile(res, "admin.html"));
+app.get("/admin.css", (_req, res) => sendAdminClientFile(res, "admin.css"));
+app.get("/admin.js", (_req, res) => sendAdminClientFile(res, "admin.js"));
+app.get("/render/assets.js", (_req, res) => sendAdminClientFile(res, path.join("render", "assets.js")));
+app.get("/terms", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
+app.get("/privacy", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
+app.get("/terms-of-service", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
+app.get("/privacy-policy", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
 
 app.get("/health", async (_req, res) => {
   if (process.env.DATABASE_URL) {

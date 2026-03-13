@@ -26,6 +26,13 @@ namespace CastleDefender.UI
         public TMP_Text TxtGold;
         public TMP_Text TxtIncome;
         public TMP_Text TxtBarracksLv;
+        public TMP_Text TxtGoldTop;
+        public TMP_Text TxtIncomeTop;
+        public TMP_Text TxtWave;
+        public TMP_Text TxtPhase;
+        public TMP_Text TxtCountdown;
+        public TMP_Text TxtTeamHpLeft;
+        public TMP_Text TxtTeamHpRight;
 
         [Header("Income ring")]
         public Image ImgIncomeRing;
@@ -53,9 +60,12 @@ namespace CastleDefender.UI
         int      _prevLives    = -1;
         int      _prevBarracks = -1;
         bool     _branchLabelSet;
+        string   _playerSide;
         Coroutine _goldFlash;
         Coroutine _livesFlash;
         Coroutine _barracksFlash;
+
+        const int TickHz = 20;
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -85,10 +95,13 @@ namespace CastleDefender.UI
             var lane = SnapshotApplier.Instance?.MyLane;
             if (lane == null) return;
 
-            // Lives
-            if (lane.lives != _prevLives)
+            int displayHp = ResolveDisplayedHp(snap, lane);
+            int displayHpMax = ResolveDisplayedHpMax(snap, lane);
+
+            // HP
+            if (displayHp != _prevLives)
             {
-                TxtLives.text = $"HP: {lane.lives}";
+                TxtLives.text = displayHpMax > 0 ? $"HP: {displayHp}/{displayHpMax}" : $"HP: {displayHp}";
                 if (_prevLives >= 0)
                 {
                     if (_livesFlash != null) StopCoroutine(_livesFlash);
@@ -100,13 +113,14 @@ namespace CastleDefender.UI
                             FloatTextAnchor.position + Vector3.up * 0.5f,
                             FloatingText.Kind.LifeLoss);
                 }
-                _prevLives = lane.lives;
+                _prevLives = displayHp;
             }
 
             // Gold (flash border on change)
             if (Mathf.Abs(lane.gold - _prevGold) > 0.01f)
             {
-                TxtGold.text = $"G: {Mathf.FloorToInt(lane.gold)}";
+                TxtGold.text = $"Gold: {Mathf.FloorToInt(lane.gold)}";
+                if (TxtGoldTop != null) TxtGoldTop.text = $"Gold {Mathf.FloorToInt(lane.gold)}";
                 if (_prevGold >= 0f)
                 {
                     float delta = lane.gold - _prevGold;
@@ -130,11 +144,15 @@ namespace CastleDefender.UI
 
             // Income
             TxtIncome.text = $"Inc: {lane.income:0.0}";
+            if (TxtIncomeTop != null) TxtIncomeTop.text = $"Inc {lane.income:0.0}";
 
             // Income ring
             if (ImgIncomeRing != null && snap != null)
                 ImgIncomeRing.fillAmount =
                     1f - (float)snap.incomeTicksRemaining / IncomePeriodTicks;
+
+            if (snap != null)
+                UpdateMatchStats(snap);
 
             // Branch identity — set once when assignment data first arrives
             if (TxtBranchLabel != null && !_branchLabelSet)
@@ -161,7 +179,7 @@ namespace CastleDefender.UI
             // Barracks level
             if (lane.barracksLevel != _prevBarracks)
             {
-                TxtBarracksLv.text = $"Barracks Lv {lane.barracksLevel}";
+                TxtBarracksLv.text = $"Lv{lane.barracksLevel}";
                 if (_prevBarracks >= 0)
                 {
                     if (_barracksFlash != null) StopCoroutine(_barracksFlash);
@@ -200,6 +218,83 @@ namespace CastleDefender.UI
                 var lvRt = TxtBarracksLv.rectTransform;
                 lvRt.anchoredPosition = new Vector2(targetX - 95f, lvRt.anchoredPosition.y);
             }
+        }
+
+        void UpdateMatchStats(MLSnapshot snap)
+        {
+            if (_playerSide == null)
+            {
+                var sa = SnapshotApplier.Instance;
+                if (sa != null)
+                {
+                    var myLane = sa.MyLane;
+                    if (myLane != null)
+                        _playerSide = myLane.side;
+                }
+            }
+
+            if (TxtWave != null)
+                TxtWave.text = $"Wave {snap.roundNumber}";
+
+            if (TxtPhase != null)
+            {
+                TxtPhase.text = snap.roundState switch
+                {
+                    "build"      => "BUILD",
+                    "combat"     => "COMBAT",
+                    "transition" => "NEXT WAVE",
+                    _            => snap.roundState?.ToUpper() ?? ""
+                };
+            }
+
+            if (TxtCountdown != null)
+            {
+                int ticksLeft = snap.roundState == "build" && snap.buildPhaseTotal > 0
+                    ? (snap.buildPhaseTotal - snap.roundStateTicks)
+                    : snap.roundStateTicks;
+                int secs = Mathf.CeilToInt((float)ticksLeft / TickHz);
+                TxtCountdown.text = secs > 0 ? $"{secs}s" : "--";
+            }
+
+            var hp = snap.teamHp;
+            if (hp == null) return;
+
+            if (TxtTeamHpLeft != null)
+            {
+                TxtTeamHpLeft.text = $"Left Team {hp.left}";
+                TxtTeamHpLeft.color = _playerSide == "left"
+                    ? new Color(1f, 0.92f, 0.2f)
+                    : new Color(1f, 1f, 1f, 0.75f);
+            }
+
+            if (TxtTeamHpRight != null)
+            {
+                TxtTeamHpRight.text = $"Right Team {hp.right}";
+                TxtTeamHpRight.color = _playerSide == "right"
+                    ? new Color(1f, 0.92f, 0.2f)
+                    : new Color(1f, 1f, 1f, 0.75f);
+            }
+        }
+
+        int ResolveDisplayedHp(MLSnapshot snap, MLLaneSnap lane)
+        {
+            if (lane == null) return 0;
+            if (_playerSide == null && !string.IsNullOrWhiteSpace(lane.side))
+                _playerSide = lane.side;
+
+            var hp = snap?.teamHp;
+            if (hp != null)
+            {
+                if (_playerSide == "right") return hp.right;
+                if (_playerSide == "left") return hp.left;
+            }
+            return lane.lives;
+        }
+
+        int ResolveDisplayedHpMax(MLSnapshot snap, MLLaneSnap lane)
+        {
+            if (snap != null && snap.teamHpMax > 0) return snap.teamHpMax;
+            return lane != null ? Mathf.Max(lane.lives, 0) : 0;
         }
 
         // ── Coroutine helpers ─────────────────────────────────────────────────

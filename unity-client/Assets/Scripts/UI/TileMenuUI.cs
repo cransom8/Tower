@@ -14,6 +14,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 using CastleDefender.Net;
 using CastleDefender.Game;
@@ -47,7 +48,6 @@ namespace CastleDefender.UI
         // Fallback tower data (used until match config / catalog loads)
         static readonly string[] FallbackTowerKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
         static readonly int[]    FallbackTowerCosts  = {       8,    14,      16,        20,       22 };
-        static readonly int[]    UpgradeCostPerLevel = { 12, 18, 26, 36, 50, 65, 82, 100, 120 };
 
         // Catalog-driven (populated in ApplyCatalog)
         string[] _towerKeys;
@@ -58,6 +58,7 @@ namespace CastleDefender.UI
         string _towerType;
         bool   _initialized;
         Coroutine _scaleCoroutine;
+        int _shownFrame = -1;
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -77,9 +78,6 @@ namespace CastleDefender.UI
         {
             if (config?.loadout == null || config.loadout.Length == 0) return;
 
-            // Match loadout is authoritative — stop catalog from clobbering it.
-            CatalogLoader.OnCatalogReady -= ApplyCatalog;
-
             int count = Mathf.Min(config.loadout.Length, 5);
             _towerKeys  = new string[count];
             _towerCosts = new int[count];
@@ -87,43 +85,26 @@ namespace CastleDefender.UI
             {
                 var entry = config.loadout[i];
                 _towerKeys[i]  = entry.key;
-                // Prefer build_cost from unit catalog; fall back to send_cost
-                _towerCosts[i] = CatalogLoader.UnitByKey.TryGetValue(entry.key, out var ce)
-                    ? ce.build_cost : entry.send_cost;
+                _towerCosts[i] = entry.build_cost > 0
+                    ? entry.build_cost
+                    : GetKnownTowerCost(entry.key);
             }
 
-            // Re-wire buttons with the actual loadout keys and update visible labels
-            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
-            for (int i = 0; i < buttons.Length; i++)
-            {
-                if (buttons[i] == null) continue;
-                buttons[i].onClick.RemoveAllListeners();
-                if (i < count)
-                {
-                    // Update the button's text label
-                    var lbl = buttons[i].GetComponentInChildren<TMPro.TMP_Text>(true);
-                    if (lbl != null)
-                        lbl.text = $"{config.loadout[i].name}\n{_towerCosts[i]}g";
-
-                    int captured = i;
-                    buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
-                    buttons[i].gameObject.SetActive(true);
-                }
-                else
-                {
-                    buttons[i].gameObject.SetActive(false);
-                }
-            }
+            RefreshPlacementButtons(config.loadout);
+            ApplyTowerButtonIcons();
             Debug.Log($"[TileMenuUI] Match loadout applied — {count} tower types");
         }
 
         void ApplyCatalog()
         {
             CatalogLoader.OnCatalogReady -= ApplyCatalog;
-
-            // If the match loadout is already set, don't clobber it with catalog data.
-            // HandleMatchConfig will always set the authoritative keys for this match.
-            if (NetworkManager.Instance?.LastMatchLoadout?.Length > 0) return;
+            var cachedLoadout = NetworkManager.Instance?.LastMatchLoadout;
+            if (cachedLoadout != null && cachedLoadout.Length > 0)
+            {
+                BackfillTowerCostsFromCatalog(cachedLoadout);
+                RefreshPlacementButtons(cachedLoadout);
+                return;
+            }
 
             // Use unit-types catalog (behavior_mode='both' HF units) as the pre-match
             // fallback — NOT the old towers catalog which has retired classic keys.
@@ -138,29 +119,8 @@ namespace CastleDefender.UI
                 _towerCosts[i] = units.Count > 0 ? units[i].build_cost : FallbackTowerCosts[i];
             }
 
-            // Re-wire button listeners and update labels to use catalog keys
-            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
-            for (int i = 0; i < buttons.Length; i++)
-            {
-                if (buttons[i] == null) continue;
-                buttons[i].onClick.RemoveAllListeners();
-                if (i < count)
-                {
-                    var lbl = buttons[i].GetComponentInChildren<TMPro.TMP_Text>(true);
-                    if (lbl != null)
-                    {
-                        string name = units.Count > 0 ? units[i].name : _towerKeys[i];
-                        lbl.text = $"{name}\n{_towerCosts[i]}g";
-                    }
-                    int captured = i;
-                    buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
-                    buttons[i].gameObject.SetActive(true);
-                }
-                else
-                {
-                    buttons[i].gameObject.SetActive(false);
-                }
-            }
+            RefreshPlacementButtons(units.Count > 0 ? units.ToArray() : null);
+            ApplyTowerButtonIcons();
             Debug.Log($"[TileMenuUI] Catalog applied — {count} unit types (pre-match fallback)");
         }
 
@@ -168,6 +128,10 @@ namespace CastleDefender.UI
         {
             if (_initialized) return;
             _initialized = true;
+
+            EnsureEventSystem();
+            EnsureCanvasRaycaster();
+            EnsurePanelRaycastState();
 
             // Seed with fallback data immediately; catalog will override when ready
             _towerKeys  = (string[])FallbackTowerKeys.Clone();
@@ -211,20 +175,176 @@ namespace CastleDefender.UI
                 HandleMatchConfig(new MLMatchConfig { loadout = cachedLoadout });
         }
 
+        static void EnsureEventSystem()
+        {
+            var existing = EventSystem.current;
+            if (existing == null)
+            {
+                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
+            }
+
+            if (existing == null)
+            {
+                var go = new GameObject("GameplayEventSystem");
+                existing = go.AddComponent<EventSystem>();
+                go.AddComponent<StandaloneInputModule>();
+                Debug.Log("[TileMenuUI] Created fallback EventSystem for gameplay UI.");
+                return;
+            }
+
+            if (existing.GetComponent<BaseInputModule>() == null)
+            {
+                existing.gameObject.AddComponent<StandaloneInputModule>();
+                Debug.Log("[TileMenuUI] Added missing StandaloneInputModule to existing EventSystem.");
+            }
+        }
+
+        void EnsureCanvasRaycaster()
+        {
+            var canvas = GetComponentInParent<Canvas>(true);
+            if (canvas == null) return;
+
+            if (canvas.GetComponent<GraphicRaycaster>() == null)
+            {
+                canvas.gameObject.AddComponent<GraphicRaycaster>();
+                Debug.Log("[TileMenuUI] Added missing GraphicRaycaster to parent Canvas.");
+            }
+        }
+
+        void EnsurePanelRaycastState()
+        {
+            if (PanelTileMenu == null) return;
+
+            var panelImage = PanelTileMenu.GetComponent<Image>();
+            if (panelImage != null) panelImage.raycastTarget = true;
+
+            var canvasGroup = PanelTileMenu.GetComponent<CanvasGroup>();
+            if (canvasGroup == null) canvasGroup = PanelTileMenu.AddComponent<CanvasGroup>();
+            canvasGroup.interactable = true;
+            canvasGroup.blocksRaycasts = true;
+        }
+
         void ApplyTowerButtonIcons()
         {
-            if (TowerIcons == null || TowerIcons.Length == 0) return;
             var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
-            for (int i = 0; i < buttons.Length && i < TowerIcons.Length; i++)
-                ApplyIcon(buttons[i], TowerIcons[i]);
+            for (int i = 0; i < buttons.Length; i++)
+                ApplyIcon(buttons[i], ResolvePlacementSprite(i));
         }
 
         static void ApplyIcon(Button button, Sprite sprite)
         {
-            if (button == null || button.image == null || sprite == null) return;
-            button.image.sprite = sprite;
-            button.image.preserveAspect = true;
-            button.image.type = Image.Type.Simple;
+            if (button == null || sprite == null) return;
+            var target = button.transform.Find("Icon")?.GetComponent<Image>() ?? button.image;
+            if (target == null) return;
+            target.sprite = sprite;
+            target.preserveAspect = true;
+            target.type = Image.Type.Simple;
+            target.color = Color.white;
+        }
+
+        Sprite ResolvePlacementSprite(int index)
+        {
+            var cmdBar = FindFirstObjectByType<CastleDefender.UI.CmdBar>(FindObjectsInactive.Include);
+            if (cmdBar != null)
+            {
+                if (cmdBar.UnitButtons != null && index < cmdBar.UnitButtons.Length && cmdBar.UnitButtons[index] != null)
+                {
+                    var liveIcon = cmdBar.UnitButtons[index].transform.Find("Icon")?.GetComponent<Image>();
+                    if (liveIcon != null && liveIcon.sprite != null) return liveIcon.sprite;
+                    if (cmdBar.UnitButtons[index].image != null && cmdBar.UnitButtons[index].image.sprite != null)
+                        return cmdBar.UnitButtons[index].image.sprite;
+                }
+
+                if (cmdBar.UnitIcons != null && index < cmdBar.UnitIcons.Length && cmdBar.UnitIcons[index] != null)
+                    return cmdBar.UnitIcons[index];
+            }
+
+            return TowerIcons != null && index < TowerIcons.Length ? TowerIcons[index] : null;
+        }
+
+        void RefreshPlacementButtons(UnitCatalogEntry[] catalogEntries)
+        {
+            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i] == null) continue;
+                buttons[i].onClick.RemoveAllListeners();
+                if (_towerKeys == null || i >= _towerKeys.Length)
+                {
+                    buttons[i].gameObject.SetActive(false);
+                    continue;
+                }
+
+                string key = _towerKeys[i];
+                string name = key;
+                int cost = i < _towerCosts.Length ? _towerCosts[i] : 0;
+
+                if (catalogEntries != null && i < catalogEntries.Length && catalogEntries[i] != null)
+                {
+                    name = catalogEntries[i].name;
+                    if (cost <= 0) cost = catalogEntries[i].build_cost;
+                }
+                else if (CatalogLoader.UnitByKey.TryGetValue(key, out var catalogUnit))
+                {
+                    name = catalogUnit.name;
+                    if (cost <= 0) cost = catalogUnit.build_cost;
+                }
+
+                _towerCosts[i] = cost;
+
+                var lbl = buttons[i].GetComponentInChildren<TMP_Text>(true);
+                if (lbl != null)
+                    lbl.text = $"{name}\n{cost}g";
+
+                int captured = i;
+                buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
+                buttons[i].gameObject.SetActive(true);
+            }
+        }
+
+        void RefreshPlacementButtons(LoadoutEntry[] loadoutEntries)
+        {
+            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i] == null) continue;
+                buttons[i].onClick.RemoveAllListeners();
+                if (_towerKeys == null || i >= _towerKeys.Length || loadoutEntries == null || i >= loadoutEntries.Length)
+                {
+                    buttons[i].gameObject.SetActive(false);
+                    continue;
+                }
+
+                int cost = i < _towerCosts.Length ? _towerCosts[i] : 0;
+                if (cost <= 0 && CatalogLoader.UnitByKey.TryGetValue(loadoutEntries[i].key, out var catalogUnit))
+                    cost = catalogUnit.build_cost;
+
+                _towerCosts[i] = cost;
+
+                var lbl = buttons[i].GetComponentInChildren<TMP_Text>(true);
+                if (lbl != null)
+                    lbl.text = $"{loadoutEntries[i].name}\n{cost}g";
+
+                int captured = i;
+                buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
+                buttons[i].gameObject.SetActive(true);
+            }
+        }
+
+        void BackfillTowerCostsFromCatalog(LoadoutEntry[] loadoutEntries)
+        {
+            if (loadoutEntries == null || _towerKeys == null || _towerCosts == null) return;
+            for (int i = 0; i < loadoutEntries.Length && i < _towerKeys.Length && i < _towerCosts.Length; i++)
+            {
+                if (_towerCosts[i] > 0) continue;
+                if (loadoutEntries[i].build_cost > 0)
+                {
+                    _towerCosts[i] = loadoutEntries[i].build_cost;
+                    continue;
+                }
+                if (CatalogLoader.UnitByKey.TryGetValue(loadoutEntries[i].key, out var unit))
+                    _towerCosts[i] = unit.build_cost;
+            }
         }
 
         void Update()
@@ -243,14 +363,14 @@ namespace CastleDefender.UI
 
             if (_tileType == "tower")
             {
-                int cost = UpgradeCostEstimate();
+                int lvl  = GetTowerLevel(_col, _row);
+                int cost = UpgradeCostEstimate(lvl);
                 BtnUpgrade.interactable = gold >= cost;
                 if (TxtUpgradeCost != null)
-                {
-                    int lvl = GetTowerLevel(_col, _row);
-                    TxtUpgradeCost.text = $"↑  Lv {lvl} → {lvl + 1}   ({cost}g)";
-                }
+                    TxtUpgradeCost.text = BuildUpgradeLabel(lvl, cost);
             }
+
+            HandlePointerFallback();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -280,16 +400,15 @@ namespace CastleDefender.UI
 
             if (isTower)
             {
-                int lvl = GetTowerLevel(col, row);
-                int nextLvl = lvl + 1;
-                int cost = UpgradeCostEstimate();
-                TxtTileInfo.text = $"{Capitalize(towerType)}  Lv {lvl}";
+                int lvl  = GetTowerLevel(col, row);
+                int cost = UpgradeCostEstimate(lvl);
+                TxtTileInfo.text = $"{Capitalize(towerType)}  Lv {lvl}  [{col},{row}]";
                 if (TxtUpgradeCost != null)
-                    TxtUpgradeCost.text = $"↑  Lv {lvl} → {nextLvl}   ({cost}g)";
+                    TxtUpgradeCost.text = BuildUpgradeLabel(lvl, cost);
             }
             else
             {
-                TxtTileInfo.text = $"Place unit ({col},{row})";
+                TxtTileInfo.text = $"Place unit  [{col},{row}]";
             }
 
             HLayoutTowerButtons.SetActive(isEmpty);
@@ -297,6 +416,7 @@ namespace CastleDefender.UI
             BtnRemove.gameObject.SetActive(isTower);
 
             PanelTileMenu.SetActive(true);
+            _shownFrame = Time.frameCount;
             if (isActiveAndEnabled)
             {
                 if (_scaleCoroutine != null) StopCoroutine(_scaleCoroutine);
@@ -321,6 +441,73 @@ namespace CastleDefender.UI
             {
                 PanelTileMenu.SetActive(false);
             }
+        }
+
+        void HandlePointerFallback()
+        {
+            if (Time.frameCount == _shownFrame) return;
+
+            if (Input.GetMouseButtonUp(0))
+            {
+                if (TryHandlePointerAt(Input.mousePosition)) return;
+            }
+
+            if (Input.touchCount > 0)
+            {
+                for (int i = 0; i < Input.touchCount; i++)
+                {
+                    var touch = Input.GetTouch(i);
+                    if (touch.phase == TouchPhase.Ended)
+                    {
+                        if (TryHandlePointerAt(touch.position)) return;
+                    }
+                }
+            }
+        }
+
+        bool TryHandlePointerAt(Vector2 screenPos)
+        {
+            Camera eventCam = GetEventCamera();
+
+            if (_tileType == "tower" && BtnUpgrade != null && BtnUpgrade.gameObject.activeInHierarchy
+                && RectContainsScreenPoint(BtnUpgrade.transform as RectTransform, screenPos, eventCam))
+            {
+                if (BtnUpgrade.interactable)
+                {
+                    Debug.Log($"[TileMenuUI] Fallback upgrade click at ({_col},{_row}) tower={_towerType}");
+                    OnUpgrade();
+                }
+                return true;
+            }
+
+            if (_tileType == "tower" && BtnRemove != null && BtnRemove.gameObject.activeInHierarchy
+                && RectContainsScreenPoint(BtnRemove.transform as RectTransform, screenPos, eventCam))
+            {
+                if (BtnRemove.interactable) OnRemove();
+                return true;
+            }
+
+            if (BtnClose != null && BtnClose.gameObject.activeInHierarchy
+                && RectContainsScreenPoint(BtnClose.transform as RectTransform, screenPos, eventCam))
+            {
+                Close();
+                return true;
+            }
+
+            return false;
+        }
+
+        Camera GetEventCamera()
+        {
+            var canvas = GetComponentInParent<Canvas>(true);
+            if (canvas == null) return Camera.main;
+            if (canvas.renderMode == RenderMode.ScreenSpaceOverlay) return null;
+            return canvas.worldCamera != null ? canvas.worldCamera : Camera.main;
+        }
+
+        static bool RectContainsScreenPoint(RectTransform rt, Vector2 screenPos, Camera eventCam)
+        {
+            return rt != null && RectTransformUtility.RectangleContainsScreenPoint(rt, screenPos, eventCam);
         }
 
         void PositionMenuNearTile(int col, int row)
@@ -373,23 +560,63 @@ namespace CastleDefender.UI
         int GetTowerLevel(int col, int row)
         {
             var lane = SnapshotApplier.Instance?.ViewedLane;
-            if (lane?.towerCells == null) return 1;
-            foreach (var t in lane.towerCells)
-                if (t.X == col && t.Y == row) return Mathf.Max(1, t.level);
+            if (lane == null) return 1;
+            if (lane.towerCells != null)
+                foreach (var t in lane.towerCells)
+                    if (t.X == col && t.Y == row) return Mathf.Max(1, t.level);
+            // Defender may be mobilized during combat — check mobilizedCells too
+            if (lane.mobilizedCells != null)
+                foreach (var t in lane.mobilizedCells)
+                    if (t.X == col && t.Y == row) return Mathf.Max(1, t.level);
             return 1;
         }
 
-        int UpgradeCostEstimate()
+        // Mirrors server: Math.ceil(baseCost * (0.75 + 0.25 * nextLevel))
+        int UpgradeCostEstimate(int currentLevel)
         {
-            var lane = SnapshotApplier.Instance?.ViewedLane;
-            if (lane?.towerCells == null) return 15;
-            foreach (var t in lane.towerCells)
-                if (t.X == _col && t.Y == _row)
-                {
-                    int lvl = Mathf.Clamp(t.level - 1, 0, UpgradeCostPerLevel.Length - 1);
-                    return UpgradeCostPerLevel[lvl];
-                }
-            return 15;
+            int baseCost = GetTowerBaseCost(_towerType);
+            if (baseCost <= 0) return 0;
+            return Mathf.CeilToInt(baseCost * (0.75f + 0.25f * (currentLevel + 1)));
+        }
+
+        int GetTowerBaseCost(string towerType)
+        {
+            if (string.IsNullOrEmpty(towerType)) return 0;
+            if (CatalogLoader.UnitByKey.TryGetValue(towerType, out var u)) return u.build_cost;
+            if (_towerKeys != null)
+                for (int i = 0; i < _towerKeys.Length && i < _towerCosts.Length; i++)
+                    if (_towerKeys[i] == towerType) return _towerCosts[i];
+            return 0;
+        }
+
+        int GetKnownTowerCost(string towerType)
+        {
+            if (string.IsNullOrEmpty(towerType)) return 0;
+            if (CatalogLoader.UnitByKey.TryGetValue(towerType, out var u) && u.build_cost > 0) return u.build_cost;
+            if (_towerKeys != null)
+                for (int i = 0; i < _towerKeys.Length && i < _towerCosts.Length; i++)
+                    if (_towerKeys[i] == towerType && _towerCosts[i] > 0) return _towerCosts[i];
+            return 0;
+        }
+
+        string BuildUpgradeLabel(int lvl, int cost)
+        {
+            string line = $"↑  Lv {lvl} → {lvl + 1}   ({cost}g)";
+            string preview = NextLevelDmgPreview(lvl);
+            return preview.Length > 0 ? $"{line}\n{preview}" : line;
+        }
+
+        string NextLevelDmgPreview(int currentLevel)
+        {
+            float baseDmg = 0f;
+            var loadout = NetworkManager.Instance?.LastMatchLoadout;
+            if (loadout != null)
+                foreach (var e in loadout)
+                    if (e.key == _towerType) { baseDmg = e.attack_damage; break; }
+            if (baseDmg <= 0) return "";
+            float curDmg  = baseDmg * (1f + 0.12f * (currentLevel - 1));
+            float nextDmg = baseDmg * (1f + 0.12f * currentLevel);
+            return $"DMG  {curDmg:0} → {nextDmg:0}";
         }
 
         static string Capitalize(string s)

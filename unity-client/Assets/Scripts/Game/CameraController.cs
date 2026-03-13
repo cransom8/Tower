@@ -83,7 +83,18 @@ public class CameraController : MonoBehaviour
 
     void Update()
     {
-        if (MainCam == null || CameraTarget == null) return;
+        // If the camera we were given got destroyed (e.g. previous scene unloaded),
+        // try to find a replacement in the current scene.
+        if (MainCam == null)
+        {
+            MainCam = Camera.main ?? FindFirstObjectByType<Camera>();
+            if (MainCam == null) return;
+            CameraTarget = MainCam.transform;
+            ConfigureBoundsFromGrid();
+            SnapToCurrentPosition();
+            return;
+        }
+        if (CameraTarget == null) CameraTarget = MainCam.transform;
 
         ScrollZoom();
         KeyboardInput();

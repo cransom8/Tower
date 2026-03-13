@@ -1,13 +1,13 @@
 "use strict";
 
 const DEFAULT_BRANDING = Object.freeze({
-  publicTitle: "Ransom Forge",
-  publicSubtitle: "PvP Tower Defense",
-  publicBrowserTitle: "Ransom Forge - Multiplayer",
-  adminTitle: "Castle Defender Admin",
-  adminLoginTitle: "Admin Dashboard",
+  publicTitle: "Forge Wars",
+  publicSubtitle: "Team lane defense",
+  publicBrowserTitle: "Forge Wars - Multiplayer",
+  adminTitle: "Forge Wars Admin",
+  adminLoginTitle: "Forge Wars Control",
   loadoutTitle: "Loadout",
-  loadoutHint: "Click a slot to edit",
+  loadoutHint: "Choose five units for this match",
   loadoutBuilderTitle: "Loadout Builder",
 });
 

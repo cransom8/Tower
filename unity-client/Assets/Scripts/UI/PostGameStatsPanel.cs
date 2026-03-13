@@ -55,6 +55,9 @@ namespace CastleDefender.UI
         private bool _economyPopulated;
         private bool _buildPopulated;
         private bool _wavesPopulated;
+        private LineGraphUI _leakGraph;
+        private TMP_Text _leakGraphTitle;
+        private ScrollRect _waveScroll;
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -67,6 +70,7 @@ namespace CastleDefender.UI
             if (Btn_Tab_Build   != null) Btn_Tab_Build  .onClick.AddListener(() => SwitchTab(2));
             if (Btn_Tab_Waves   != null) Btn_Tab_Waves  .onClick.AddListener(() => SwitchTab(3));
             if (Btn_Close       != null) Btn_Close      .onClick.AddListener(Hide);
+            EnsureWavesTabLayout();
         }
 
         // ── Public API ────────────────────────────────────────────────────────
@@ -86,6 +90,16 @@ namespace CastleDefender.UI
         public void Hide()
         {
             StartCoroutine(ScaleOut(PanelRoot.transform, 0.2f));
+        }
+
+        public void HideImmediate()
+        {
+            StopAllCoroutines();
+            if (PanelRoot != null)
+            {
+                PanelRoot.transform.localScale = Vector3.zero;
+                PanelRoot.SetActive(false);
+            }
         }
 
         // ── Tab switching ─────────────────────────────────────────────────────
@@ -113,21 +127,29 @@ namespace CastleDefender.UI
             if (_payload?.finalStats == null) return;
             var stats = _payload.finalStats;
 
-            // Ensure enough rows exist (dynamically instantiate if needed)
             if (SummaryRows != null)
             {
                 for (int i = 0; i < SummaryRows.Length && i < stats.Length; i++)
                 {
                     if (SummaryRows[i] == null) continue;
                     var s = stats[i];
+                    bool isWinner = !string.IsNullOrEmpty(_payload.winningTeam)
+                        ? s.team == _payload.winningTeam
+                        : s.laneIndex == _payload.winnerLaneIndex;
                     SummaryRows[i].text =
-                        $"<b>{s.displayName}</b>  " +
+                        $"<b>{s.displayName}</b>  {(isWinner ? "WIN" : "LOSS")}  " +
                         $"Income:{s.income:F0}  " +
                         $"Build:{s.buildValue:F0}  " +
-                        $"Gold:{s.gold}  " +
-                        $"Sends:{s.totalSendSpend:F0}  " +
+                        $"BuildSpend:{s.totalBuildSpend:F0}  " +
+                        $"Sends:{s.totalSendSpend:F0}/{s.totalSendCount}  " +
                         $"Leaks:{s.totalLeaksTaken}  " +
-                        $"TeamHP:{s.teamHp}";
+                        $"Hold:{s.longestHoldStreak}  " +
+                        $"BigLeak:{s.biggestLeakTaken}";
+                }
+
+                for (int i = stats.Length; i < SummaryRows.Length; i++)
+                {
+                    if (SummaryRows[i] != null) SummaryRows[i].text = string.Empty;
                 }
             }
         }
@@ -181,6 +203,9 @@ namespace CastleDefender.UI
             if (WaveRowContainer == null || WaveRowPrefab == null || _payload?.waveSnapshots == null)
                 return;
 
+            EnsureWavesTabLayout();
+            PopulateLeakGraph();
+
             // Clear existing rows
             foreach (Transform child in WaveRowContainer)
                 Destroy(child.gameObject);
@@ -195,21 +220,111 @@ namespace CastleDefender.UI
                 var sb = new System.Text.StringBuilder();
                 string waveLabel = snap.terminal ? "Final" : $"Wave {snap.round}";
                 sb.Append($"<b>{waveLabel}</b>");
+                if (snap.elapsedSeconds > 0)
+                    sb.Append($"  t={snap.elapsedSeconds / 60}m {snap.elapsedSeconds % 60}s");
 
                 if (snap.lanes != null)
                 {
                     foreach (var l in snap.lanes)
                     {
-                        sb.Append($"  [L{l.laneIndex}]" +
+                        sb.Append($"  [{GetLaneLabel(l.laneIndex)}]" +
                                   $" Inc:{l.income:F0}" +
                                   $" Build:{l.buildValue:F0}" +
-                                  $" Sends:{l.sendSpend:F0}" +
-                                  $" Leaks:{l.leaksTaken}" +
+                                  $" BuildSpend:{l.buildSpend:F0}" +
+                                  $" Sends:{l.sendSpend:F0}/{l.sendCount}" +
+                                  $" Leak:{l.leaksTaken}" +
+                                  $" LifeLoss:{l.leakDamage}" +
+                                  $" Result:{l.holdResult}" +
                                   $" HP:{l.teamHp}");
                     }
                 }
                 lbl.text = sb.ToString();
             }
+        }
+
+        void EnsureWavesTabLayout()
+        {
+            if (PanelWaves == null) return;
+
+            if (_waveScroll == null)
+                _waveScroll = PanelWaves.GetComponentInChildren<ScrollRect>(true);
+
+            if (_leakGraphTitle == null)
+            {
+                var existingTitle = PanelWaves.transform.Find("LeakGraphTitle");
+                if (existingTitle != null)
+                {
+                    _leakGraphTitle = existingTitle.GetComponent<TMP_Text>();
+                }
+                else
+                {
+                    var titleGO = new GameObject("LeakGraphTitle");
+                    titleGO.transform.SetParent(PanelWaves.transform, false);
+                    var rt = titleGO.AddComponent<RectTransform>();
+                    rt.anchorMin = new Vector2(0.04f, 0.88f);
+                    rt.anchorMax = new Vector2(0.96f, 0.98f);
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                    _leakGraphTitle = titleGO.AddComponent<TextMeshProUGUI>();
+                    _leakGraphTitle.text = "Leaks By Wave";
+                    _leakGraphTitle.fontSize = 16;
+                    _leakGraphTitle.alignment = TextAlignmentOptions.MidlineLeft;
+                    _leakGraphTitle.color = Color.white;
+                }
+            }
+
+            if (_leakGraph == null)
+            {
+                var existingGraph = PanelWaves.transform.Find("LeakGraph");
+                if (existingGraph != null)
+                {
+                    _leakGraph = existingGraph.GetComponent<LineGraphUI>();
+                }
+                else
+                {
+                    var graphGO = new GameObject("LeakGraph");
+                    graphGO.transform.SetParent(PanelWaves.transform, false);
+                    var rt = graphGO.AddComponent<RectTransform>();
+                    rt.anchorMin = new Vector2(0.04f, 0.52f);
+                    rt.anchorMax = new Vector2(0.96f, 0.86f);
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                    _leakGraph = graphGO.AddComponent<LineGraphUI>();
+                }
+            }
+
+            if (_waveScroll != null && _waveScroll.viewport != null)
+            {
+                var viewportRt = _waveScroll.viewport;
+                viewportRt.anchorMin = new Vector2(0f, 0f);
+                viewportRt.anchorMax = new Vector2(1f, 0.48f);
+                viewportRt.offsetMin = Vector2.zero;
+                viewportRt.offsetMax = Vector2.zero;
+            }
+        }
+
+        void PopulateLeakGraph()
+        {
+            if (_leakGraph == null || _payload?.waveSnapshots == null) return;
+            var snaps = _payload.waveSnapshots;
+            int nLanes = snaps.Length > 0 && snaps[0].lanes != null ? snaps[0].lanes.Length : 0;
+            if (nLanes == 0) return;
+
+            var series = new float[nLanes][];
+            var labels = new string[nLanes];
+            for (int li = 0; li < nLanes; li++)
+            {
+                series[li] = new float[snaps.Length];
+                for (int wi = 0; wi < snaps.Length; wi++)
+                {
+                    var wl = snaps[wi].lanes;
+                    series[li][wi] = (wl != null && li < wl.Length)
+                        ? Mathf.Max(wl[li].leakDamage, wl[li].leaksTaken)
+                        : 0f;
+                }
+                labels[li] = GetLaneLabel(li);
+            }
+            _leakGraph.SetData(series, labels);
         }
 
         // ── Utility ───────────────────────────────────────────────────────────

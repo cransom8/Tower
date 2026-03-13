@@ -24,6 +24,65 @@ const GRID_H = simMl.GRID_H;
 const TANK_UNITS  = new Set(["ogre","troll","cyclops","hydra","oak_tree_ent","manticora","chimera","ice_golem","demon_lord"]);
 const SWARM_UNITS = new Set(["goblin","kobold","giant_rat","ghoul","harpy","fantasy_wolf"]);
 
+function sumValues(values) {
+  let total = 0;
+  for (const value of values || []) total += Number(value) || 0;
+  return total;
+}
+
+function getRoundStage(roundNumber) {
+  const round = Number(roundNumber) || 1;
+  if (round <= 5) return "early";
+  if (round <= 12) return "mid";
+  return "late";
+}
+
+function countBuiltDefenders(lane) {
+  if (!lane || !lane.grid) return 0;
+  let total = 0;
+  for (let x = 0; x < lane.grid.length; x++) {
+    const col = lane.grid[x] || [];
+    for (let y = 0; y < col.length; y++) {
+      const tile = col[y];
+      if (tile && (tile.type === "tower" || tile.type === "dead_tower")) total += 1;
+    }
+  }
+  return total;
+}
+
+function estimateDefenseDurability(lane) {
+  if (!lane || !lane.grid) return 0;
+  let total = 0;
+  for (let x = 0; x < lane.grid.length; x++) {
+    const col = lane.grid[x] || [];
+    for (let y = 0; y < col.length; y++) {
+      const tile = col[y];
+      if (!tile || tile.type !== "tower") continue;
+      total += (Number(tile.hp) || Number(tile.maxHp) || 0) / 100;
+    }
+  }
+  return total;
+}
+
+function getTeamMateLanes(game, laneIndex) {
+  const lane = game && game.lanes && game.lanes[laneIndex];
+  if (!lane) return [];
+  return (game.lanes || []).filter((other) => other && other.laneIndex !== laneIndex && !other.eliminated && other.team === lane.team);
+}
+
+function getIncomingPressure(lane) {
+  if (!lane || !Array.isArray(lane.units)) return 0;
+  let total = 0;
+  for (const unit of lane.units) {
+    if (!unit || unit.ownerLane === lane.laneIndex || unit.hp <= 0) continue;
+    const base = simMl.resolveUnitDef(unit.type);
+    const pathIdx = Number(unit.pathIdx) || 0;
+    const progressWeight = 0.5 + Math.min(1.5, pathIdx / Math.max(1, GRID_H - 1));
+    total += ((Number(unit.hp) || (base && base.hp) || 100) / 100) * progressWeight;
+  }
+  return total;
+}
+
 function getKnobs(difficulty) {
   return DIFFICULTY_KNOBS[difficulty] || DIFFICULTY_KNOBS.medium;
 }
@@ -141,6 +200,9 @@ class BotBrain {
       lastTargetSwitchTick: -1,
       lastSendByTarget: {},
       observationDim: 0,
+      lastLeakTick: -9999,
+      lastBigLeakTick: -9999,
+      lastStabilizeTick: -9999,
     };
   }
 
@@ -174,8 +236,10 @@ class BotBrain {
     };
 
     const incomingMix = scanUnitMix(lane.units, lane.laneIndex);
+    const roundStage = getRoundStage(game.roundNumber);
     if (danger && incomingMix.swarm >= 4) { const t = pick("mountain_dragon"); if (t) return t; }
     if (danger && incomingMix.heavy >= 3) { const t = pick("giant_viper");     if (t) return t; }
+    if (roundStage === "late" && danger) { const t = pick("chimera"); if (t) return t; }
 
     const targetLane = getLane(game, targetLaneIndex);
     const targetMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
@@ -193,10 +257,12 @@ class BotBrain {
     return "archer";
   }
 
-  findBuildTowerAction(game, lane, targetLaneIndex, danger) {
+  findBuildTowerAction(game, lane, targetLaneIndex, danger, context) {
     if (game.roundState && game.roundState !== "build") return null;
     const towerType = this.chooseTowerType(game, lane, targetLaneIndex, danger);
     const candidates = [];
+    const roundStage = getRoundStage(game.roundNumber);
+    const defendBias = context && context.recentLeaks > 0 ? 2.2 : 0;
     for (let x = 0; x < GRID_W; x++) {
       for (let y = 1; y < GRID_H - 1; y++) {
         if (x === SPAWN_X && y === SPAWN_Y) continue;
@@ -205,7 +271,10 @@ class BotBrain {
         if (!tile || tile.type !== "empty") continue;
         const centerBias = 1 - Math.abs(x - CASTLE_X) / CASTLE_X;
         let score = danger ? y : Math.abs(14 - y);
+        if (roundStage === "early") score -= y * 0.08;
+        if (roundStage === "late") score += y * 0.14;
         score += centerBias * 0.6;
+        score += defendBias;
         candidates.push({ x, y, score });
       }
     }
@@ -249,23 +318,35 @@ class BotBrain {
   findEcoAction(game, lane, danger) {
     if (danger) return null;
     const next = getBarracksUpgradeCost(lane);
-    if (lane.income < next.reqIncome) return null;
-    if (lane.gold < next.cost) return null;
+    const cost = Number(next && (next.cost ?? next.upgradeCost));
+    const reqIncome = Number(next && next.reqIncome);
+    if (!Number.isFinite(cost) || !Number.isFinite(reqIncome)) return null;
+    if (lane.income < reqIncome) return null;
+    if (lane.gold < cost) return null;
     const action = { type: AI_ACTION_TYPE.UPGRADE_INCOME };
     const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
     return legal.ok ? legal.normalized : null;
   }
 
-  chooseSendUnitType(game, targetLaneIndex, danger) {
+  chooseSendUnitType(game, targetLaneIndex, danger, context) {
     const targetLane = getLane(game, targetLaneIndex);
     const unitMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
     const preference = this.personalityProfile.preferredUnits.slice();
+    const roundStage = getRoundStage(game.roundNumber);
 
     if (this.memory.tankPressureBias > 0.8) {
       preference.unshift("ogre", "troll");
     }
     if (danger) {
       preference.unshift("goblin");
+    }
+    if (context && context.opponentRecentLeaks >= 2) {
+      preference.unshift("werewolf", "griffin", "ogre");
+    }
+    if (roundStage === "early") {
+      preference.unshift("goblin", "kobold");
+    } else if (roundStage === "late") {
+      preference.unshift("chimera", "demon_lord", "manticora");
     }
     if (unitMix.swarm >= 6) {
       preference.unshift("mountain_dragon");
@@ -281,15 +362,21 @@ class BotBrain {
     return dedup[0] || "goblin";
   }
 
-  chooseSendBucket(lane, unitType, reserveGold, spikePlan) {
+  chooseSendBucket(game, lane, unitType, reserveGold, spikePlan, context) {
     const unitCost = getUnitCost(lane, unitType, this.unitDefs);
     if (!Number.isFinite(unitCost) || unitCost <= 0) return null;
     const maxAffordable = Math.floor(Math.max(0, lane.gold - reserveGold) / unitCost);
     if (maxAffordable <= 0) return null;
+    const roundStage = getRoundStage(game.roundNumber);
 
     if (spikePlan && Number.isFinite(spikePlan.countBucket)) {
       const spikeBucket = clampCountBucket(spikePlan.countBucket);
       if (spikeBucket <= maxAffordable) return spikeBucket;
+    }
+
+    if (context && context.opponentWeakWindow && roundStage !== "early") {
+      if (maxAffordable >= 10) return 10;
+      if (maxAffordable >= 5) return 5;
     }
 
     for (const b of this.personalityProfile.sendBucketBias) {
@@ -301,11 +388,13 @@ class BotBrain {
     return 1;
   }
 
-  findSendAction(game, lane, targetLaneIndex, danger, spikePlan) {
+  findSendAction(game, lane, targetLaneIndex, danger, spikePlan, context) {
     if (!isInteger(targetLaneIndex)) return null;
-    const unitType = this.chooseSendUnitType(game, targetLaneIndex, danger);
-    const reserveGold = danger ? 26 : 10;
-    const countBucket = this.chooseSendBucket(lane, unitType, reserveGold, spikePlan);
+    const unitType = this.chooseSendUnitType(game, targetLaneIndex, danger, context);
+    const reserveGold = context && Number.isFinite(context.reserveGold)
+      ? context.reserveGold
+      : (danger ? 26 : 10);
+    const countBucket = this.chooseSendBucket(game, lane, unitType, reserveGold, spikePlan, context);
     if (!countBucket) return null;
     const action = {
       type: AI_ACTION_TYPE.SEND_UNITS,
@@ -378,18 +467,69 @@ class BotBrain {
     // Defensive and pressure context from actual lane state (no hidden info).
     const threat = estimateLaneThreat(lane, this.unitDefs);
     const defense = estimateLaneDefense(lane);
-    const danger = lane.lives <= 8 || threat > Math.max(2, defense * 1.08);
+    const recentLeaks = runtime && runtime.laneLeakHistory ? sumValues((runtime.laneLeakHistory[this.laneIndex] || []).slice(-2)) : 0;
+    const recentLifeLoss = Number(runtime && runtime.recentLifeLossByLane && runtime.recentLifeLossByLane[this.laneIndex]) || 0;
+    const incomingPressure = getIncomingPressure(lane);
+    const teammateLanes = getTeamMateLanes(game, this.laneIndex);
+    const teammateGold = teammateLanes.reduce((sum, mate) => sum + (Number(mate.gold) || 0), 0);
+    const teammateIncome = teammateLanes.reduce((sum, mate) => sum + (Number(mate.income) || 0), 0);
+    const targetLane = getLane(game, targetLaneIndex);
+    const targetRecentLeaks = Number.isInteger(targetLaneIndex) && runtime && runtime.laneLeakHistory
+      ? sumValues((runtime.laneLeakHistory[targetLaneIndex] || []).slice(-2))
+      : 0;
+    const targetThreat = targetLane ? estimateLaneThreat(targetLane, this.unitDefs) : 0;
+    const targetDefense = targetLane ? estimateLaneDefense(targetLane) : 0;
+    const defenseDurability = estimateDefenseDurability(lane);
+    const roundStage = getRoundStage(game.roundNumber);
+    if (recentLifeLoss > 0) this.memory.lastLeakTick = currentTick;
+    if (recentLifeLoss >= 2) this.memory.lastBigLeakTick = currentTick;
+    const stabilizationWindow = currentTick - this.memory.lastLeakTick <= Math.max(24, this.reactionDelayTicks * 3);
+    const danger = (
+      lane.lives <= 8 ||
+      recentLifeLoss > 0 ||
+      recentLeaks >= 2 ||
+      stabilizationWindow ||
+      threat + incomingPressure > Math.max(2.4, defense * 1.03 + defenseDurability * 0.12)
+    );
     const overDefendedTarget = isInteger(targetLaneIndex) && targeting.isLaneOverDefended(game, targetLaneIndex);
     if (overDefendedTarget && (this.personality === "PRESSURE" || this.personality === "ADAPTIVE")) {
       // Allow quick pivot in FFA when one lane is clearly overdefended.
       this.memory.targetHoldUntilTick = currentTick;
     }
+    const pressureWindow = !danger && (
+      spikePlan ||
+      targetRecentLeaks > 0 ||
+      targetThreat > targetDefense * 1.08 ||
+      (roundStage === "late" && lane.gold >= 90)
+    );
+    const ecoWindow = !danger && !pressureWindow && (
+      roundStage !== "late" ||
+      lane.income < 120
+    );
+    const reserveGold = danger
+      ? 34
+      : pressureWindow
+        ? (roundStage === "late" ? 18 : 12)
+        : (roundStage === "early" ? 18 : 24);
+    const botCountOnTeam = teammateLanes.length + 1;
+    const contextView = {
+      recentLeaks,
+      recentLifeLoss,
+      reserveGold,
+      pressureWindow,
+      ecoWindow,
+      teammateGold,
+      teammateIncome,
+      opponentRecentLeaks: targetRecentLeaks,
+      opponentWeakWindow: targetDefense <= Math.max(2, targetThreat * 0.95),
+      teamBurstLikely: !!spikePlan || teammateGold / Math.max(1, botCountOnTeam - 1 || 1) >= 70,
+    };
 
-    const buildAction = this.findBuildTowerAction(game, lane, targetLaneIndex, danger);
+    const buildAction = this.findBuildTowerAction(game, lane, targetLaneIndex, danger, contextView);
     const upgradeAction = this.findUpgradeTowerAction(game, lane, danger);
     const defenseAction = buildAction || upgradeAction;
     const ecoAction = this.findEcoAction(game, lane, danger);
-    const sendAction = this.findSendAction(game, lane, targetLaneIndex, danger, spikePlan);
+    const sendAction = this.findSendAction(game, lane, targetLaneIndex, danger, spikePlan, contextView);
     const doNothing = createDoNothingAction();
 
     const obs = buildObservation(game, this.laneIndex, runtime, this.unitDefs);
@@ -399,28 +539,36 @@ class BotBrain {
     if (defenseAction) {
       candidates.push({
         action: defenseAction,
-        score: this.personalityProfile.defenseWeight * (1.0 + (danger ? 1.2 : 0.3) + leakPressure * 0.8),
+        score: this.personalityProfile.defenseWeight * (
+          1.0 +
+          (danger ? 1.4 : 0.25) +
+          leakPressure * 0.8 +
+          recentLifeLoss * 0.7 +
+          (roundStage === "late" ? 0.25 : 0)
+        ),
       });
     }
     if (ecoAction) {
       const ecoNeed = lane.income < 40 ? 1.0 : lane.income < 120 ? 0.7 : 0.3;
       candidates.push({
         action: ecoAction,
-        score: this.personalityProfile.ecoWeight * ecoNeed * (danger ? 0.25 : 1.0),
+        score: this.personalityProfile.ecoWeight * ecoNeed * (danger ? 0.2 : 1.0) * (ecoWindow ? 1.1 : 0.7),
       });
     }
     if (sendAction) {
-      const pressureBase = this.personalityProfile.pressureWeight * (danger ? 0.4 : 1.0);
-      const spikeBonus = spikePlan ? 0.7 : 0;
+      const pressureBase = this.personalityProfile.pressureWeight * (danger ? 0.18 : (pressureWindow ? 1.22 : 0.92));
+      const spikeBonus = spikePlan ? 1.0 : 0;
       const depthBonus = 0.05 * this.planningDepth;
+      const weaknessBonus = targetRecentLeaks > 0 ? 0.55 : 0;
+      const lateFinisherBonus = roundStage === "late" && lane.gold >= 120 ? 0.8 : 0;
       candidates.push({
         action: sendAction,
-        score: pressureBase + spikeBonus + depthBonus,
+        score: pressureBase + spikeBonus + depthBonus + weaknessBonus + lateFinisherBonus,
       });
     }
     candidates.push({
       action: doNothing,
-      score: 0.05 + (danger ? -0.1 : 0.06),
+      score: 0.03 + (danger ? -0.22 : 0.05),
     });
 
     const sorted = this.rankCandidates(candidates);
@@ -451,4 +599,3 @@ class BotBrain {
 module.exports = {
   BotBrain,
 };
-

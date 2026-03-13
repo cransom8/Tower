@@ -25,6 +25,7 @@ namespace CastleDefender.UI
     public class GameOverUI : MonoBehaviour
     {
         private MLGameOverPayload _lastPayload;
+        private bool _rematchRequested;
         public GameObject PanelGameOver;
         public TMP_Text   TxtResult;
         public Button     BtnRematch;
@@ -49,6 +50,8 @@ namespace CastleDefender.UI
             nm.OnMLGameOver          += HandleMLGameOver;
             nm.OnClassicGameOver     += HandleClassicGameOver;
             nm.OnRematchVote         += HandleRematchVote;
+            nm.OnRematchStatus       += HandleRematchStatus;
+            nm.OnRematchStarting     += HandleRematchStarting;
             nm.OnMLMatchReady        += HandleMatchRestarted;
             nm.OnClassicMatchReady   += HandleClassicMatchRestarted;
             nm.OnRatingUpdate        += HandleRatingUpdate;
@@ -61,6 +64,8 @@ namespace CastleDefender.UI
             nm.OnMLGameOver          -= HandleMLGameOver;
             nm.OnClassicGameOver     -= HandleClassicGameOver;
             nm.OnRematchVote         -= HandleRematchVote;
+            nm.OnRematchStatus       -= HandleRematchStatus;
+            nm.OnRematchStarting     -= HandleRematchStarting;
             nm.OnMLMatchReady        -= HandleMatchRestarted;
             nm.OnClassicMatchReady   -= HandleClassicMatchRestarted;
             nm.OnRatingUpdate        -= HandleRatingUpdate;
@@ -81,13 +86,34 @@ namespace CastleDefender.UI
         void HandleMLGameOver(MLGameOverPayload p)
         {
             _lastPayload = p;
+            _rematchRequested = false;
             bool isWinner = p.winnerLaneIndex == SnapshotApplier.Instance.MyLaneIndex;
             ShowPanel(isWinner);
-            if (Txt_CauseLoss != null) Txt_CauseLoss.text = p.causeLoss ?? "";
+            var myStat = GetMyFinalStat(p);
+            if (Txt_CauseLoss != null)
+            {
+                string winnerLine = !string.IsNullOrEmpty(p.winnerName)
+                    ? $"Winner: {p.winnerName}"
+                    : (!string.IsNullOrEmpty(p.winningTeam) ? $"Winner: {p.winningTeam}" : "Match complete");
+                Txt_CauseLoss.text = $"{winnerLine}  •  {p.causeLoss ?? "Lives reduced to 0"}";
+            }
             if (Txt_Duration != null)
-                Txt_Duration.text = $"{p.gameDuration / 60}m {p.gameDuration % 60}s";
+            {
+                string duration = $"{p.gameDuration / 60}m {p.gameDuration % 60}s";
+                if (myStat != null)
+                {
+                    Txt_Duration.text =
+                        $"{duration}  •  Inc {myStat.income:F0}  •  Build {myStat.buildValue:F0}  •  Sends {myStat.totalSendSpend:F0}  •  Leaks {myStat.totalLeaksTaken}";
+                }
+                else
+                {
+                    Txt_Duration.text = duration;
+                }
+            }
             if (BtnStats != null)
                 BtnStats.gameObject.SetActive(p.waveSnapshots != null && p.waveSnapshots.Length > 0);
+            if (BtnRematch != null) BtnRematch.interactable = true;
+            if (TxtRematchBtn != null) TxtRematchBtn.text = "Rematch";
         }
 
         void HandleClassicGameOver(ClassicGameOverPayload p)
@@ -111,7 +137,47 @@ namespace CastleDefender.UI
 
         void HandleRematchVote(RematchVotePayload p)
         {
-            TxtRematchBtn.text = $"Waiting... ({p.count}/{p.needed})";
+            if (TxtRematchBtn != null && _rematchRequested)
+                TxtRematchBtn.text = $"Waiting... ({p.count}/{p.needed})";
+        }
+
+        void HandleRematchStatus(RematchStatusPayload p)
+        {
+            if (TxtRematchBtn == null) return;
+            if (p == null)
+            {
+                TxtRematchBtn.text = _rematchRequested ? "Waiting..." : "Rematch";
+                return;
+            }
+
+            if (p.allAccepted)
+            {
+                TxtRematchBtn.text = "Rematch starting...";
+                if (BtnRematch != null) BtnRematch.interactable = false;
+                return;
+            }
+
+            if (_rematchRequested)
+            {
+                TxtRematchBtn.text = $"Waiting... ({p.count}/{p.needed})";
+                if (BtnRematch != null) BtnRematch.interactable = false;
+            }
+            else if (p.count > 0)
+            {
+                TxtRematchBtn.text = $"Opponent ready ({p.count}/{p.needed})";
+                if (BtnRematch != null) BtnRematch.interactable = true;
+            }
+            else
+            {
+                TxtRematchBtn.text = "Rematch";
+                if (BtnRematch != null) BtnRematch.interactable = true;
+            }
+        }
+
+        void HandleRematchStarting(RematchStartingPayload _)
+        {
+            if (TxtRematchBtn != null) TxtRematchBtn.text = "Rematch starting...";
+            if (BtnRematch != null) BtnRematch.interactable = false;
         }
 
         void HandleMatchRestarted(MLMatchReadyPayload _)             => HidePanel();
@@ -140,13 +206,19 @@ namespace CastleDefender.UI
 
         void HidePanel()
         {
+            _rematchRequested = false;
             if (Panel_Rating != null) Panel_Rating.SetActive(false);
+            if (StatsPanel != null) StatsPanel.HideImmediate();
             StartCoroutine(ScaleOut(PanelGameOver.transform, 0.2f));
         }
 
         void OnRematch()
         {
+            if (_rematchRequested) return;
+            _rematchRequested = true;
             ActionSender.RequestRematch();
+            if (BtnRematch != null) BtnRematch.interactable = false;
+            if (TxtRematchBtn != null) TxtRematchBtn.text = "Waiting...";
             AudioManager.I?.Play(AudioManager.SFX.Rematch);
         }
 
@@ -195,6 +267,17 @@ namespace CastleDefender.UI
             const float c3 = c1 + 1f;
             float tm1 = t - 1f;
             return 1f + c3 * tm1 * tm1 * tm1 + c1 * tm1 * tm1;
+        }
+
+        MLFinalLaneStat GetMyFinalStat(MLGameOverPayload payload)
+        {
+            if (payload?.finalStats == null || SnapshotApplier.Instance == null) return null;
+            int myLaneIndex = SnapshotApplier.Instance.MyLaneIndex;
+            foreach (var stat in payload.finalStats)
+            {
+                if (stat != null && stat.laneIndex == myLaneIndex) return stat;
+            }
+            return null;
         }
     }
 }

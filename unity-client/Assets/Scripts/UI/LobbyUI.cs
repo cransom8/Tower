@@ -1,4 +1,4 @@
-// LobbyUI.cs — Wizard lobby (Phase U5 + U7 + U8).
+// LobbyUI.cs — Wizard lobby (queue/lobby only; loadout selection happens in-match).
 //
 // SCENE SETUP (Lobby.unity):
 //
@@ -9,7 +9,6 @@
 //   │   └── Btn_Back_Step3
 //   ├── Panel_Step2_Format            — shown second: pick 1v1 or 2v2
 //   │   ├── Btn_1v1 / Btn_2v2 / Btn_Back_Step2
-//   ├── Panel_Loadout                 — Phase U7: loadout slot picker (LoadoutUI component)
 //   ├── Panel_Step4A_Queue
 //   │   ├── Txt_QueueStatus
 //   │   └── Btn_CancelQueue
@@ -74,9 +73,6 @@ namespace CastleDefender.UI
         public Button     Btn_AddBot_Hard;
         public Button     Btn_Leave;
 
-        [Header("Loadout Step (Phase U7)")]
-        public LoadoutUI  LoadoutStep;          // Panel_Loadout with LoadoutUI component
-
         [Header("Leaderboard (Phase U8)")]
         public GameObject Panel_Leaderboard;
         public TMP_Text   Txt_LeaderboardList;
@@ -95,7 +91,6 @@ namespace CastleDefender.UI
         string _matchFormat = "1v1";
         bool   _pendingRanked;
         bool   _pendingPrivateLobby;
-        int[]  _pendingUnitTypeIds;
 
         // ── Lobby state ───────────────────────────────────────────────────────
         bool          _isHost;
@@ -105,6 +100,7 @@ namespace CastleDefender.UI
         // ── Queue state ───────────────────────────────────────────────────────
         float _queueElapsed;
         bool  _inQueue;
+        bool  _awaitingLoadoutScene; // true after match_found, until ml_loadout_phase_start arrives
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -115,7 +111,8 @@ namespace CastleDefender.UI
                 nm.OnConnected      += HandleConnected;
                 nm.OnDisconnected   += HandleDisconnected;
                 nm.OnQueueStatus    += HandleQueueStatus;
-                nm.OnMatchFound     += HandleMatchFound;
+                nm.OnMatchFound            += HandleMatchFound;
+                nm.OnMLLoadoutPhaseStart   += HandleLoadoutPhaseStart;
                 nm.OnLobbyCreated   += HandleLobbyCreated;
                 nm.OnLobbyJoined    += HandleLobbyJoined;
                 nm.OnLobbyUpdate    += HandleLobbyUpdate;
@@ -147,14 +144,6 @@ namespace CastleDefender.UI
             Btn_AddBot_Hard.onClick.AddListener(() => { ActionSender.LobbyAddBot("hard");   Play(AudioManager.SFX.ButtonClick); });
             Btn_Leave.onClick.AddListener(OnLeaveLobby);
 
-            // Loadout step (Phase U7)
-            if (LoadoutStep != null)
-            {
-                LoadoutStep.OnConfirmed += OnLoadoutConfirmed;
-                LoadoutStep.OnBack      += () => GoToStep(3);
-                LoadoutStep.gameObject.SetActive(false);
-            }
-
             // Leaderboard (Phase U8)
             if (Btn_ToggleLeaderboard != null) Btn_ToggleLeaderboard.onClick.AddListener(ShowLeaderboard);
             if (Btn_HideLeaderboard   != null) Btn_HideLeaderboard.onClick.AddListener(HideLeaderboard);
@@ -178,7 +167,8 @@ namespace CastleDefender.UI
             nm.OnConnected      -= HandleConnected;
             nm.OnDisconnected   -= HandleDisconnected;
             nm.OnQueueStatus    -= HandleQueueStatus;
-            nm.OnMatchFound     -= HandleMatchFound;
+            nm.OnMatchFound            -= HandleMatchFound;
+            nm.OnMLLoadoutPhaseStart   -= HandleLoadoutPhaseStart;
             nm.OnLobbyCreated   -= HandleLobbyCreated;
             nm.OnLobbyJoined    -= HandleLobbyJoined;
             nm.OnLobbyUpdate    -= HandleLobbyUpdate;
@@ -186,10 +176,6 @@ namespace CastleDefender.UI
             nm.OnLobbyError     -= HandleLobbyError;
             nm.OnErrorMsg       -= HandleError;
 
-            if (LoadoutStep != null)
-            {
-                LoadoutStep.OnConfirmed -= OnLoadoutConfirmed;
-            }
         }
 
         void Update()
@@ -200,18 +186,13 @@ namespace CastleDefender.UI
         }
 
         // ── Step navigation ───────────────────────────────────────────────────
-        // Steps: 2=Type (first), 3=Format (second), 4=Queue, 5=Lobby, 6=Loadout
+        // Steps: 2=Type (first), 3=Format (second), 4=Queue, 5=Lobby
         void GoToStep(int step)
         {
             Panel_Step3_Type.SetActive(step == 2);
             Panel_Step2_Format.SetActive(step == 3);
             Panel_Step4A_Queue.SetActive(step == 4);
             Panel_Step4B_Lobby.SetActive(step == 5);
-            if (LoadoutStep != null)
-            {
-                LoadoutStep.gameObject.SetActive(step == 6);
-                if (step == 6) LoadoutStep.Refresh();
-            }
 
             if (step == 2) RefreshTypeButtons();
             if (step == 3) RefreshFormatButtons();
@@ -248,12 +229,7 @@ namespace CastleDefender.UI
         {
             _matchFormat = format;
             Play(AudioManager.SFX.ButtonClick);
-            if (LoadoutStep != null)
-            {
-                GoToStep(6);
-                SetStatus("Choose a loadout (optional).");
-            }
-            else if (_pendingPrivateLobby)
+            if (_pendingPrivateLobby)
             {
                 _pendingPrivateLobby = false;
                 CreatePrivateLobby();
@@ -270,24 +246,9 @@ namespace CastleDefender.UI
             Btn_2v2.gameObject.SetActive(true);
         }
 
-        void OnLoadoutConfirmed(int[] unitTypeIds)
-        {
-            _pendingUnitTypeIds = unitTypeIds;
-            if (_pendingPrivateLobby)
-            {
-                _pendingPrivateLobby = false;
-                CreatePrivateLobby();
-            }
-            else
-            {
-                EnterQueue();
-            }
-        }
-
         void EnterQueue()
         {
-            ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked, unitTypeIds: _pendingUnitTypeIds);
-            _pendingUnitTypeIds = null;
+            ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked);
             _inQueue      = true;
             _queueElapsed = 0f;
             GoToStep(4);
@@ -306,8 +267,7 @@ namespace CastleDefender.UI
         void CreatePrivateLobby()
         {
             string pvpMode = _matchFormat == "ffa" ? "ffa" : "teams";
-            ActionSender.LobbyCreate(_gameType, _matchFormat, pvpMode, DisplayName, _pendingUnitTypeIds);
-            _pendingUnitTypeIds = null;
+            ActionSender.LobbyCreate(_gameType, _matchFormat, pvpMode, DisplayName);
             SetStatus("Creating lobby...");
         }
 
@@ -464,7 +424,23 @@ namespace CastleDefender.UI
                 Debug.Log("[Lobby] Stored reconnect token");
             }
 
-            LoadingScreen.LoadScene("Game_ML");
+            // Stay in Lobby until ml_loadout_phase_start arrives — transitioning
+            // immediately causes a socket disconnect while the scene loads, so
+            // PendingLoadoutPhase ends up null.  The flag is cleared in HandleLoadoutPhaseStart.
+            _awaitingLoadoutScene = true;
+
+            // If PendingLoadoutPhase was already cached by NetworkManager (extremely
+            // fast server), handle it now rather than waiting for the event.
+            var nm = NetworkManager.Instance;
+            if (nm != null && nm.PendingLoadoutPhase != null)
+                HandleLoadoutPhaseStart(nm.PendingLoadoutPhase);
+        }
+
+        void HandleLoadoutPhaseStart(MLLoadoutPhaseStartPayload _)
+        {
+            if (!_awaitingLoadoutScene) return;
+            _awaitingLoadoutScene = false;
+            LoadingScreen.LoadScene("Loadout");
         }
 
         void HandleLobbyCreated(LobbyCreatedPayload p)

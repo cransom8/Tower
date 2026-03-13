@@ -3,15 +3,20 @@
 const crypto = require("crypto");
 
 function registerSocketHandlers({
+  attachTakeoverBot,
   authService,
+  buildAvailableUnits,
+  buildRematchStatus,
   checkActionRateLimit,
   checkLobbyRateLimit,
   createMLRoom,
+  detachTakeoverBot,
   db,
   disconnectGrace,
   ffaTeamForLane,
   gamesByRoomId,
   generateCode,
+  hasValidInlineLoadoutIds,
   io,
   log,
   matchmaker,
@@ -36,6 +41,9 @@ function registerSocketHandlers({
   RECONNECT_GRACE_MS,
   isEnabled,
 }) {
+  const VALID_AI_DIFFICULTIES = ["easy", "medium", "hard", "insane"];
+  const DEFAULT_TAKEOVER_DIFFICULTY = "hard";
+
   async function getFriendsList(playerId) {
     if (!db) return [];
     const result = await db.query(
@@ -390,6 +398,8 @@ function registerSocketHandlers({
           break;
         }
 
+        const reclaimedTakeover = detachTakeoverBot ? detachTakeoverBot(room, entry, laneIndex) : null;
+
         const grace = disconnectGrace.get(graceKey);
         if (grace) {
           clearTimeout(grace.graceHandle);
@@ -429,7 +439,28 @@ function registerSocketHandlers({
           reconnectConfig.loadout = room.loadoutByLane[laneIndex];
         }
         socket.emit("ml_match_config", reconnectConfig);
-        socket.emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+        // Re-emit loadout phase if still active (player reconnected during selection window)
+        if (room._loadoutPhaseResolve && room._loadoutPhaseDeadline) {
+          const remainingMs = room._loadoutPhaseDeadline - Date.now();
+          if (remainingMs > 0) {
+            socket.emit("ml_loadout_phase_start", {
+              code,
+              timeoutSeconds: Math.max(1, Math.ceil(remainingMs / 1000)),
+              selectionMode: (room.settings && room.settings.selectionMode) || "manual",
+              availableUnits: buildAvailableUnits(),
+            });
+          }
+        }
+        // Only send snapshot if ticks have started (null tickHandle = still in loadout phase)
+        if (entry.tickHandle !== null) {
+          socket.emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+        }
+        if (reclaimedTakeover) {
+          io.to(roomId).emit("ml_ai_takeover_ended", {
+            laneIndex,
+            displayName: playerName,
+          });
+        }
         io.to(roomId).emit("player_reconnected", { laneIndex, displayName: playerName, mode: "multilane" });
         log.info(`[reconnect] ml lane ${laneIndex} in ${roomId}`);
       } else {
@@ -689,7 +720,7 @@ function registerSocketHandlers({
         const botCfgs = Array.isArray(filters.botConfigs) && filters.botConfigs.length > 0
           ? filters.botConfigs
           : [{ difficulty: "medium" }];
-        const validDiffs = ["easy", "medium", "hard"];
+        const validDiffs = VALID_AI_DIFFICULTIES;
         for (const bot of botCfgs) {
           const difficulty = validDiffs.includes(bot.difficulty) ? bot.difficulty : "medium";
           const totalPlayers = room.players.length + (room.aiPlayers || []).length;
@@ -1316,8 +1347,7 @@ function registerSocketHandlers({
       if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
       const totalPlayers = room.players.length + (room.aiPlayers || []).length;
       if (totalPlayers >= 4) return socket.emit("error_message", { message: "Room is full (max 4 players)." });
-      const validDifficulties = ["easy", "medium", "hard"];
-      const diff = validDifficulties.includes(String(difficulty)) ? String(difficulty) : "easy";
+      const diff = VALID_AI_DIFFICULTIES.includes(String(difficulty)) ? String(difficulty) : "easy";
       if (!room.aiPlayers) room.aiPlayers = [];
       const aiTeam = room.pvpMode === "ffa" ? ffaTeamForLane(totalPlayers) : pickBalancedMlTeam(room);
       room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: aiTeam });
@@ -1434,6 +1464,33 @@ function registerSocketHandlers({
       io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
     });
 
+    // ── Loadout selection phase (in-game) ─────────────────────────────────
+    socket.on("ml_loadout_confirm", ({ unitTypeIds } = {}) => {
+      if (!checkActionRateLimit(socket.id)) return;
+      if (!hasValidInlineLoadoutIds(unitTypeIds)) {
+        return socket.emit("error_message", { message: "Invalid loadout selection." });
+      }
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      const room = mlRoomsByCode.get(session.code);
+      if (!room) return;
+      // Store confirmed ids on the socket (resolveLoadout picks this up)
+      socket.pendingUnitTypeIds = unitTypeIds.map(Number);
+      if (room.loadoutConfirms) {
+        room.loadoutConfirms.set(socket.id, socket.pendingUnitTypeIds);
+      }
+      // Unblock waitForLoadoutConfirms if every human has now confirmed
+      if (room._loadoutPhaseResolve) {
+        const allDone = room.players.every(sid => {
+          const s = io.sockets.sockets.get(sid);
+          return s && Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5;
+        });
+        if (allDone) room._loadoutPhaseResolve();
+      }
+      log.info("[loadout] player confirmed", { code: session.code, laneIndex: session.laneIndex });
+    });
+    // ─────────────────────────────────────────────────────────────────────
+
     socket.on("player_action", ({ type, data }) => {
       if (!checkActionRateLimit(socket.id)) {
         socket.emit("error_message", { message: "Action rate limit exceeded." });
@@ -1472,17 +1529,30 @@ function registerSocketHandlers({
       if (!room.rematchVotes) room.rematchVotes = new Set();
       if (room.rematchVotes.has(socket.id)) return;
       room.rematchVotes.add(socket.id);
-      const needed = room.players.length;
-      io.to(room.roomId).emit("rematch_vote", { count: room.rematchVotes.size, needed });
-      if (room.rematchVotes.size >= needed) {
+      const status = buildRematchStatus ? buildRematchStatus(room) : { count: room.rematchVotes.size, needed: room.players.length };
+      io.to(room.roomId).emit("rematch_vote", { count: status.count, needed: status.needed });
+      io.to(room.roomId).emit("rematch_status", status);
+      if (status.allAccepted) {
         room.rematchVotes = null;
         room.readySet = new Set();
         if (room._cleanupHandle) {
           clearTimeout(room._cleanupHandle);
           room._cleanupHandle = null;
         }
+        io.to(room.roomId).emit("rematch_starting", { countdownSeconds: 0 });
         startMLGame(room.roomId, session.code);
       }
+    });
+
+    socket.on("cancel_rematch", () => {
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      const room = mlRoomsByCode.get(session.code);
+      if (!room || !room.rematchVotes || gamesByRoomId.has(room.roomId)) return;
+      if (!room.rematchVotes.delete(socket.id)) return;
+      const status = buildRematchStatus ? buildRematchStatus(room) : { count: room.rematchVotes.size, needed: room.players.length };
+      io.to(room.roomId).emit("rematch_vote", { count: status.count, needed: status.needed });
+      io.to(room.roomId).emit("rematch_status", status);
     });
 
     socket.on("leave_game", () => {
@@ -1495,10 +1565,7 @@ function registerSocketHandlers({
         const laneIndex = room.laneBySocketId.get(socket.id);
         const entry = gamesByRoomId.get(room.roomId);
         const playerName = room.playerNames.get(socket.id) || socket.playerDisplayName || "Player";
-        if (entry && laneIndex !== undefined && !entry.eliminatedNotified.has(laneIndex)) {
-          entry.eliminatedNotified.add(laneIndex);
-          io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "quit" });
-        }
+        const assignedTeam = room.playerTeamsBySocketId?.get(socket.id);
 
         const idx = room.players.indexOf(socket.id);
         if (idx !== -1) room.players.splice(idx, 1);
@@ -1511,10 +1578,35 @@ function registerSocketHandlers({
         socket.leave(room.roomId);
         socket.emit("left_game_ack");
 
-        if (room.players.length === 0) {
+        if (entry && laneIndex !== undefined && attachTakeoverBot) {
+          const takeover = attachTakeoverBot(room, entry, laneIndex, {
+            difficulty: DEFAULT_TAKEOVER_DIFFICULTY,
+            displayName: `Takeover AI (${DEFAULT_TAKEOVER_DIFFICULTY})`,
+            humanDisplayName: playerName,
+            playerId: socket.playerId || null,
+            team: assignedTeam,
+          });
+          if (takeover) {
+            io.to(room.roomId).emit("ml_ai_takeover_started", {
+              laneIndex,
+              displayName: playerName,
+              difficulty: takeover.difficulty,
+            });
+          } else if (!entry.eliminatedNotified.has(laneIndex)) {
+            entry.eliminatedNotified.add(laneIndex);
+            io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "quit" });
+          }
+        }
+
+        if (room.players.length === 0 && (room.aiPlayers || []).length === 0) {
           stopMLGame(room.roomId, session.code);
           mlRoomsByCode.delete(session.code);
         } else if (!entry) {
+          if (room.rematchVotes) {
+            const status = buildRematchStatus ? buildRematchStatus(room) : { count: room.rematchVotes.size, needed: room.players.length };
+            io.to(room.roomId).emit("rematch_vote", { count: status.count, needed: status.needed });
+            io.to(room.roomId).emit("rematch_status", status);
+          }
           io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
         }
         return;
@@ -1583,20 +1675,38 @@ function registerSocketHandlers({
           const graceHandle = setTimeout(() => {
             disconnectGrace.delete(graceKey);
             const entry = gamesByRoomId.get(room.roomId);
-            if (entry && !entry.eliminatedNotified.has(laneIndex)) {
-              entry.eliminatedNotified.add(laneIndex);
-              io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "forfeit" });
-              io.to(socket.id).emit("ml_spectator_join", { laneIndex });
-            }
             const staleRoom = mlRoomsByCode.get(code);
             if (staleRoom) {
+              const assignedTeam = staleRoom.playerTeamsBySocketId?.get(socket.id);
               const staleIdx = staleRoom.players.indexOf(socket.id);
               if (staleIdx !== -1) staleRoom.players.splice(staleIdx, 1);
               staleRoom.laneBySocketId.delete(socket.id);
               if (staleRoom.playerTeamsBySocketId) staleRoom.playerTeamsBySocketId.delete(socket.id);
               staleRoom.playerNames.delete(socket.id);
               staleRoom.readySet.delete(socket.id);
-              if (staleRoom.players.length === 0) {
+              if (entry && attachTakeoverBot && laneIndex !== undefined) {
+                const takeover = attachTakeoverBot(staleRoom, entry, laneIndex, {
+                  difficulty: DEFAULT_TAKEOVER_DIFFICULTY,
+                  displayName: `Takeover AI (${DEFAULT_TAKEOVER_DIFFICULTY})`,
+                  humanDisplayName: playerName,
+                  playerId: socket.playerId || null,
+                  team: assignedTeam,
+                });
+                if (takeover) {
+                  io.to(room.roomId).emit("ml_ai_takeover_started", {
+                    laneIndex,
+                    displayName: playerName,
+                    difficulty: takeover.difficulty,
+                  });
+                } else if (entry && !entry.eliminatedNotified.has(laneIndex)) {
+                  entry.eliminatedNotified.add(laneIndex);
+                  io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "forfeit" });
+                }
+              } else if (entry && !entry.eliminatedNotified.has(laneIndex)) {
+                entry.eliminatedNotified.add(laneIndex);
+                io.to(room.roomId).emit("ml_player_eliminated", { laneIndex, displayName: playerName, reason: "forfeit" });
+              }
+              if (staleRoom.players.length === 0 && (staleRoom.aiPlayers || []).length === 0) {
                 stopMLGame(room.roomId, code);
                 mlRoomsByCode.delete(code);
               }
@@ -1621,7 +1731,7 @@ function registerSocketHandlers({
           room.playerNames.delete(socket.id);
           room.readySet.delete(socket.id);
           io.to(room.roomId).emit("player_left", { code });
-          if (room.players.length === 0) {
+          if (room.players.length === 0 && (room.aiPlayers || []).length === 0) {
             stopMLGame(room.roomId, code);
             mlRoomsByCode.delete(code);
           }

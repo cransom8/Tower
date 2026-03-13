@@ -37,4 +37,9 @@ function getDefaults(mode) {
   return mode === 'classic' ? CLASSIC : MULTILANE;
 }
 
-module.exports = { loadActiveConfigs, getActiveConfig, getDefaults };
+function setActiveConfig(mode, config) {
+  if (!mode) return;
+  _active[mode] = config;
+}
+
+module.exports = { loadActiveConfigs, getActiveConfig, getDefaults, setActiveConfig };

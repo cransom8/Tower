@@ -4,6 +4,7 @@ const BOT_DIFFICULTY = Object.freeze({
   EASY: "easy",
   MEDIUM: "medium",
   HARD: "hard",
+  INSANE: "insane",
 });
 
 const BOT_PERSONALITY = Object.freeze({
@@ -38,9 +39,15 @@ const DIFFICULTY_KNOBS = Object.freeze({
   }),
   hard: Object.freeze({
     reactionDelayMinMs: 300,
-    reactionDelayMaxMs: 900,
+    reactionDelayMaxMs: 500,
     mistakeRate: 0.03,
     planningDepth: 3,
+  }),
+  insane: Object.freeze({
+    reactionDelayMinMs: 120,
+    reactionDelayMaxMs: 320,
+    mistakeRate: 0.0,
+    planningDepth: 4,
   }),
 });
 
@@ -51,4 +58,3 @@ module.exports = {
   COUNT_BUCKETS,
   DIFFICULTY_KNOBS,
 };
-

@@ -46,4 +46,9 @@ function getAllUnitTypes() {
   return _unitTypes;
 }
 
-module.exports = { loadUnitTypes, reloadUnitTypes, getUnitType, getAllUnitTypes };
+function setUnitTypesForTests(unitTypes) {
+  _unitTypes = Array.isArray(unitTypes) ? unitTypes.slice() : [];
+  _byKey = Object.fromEntries(_unitTypes.map((ut) => [ut.key, ut]));
+}
+
+module.exports = { loadUnitTypes, reloadUnitTypes, getUnitType, getAllUnitTypes, setUnitTypesForTests };

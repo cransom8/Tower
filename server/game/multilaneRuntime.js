@@ -102,6 +102,26 @@ function createMultilaneRuntime({
     return String(value || "").charAt(0).toUpperCase() + String(value || "").slice(1);
   }
 
+  function buildRematchStatus(room) {
+    const votes = room && room.rematchVotes ? Array.from(room.rematchVotes) : [];
+    const acceptedLaneIndices = votes
+      .map((sid) => room.laneBySocketId.get(sid))
+      .filter((laneIndex) => Number.isInteger(laneIndex))
+      .sort((a, b) => a - b);
+    const acceptedDisplayNames = acceptedLaneIndices.map((laneIndex) => {
+      const sid = room.players.find((playerSid) => room.laneBySocketId.get(playerSid) === laneIndex);
+      return sid ? (room.playerNames.get(sid) || "Player") : `Lane ${laneIndex + 1}`;
+    });
+    const needed = room && Array.isArray(room.players) ? room.players.length : 0;
+    return {
+      count: acceptedLaneIndices.length,
+      needed,
+      acceptedLaneIndices,
+      acceptedDisplayNames,
+      allAccepted: needed > 0 && acceptedLaneIndices.length >= needed,
+    };
+  }
+
   function mlLobbyUpdatePayload(code, room) {
     const humanPlayers = room.players.map((sid) => ({
       laneIndex: room.laneBySocketId.get(sid),
@@ -112,11 +132,12 @@ function createMultilaneRuntime({
     }));
     const aiPlayers = (room.aiPlayers || []).map((ai) => ({
       laneIndex: ai.laneIndex,
-      displayName: `CPU (${capFirst(ai.difficulty)})`,
+      displayName: ai.displayName || `CPU (${capFirst(ai.difficulty)})`,
       ready: true,
       isAI: true,
       difficulty: ai.difficulty,
       team: ai.team || "red",
+      takeover: !!ai.takeover,
     }));
     const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
     return {
@@ -179,6 +200,68 @@ function createMultilaneRuntime({
       }
     }
     return result;
+  }
+
+  function addRuntimeBot(entry, botConfig) {
+    if (!entry || !botConfig || !Number.isInteger(botConfig.laneIndex)) return null;
+    if (!entry.botController) {
+      entry.botController = aiRuntime.createBotController({
+        game: entry.game,
+        seed: `${entry.game.matchSeed || "match"}:runtime`,
+        tickMs: simMl.TICK_MS,
+        botTickMs: 500,
+        runtimeOptions: { waveTickInterval: simMl.INCOME_INTERVAL_TICKS || 240 },
+        botConfigs: [botConfig],
+      });
+      return entry.botController;
+    }
+    if (typeof entry.botController.addBot === "function") {
+      entry.botController.addBot(botConfig);
+    }
+    return entry.botController;
+  }
+
+  function removeRuntimeBot(entry, laneIndex) {
+    if (!entry || !entry.botController || !Number.isInteger(laneIndex)) return null;
+    if (typeof entry.botController.removeBot === "function") {
+      return entry.botController.removeBot(laneIndex);
+    }
+    return null;
+  }
+
+  function attachTakeoverBot(room, entry, laneIndex, options) {
+    if (!room || !entry || !Number.isInteger(laneIndex)) return null;
+    const lane = entry.game && entry.game.lanes && entry.game.lanes[laneIndex];
+    if (!lane || lane.eliminated) return null;
+    if (!room.aiPlayers) room.aiPlayers = [];
+    const existing = room.aiPlayers.find((ai) => ai.laneIndex === laneIndex);
+    if (existing) return existing;
+    const opt = options && typeof options === "object" ? options : {};
+    const aiEntry = {
+      laneIndex,
+      difficulty: opt.difficulty || "hard",
+      team: opt.team || lane.team || "red",
+      displayName: opt.displayName || `Takeover AI (${capFirst(opt.difficulty || "hard")})`,
+      takeover: true,
+      humanDisplayName: opt.humanDisplayName || opt.displayName || "Player",
+      playerId: opt.playerId || null,
+    };
+    room.aiPlayers.push(aiEntry);
+    addRuntimeBot(entry, {
+      laneIndex,
+      difficulty: aiEntry.difficulty,
+      seedSuffix: `takeover:${laneIndex}`,
+    });
+    return aiEntry;
+  }
+
+  function detachTakeoverBot(room, entry, laneIndex) {
+    if (!room || !Number.isInteger(laneIndex)) return null;
+    const idx = (room.aiPlayers || []).findIndex((ai) => ai.laneIndex === laneIndex && ai.takeover);
+    if (idx === -1) return null;
+    const [removed] = room.aiPlayers.splice(idx, 1);
+    removeRuntimeBot(entry, laneIndex);
+    return removed;
   }
 
   function _bucketToDbMode(queueMode) {
@@ -279,7 +362,7 @@ function createMultilaneRuntime({
       })),
       ...aiList.map((ai) => ({
         laneIndex: ai.laneIndex,
-        displayName: `CPU (${capFirst(ai.difficulty)})`,
+        displayName: ai.displayName || `CPU (${capFirst(ai.difficulty)})`,
         isAI: true,
         team: ai.team || "red",
       })),
@@ -473,7 +556,7 @@ function createMultilaneRuntime({
           const displayName = eliminatedSid
             ? room.playerNames.get(eliminatedSid) || "Player"
             : aiEntry
-              ? `CPU (${capFirst(aiEntry.difficulty)})`
+              ? (aiEntry.displayName || `CPU (${capFirst(aiEntry.difficulty)})`)
               : "Player";
           io.to(roomId).emit("ml_player_eliminated", { laneIndex: lane.laneIndex, displayName });
           if (eliminatedSid) {
@@ -502,6 +585,17 @@ function createMultilaneRuntime({
 
       if (entry.game.phase === "ended") {
         const winnerLane = entry.game.winner;
+        const winningLane = Number.isInteger(winnerLane) ? entry.game.lanes[winnerLane] : null;
+        const winningTeam = winningLane ? winningLane.team : null;
+        const winningSide = winningLane ? winningLane.side : null;
+        const losingSide = entry.game.teamHp.left <= 0
+          ? "left"
+          : entry.game.teamHp.right <= 0
+            ? "right"
+            : null;
+        const losingTeam = losingSide
+          ? (entry.game.lanes.find((lane) => lane.side === losingSide) || {}).team || null
+          : null;
         let winnerName = "Unknown";
         if (winnerLane !== null && winnerLane !== undefined) {
           const winnerSid = room.players.find((sid) => room.laneBySocketId.get(sid) === winnerLane);
@@ -509,23 +603,32 @@ function createMultilaneRuntime({
             winnerName = room.playerNames.get(winnerSid) || "Player";
           } else {
             const winnerAi = (room.aiPlayers || []).find((ai) => ai.laneIndex === winnerLane);
-            if (winnerAi) winnerName = `CPU (${capFirst(winnerAi.difficulty)})`;
+            if (winnerAi) winnerName = winnerAi.displayName || `CPU (${capFirst(winnerAi.difficulty)})`;
           }
         }
 
         const gameDurationSec = Math.round((Date.now() - (entry.game.startedAt || Date.now())) / 1000);
+        const causeLoss = losingSide
+          ? `Lives reduced to 0 on Wave ${entry.game.roundNumber}`
+          : "Lives reduced to 0";
         const finalStats = entry.game.lanes.map(lane => {
           const sid = room.players.find(s => room.laneBySocketId.get(s) === lane.laneIndex);
           const ai  = (room.aiPlayers || []).find(a => a.laneIndex === lane.laneIndex);
           const displayName = sid ? (room.playerNames.get(sid) || "Player")
-                            : ai  ? `CPU (${capFirst(ai.difficulty)})` : "Player";
+                            : ai  ? (ai.displayName || `CPU (${capFirst(ai.difficulty)})`) : "Player";
           return {
             laneIndex: lane.laneIndex, displayName, team: lane.team, side: lane.side,
             income: lane.income,
             buildValue: simMl.getLaneBuildValue(lane),
             gold: Math.floor(lane.gold),
             totalSendSpend: lane.totalSendSpend,
+            totalSendCount: lane.totalSendCount || 0,
+            totalBuildSpend: lane.totalBuildSpend || 0,
             totalLeaksTaken: lane.totalLeaksTaken,
+            biggestLeakTaken: lane.biggestLeakTaken || 0,
+            wavesHeld: lane.wavesHeld || 0,
+            wavesLeaked: lane.wavesLeaked || 0,
+            longestHoldStreak: lane.longestHoldStreak || 0,
             lives: lane.lives,
             teamHp: entry.game.teamHp[lane.side],
             eliminated: lane.eliminated,
@@ -533,8 +636,13 @@ function createMultilaneRuntime({
         });
         io.to(roomId).emit("ml_game_over", {
           winnerLaneIndex: winnerLane, winnerName,
+          winningTeam,
+          winningSide,
+          losingTeam,
+          losingSide,
+          finalRound: entry.game.roundNumber,
           gameDuration: gameDurationSec,
-          causeLoss: "Lives reduced to 0",
+          causeLoss,
           finalStats,
           waveSnapshots: entry.game.roundSnapshots,
         });
@@ -629,10 +737,13 @@ function createMultilaneRuntime({
   }
   return {
     applyMultilaneAction,
+    attachTakeoverBot,
     buildAvailableUnits,
+    buildRematchStatus,
     capFirst,
     countMlTeams,
     createMLRoom,
+    detachTakeoverBot,
     ffaTeamForLane,
     mlLobbyUpdatePayload,
     pickBalancedMlTeam,

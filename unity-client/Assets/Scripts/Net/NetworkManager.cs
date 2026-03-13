@@ -24,8 +24,11 @@ namespace CastleDefender.Net
 
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Connection")]
-        [Tooltip("Railway URL or http://localhost:3000")]
+        [Tooltip("Production server URL (used in builds and WebGL)")]
         public string ServerUrl = "https://castle-defender-production.up.railway.app";
+
+        [Tooltip("Server URL used when running in the Unity Editor (overrides ServerUrl)")]
+        public string EditorServerUrl = "http://127.0.0.1:3000";
 
         // ── Session state ─────────────────────────────────────────────────────
         public string MySocketId   { get; private set; }
@@ -42,12 +45,20 @@ namespace CastleDefender.Net
         // has a chance to hook in.
         public LoadoutEntry[] LastMatchLoadout { get; private set; }
 
+        // Cached so LoadoutPhaseManager.Start() can pick it up after scene load.
+        // Cleared when ml_loadout_phase_end or ml_match_config(loadout) arrives.
+        public MLLoadoutPhaseStartPayload PendingLoadoutPhase { get; private set; }
+
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
         public event Action<MLRoomJoinedPayload>      OnMLRoomJoined;
         public event Action<MLLobbyUpdate>            OnMLLobbyUpdate;
         public event Action<MLMatchReadyPayload>      OnMLMatchReady;
         public event Action<MLMatchConfig>            OnMLMatchConfig;
+
+        // ── Loadout phase events ──────────────────────────────────────────────
+        public event Action<MLLoadoutPhaseStartPayload>  OnMLLoadoutPhaseStart;
+        public event Action<MLLoadoutPhaseEndPayload>    OnMLLoadoutPhaseEnd;
 
         // ── Classic Lobby events ──────────────────────────────────────────────
         public event Action<ClassicRoomCreatedPayload>  OnClassicRoomCreated;
@@ -64,6 +75,8 @@ namespace CastleDefender.Net
 
         // ── Gameplay events ───────────────────────────────────────────────────
         public event Action<RematchVotePayload>          OnRematchVote;
+        public event Action<RematchStatusPayload>        OnRematchStatus;
+        public event Action<RematchStartingPayload>      OnRematchStarting;
         public event Action<ActionAppliedPayload>        OnActionApplied;
         public event Action<MLPlayerEliminatedPayload>   OnMLPlayerEliminated;
         public event Action<MLSpectatorJoinPayload>      OnMLSpectatorJoin;
@@ -107,7 +120,7 @@ namespace CastleDefender.Net
 #endif
 
         // ── Resolved URL ──────────────────────────────────────────────────────
-        string ResolvedServerUrl
+        public string ResolvedServerUrl
         {
             get
             {
@@ -119,6 +132,8 @@ namespace CastleDefender.Net
                 return standard
                     ? $"{page.Scheme}://{page.Host}"
                     : $"{page.Scheme}://{page.Host}:{page.Port}";
+#elif UNITY_EDITOR
+                return !string.IsNullOrEmpty(EditorServerUrl) ? EditorServerUrl : ServerUrl;
 #else
                 return ServerUrl;
 #endif
@@ -164,6 +179,8 @@ namespace CastleDefender.Net
             JSIO_On("ml_lobby_update");
             JSIO_On("ml_match_ready");
             JSIO_On("ml_match_config");
+            JSIO_On("ml_loadout_phase_start");
+            JSIO_On("ml_loadout_phase_end");
             JSIO_On("room_created");
             JSIO_On("room_joined");
             JSIO_On("match_ready");
@@ -172,6 +189,8 @@ namespace CastleDefender.Net
             JSIO_On("ml_game_over");
             JSIO_On("game_over");
             JSIO_On("rematch_vote");
+            JSIO_On("rematch_status");
+            JSIO_On("rematch_starting");
             JSIO_On("action_applied");
             JSIO_On("ml_player_eliminated");
             JSIO_On("ml_spectator_join");
@@ -261,8 +280,27 @@ namespace CastleDefender.Net
                 {
                     var cfg = JsonUtility.FromJson<MLMatchConfig>(json);
                     if (cfg.loadout != null && cfg.loadout.Length > 0)
+                    {
                         LastMatchLoadout = cfg.loadout;
+                        PendingLoadoutPhase = null; // phase complete
+                    }
                     OnMLMatchConfig?.Invoke(cfg);
+                    break;
+                }
+                case "ml_loadout_phase_start":
+                {
+                    var p = JsonUtility.FromJson<MLLoadoutPhaseStartPayload>(json);
+                    PendingLoadoutPhase = p;
+                    Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s units={p.availableUnits?.Length}");
+                    OnMLLoadoutPhaseStart?.Invoke(p);
+                    break;
+                }
+                case "ml_loadout_phase_end":
+                {
+                    var p = JsonUtility.FromJson<MLLoadoutPhaseEndPayload>(json);
+                    PendingLoadoutPhase = null;
+                    Debug.Log($"[NM] ml_loadout_phase_end reason={p.reason}");
+                    OnMLLoadoutPhaseEnd?.Invoke(p);
                     break;
                 }
                 case "room_created":
@@ -312,6 +350,12 @@ namespace CastleDefender.Net
                 }
                 case "rematch_vote":
                     OnRematchVote?.Invoke(JsonUtility.FromJson<RematchVotePayload>(json));
+                    break;
+                case "rematch_status":
+                    OnRematchStatus?.Invoke(JsonUtility.FromJson<RematchStatusPayload>(json));
+                    break;
+                case "rematch_starting":
+                    OnRematchStarting?.Invoke(JsonUtility.FromJson<RematchStartingPayload>(json));
                     break;
                 case "action_applied":
                     OnActionApplied?.Invoke(JsonUtility.FromJson<ActionAppliedPayload>(json));
@@ -496,8 +540,27 @@ namespace CastleDefender.Net
             {
                 var cfg = FromResp<MLMatchConfig>(resp);
                 if (cfg.loadout != null && cfg.loadout.Length > 0)
+                {
                     LastMatchLoadout = cfg.loadout;
+                    PendingLoadoutPhase = null; // phase complete
+                }
                 OnMLMatchConfig?.Invoke(cfg);
+            });
+
+            _socket.OnUnityThread("ml_loadout_phase_start", resp =>
+            {
+                var p = FromResp<MLLoadoutPhaseStartPayload>(resp);
+                PendingLoadoutPhase = p;
+                Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s units={p.availableUnits?.Length}");
+                OnMLLoadoutPhaseStart?.Invoke(p);
+            });
+
+            _socket.OnUnityThread("ml_loadout_phase_end", resp =>
+            {
+                var p = FromResp<MLLoadoutPhaseEndPayload>(resp);
+                PendingLoadoutPhase = null;
+                Debug.Log($"[NM] ml_loadout_phase_end reason={p.reason}");
+                OnMLLoadoutPhaseEnd?.Invoke(p);
             });
 
             // ── Classic Lobby ─────────────────────────────────────────────────
@@ -556,6 +619,16 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("rematch_vote", resp =>
             {
                 OnRematchVote?.Invoke(FromResp<RematchVotePayload>(resp));
+            });
+
+            _socket.OnUnityThread("rematch_status", resp =>
+            {
+                OnRematchStatus?.Invoke(FromResp<RematchStatusPayload>(resp));
+            });
+
+            _socket.OnUnityThread("rematch_starting", resp =>
+            {
+                OnRematchStarting?.Invoke(FromResp<RematchStartingPayload>(resp));
             });
 
             _socket.OnUnityThread("action_applied", resp =>
@@ -685,6 +758,12 @@ namespace CastleDefender.Net
 #endif // !UNITY_WEBGL || UNITY_EDITOR
 
         // ─────────────────────────────────────────────────────────────────────
+        /// <summary>Send the player's confirmed loadout unit type IDs to the server.</summary>
+        public void EmitLoadoutConfirm(int[] unitTypeIds)
+        {
+            Emit("ml_loadout_confirm", new { unitTypeIds });
+        }
+
         /// <summary>Emit a socket event. Pass null to emit with no payload.</summary>
         public void Emit(string eventName, object data = null)
         {

@@ -125,6 +125,7 @@ namespace CastleDefender.UI
 
             if (req.result != UnityWebRequest.Result.Success)
             {
+                Debug.LogError($"[LoginUI] FetchConfig failed — result:{req.result} error:'{req.error}' url:{url} body:'{req.downloadHandler?.text}'");
                 SetStatus("Could not reach server. Check connection.");
                 yield break;
             }
@@ -545,8 +546,8 @@ namespace CastleDefender.UI
                     : $"{page.Scheme}://{page.Host}:{page.Port}";
 #else
                 return NetworkManager.Instance != null
-                    ? NetworkManager.Instance.ServerUrl
-                    : "http://localhost:3000";
+                    ? NetworkManager.Instance.ResolvedServerUrl
+                    : "http://127.0.0.1:3000";
 #endif
             }
         }

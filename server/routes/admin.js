@@ -1368,6 +1368,7 @@ router.post('/game-config', requireAdmin, requirePermission('config.write'), asy
   }
 
   try {
+    const gameConfig = require('../gameConfig');
     const versionRes = await db.query(
       `SELECT COALESCE(MAX(version),0)+1 AS next FROM game_configs WHERE mode=$1`, [mode]
     );
@@ -1386,7 +1387,8 @@ router.post('/game-config', requireAdmin, requirePermission('config.write'), asy
     );
     await audit(db, 'publish_config', 'game_config', result.rows[0].id,
       { mode, version, label, activate }, req.adminEmail, req.ip);
-    res.status(201).json({ config: result.rows[0], note: 'Changes take effect on next server restart.' });
+    if (activate) gameConfig.setActiveConfig(mode, config);
+    res.status(201).json({ config: result.rows[0], note: activate ? 'Changes are active for new matches now.' : 'Saved without activating.' });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
@@ -1399,13 +1401,16 @@ router.post('/game-config/:id/activate', requireAdmin, requirePermission('config
   const db = require('../db');
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid config ID' });
   try {
+    const gameConfig = require('../gameConfig');
     const check = await db.query(`SELECT id, mode, version, label FROM game_configs WHERE id=$1`, [req.params.id]);
     if (!check.rows[0]) return res.status(404).json({ error: 'Config version not found' });
     await db.query(`UPDATE game_configs SET is_active=false WHERE mode=$1`, [check.rows[0].mode]);
     await db.query(`UPDATE game_configs SET is_active=true  WHERE id=$1`,  [req.params.id]);
+    const active = await db.query(`SELECT config_json FROM game_configs WHERE id=$1`, [req.params.id]);
+    if (active.rows[0]?.config_json) gameConfig.setActiveConfig(check.rows[0].mode, active.rows[0].config_json);
     await audit(db, 'activate_config', 'game_config', req.params.id,
       { mode: check.rows[0].mode, version: check.rows[0].version }, req.adminEmail, req.ip);
-    res.json({ activated: true, config: check.rows[0], note: 'Changes take effect on next server restart.' });
+    res.json({ activated: true, config: check.rows[0], note: 'Changes are active for new matches now.' });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
@@ -1436,12 +1441,12 @@ router.post('/assets/upload-image', requireAdmin, requirePermission('config.writ
     }
 
     const rootCandidates = [
-      path.join(__dirname, '..', '..', 'client'),
-      path.join(__dirname, '..', 'client'),
+      path.join(__dirname, '..', '..', 'admin-client'),
+      path.join(__dirname, '..', 'admin-client'),
     ];
-    const clientRoot =
-      rootCandidates.find((p) => fs.existsSync(path.join(p, 'index.html'))) || rootCandidates[0];
-    const uploadDir = path.join(clientRoot, 'assets', 'uploads', 'towers');
+    const adminAssetRoot =
+      rootCandidates.find((p) => fs.existsSync(path.join(p, 'assets')) ) || rootCandidates[0];
+    const uploadDir = path.join(adminAssetRoot, 'assets', 'uploads', 'towers');
     await fsp.mkdir(uploadDir, { recursive: true });
 
     const safeBase = path

@@ -109,6 +109,7 @@ namespace CastleDefender.Net
         public string key;          // "runner"|"footman"|etc.
         public string name;         // display name
         public int    send_cost;    // gold cost to send
+        public int    build_cost;   // gold cost to place as a defender / tower
         public int    hp;
         public float  path_speed;
         public float  income;        // gold-per-wave income bonus
@@ -420,7 +421,13 @@ namespace CastleDefender.Net
         public float  buildValue;
         public int    gold;
         public float  totalSendSpend;
+        public int    totalSendCount;
+        public float  totalBuildSpend;
         public int    totalLeaksTaken;
+        public int    biggestLeakTaken;
+        public int    wavesHeld;
+        public int    wavesLeaked;
+        public int    longestHoldStreak;
         public int    lives;
         public int    teamHp;
         public bool   eliminated;
@@ -434,10 +441,14 @@ namespace CastleDefender.Net
         public float buildValue;
         public int   gold;
         public int   leaksTaken;
+        public int   leakDamage;
         public float sendSpend;
+        public int   sendCount;
+        public float buildSpend;
         public int   lives;
         public int   teamHp;
         public bool  eliminated;
+        public string holdResult;
     }
 
     [Serializable]
@@ -445,6 +456,7 @@ namespace CastleDefender.Net
     {
         public int              round;
         public bool             terminal;
+        public int              elapsedSeconds;
         public MLWaveLaneStat[] lanes;
     }
 
@@ -453,6 +465,11 @@ namespace CastleDefender.Net
     {
         public int    winnerLaneIndex;
         public string winnerName;
+        public string winningTeam;
+        public string winningSide;
+        public string losingTeam;
+        public string losingSide;
+        public int    finalRound;
         // Phase 1 additions
         public int    gameDuration;
         public string causeLoss;
@@ -475,6 +492,22 @@ namespace CastleDefender.Net
     {
         public int count;
         public int needed;
+    }
+
+    [Serializable]
+    public class RematchStatusPayload
+    {
+        public int      count;
+        public int      needed;
+        public int[]    acceptedLaneIndices;
+        public string[] acceptedDisplayNames;
+        public bool     allAccepted;
+    }
+
+    [Serializable]
+    public class RematchStartingPayload
+    {
+        public int countdownSeconds;
     }
 
     // ─── Action Applied ───────────────────────────────────────────────────────
@@ -637,9 +670,8 @@ namespace CastleDefender.Net
     {
         public int   level;         // target level (2, 3, 4)
         public int   upgrade_cost;
-        public int   req_income;
-        public float hp_multiplier;
-        public float dmg_multiplier;
+        public float multiplier;
+        public string notes;
     }
 
     // ─── Rating Update (Phase U8) ─────────────────────────────────────────────

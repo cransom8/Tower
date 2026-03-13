@@ -111,6 +111,9 @@ namespace CastleDefender.Game
         public static void RequestRematch()
             => NetworkManager.Instance.Emit("request_rematch", null);
 
+        public static void CancelRematch()
+            => NetworkManager.Instance.Emit("cancel_rematch", null);
+
         // ── Queue System (Phase U5) ───────────────────────────────────────────
 
         /// <param name="gameType">line_wars (Forge Wars) or other game type</param>

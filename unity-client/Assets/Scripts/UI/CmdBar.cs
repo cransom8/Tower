@@ -15,7 +15,7 @@
 //
 // Tap main button area → send one unit (spawn_unit, queued as pendingSend until combat starts).
 // Tap AUTO strip       → toggle autosend on/off for that unit.
-//   • Send buttons are only interactive during the BUILD phase.
+//   • Send buttons are interactive during BUILD and COMBAT phases.
 //   • Autosend is globally enabled whenever ≥1 unit has AUTO on.
 //   • Server fill priority = loadoutKeys order.
 
@@ -59,6 +59,12 @@ namespace CastleDefender.UI
         [Header("Unit Icons (assign in Inspector)")]
         [SerializeField] public Sprite[] UnitIcons;
 
+        [Header("3D Portraits")]
+        [Tooltip("Optional portrait camera. If omitted, CmdBar creates a hidden runtime portrait studio.")]
+        [SerializeField] UnitPortraitCamera PortraitCam;
+        [Tooltip("Optional registry override for portrait captures. Falls back to LaneRenderer/TileGrid.")]
+        [SerializeField] UnitPrefabRegistry PortraitRegistry;
+
         // ── Fallbacks ─────────────────────────────────────────────────────────
         static readonly string[] FallbackUnitKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
         static readonly int[]    FallbackUnitCosts  = { 1, 3, 4, 5, 6 };
@@ -66,6 +72,13 @@ namespace CastleDefender.UI
         // ── Catalog-driven state ──────────────────────────────────────────────
         string[] _unitKeys;
         int[]    _unitCosts;
+        readonly Dictionary<string, Texture2D> _portraitCache = new();
+        readonly HashSet<string> _capturePending = new();
+        readonly Queue<string> _captureQueue = new();
+        readonly List<RawImage> _buttonPortraits = new();
+        RenderTexture _runtimePortraitTexture;
+        GameObject _runtimePortraitRoot;
+        bool _isCapturingPortraits;
 
         // ── Autosend state ────────────────────────────────────────────────────
         Dictionary<string, bool> _autoUnits = new()
@@ -115,6 +128,8 @@ namespace CastleDefender.UI
             }
 
             ApplyUnitButtonIcons();
+            EnsurePortraitSlots();
+            RefreshButtonPortraits();
 
             // Wire unit buttons
             for (int i = 0; i < UnitButtons.Length; i++)
@@ -149,6 +164,17 @@ namespace CastleDefender.UI
                 NetworkManager.Instance.OnQueueUpdate   -= HandleQueueUpdate;
                 NetworkManager.Instance.OnMLMatchConfig -= HandleMatchConfig;
             }
+            if (_runtimePortraitRoot != null) Destroy(_runtimePortraitRoot);
+            if (_runtimePortraitTexture != null)
+            {
+                _runtimePortraitTexture.Release();
+                Destroy(_runtimePortraitTexture);
+            }
+            foreach (var tex in _portraitCache.Values)
+            {
+                if (tex != null) Destroy(tex);
+            }
+            _portraitCache.Clear();
         }
 
         // ── Queue update ──────────────────────────────────────────────────────
@@ -246,10 +272,185 @@ namespace CastleDefender.UI
 
         static void ApplyIcon(Button btn, Sprite sprite)
         {
-            if (btn == null || btn.image == null || sprite == null) return;
-            btn.image.sprite = sprite;
-            btn.image.preserveAspect = true;
-            btn.image.type = Image.Type.Simple;
+            if (btn == null || sprite == null) return;
+
+            var target = btn.transform.Find("Icon")?.GetComponent<Image>();
+            if (target == null) target = btn.image;
+            if (target == null) return;
+
+            target.sprite = sprite;
+            target.preserveAspect = true;
+            target.type = Image.Type.Simple;
+            target.color = Color.white;
+        }
+
+        void EnsurePortraitSlots()
+        {
+            _buttonPortraits.Clear();
+            if (UnitButtons == null) return;
+            for (int i = 0; i < UnitButtons.Length; i++)
+                _buttonPortraits.Add(EnsurePortraitImage(UnitButtons[i]));
+        }
+
+        RawImage EnsurePortraitImage(Button btn)
+        {
+            if (btn == null) return null;
+            var existing = btn.transform.Find("Portrait")?.GetComponent<RawImage>();
+            if (existing != null) return existing;
+            var existingInFrame = btn.transform.Find("PortraitFrame/Portrait")?.GetComponent<RawImage>();
+            if (existingInFrame != null) return existingInFrame;
+
+            var frameRect = btn.transform.Find("IconBg") as RectTransform;
+            var iconRect = btn.transform.Find("Icon") as RectTransform;
+            var referenceRect = frameRect != null ? frameRect : iconRect;
+            var frameGO = new GameObject("PortraitFrame", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Mask));
+            frameGO.transform.SetParent(btn.transform, false);
+            var frameRt = frameGO.GetComponent<RectTransform>();
+            frameRt.pivot = new Vector2(0.5f, 0.5f);
+
+            if (referenceRect != null)
+            {
+                frameRt.anchorMin = referenceRect.anchorMin;
+                frameRt.anchorMax = referenceRect.anchorMax;
+                frameRt.anchoredPosition = referenceRect.anchoredPosition;
+                frameRt.sizeDelta = referenceRect.sizeDelta;
+                frameRt.offsetMin = referenceRect.offsetMin + new Vector2(2f, 2f);
+                frameRt.offsetMax = referenceRect.offsetMax + new Vector2(-2f, -2f);
+                frameGO.transform.SetSiblingIndex(referenceRect.GetSiblingIndex() + 1);
+            }
+            else
+            {
+                frameRt.anchorMin = new Vector2(0.10f, 0.24f);
+                frameRt.anchorMax = new Vector2(0.90f, 0.72f);
+                frameRt.offsetMin = Vector2.zero;
+                frameRt.offsetMax = Vector2.zero;
+            }
+
+            var frameImage = frameGO.GetComponent<Image>();
+            frameImage.color = new Color(0.08f, 0.12f, 0.20f, 0.96f);
+            var mask = frameGO.GetComponent<Mask>();
+            mask.showMaskGraphic = false;
+
+            var portraitGO = new GameObject("Portrait", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
+            portraitGO.transform.SetParent(frameGO.transform, false);
+            var portraitRect = portraitGO.GetComponent<RectTransform>();
+            portraitRect.anchorMin = Vector2.zero;
+            portraitRect.anchorMax = Vector2.one;
+            portraitRect.offsetMin = new Vector2(2f, 2f);
+            portraitRect.offsetMax = new Vector2(-2f, -2f);
+            portraitRect.pivot = new Vector2(0.5f, 0.5f);
+
+            var raw = portraitGO.GetComponent<RawImage>();
+            raw.color = new Color(1f, 1f, 1f, 0f);
+            raw.raycastTarget = false;
+            var fitter = portraitGO.AddComponent<AspectRatioFitter>();
+            fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+            fitter.aspectRatio = 1f;
+            return raw;
+        }
+
+        void RefreshButtonPortraits()
+        {
+            if (_buttonPortraits.Count == 0) EnsurePortraitSlots();
+            for (int i = 0; i < _buttonPortraits.Count; i++)
+            {
+                var raw = _buttonPortraits[i];
+                if (raw == null) continue;
+
+                string key = (_unitKeys != null && i < _unitKeys.Length) ? _unitKeys[i] : null;
+                if (string.IsNullOrEmpty(key))
+                {
+                    raw.texture = null;
+                    raw.color = new Color(1f, 1f, 1f, 0f);
+                    continue;
+                }
+
+                if (_portraitCache.TryGetValue(key, out var tex) && tex != null)
+                {
+                    ApplyPortraitToButton(i, tex);
+                    continue;
+                }
+
+                raw.texture = null;
+                raw.color = new Color(1f, 1f, 1f, 0f);
+                StartPortraitCapture(key);
+            }
+        }
+
+        void ApplyPortraitToButton(int index, Texture texture)
+        {
+            if (index < 0 || index >= _buttonPortraits.Count) return;
+            var raw = _buttonPortraits[index];
+            if (raw == null) return;
+
+            raw.texture = texture;
+            raw.color = Color.white;
+
+            var icon = UnitButtons != null && index < UnitButtons.Length
+                ? UnitButtons[index].transform.Find("Icon")?.GetComponent<Image>()
+                : null;
+            if (icon != null) icon.color = new Color(1f, 1f, 1f, 0.03f);
+        }
+
+        void StartPortraitCapture(string key)
+        {
+            if (string.IsNullOrEmpty(key) || _capturePending.Contains(key)) return;
+            var portraitCam = EnsurePortraitCamera();
+            if (portraitCam == null) return;
+
+            _capturePending.Add(key);
+            _captureQueue.Enqueue(key);
+            if (!_isCapturingPortraits)
+                StartCoroutine(ProcessPortraitQueue(portraitCam));
+        }
+
+        IEnumerator ProcessPortraitQueue(UnitPortraitCamera portraitCam)
+        {
+            _isCapturingPortraits = true;
+            while (_captureQueue.Count > 0)
+            {
+                var key = _captureQueue.Dequeue();
+                bool done = false;
+                Texture2D captured = null;
+                portraitCam.StartIconCapture(key, tex =>
+                {
+                    captured = tex;
+                    done = true;
+                });
+                while (!done) yield return null;
+
+                _capturePending.Remove(key);
+                if (captured == null || _unitKeys == null) continue;
+
+                _portraitCache[key] = captured;
+                for (int i = 0; i < _unitKeys.Length; i++)
+                {
+                    if (_unitKeys[i] == key) ApplyPortraitToButton(i, captured);
+                }
+            }
+            _isCapturingPortraits = false;
+        }
+
+        UnitPortraitCamera EnsurePortraitCamera()
+        {
+            if (PortraitCam != null && PortraitCam.Registry != null) return PortraitCam;
+
+            var registry = RuntimePortraitStudio.ResolveRegistry(PortraitRegistry);
+            if (registry == null) return null;
+
+            if (PortraitCam != null)
+            {
+                PortraitCam.Registry = registry;
+                return PortraitCam;
+            }
+
+            if (_runtimePortraitRoot == null)
+            {
+                PortraitCam = RuntimePortraitStudio.Create("CmdBarPortraitStudio", registry, out _runtimePortraitRoot, out _runtimePortraitTexture);
+            }
+
+            PortraitCam.Registry = registry;
+            return PortraitCam;
         }
 
         void Update()
@@ -257,20 +458,21 @@ namespace CastleDefender.UI
             var sa   = SnapshotApplier.Instance;
             var lane = sa?.MyLane;
             var snap = sa?.LatestML;
+            RefreshButtonPortraits();
 
             if (lane == null || _unitCosts == null || UnitButtons.Length == 0) return;
             if (!UnitButtons[0].gameObject.activeSelf) return;
 
-            // Send buttons are only usable during the build phase.
+            // Send buttons are usable during build and combat phases.
             // When snap is null the match hasn't started — keep buttons disabled.
-            bool isBuild = snap != null && snap.roundState == "build";
+            bool canSend = snap != null && (snap.roundState == "build" || snap.roundState == "combat");
 
             for (int i = 0; i < UnitButtons.Length && i < _unitCosts.Length; i++)
             {
                 bool canAfford = lane.gold >= _unitCosts[i];
-                bool active    = isBuild && canAfford;
+                bool active    = canSend && canAfford;
                 UnitButtons[i].interactable  = active;
-                UnitButtons[i].image.color   = active ? Color.white : (isBuild ? new Color(0.5f, 0.5f, 0.5f, 0.6f) : ColorPhaseOff);
+                UnitButtons[i].image.color   = active ? Color.white : (canSend ? new Color(0.5f, 0.5f, 0.5f, 0.6f) : ColorPhaseOff);
             }
 
             // Repurpose QueueDrainBar as build-phase countdown (drains as time runs out)

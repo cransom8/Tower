@@ -36,9 +36,9 @@ namespace CastleDefender.UI
 
         // Hardcoded fallback (used when CatalogLoader barracks levels not available)
         static readonly BarracksLevelEntry[] FallbackLevels = {
-            new BarracksLevelEntry { level=2, upgrade_cost=100, req_income= 8, hp_multiplier=1.15f, dmg_multiplier=1.10f },
-            new BarracksLevelEntry { level=3, upgrade_cost=220, req_income=18, hp_multiplier=1.30f, dmg_multiplier=1.20f },
-            new BarracksLevelEntry { level=4, upgrade_cost=400, req_income=35, hp_multiplier=1.45f, dmg_multiplier=1.30f },
+            new BarracksLevelEntry { level=2, upgrade_cost=100, multiplier=1.15f, notes="Fallback level 2" },
+            new BarracksLevelEntry { level=3, upgrade_cost=220, multiplier=1.30f, notes="Fallback level 3" },
+            new BarracksLevelEntry { level=4, upgrade_cost=400, multiplier=1.45f, notes="Fallback level 4" },
         };
 
         System.Collections.Generic.IReadOnlyList<BarracksLevelEntry> Levels =>
@@ -59,8 +59,8 @@ namespace CastleDefender.UI
         {
             if (currentLevel >= 4)
             {
-                TxtTitle.text      = "Barracks — Lv 4 (MAX)";
-                TxtBenefits.text   = "HP ×1.45  DMG ×1.30  Speed ×1.08  IncBonus +2.0g";
+                TxtTitle.text      = "Barracks - Lv 4 (MAX)";
+                TxtBenefits.text   = "Admin-controlled barracks multiplier is already at the max configured level.";
                 TxtCost.text       = "Maximum level reached.";
                 TxtAffordance.text = "";
                 BtnConfirm.interactable = false;
@@ -74,30 +74,24 @@ namespace CastleDefender.UI
             var d         = Levels[idx];
             int nextLevel = currentLevel + 1;
 
-            TxtTitle.text    = $"Barracks — Lv {currentLevel} → Lv {nextLevel}";
-            TxtBenefits.text = $"HP ×{d.hp_multiplier:0.00}  DMG ×{d.dmg_multiplier:0.00}";
-            TxtCost.text     = $"Upgrade cost: {d.upgrade_cost} gold  (Need {d.req_income}g/s income)";
+            TxtTitle.text    = $"Barracks - Lv {currentLevel} -> Lv {nextLevel}";
+            TxtBenefits.text = $"Stat multiplier x{d.multiplier:0.00}";
+            TxtCost.text     = $"Upgrade cost: {d.upgrade_cost} gold";
 
             bool canAfford = gold >= d.upgrade_cost;
-            bool hasIncome = income >= d.req_income;
 
-            if (canAfford && hasIncome)
+            if (canAfford)
             {
                 TxtAffordance.text  = "+ Affordable";
                 TxtAffordance.color = new Color(0.3f, 0.9f, 0.4f);
             }
-            else if (!canAfford)
-            {
-                TxtAffordance.text  = $"✗ Need {d.upgrade_cost - Mathf.FloorToInt(gold)} more gold";
-                TxtAffordance.color = new Color(0.9f, 0.3f, 0.3f);
-            }
             else
             {
-                TxtAffordance.text  = $"✗ Need {d.req_income}g/s income (have {income:0.0}g/s)";
+                TxtAffordance.text  = $"Need {d.upgrade_cost - Mathf.FloorToInt(gold)} more gold";
                 TxtAffordance.color = new Color(0.9f, 0.3f, 0.3f);
             }
 
-            BtnConfirm.interactable = canAfford && hasIncome;
+            BtnConfirm.interactable = canAfford;
             OpenPanel();
         }
 

@@ -26,6 +26,7 @@ namespace CastleDefender.Net
         public int MyLaneIndex  { get; set; } = 0;
         public int ViewingLane  { get; set; } = 0;
         public int TotalLanes   { get; set; } = 1;
+        float _nextDebugLogAt;
 
         // ── Events ────────────────────────────────────────────────────────────
         public event Action<MLSnapshot>      OnMLSnapshotApplied;
@@ -42,6 +43,7 @@ namespace CastleDefender.Net
         {
             var nm = NetworkManager.Instance;
             if (nm == null) return;
+            SyncLaneStateFromNetworkManager(nm);
             nm.OnMLMatchReady         += HandleMLMatchReady;
             nm.OnMLMatchConfig        += HandleMLMatchConfig;
             nm.OnMLStateSnapshot      += HandleMLSnapshot;
@@ -70,8 +72,7 @@ namespace CastleDefender.Net
         void HandleMLMatchReady(MLMatchReadyPayload p)
         {
             // laneIndex is stored on NetworkManager from ml_room_created/ml_room_joined
-            MyLaneIndex = NetworkManager.Instance.MyLaneIndex;
-            ViewingLane = MyLaneIndex;
+            SyncLaneStateFromNetworkManager(NetworkManager.Instance);
             TotalLanes  = p.playerCount;
             LatestMLMatchReady = p;
             LatestML    = null;
@@ -84,8 +85,28 @@ namespace CastleDefender.Net
 
         void HandleMLSnapshot(MLSnapshot snap)
         {
+            SyncLaneStateFromNetworkManager(NetworkManager.Instance);
             LatestML = snap;
+            if (Time.unscaledTime >= _nextDebugLogAt)
+            {
+                _nextDebugLogAt = Time.unscaledTime + 1.5f;
+                var myLane = GetLane(MyLaneIndex);
+                Debug.Log(
+                    $"[SnapshotApplier] nmLane={NetworkManager.Instance?.MyLaneIndex ?? -1} " +
+                    $"saLane={MyLaneIndex} resolved={(myLane != null ? myLane.laneIndex : -1)} " +
+                    $"gold={(myLane != null ? myLane.gold : -999f)} income={(myLane != null ? myLane.income : -999f)} " +
+                    $"lanes={(snap?.lanes != null ? snap.lanes.Length : 0)}"
+                );
+            }
             OnMLSnapshotApplied?.Invoke(snap);
+        }
+
+        void SyncLaneStateFromNetworkManager(NetworkManager nm)
+        {
+            if (nm == null) return;
+            MyLaneIndex = nm.MyLaneIndex;
+            if (ViewingLane < 0 || ViewingLane == 0)
+                ViewingLane = MyLaneIndex;
         }
 
         void HandleClassicMatchReady(ClassicMatchReadyPayload p)
@@ -104,8 +125,12 @@ namespace CastleDefender.Net
         public MLLaneSnap GetLane(int index)
         {
             if (LatestML?.lanes == null) return null;
-            if (index < 0 || index >= LatestML.lanes.Length) return null;
-            return LatestML.lanes[index];
+            for (int i = 0; i < LatestML.lanes.Length; i++)
+            {
+                var lane = LatestML.lanes[i];
+                if (lane != null && lane.laneIndex == index) return lane;
+            }
+            return null;
         }
 
         public MLLaneSnap MyLane     => GetLane(MyLaneIndex);

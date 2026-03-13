@@ -137,15 +137,14 @@ router.post('/register', async (req, res) => {
 
     const player = await authService.registerWithPassword(email.trim(), displayName.trim(), password);
 
-    // Send verification email (non-fatal if mailer fails)
-    try {
-      const { raw } = await authService.createEmailVerificationToken(player.id);
+    // Send verification email — fire and forget so SMTP latency doesn't block the response
+    authService.createEmailVerificationToken(player.id).then(({ raw }) => {
       const mailer  = require('../services/mailer');
       const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-      await mailer.sendEmailVerification(email.trim().toLowerCase(), `${baseUrl}/?verify=${raw}`);
-    } catch (mailErr) {
+      return mailer.sendEmailVerification(email.trim().toLowerCase(), `${baseUrl}/?verify=${raw}`);
+    }).catch(mailErr => {
       log.error('[auth] verification email error', { err: mailErr.message });
-    }
+    });
 
     res.status(201).json({ requiresVerification: true, email: email.trim().toLowerCase() });
   } catch (err) {
@@ -409,10 +408,13 @@ router.post('/resend-verification', async (req, res) => {
       if (player.email_verified) {
         return res.json({ ok: true, alreadyVerified: true });
       }
-      const { raw } = await authService.createEmailVerificationToken(player.id);
-      const mailer  = require('../services/mailer');
-      const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
-      await mailer.sendEmailVerification(player.email, `${baseUrl}/?verify=${raw}`);
+      authService.createEmailVerificationToken(player.id).then(({ raw }) => {
+        const mailer  = require('../services/mailer');
+        const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+        return mailer.sendEmailVerification(player.email, `${baseUrl}/?verify=${raw}`);
+      }).catch(mailErr => {
+        log.error('[auth] resend-verification email error', { err: mailErr.message });
+      });
     }
   } catch (err) {
     log.error('[auth] resend-verification error', { err: err.message });

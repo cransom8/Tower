@@ -6,7 +6,7 @@ const crypto = require('crypto');
 
 const GAME_TYPES    = new Set(['line_wars', 'survival']);
 const MATCH_FORMATS = new Set(['1v1', '2v2', 'ffa']);
-const VALID_DIFFS   = new Set(['easy', 'medium', 'hard']);
+const VALID_DIFFS   = new Set(['easy', 'medium', 'hard', 'insane']);
 
 // Total player-slots needed to launch a match per format
 const FORMAT_SLOTS = { '1v1': 2, '2v2': 4, 'ffa': 4 };

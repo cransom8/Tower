@@ -253,9 +253,9 @@ namespace CastleDefender.Net
         static void FallbackBarracks()
         {
             BarracksLevels.Clear();
-            BarracksLevels.Add(new BarracksLevelEntry { level=2, upgrade_cost=100, req_income= 8, hp_multiplier=1.15f, dmg_multiplier=1.10f });
-            BarracksLevels.Add(new BarracksLevelEntry { level=3, upgrade_cost=220, req_income=18, hp_multiplier=1.30f, dmg_multiplier=1.20f });
-            BarracksLevels.Add(new BarracksLevelEntry { level=4, upgrade_cost=400, req_income=35, hp_multiplier=1.45f, dmg_multiplier=1.30f });
+            BarracksLevels.Add(new BarracksLevelEntry { level=2, upgrade_cost=100, multiplier=1.15f, notes="Fallback level 2" });
+            BarracksLevels.Add(new BarracksLevelEntry { level=3, upgrade_cost=220, multiplier=1.30f, notes="Fallback level 3" });
+            BarracksLevels.Add(new BarracksLevelEntry { level=4, upgrade_cost=400, multiplier=1.45f, notes="Fallback level 4" });
         }
     }
 }

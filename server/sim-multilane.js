@@ -22,6 +22,7 @@ const {
   applySeparation,
   mulberry32,
 } = require("./sim-core");
+const gameConfig = require("./gameConfig");
 const { getUnitType, getAllUnitTypes } = require("./unitTypes");
 const combatLog = require("./combatLog");
 const {
@@ -67,6 +68,19 @@ const TEAM_HP_START = 20;
 const BUILD_PHASE_TICKS = 600;       // 30 s at 20 Hz
 const TRANSITION_PHASE_TICKS = 200;  // 10 s at 20 Hz
 const ESCALATION_PER_EXTRA_ROUND = 0.10; // +10% HP/DMG per round beyond last wave
+
+function getMlRuntimeSettings() {
+  const cfg = gameConfig.getActiveConfig("multilane") || {};
+  const gp = cfg.globalParams || {};
+  return {
+    startGold: Math.floor(clampNum(gp.startGold, 0, 10000, START_GOLD)),
+    startIncome: clampNum(gp.startIncome, 0, 1000, START_INCOME),
+    livesStart: Math.floor(clampNum(gp.livesStart, 1, 1000, LIVES_START)),
+    teamHpStart: Math.floor(clampNum(gp.teamHpStart, 1, 1000, TEAM_HP_START)),
+    buildPhaseTicks: Math.floor(clampNum(gp.buildPhaseTicks, 20, 7200, BUILD_PHASE_TICKS)),
+    transitionPhaseTicks: Math.floor(clampNum(gp.transitionPhaseTicks, 20, 7200, TRANSITION_PHASE_TICKS)),
+  };
+}
 
 // Shared path suffix appended after each branch's BFS path.
 // Represents the outer shared bridge leading to the enemy base:
@@ -497,6 +511,7 @@ function getBattlefieldTopology(playerCount, laneTeams) {
 
 function normalizeGameOptions(options) {
   const src = options && typeof options === "object" ? options : {};
+  const runtime = getMlRuntimeSettings();
   const laneTeamsRaw = Array.isArray(src.laneTeams) ? src.laneTeams : [];
   const laneTeams = laneTeamsRaw.map((team, idx) => {
     const normalized = String(team || "").trim();
@@ -504,8 +519,12 @@ function normalizeGameOptions(options) {
     return idx % 2 === 0 ? "red" : "blue";
   });
   return {
-    startGold: Math.floor(clampNum(src.startGold, 0, 10000, START_GOLD)),
-    startIncome: clampNum(src.startIncome, 0, 1000, START_INCOME),
+    startGold: Math.floor(clampNum(src.startGold, 0, 10000, runtime.startGold)),
+    startIncome: clampNum(src.startIncome, 0, 1000, runtime.startIncome),
+    livesStart: Math.floor(clampNum(src.livesStart, 1, 1000, runtime.livesStart)),
+    teamHpStart: Math.floor(clampNum(src.teamHpStart, 1, 1000, runtime.teamHpStart)),
+    buildPhaseTicks: Math.floor(clampNum(src.buildPhaseTicks, 20, 7200, runtime.buildPhaseTicks)),
+    transitionPhaseTicks: Math.floor(clampNum(src.transitionPhaseTicks, 20, 7200, runtime.transitionPhaseTicks)),
     laneTeams,
     matchSeed: typeof src.matchSeed === "number" ? (src.matchSeed >>> 0) : undefined,
     battlefieldTopology: getBattlefieldTopology(Number(src.playerCount) || laneTeams.length || 4, laneTeams),
@@ -551,12 +570,21 @@ function createMLGame(playerCount, options) {
       gold: opt.startGold + opt.startIncome,
       income: opt.startIncome,
       incomeRemainder: 0,
-      lives: LIVES_START,
+      lives: opt.livesStart,
       totalSendSpend: 0,
+      totalSendCount: 0,
+      totalBuildSpend: 0,
       totalLeaksTaken: 0,
+      biggestLeakTaken: 0,
+      wavesHeld: 0,
+      wavesLeaked: 0,
+      currentHoldStreak: 0,
+      longestHoldStreak: 0,
       leakCountThisRound: 0,
+      lifeLossThisRound: 0,
       sendCountThisRound: 0,
       sendSpendThisRound: 0,
+      buildSpendThisRound: 0,
       grid,
       path,
       fullPath: buildFullPath(path),
@@ -582,7 +610,10 @@ function createMLGame(playerCount, options) {
     lanes,
     battlefieldTopology,
     // Wave defense state
-    teamHp: { left: TEAM_HP_START, right: TEAM_HP_START },
+    teamHp: { left: opt.teamHpStart, right: opt.teamHpStart },
+    teamHpMax: opt.teamHpStart,
+    buildPhaseTicks: opt.buildPhaseTicks,
+    transitionPhaseTicks: opt.transitionPhaseTicks,
     roundState: "build",
     roundNumber: 1,
     roundStateTicks: 0,
@@ -632,6 +663,32 @@ function getLaneBuildValue(lane) {
     }
   }
   return total;
+}
+
+function getLaneWaveResult(lane) {
+  if (!lane) return "Unknown";
+  if (lane.eliminated && lane.lifeLossThisRound > 0) return "Defeated";
+  if (lane.leakCountThisRound >= 5 || lane.lifeLossThisRound >= 5) return "Crushed";
+  if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0) return "Leaked";
+  return "Held";
+}
+
+function createRoundSnapshotLane(game, lane) {
+  return {
+    laneIndex: lane.laneIndex,
+    income: lane.income,
+    buildValue: getLaneBuildValue(lane),
+    gold: Math.floor(lane.gold),
+    leaksTaken: lane.leakCountThisRound,
+    leakDamage: lane.lifeLossThisRound,
+    sendSpend: lane.sendSpendThisRound,
+    sendCount: lane.sendCountThisRound,
+    buildSpend: lane.buildSpendThisRound,
+    lives: lane.lives,
+    teamHp: game.teamHp[lane.side],
+    eliminated: lane.eliminated,
+    holdResult: getLaneWaveResult(lane),
+  };
 }
 
 function isOpponentLane(game, sourceLaneIndex, targetLaneIndex) {
@@ -690,18 +747,13 @@ function applyMLAction(game, laneIndex, action) {
     lane.gold -= def.cost;
     lane.income += def.income;
     lane.totalSendSpend += def.cost;
+    lane.totalSendCount += 1;
     lane.sendSpendThisRound += def.cost;
     lane.sendCountThisRound += 1;
-    if (game.roundState === "combat") {
-      // Spawn immediately into the target lane during combat
-      const targetLane = game.lanes[targetLaneIdx];
-      if (targetLane && !targetLane.eliminated) {
-        _spawnWaveUnit(game, targetLane, { unit_type: unitType, hp_mult: 1, dmg_mult: 1, speed_mult: 1, spawn_qty: 1 });
-      }
-    } else {
-      if (!game.pendingSends[targetLaneIdx]) game.pendingSends[targetLaneIdx] = [];
-      game.pendingSends[targetLaneIdx].push({ unitType, count: 1 });
-    }
+    // Sends always feed the target lane's next combat wave.
+    // Buying during combat is allowed, but it should never spawn mid-wave.
+    if (!game.pendingSends[targetLaneIdx]) game.pendingSends[targetLaneIdx] = [];
+    game.pendingSends[targetLaneIdx].push({ unitType, count: 1 });
     return { ok: true };
   }
 
@@ -743,6 +795,8 @@ function applyMLAction(game, laneIndex, action) {
     tile.maxHp = hp;
     tile.costHistory = [{ cost: towerDef.cost, refundPct: 100 }];
     lane.gold -= towerDef.cost;
+    lane.totalBuildSpend += towerDef.cost;
+    lane.buildSpendThisRound += towerDef.cost;
     return { ok: true };
   }
 
@@ -760,6 +814,8 @@ function applyMLAction(game, laneIndex, action) {
     if (lane.gold < cost) return { ok: false, reason: "Not enough gold" };
 
     lane.gold -= cost;
+    lane.totalBuildSpend += cost;
+    lane.buildSpendThisRound += cost;
     tile.towerLevel = nextLevel;
     if (!tile.costHistory) tile.costHistory = [];
     tile.costHistory.push({ cost, refundPct: 100 });
@@ -792,6 +848,8 @@ function applyMLAction(game, laneIndex, action) {
       const cost = getTowerUpgradeCost(tile.towerType, nextLevel);
       if (lane.gold < cost) continue;
       lane.gold -= cost;
+      lane.totalBuildSpend += cost;
+      lane.buildSpendThisRound += cost;
       tile.towerLevel = nextLevel;
       if (!tile.costHistory) tile.costHistory = [];
       tile.costHistory.push({ cost, refundPct: 100 });
@@ -828,6 +886,8 @@ function applyMLAction(game, laneIndex, action) {
       const fallback = getBarracksLevelDef(nextLevel);
       if (lane.gold < fallback.cost) return { ok: false, reason: "Not enough gold" };
       lane.gold -= fallback.cost;
+      lane.totalBuildSpend += fallback.cost;
+      lane.buildSpendThisRound += fallback.cost;
       lane.barracks = { level: nextLevel, multiplier: fallback.hpMult };
       return { ok: true };
     }
@@ -835,6 +895,8 @@ function applyMLAction(game, laneIndex, action) {
 
     // Phase F: barracks stores level + DB multiplier only
     lane.gold -= nextDef.upgradeCost;
+    lane.totalBuildSpend += nextDef.upgradeCost;
+    lane.buildSpendThisRound += nextDef.upgradeCost;
     lane.barracks = { level: nextLevel, multiplier: nextDef.multiplier };
     return { ok: true };
   }
@@ -877,7 +939,6 @@ function applyMLAction(game, laneIndex, action) {
     if (VALID_RATES.has(rate)) as.rate = rate;
     if (Array.isArray(loadoutKeys)) as.loadoutKeys = loadoutKeys.slice(0, 5);
     as.tickCounter = 0;
-    if (as.enabled) _runAutosendBuild(game, lane);
     return { ok: true };
   }
 
@@ -1114,19 +1175,21 @@ function _startCombat(game) {
 }
 
 function _startTransition(game) {
+  for (const lane of game.lanes) {
+    if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0) {
+      lane.wavesLeaked += 1;
+      lane.currentHoldStreak = 0;
+      lane.biggestLeakTaken = Math.max(lane.biggestLeakTaken || 0, lane.lifeLossThisRound || lane.leakCountThisRound || 0);
+    } else {
+      lane.wavesHeld += 1;
+      lane.currentHoldStreak = (lane.currentHoldStreak || 0) + 1;
+      lane.longestHoldStreak = Math.max(lane.longestHoldStreak || 0, lane.currentHoldStreak);
+    }
+  }
   game.roundSnapshots.push({
     round: game.roundNumber,
-    lanes: game.lanes.map(l => ({
-      laneIndex:  l.laneIndex,
-      income:     l.income,
-      buildValue: getLaneBuildValue(l),
-      gold:       Math.floor(l.gold),
-      leaksTaken: l.leakCountThisRound,
-      sendSpend:  l.sendSpendThisRound,
-      lives:      l.lives,
-      teamHp:     game.teamHp[l.side],
-      eliminated: l.eliminated,
-    })),
+    elapsedSeconds: Math.floor(game.tick / TICK_HZ),
+    lanes: game.lanes.map(l => createRoundSnapshotLane(game, l)),
   });
   game._pendingEvents.push({
     type: "ml_round_end",
@@ -1146,8 +1209,10 @@ function _startBuild(game) {
     if (lane.eliminated) continue;
     lane.gold += lane.income;
     lane.leakCountThisRound = 0;
+    lane.lifeLossThisRound = 0;
     lane.sendCountThisRound = 0;
     lane.sendSpendThisRound = 0;
+    lane.buildSpendThisRound = 0;
     lane.units = [];
     lane.mobileDefenders.clear();
     lane.spawnQueue = [];
@@ -1212,17 +1277,13 @@ function mlTick(game) {
 
   // ── BUILD PHASE ──────────────────────────────────────────────────────────────
   if (game.roundState === "build") {
-    for (const lane of game.lanes) {
-      if (lane.eliminated) continue;
-      _runAutosendBuild(game, lane);
-    }
-    if (game.roundStateTicks >= BUILD_PHASE_TICKS) _startCombat(game);
+    if (game.roundStateTicks >= (game.buildPhaseTicks || BUILD_PHASE_TICKS)) _startCombat(game);
     return;
   }
 
   // ── TRANSITION PHASE ─────────────────────────────────────────────────────────
   if (game.roundState === "transition") {
-    if (game.roundStateTicks >= TRANSITION_PHASE_TICKS) _startBuild(game);
+    if (game.roundStateTicks >= (game.transitionPhaseTicks || TRANSITION_PHASE_TICKS)) _startBuild(game);
     return;
   }
 
@@ -1427,6 +1488,7 @@ function mlTick(game) {
           game.teamHp[side] = Math.max(0, game.teamHp[side] - 1);
           lane.totalLeaksTaken += 1;
           lane.leakCountThisRound += 1;
+          lane.lifeLossThisRound += 1;
           for (const l of game.lanes) {
             if (l.side === side) l.lives = game.teamHp[side];
           }
@@ -1581,13 +1643,10 @@ function mlTick(game) {
     if (activeLanes.length === 0) {
       if (!game.finalSnapshotCaptured) {
         game.roundSnapshots.push({
-          round: game.roundNumber, terminal: true,
-          lanes: game.lanes.map(l => ({
-            laneIndex: l.laneIndex, income: l.income, buildValue: getLaneBuildValue(l),
-            gold: Math.floor(l.gold), leaksTaken: l.leakCountThisRound,
-            sendSpend: l.sendSpendThisRound, lives: l.lives,
-            teamHp: game.teamHp[l.side], eliminated: l.eliminated,
-          })),
+          round: game.roundNumber,
+          terminal: true,
+          elapsedSeconds: Math.floor(game.tick / TICK_HZ),
+          lanes: game.lanes.map(l => createRoundSnapshotLane(game, l)),
         });
         game.finalSnapshotCaptured = true;
       }
@@ -1598,13 +1657,10 @@ function mlTick(game) {
       if (aliveTeams.size === 1) {
         if (!game.finalSnapshotCaptured) {
           game.roundSnapshots.push({
-            round: game.roundNumber, terminal: true,
-            lanes: game.lanes.map(l => ({
-              laneIndex: l.laneIndex, income: l.income, buildValue: getLaneBuildValue(l),
-              gold: Math.floor(l.gold), leaksTaken: l.leakCountThisRound,
-              sendSpend: l.sendSpendThisRound, lives: l.lives,
-              teamHp: game.teamHp[l.side], eliminated: l.eliminated,
-            })),
+            round: game.roundNumber,
+            terminal: true,
+            elapsedSeconds: Math.floor(game.tick / TICK_HZ),
+            lanes: game.lanes.map(l => createRoundSnapshotLane(game, l)),
           });
           game.finalSnapshotCaptured = true;
         }
@@ -1634,10 +1690,10 @@ function createMLSnapshot(game) {
     roundState: game.roundState || "build",
     roundNumber: game.roundNumber || 1,
     roundStateTicks: game.roundStateTicks || 0,
-    buildPhaseTotal: BUILD_PHASE_TICKS,
-    transitionPhaseTotal: TRANSITION_PHASE_TICKS,
-    teamHp: game.teamHp || { left: TEAM_HP_START, right: TEAM_HP_START },
-    teamHpMax: TEAM_HP_START,
+    buildPhaseTotal: game.buildPhaseTicks || BUILD_PHASE_TICKS,
+    transitionPhaseTotal: game.transitionPhaseTicks || TRANSITION_PHASE_TICKS,
+    teamHp: game.teamHp || { left: game.teamHpMax || TEAM_HP_START, right: game.teamHpMax || TEAM_HP_START },
+    teamHpMax: game.teamHpMax || TEAM_HP_START,
     lanes: game.lanes.map(lane => {
       const towerCells = [];
       const mobilizedCells = [];
@@ -1781,7 +1837,7 @@ function createMLPublicConfig(options) {
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
     startGold: opt.startGold,
     startIncome: opt.startIncome,
-    livesStart: LIVES_START,
+    livesStart: opt.livesStart,
     gridW: GRID_W,
     gridH: GRID_H,
     unitDefs: getMovingUnitDefMap(),
@@ -1792,9 +1848,9 @@ function createMLPublicConfig(options) {
     barracksReqIncomeBase: BARRACKS_REQ_INCOME_BASE,
     barracksLevels: [],
     // Wave defense
-    teamHpStart: TEAM_HP_START,
-    buildPhaseTicks: BUILD_PHASE_TICKS,
-    transitionPhaseTicks: TRANSITION_PHASE_TICKS,
+    teamHpStart: opt.teamHpStart,
+    buildPhaseTicks: opt.buildPhaseTicks,
+    transitionPhaseTicks: opt.transitionPhaseTicks,
     escalationPerExtraRound: ESCALATION_PER_EXTRA_ROUND,
     battlefieldTopology: opt.battlefieldTopology,
     slotDefinitions: opt.battlefieldTopology.slotDefinitions,

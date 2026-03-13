@@ -148,7 +148,8 @@ function normalizeMatchSettings(settings) {
   const startIncome = Number.isFinite(rawIncome)
     ? Math.max(0, Math.min(1000, rawIncome))
     : DEFAULT_MATCH_SETTINGS.startIncome;
-  return { startIncome };
+  const selectionMode = src.selectionMode === "random" ? "random" : "manual";
+  return { startIncome, selectionMode };
 }
 
 function requireAuthSocket(socket, cb) {

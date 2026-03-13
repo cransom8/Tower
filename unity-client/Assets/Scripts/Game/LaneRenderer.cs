@@ -14,6 +14,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using CastleDefender.Net;
 
 namespace CastleDefender.Game
@@ -32,9 +33,13 @@ namespace CastleDefender.Game
         {
             public GameObject go;
             public Transform  hpBarFill;
+            public Transform  hpBarFillAnchor;
+            public Image      hpBarImage;
+            public Vector3    hpBarFillBaseScale = Vector3.one;
             public string     typeKey;
             public bool       isMine;
             public int        ownerLane;
+            public int        level;
 
             // Dead-reckoning: last known world position + estimated velocity
             public Vector3 worldPos;        // world position at last snapshot
@@ -62,7 +67,36 @@ namespace CastleDefender.Game
         readonly List<string>                 _toRemove = new();
         float  _lastSnapTime = -1f;
         bool   _subscribed;
+        readonly int[] _branchMap = new int[4] { 0, 1, 2, 3 }; // laneIndex → branchCfg
         string _roundState   = "build";   // "build" | "combat" | "transition"
+        static readonly Vector3 HpBarScaleBoost = new(1.85f, 1.55f, 1.40f);
+        static readonly Color HpBarFrameColor   = new(0.03f, 0.03f, 0.03f, 1f);
+        static readonly Color HpBarShadowColor  = new(0.11f, 0.08f, 0.08f, 1f);
+        static readonly Dictionary<string, float> HpBarTypeOffset = new(System.StringComparer.OrdinalIgnoreCase)
+        {
+            { "goblin", 0.28f },
+            { "kobold", 0.28f },
+            { "runner", 0.24f },
+            { "archer", 0.24f },
+            { "fighter", 0.28f },
+            { "mage", 0.30f },
+            { "ballista", 0.44f },
+            { "cannon", 0.44f },
+            { "footman", 0.28f },
+            { "ironclad", 0.38f },
+            { "warlock", 0.36f },
+            { "golem", 0.56f },
+            { "ogre", 0.50f },
+            { "troll", 0.42f },
+            { "werewolf", 0.34f },
+            { "griffin", 0.48f },
+            { "chimera", 0.62f },
+            { "manticora", 0.64f },
+            { "mountain_dragon", 0.80f },
+            { "giant_viper", 0.34f },
+            { "evil_watcher", 0.42f },
+            { "hydra", 0.74f },
+        };
 
         // State name tables — covers PascalCase (Orc/Ghoul style), camelCase (Goblin/Werewolf/Cyclops),
         // and animal variants (Wolf/GiantRat/Spider). Order = priority (first match wins).
@@ -99,6 +133,9 @@ namespace CastleDefender.Game
             // camelCase generics (Werewolf, Cyclops)
             "clawsAttack", "clawsAttackLeft", "clawsAttackRight",
             "rightHandAttack", "leftHandAttack",
+            // Wyvern (HEROIC FANTASY CREATURES)
+            "SimpleBiteAttack", "StingerAttack", "SpecialFinishBiteAttack",
+            "FlyStationarySpitFireball", "SpitFireball",
             // Misc
             "Attack", "attack",
         };
@@ -189,6 +226,15 @@ namespace CastleDefender.Game
             _roundState = snap.roundState ?? "build";
             bool roundStateChanged = _roundState != prevRoundState;
 
+            // Rebuild branchMap from current snapshot lane metadata (zero-alloc)
+            for (int i = 0; i < _branchMap.Length; i++) _branchMap[i] = i;
+            foreach (var ls in snap.lanes)
+            {
+                if (ls == null || (uint)ls.laneIndex >= (uint)_branchMap.Length) continue;
+                int bc = TileGrid.GetBranchConfigIndex(ls.branchId);
+                if (bc >= 0) _branchMap[ls.laneIndex] = bc;
+            }
+
             _seenIds.Clear();
 
             foreach (var lane in snap.lanes)
@@ -208,21 +254,29 @@ namespace CastleDefender.Game
                     // units on the shared suffix (beyond the private build grid).
                     // Wave units have ownerLane=-1 (no player owner); use the lane they
                     // belong to in the snapshot so they render on the correct branch.
-                    int renderLane = u.ownerLane >= 0 ? u.ownerLane : lane.laneIndex;
+                    int dataLane    = u.ownerLane >= 0 ? u.ownerLane : lane.laneIndex;  // server lane (data lookup)
+                    int spatialLane = (uint)dataLane < (uint)_branchMap.Length ? _branchMap[dataLane] : dataLane;
 
                     MLLaneSnap ownerLaneSnap = null;
                     foreach (var ls in snap.lanes)
-                        if (ls != null && ls.laneIndex == renderLane) { ownerLaneSnap = ls; break; }
+                        if (ls != null && ls.laneIndex == dataLane) { ownerLaneSnap = ls; break; }
 
                     int branchLen = ownerLaneSnap?.path?.Length ?? 0;
                     bool onBranch = branchLen > 0 && u.pathIdx < branchLen;
 
                     Vector3 newWorldPos;
-                    if (u.isDefender || (u.isWaveUnit && onBranch))
+                    if (u.isDefender && !onBranch)
                     {
-                        // Defenders and wave units on the branch grid use direct 2D tile coords
+                        // Defender on the suffix (merge bridge): use the suffix polyline so they
+                        // appear at the correct world position (pt3 = Island_Split exit) rather
+                        // than extrapolating off the end of the branch tile grid.
+                        newWorldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
+                    }
+                    else if (u.isDefender || (u.isWaveUnit && onBranch))
+                    {
+                        // Defenders on the branch grid and wave units use direct 2D tile coords
                         // so the full rectangle spawn spread is rendered correctly.
-                        newWorldPos = TileGrid.TileToWorld(renderLane, u.gridX, u.gridY);
+                        newWorldPos = TileGrid.TileToWorld(spatialLane, u.gridX, u.gridY);
                     }
                     else if (onBranch && ownerLaneSnap.path != null && ownerLaneSnap.path.Length >= 2)
                     {
@@ -233,14 +287,14 @@ namespace CastleDefender.Game
                         var  t0  = ownerLaneSnap.path[p0];
                         var  t1  = ownerLaneSnap.path[p1];
                         newWorldPos = Vector3.Lerp(
-                            TileGrid.TileToWorld(renderLane, t0.x, t0.y),
-                            TileGrid.TileToWorld(renderLane, t1.x, t1.y),
+                            TileGrid.TileToWorld(spatialLane, t0.x, t0.y),
+                            TileGrid.TileToWorld(spatialLane, t1.x, t1.y),
                             ft);
                     }
                     else
                     {
-                        // Shared suffix or no path data — use normalized polyline.
-                        newWorldPos = TileGrid.NormProgressToWorld(renderLane, u.normProgress);
+                        // Suffix: normProgress is suffix-relative (0=grid end/pt2, 1=castle/pt5).
+                        newWorldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
                     }
 
                     // Estimate world-space velocity from position delta between snapshots.
@@ -257,7 +311,7 @@ namespace CastleDefender.Game
                     view.worldPos      = newWorldPos;
                     view.normProgress  = u.normProgress;
                     view.timeSinceSnap = 0f;
-                    view.ownerLane     = renderLane;
+                    view.ownerLane     = dataLane;
                     view.hadSnapshot   = true;
 
                     // Drive animation using authoritative server state:
@@ -282,8 +336,8 @@ namespace CastleDefender.Game
                         }
                     }
 
-                    if (view.hpBarFill != null && u.maxHp > 0f)
-                        view.hpBarFill.localScale = new Vector3(Mathf.Clamp01(u.hp / u.maxHp), 1f, 1f);
+                    if ((view.hpBarFill != null || view.hpBarImage != null) && u.maxHp > 0f)
+                        UpdateHpBarVisual(view, Mathf.Clamp01(u.hp / u.maxHp));
 
                     // Trigger red flash when HP drops
                     if (view.lastHp >= 0f && u.hp < view.lastHp)
@@ -322,12 +376,24 @@ namespace CastleDefender.Game
                 return new UnitView();
             }
 
-            Vector3 spawnPos = TileGrid.NormProgressToWorld(u.ownerLane, u.normProgress);
-            Vector3 spawnFwd = TileGrid.GetLaneForwardDir(u.ownerLane >= 0 ? u.ownerLane : 0);
+            int ownerDataLane = u.ownerLane >= 0 ? u.ownerLane : 0;
+            int ownerBranchCfg = ownerDataLane;
+            if (sa?.LatestML?.lanes != null)
+                foreach (var ls in sa.LatestML.lanes)
+                    if (ls != null && ls.laneIndex == ownerDataLane)
+                    { int bc = TileGrid.GetBranchConfigIndex(ls.branchId); if (bc >= 0) ownerBranchCfg = bc; break; }
+
+            const int branchLen = 28; // GRID_H — matches server constant
+            Vector3 spawnPos = u.pathIdx < branchLen
+                ? TileGrid.TileToWorld(ownerBranchCfg, (int)u.gridX, (int)u.gridY)
+                : TileGrid.SuffixProgressToWorld(ownerBranchCfg, u.normProgress);
+            Vector3 spawnFwd = TileGrid.GetLaneForwardDir(ownerBranchCfg);
             var go = Instantiate(prefab, spawnPos, Quaternion.LookRotation(spawnFwd, Vector3.up), transform);
             go.name = $"Unit_{u.id}_{u.type}_{u.skinKey ?? "default"}";
 
-            float scale = Registry != null ? Registry.GetScaleForSkin(u.type, u.skinKey) : 1f;
+            int   unitLevel  = u.level > 0 ? u.level : 1;
+            float baseScale  = Registry != null ? Registry.GetScaleForSkin(u.type, u.skinKey) : 1f;
+            float scale      = baseScale * GetLevelScale(unitLevel);
             go.transform.localScale = Vector3.one * scale;
 
             // Wave enemies use a hostile red/orange tint; player-sent units use team colours.
@@ -367,11 +433,21 @@ namespace CastleDefender.Game
             }
 
             Transform hpFill = null;
+            Transform hpFillAnchor = null;
+            Image hpImage = null;
             if (HpBarPrefab != null)
             {
                 var bar = Instantiate(HpBarPrefab, go.transform);
-                bar.transform.localPosition = Vector3.up * (scale * 1.2f + 0.3f);
-                hpFill = bar.transform.Find("Fill");
+                bar.transform.localScale = Vector3.Scale(bar.transform.localScale, HpBarScaleBoost);
+                if (bar.GetComponent<CastleDefender.FX.BillboardY>() == null)
+                    bar.AddComponent<CastleDefender.FX.BillboardY>();
+                EnsureHpBarMaterials(bar.transform);
+                hpFillAnchor = FindChildRecursive(bar.transform, "FillAnchor");
+                hpFill = FindChildRecursive(bar.transform, "Fill");
+                if (hpFill == null)
+                    hpFill = hpFillAnchor;
+                hpImage = hpFill != null ? hpFill.GetComponent<Image>() : null;
+                PositionHpBarOverHead(go, bar.transform, u.type);
             }
 
             var unitAnim = go.GetComponentInChildren<Animator>();
@@ -388,11 +464,15 @@ namespace CastleDefender.Game
             {
                 go             = go,
                 hpBarFill      = hpFill,
+                hpBarFillAnchor = hpFillAnchor,
+                hpBarImage     = hpImage,
+                hpBarFillBaseScale = hpFill != null ? hpFill.localScale : Vector3.one,
                 anim           = unitAnim,
                 wasMoving      = false,
                 typeKey        = u.type,
                 isMine         = isMine,
                 ownerLane      = u.ownerLane,
+                level          = unitLevel,
                 normProgress   = u.normProgress,
                 worldPos       = spawnPos,
                 worldVelocity  = Vector3.zero,
@@ -401,6 +481,7 @@ namespace CastleDefender.Game
                 baseColor      = col,
                 renderers      = go.GetComponentsInChildren<Renderer>(),
             };
+            if (hpFill != null || hpImage != null) UpdateHpBarVisual(view, 1f);
             if (unitAnim != null) SetAnimIdle(unitAnim);   // idle until first snapshot velocity known
             _units[u.id] = view;
 
@@ -408,7 +489,159 @@ namespace CastleDefender.Game
             return view;
         }
 
+        // ── Level helpers ─────────────────────────────────────────────────────
+
+        // Returns a scale multiplier based on barracks level.
+        // Level 1 = 1.65× registry base (registry scales already tuned to small baseline).
+        // Each level adds ~10 % so level 4 ≈ 2.0×, giving clear visible growth.
+        static float GetLevelScale(int level)
+        {
+            int lvl = Mathf.Clamp(level, 1, 10);
+            return 1.55f + lvl * 0.10f;  // 1→1.65, 2→1.75, 3→1.85, 4→1.95 …
+        }
+
+        // Adds N-1 thin notch dividers to the bar for level N (level 1 = no notches).
+        // Notches visually segment the HP bar so unit level is readable at a glance.
+        static void AddHpBarNotches(Transform barRoot, int level)
+        {
+            if (level <= 1) return;
+
+            // Background cube runs localX −0.5 … +0.5 (scale.x = 1).
+            // Place one divider per internal boundary (level−1 dividers for level segments).
+            for (int i = 1; i < level; i++)
+            {
+                float xPos = (float)i / level - 0.5f;
+
+                var notch = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                notch.name = "Notch";
+                notch.transform.SetParent(barRoot, false);
+                notch.transform.localPosition = new Vector3(xPos, 0f, -0.009f);
+                notch.transform.localScale    = new Vector3(0.018f, 0.14f, 0.07f);
+
+                // Remove collider — purely visual.
+                var col = notch.GetComponent<Collider>();
+                if (col != null) Object.Destroy(col);
+
+                var rend = notch.GetComponent<Renderer>();
+                if (rend != null)
+                {
+                    // Use a simple instanced material so each notch is independent.
+                    rend.material.color = new Color(0.04f, 0.04f, 0.04f, 1f);
+                }
+            }
+        }
+
         // ── Animation helpers ─────────────────────────────────────────────────
+        static void PositionHpBarOverHead(GameObject unitGo, Transform barRoot, string unitType)
+        {
+            if (unitGo == null || barRoot == null) return;
+
+            var renderers = unitGo.GetComponentsInChildren<Renderer>();
+            if (renderers == null || renderers.Length == 0)
+            {
+                barRoot.localPosition = Vector3.up * (2.9f + GetHpBarTypeOffset(unitType));
+                return;
+            }
+
+            bool hasBounds = false;
+            Bounds combined = default;
+            foreach (var renderer in renderers)
+            {
+                if (renderer == null) continue;
+                if (!hasBounds)
+                {
+                    combined = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    combined.Encapsulate(renderer.bounds);
+                }
+            }
+
+            if (!hasBounds)
+            {
+                barRoot.localPosition = Vector3.up * (2.9f + GetHpBarTypeOffset(unitType));
+                return;
+            }
+
+            float extraLift = Mathf.Max(0.85f, combined.size.y * 0.35f) + GetHpBarTypeOffset(unitType);
+            Vector3 headWorld = new(combined.center.x, combined.max.y + extraLift, combined.center.z);
+            barRoot.localPosition = unitGo.transform.InverseTransformPoint(headWorld);
+        }
+
+        static float GetHpBarTypeOffset(string unitType)
+            => !string.IsNullOrWhiteSpace(unitType) && HpBarTypeOffset.TryGetValue(unitType, out var offset)
+                ? offset
+                : 0.32f;
+
+        static Transform FindChildRecursive(Transform root, string childName)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(childName)) return null;
+            if (root.name == childName) return root;
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var found = FindChildRecursive(root.GetChild(i), childName);
+                if (found != null) return found;
+            }
+
+            return null;
+        }
+
+        static void EnsureHpBarMaterials(Transform barRoot)
+        {
+            if (barRoot == null) return;
+
+            SetHpBarMeshColor(FindChildRecursive(barRoot, "Background"), new Color(0.08f, 0.08f, 0.08f, 0.92f));
+            SetHpBarMeshColor(FindChildRecursive(barRoot, "Fill"), new Color(0.18f, 0.88f, 0.28f, 1f));
+        }
+
+        static void SetHpBarMeshColor(Transform target, Color color)
+        {
+            if (target == null) return;
+
+            var renderer = target.GetComponent<Renderer>();
+            if (renderer == null) return;
+
+            var shader = Shader.Find("Universal Render Pipeline/Unlit")
+                         ?? Shader.Find("Universal Render Pipeline/Lit")
+                         ?? Shader.Find("Standard");
+            if (shader == null) return;
+
+            var material = new Material(shader);
+            if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
+            if (material.HasProperty("_Color")) material.SetColor("_Color", color);
+            renderer.material = material;
+        }
+
+        static void UpdateHpBarVisual(UnitView view, float hp01)
+        {
+            hp01 = Mathf.Clamp01(hp01);
+
+            if (view.hpBarImage != null)
+                view.hpBarImage.fillAmount = hp01;
+
+            if (view.hpBarFillAnchor != null)
+                view.hpBarFillAnchor.localScale = Vector3.one;
+
+            if (view.hpBarFill != null)
+            {
+                view.hpBarFill.localScale = new Vector3(
+                    view.hpBarFillBaseScale.x * hp01,
+                    view.hpBarFillBaseScale.y,
+                    view.hpBarFillBaseScale.z);
+
+                if (view.hpBarFillAnchor != null)
+                {
+                    view.hpBarFill.localPosition = new Vector3(
+                        0.5f * hp01,
+                        view.hpBarFill.localPosition.y,
+                        view.hpBarFill.localPosition.z);
+                }
+            }
+        }
+
         static void SetAnimIdle(Animator anim)
         {
             if (anim == null) return;

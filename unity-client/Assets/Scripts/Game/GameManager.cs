@@ -40,7 +40,7 @@ namespace CastleDefender.Game
 
         [Header("Camera Preset")]
         public bool ForceCameraPreset = true;
-        public float CameraOrthoSize = 22f;
+        public float CameraOrthoSize = 9.2f;
 
         [Header("Battlefield Camera (Phase 3)")]
         [Tooltip("World position of the camera for the full-battlefield view.")]
@@ -61,6 +61,10 @@ namespace CastleDefender.Game
         public TMP_Text TxtPhase;
         [Tooltip("Seconds remaining in the current phase.")]
         public TMP_Text TxtCountdown;
+        [Tooltip("Top gold display for the active lane.")]
+        public TMP_Text TxtGoldTop;
+        [Tooltip("Top income display for the active lane.")]
+        public TMP_Text TxtIncomeTop;
         [Tooltip("Left-team HP display.")]
         public TMP_Text TxtTeamHpLeft;
         [Tooltip("Right-team HP display.")]
@@ -75,7 +79,7 @@ namespace CastleDefender.Game
         [Header("Legacy Single-Lane Camera (unused in battlefield mode)")]
         public float CameraBehind = 0f;
         public float CameraSide = 0f;
-        public float CameraHeight = 20f;
+        public float CameraHeight = 11f;
         public float CameraLookAhead = 0f;
         public float CameraLookSide = 0f;
         public float CameraLookHeight = 0f;
@@ -93,6 +97,10 @@ namespace CastleDefender.Game
                 sa.OnMLSnapshotApplied += OnMLSnapshot;
                 _hudSubscribed = true;
             }
+
+            var nm = CastleDefender.Net.NetworkManager.Instance;
+            if (nm != null)
+                nm.OnMLMatchReady += OnMatchReadySnapCamera;
         }
 
         void OnDisable()
@@ -100,6 +108,18 @@ namespace CastleDefender.Game
             if (_hudSubscribed && SnapshotApplier.Instance != null)
                 SnapshotApplier.Instance.OnMLSnapshotApplied -= OnMLSnapshot;
             _hudSubscribed = false;
+
+            var nm = CastleDefender.Net.NetworkManager.Instance;
+            if (nm != null)
+                nm.OnMLMatchReady -= OnMatchReadySnapCamera;
+        }
+
+        // Called when match_ready fires — lane index is now authoritative.
+        void OnMatchReadySnapCamera(MLMatchReadyPayload _)
+        {
+            EnsureCameraPOV();
+            // Re-arm the lock so a few frames of position jitter are absorbed.
+            _cameraLockCountdown = CameraLockFrames;
         }
 
         void OnMLSnapshot(MLSnapshot snap)
@@ -110,10 +130,9 @@ namespace CastleDefender.Game
             if (_playerSide == null)
             {
                 var sa = SnapshotApplier.Instance;
-                if (sa != null && sa.MyLaneIndex >= 0 &&
-                    snap.lanes != null && sa.MyLaneIndex < snap.lanes.Length)
+                if (sa != null)
                 {
-                    var myLane = snap.lanes[sa.MyLaneIndex];
+                    var myLane = sa.MyLane;
                     if (myLane != null)
                         _playerSide = myLane.side; // "left" | "right"
                 }
@@ -124,6 +143,11 @@ namespace CastleDefender.Game
 
         void UpdateWaveHUD(MLSnapshot snap)
         {
+            EnsureWaveHUDRefs();
+
+            var sa = SnapshotApplier.Instance;
+            var lane = sa?.MyLane;
+
             // Round number
             if (TxtRound != null)
                 TxtRound.text = $"Wave {snap.roundNumber}";
@@ -148,6 +172,15 @@ namespace CastleDefender.Game
                     : snap.roundStateTicks;
                 int secs = Mathf.CeilToInt((float)ticksLeft / TickHz);
                 TxtCountdown.text = secs > 0 ? $"{secs}s" : "";
+            }
+
+            if (lane != null)
+            {
+                if (TxtGoldTop != null)
+                    TxtGoldTop.text = $"Gold {Mathf.FloorToInt(lane.gold)}";
+
+                if (TxtIncomeTop != null)
+                    TxtIncomeTop.text = $"Inc {lane.income:0.0}";
             }
 
             // Wave-start audio cue: play a sound when build phase transitions to combat
@@ -192,6 +225,18 @@ namespace CastleDefender.Game
             // initialization after Awake; re-apply POV at Start and next frame.
             EnsureCameraPOV();
             StartCoroutine(EnsureCameraPOVNextFrame());
+
+            // match_ready may have already fired before this scene loaded (e.g. the
+            // Loading screen absorbed the event).  If so, snap the camera immediately
+            // to the correct lane rather than waiting for the next match_ready.
+            {
+                var saReady = SnapshotApplier.Instance;
+                if (saReady != null && saReady.LatestMLMatchReady != null)
+                {
+                    EnsureCameraPOV();
+                    _cameraLockCountdown = CameraLockFrames;
+                }
+            }
 
             // SnapshotApplier may have initialised after OnEnable — subscribe if missed.
             if (!_hudSubscribed)
@@ -240,29 +285,64 @@ namespace CastleDefender.Game
                 Debug.LogWarning("[GameManager] FloatingTextPrefab not assigned.");
         }
 
+        // Finds a Camera only within this GameObject's scene, ignoring cameras
+        // in other additively-loaded scenes (e.g. Lobby still unloading during transition).
+        Camera FindCameraInScene()
+        {
+            var scene = gameObject.scene;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var cam = root.GetComponentInChildren<Camera>(true);
+                if (cam != null) return cam;
+            }
+            return null;
+        }
+
         void EnsureCameraPOV()
         {
             if (!ForceCameraPreset) return;
 
-            var cam = Camera.main ?? FindFirstObjectByType<Camera>();
+            var cam = FindCameraInScene();
             if (cam == null) return;
 
             cam.orthographic     = true;
             cam.orthographicSize = CameraOrthoSize;
 
             // Position camera over the local player's assigned lane.
-            // Falls back to Inspector preset (Lane 0) if NetworkManager isn't ready yet.
+            // Falls back to lane 0 if NetworkManager isn't ready yet.
             int laneIndex = CastleDefender.Net.NetworkManager.Instance != null
                 ? CastleDefender.Net.NetworkManager.Instance.MyLaneIndex
                 : 0;
 
-            Vector3 castlePos  = TileGrid.TileToWorld(laneIndex, 5, 27);
-            Vector3 spawnPos   = TileGrid.TileToWorld(laneIndex, 5, 0);
-            Vector3 laneCenter = (castlePos + spawnPos) * 0.5f + new Vector3(0f, 0f, CameraFrameOffsetZ);
+            // Try to resolve server lane index → spatial branch config via branchId
+            int branchCfg = laneIndex;
+            var sa = SnapshotApplier.Instance;
+            // Check match-ready assignments first (available before first snapshot)
+            if (sa?.LatestMLMatchReady?.laneAssignments != null)
+            {
+                foreach (var a in sa.LatestMLMatchReady.laneAssignments)
+                    if (a.laneIndex == laneIndex)
+                    { int bc = TileGrid.GetBranchConfigIndex(a.branchId); if (bc >= 0) { branchCfg = bc; break; } }
+            }
+            else if (sa?.LatestML?.lanes != null)
+            {
+                foreach (var ls in sa.LatestML.lanes)
+                    if (ls != null && ls.laneIndex == laneIndex)
+                    { int bc = TileGrid.GetBranchConfigIndex(ls.branchId); if (bc >= 0) { branchCfg = bc; break; } }
+            }
+
+            Vector3 castlePos  = TileGrid.TileToWorld(branchCfg, 5, 27);
+            Vector3 spawnPos   = TileGrid.TileToWorld(branchCfg, 5, 0);
+            Vector3 laneCenter = (castlePos + spawnPos) * 0.5f;
             Vector3 camPos     = laneCenter + Vector3.up * CameraHeight;
 
             cam.transform.position = camPos;
-            cam.transform.LookAt(laneCenter, Vector3.left); // −X up → lane runs vertically
+
+            // Orient so spawn (row 0) appears at the TOP of the screen.
+            // rowDir points spawn→castle, so negating it gives the screen-up direction.
+            Vector3 screenUp = -TileGrid.GetLaneForwardDir(branchCfg);
+            if (screenUp.sqrMagnitude < 0.001f) screenUp = Vector3.back;
+            cam.transform.LookAt(laneCenter, screenUp);
 
             var ctrl = FindFirstObjectByType<global::CameraController>();
             if (ctrl == null)
@@ -272,8 +352,7 @@ namespace CastleDefender.Game
             if (ctrl.CameraTarget == null)
                 ctrl.CameraTarget = cam.transform;
 
-            // Sync the controller's internal state to the freshly-placed camera so
-            // pan/zoom takes over from exactly this position (not the old _targetPos).
+            // Sync the controller so pan/zoom starts from exactly this position.
             ctrl.SnapToCurrentPosition();
         }
 
@@ -286,8 +365,6 @@ namespace CastleDefender.Game
         // ── Auto-create Wave HUD if not wired in Inspector ────────────────────
         void EnsureWaveHUD()
         {
-            if (TxtRound != null) return; // already wired
-
             var canvas = FindFirstObjectByType<Canvas>();
             if (canvas == null) return;
 
@@ -316,12 +393,49 @@ namespace CastleDefender.Game
                 hlg.padding = new RectOffset(12, 12, 4, 4);
             }
 
-            TxtRound      = GetOrMakeLabel(hudGO, "Txt_Round",      "Wave 1",  100f, 18, Color.white);
-            TxtPhase      = GetOrMakeLabel(hudGO, "Txt_Phase",      "BUILD",    90f, 18, new Color(0.3f, 1f, 0.45f));
-            TxtCountdown  = GetOrMakeLabel(hudGO, "Txt_Countdown",  "30s",      64f, 18, new Color(1f, 0.9f, 0.3f));
-            TxtTeamHpLeft  = GetOrMakeLabel(hudGO, "Txt_HpLeft",   "♥ 20",     80f, 16, new Color(1f, 0.92f, 0.2f));
-            TxtTeamHpRight = GetOrMakeLabel(hudGO, "Txt_HpRight",  "♥ 20",     80f, 16, Color.white);
+            if (TxtRound == null)
+                TxtRound = GetOrMakeLabel(hudGO, "Txt_Round", "Wave 1", 100f, 18, Color.white);
+            if (TxtPhase == null)
+                TxtPhase = GetOrMakeLabel(hudGO, "Txt_Phase", "BUILD", 90f, 18, new Color(0.3f, 1f, 0.45f));
+            if (TxtCountdown == null)
+                TxtCountdown = GetOrMakeLabel(hudGO, "Txt_Countdown", "30s", 64f, 18, new Color(1f, 0.9f, 0.3f));
+            if (TxtGoldTop == null)
+                TxtGoldTop = GetOrMakeLabel(hudGO, "Txt_GoldTop", "Gold 0", 92f, 18, new Color(1f, 0.86f, 0.27f));
+            if (TxtIncomeTop == null)
+                TxtIncomeTop = GetOrMakeLabel(hudGO, "Txt_IncomeTop", "Inc 0.0", 92f, 18, new Color(0.36f, 0.92f, 0.86f, 1f));
+            TxtTeamHpLeft  = GetOrMakeLabel(hudGO, "Txt_HpLeft",     "♥ 20",     80f, 16, new Color(1f, 0.92f, 0.2f));
+            TxtTeamHpRight = GetOrMakeLabel(hudGO, "Txt_HpRight",    "♥ 20",     80f, 16, Color.white);
             Debug.Log("[GameManager] Auto-created WaveHUD panel.");
+        }
+
+        void EnsureWaveHUDRefs()
+        {
+            var canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null) return;
+
+            var hud = canvas.transform.Find("WaveHUD");
+            if (hud == null) return;
+
+            if (TxtRound == null)
+                TxtRound = FindHudLabel(hud, "Txt_Round") ?? FindHudLabel(hud, "Txt_Wave");
+            if (TxtPhase == null)
+                TxtPhase = FindHudLabel(hud, "Txt_Phase");
+            if (TxtCountdown == null)
+                TxtCountdown = FindHudLabel(hud, "Txt_Countdown");
+            if (TxtGoldTop == null)
+                TxtGoldTop = FindHudLabel(hud, "Txt_GoldTop");
+            if (TxtIncomeTop == null)
+                TxtIncomeTop = FindHudLabel(hud, "Txt_IncomeTop");
+            if (TxtTeamHpLeft == null)
+                TxtTeamHpLeft = FindHudLabel(hud, "Txt_HpLeft");
+            if (TxtTeamHpRight == null)
+                TxtTeamHpRight = FindHudLabel(hud, "Txt_HpRight");
+        }
+
+        static TMP_Text FindHudLabel(Transform parent, string name)
+        {
+            var child = parent.Find(name);
+            return child != null ? child.GetComponent<TMP_Text>() : null;
         }
 
         static TMPro.TMP_Text GetOrMakeLabel(GameObject parent, string name, string defaultText, float width, int fontSize, Color color)

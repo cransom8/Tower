@@ -256,18 +256,13 @@ class BotMatchController {
     this.runtimeTracker = new RuntimeTracker(this.game, cfg.runtimeOptions || {});
     this.botsByLane = {};
     this.actionLog = [];
+    this.seedBase = String(cfg.seed || "match");
 
     const unitDefMap = typeof simMl.getMovingUnitDefMap === "function" ? simMl.getMovingUnitDefMap() : null;
     this.unitDefMap = unitDefMap;
     const botConfigs = Array.isArray(cfg.botConfigs) ? cfg.botConfigs : [];
     for (const botCfg of botConfigs) {
-      if (!botCfg || !Number.isInteger(botCfg.laneIndex)) continue;
-      const fullCfg = Object.assign({}, botCfg, {
-        tickMs: this.tickMs,
-        seed: `${cfg.seed || "match"}:${botCfg.laneIndex}`,
-        unitDefMap,
-      });
-      this.botsByLane[botCfg.laneIndex] = new BotBrain(fullCfg);
+      this.addBot(botCfg);
     }
   }
 
@@ -277,6 +272,32 @@ class BotMatchController {
 
   getBotCount() {
     return Object.keys(this.botsByLane).length;
+  }
+
+  hasBot(laneIndex) {
+    return !!this.botsByLane[Number(laneIndex)];
+  }
+
+  addBot(botCfg) {
+    if (!botCfg || !Number.isInteger(botCfg.laneIndex)) return null;
+    const laneIndex = Number(botCfg.laneIndex);
+    const fullCfg = Object.assign({}, botCfg, {
+      laneIndex,
+      tickMs: this.tickMs,
+      seed: `${this.seedBase || "match"}:${laneIndex}:${botCfg.seedSuffix || "bot"}`,
+      unitDefMap: this.unitDefMap,
+    });
+    const bot = new BotBrain(fullCfg);
+    this.botsByLane[laneIndex] = bot;
+    this.runtimeTracker.ensureLaneSlots(this.game);
+    return bot;
+  }
+
+  removeBot(laneIndex) {
+    const key = Number(laneIndex);
+    const existing = this.botsByLane[key] || null;
+    delete this.botsByLane[key];
+    return existing;
   }
 
   onBeforeSimTick(game) {
@@ -423,4 +444,3 @@ module.exports = {
   runHeadlessMatch,
   runSelfPlaySeries,
 };
-

@@ -29,7 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_ml_waves_config_id ON ml_waves(config_id);
 -- Unit types reference keys expected from migration 034 (new_units).
 -- Adjust unit_type values if your DB uses different keys.
 INSERT INTO ml_wave_configs (name, description, is_default)
-VALUES ('Standard', 'Default 10-wave progression. Repeats wave 10 with +10% stats per extra round.', TRUE);
+SELECT 'Standard', 'Default 10-wave progression. Repeats wave 10 with +10% stats per extra round.', TRUE
+WHERE NOT EXISTS (SELECT 1 FROM ml_wave_configs WHERE name = 'Standard');
 
 -- Seed waves for config id=1
 INSERT INTO ml_waves (config_id, wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult)

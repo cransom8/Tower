@@ -1,6 +1,6 @@
 // UnitPortraitCamera.cs — Off-screen camera renders unit prefabs to a RenderTexture.
 // Place one "PortraitStudio" object in Lobby scene. SetupPortraitStudio creates it.
-// LoadoutUI calls ShowUnit(key) to update the preview.
+// Match UI flows call ShowUnit(key) to update portrait captures.
 
 using System;
 using System.Collections;
@@ -25,7 +25,11 @@ namespace CastleDefender.UI
         [Tooltip("Automatically scale each unit so it fills FitHeight world units in the frame.")]
         public bool  AutoFitSize = true;
         [Tooltip("Target height in world units that every unit is scaled to fill.")]
-        public float FitHeight   = 1.6f;
+        public float FitHeight   = 2.25f;
+        [Tooltip("How much of the frame height the unit should occupy. Higher = closer portrait.")]
+        [Range(0.5f, 0.95f)] public float FrameFill = 0.82f;
+        [Tooltip("Bias framing upward so the portrait feels like a closer character shot.")]
+        [Range(0f, 1f)] public float VerticalFocus = 0.62f;
 
         GameObject _staged;
 
@@ -44,27 +48,24 @@ namespace CastleDefender.UI
                 Quaternion.Euler(0f, RotationY, 0f));
             _staged.transform.localScale = Vector3.one * scale;
 
+            var renderers = _staged.GetComponentsInChildren<Renderer>();
+            if (renderers.Length == 0) return;
+
             if (AutoFitSize)
             {
-                // Calculate combined world-space bounds of all renderers
-                var renderers = _staged.GetComponentsInChildren<Renderer>();
-                if (renderers.Length > 0)
+                var bounds = CalculateBounds(renderers);
+                float height = bounds.size.y;
+                if (height > 0.001f)
                 {
-                    var bounds = renderers[0].bounds;
-                    for (int ri = 1; ri < renderers.Length; ri++)
-                        bounds.Encapsulate(renderers[ri].bounds);
-
-                    float maxExtent = Mathf.Max(bounds.size.x, bounds.size.y, bounds.size.z);
-                    if (maxExtent > 0.001f)
-                    {
-                        float fitScale = scale * (FitHeight / maxExtent);
-                        _staged.transform.localScale = Vector3.one * fitScale;
-                    }
+                    float fitScale = scale * (FitHeight / height);
+                    _staged.transform.localScale = Vector3.one * fitScale;
+                    renderers = _staged.GetComponentsInChildren<Renderer>();
                 }
             }
 
+            FrameStagedUnit(CalculateBounds(renderers));
+
             // Apply tint, auto-upgrading non-URP materials (Standard → URP Lit)
-            Color tint = Registry.GetTintMine(key);
             var urpLit = Shader.Find("Universal Render Pipeline/Lit");
 
             foreach (var r in _staged.GetComponentsInChildren<Renderer>())
@@ -92,20 +93,17 @@ namespace CastleDefender.UI
                                 if (tex != null) upgraded.SetTexture("_BaseMap", tex);
                             }
                             var baseCol = orig.HasProperty("_Color") ? orig.GetColor("_Color") : Color.white;
-                            upgraded.SetColor("_BaseColor", new Color(
-                                baseCol.r * tint.r, baseCol.g * tint.g,
-                                baseCol.b * tint.b, baseCol.a * tint.a));
+                            upgraded.SetColor("_BaseColor", baseCol);
                         }
                         else
                         {
-                            upgraded.SetColor("_BaseColor", tint);
+                            upgraded.SetColor("_BaseColor", Color.white);
                         }
                         instanced[mi] = upgraded;
                     }
                     else
                     {
-                        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", tint);
-                        else if (mat.HasProperty("_Color")) mat.color = tint;
+                        // Keep authored material colors for portraits.
                     }
                 }
                 r.materials = instanced;
@@ -115,6 +113,44 @@ namespace CastleDefender.UI
         public void Clear()
         {
             if (_staged != null) { Destroy(_staged); _staged = null; }
+        }
+
+        Bounds CalculateBounds(Renderer[] renderers)
+        {
+            var bounds = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+                bounds.Encapsulate(renderers[i].bounds);
+            return bounds;
+        }
+
+        void FrameStagedUnit(Bounds bounds)
+        {
+            if (_staged == null || Cam == null) return;
+
+            float height = Mathf.Max(0.1f, bounds.size.y);
+            float width = Mathf.Max(0.1f, bounds.size.x);
+            Vector3 stageOrigin = StagePoint != null ? StagePoint.position : Vector3.zero;
+
+            Vector3 focusPoint = new Vector3(
+                bounds.center.x,
+                bounds.min.y + (height * VerticalFocus),
+                bounds.center.z);
+
+            _staged.transform.position += stageOrigin - focusPoint;
+
+            float halfHeight = height * 0.5f;
+            float halfWidth = width * 0.5f;
+            float verticalFov = Cam.fieldOfView * Mathf.Deg2Rad;
+            float horizontalFov = 2f * Mathf.Atan(Mathf.Tan(verticalFov * 0.5f) * Cam.aspect);
+            float fill = Mathf.Max(0.01f, FrameFill);
+
+            float distForHeight = halfHeight / (Mathf.Tan(verticalFov * 0.5f) * fill);
+            float distForWidth = halfWidth / (Mathf.Tan(horizontalFov * 0.5f) * fill);
+            float camDistance = Mathf.Max(distForHeight, distForWidth, 1.1f);
+
+            Cam.transform.position = stageOrigin + new Vector3(0f, 0.05f, -camDistance);
+            Cam.transform.rotation = Quaternion.identity;
+            Cam.transform.LookAt(stageOrigin + new Vector3(0f, height * 0.06f, 0f));
         }
 
         /// <summary>
