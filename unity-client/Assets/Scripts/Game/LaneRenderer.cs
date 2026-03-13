@@ -36,6 +36,7 @@ namespace CastleDefender.Game
             public Transform  hpBarFillAnchor;
             public Image      hpBarImage;
             public Vector3    hpBarFillBaseScale = Vector3.one;
+            public Vector3    hpBarFillBaseLocalPosition = Vector3.zero;
             public string     typeKey;
             public bool       isMine;
             public int        ownerLane;
@@ -437,16 +438,7 @@ namespace CastleDefender.Game
             Image hpImage = null;
             if (HpBarPrefab != null)
             {
-                var bar = Instantiate(HpBarPrefab, go.transform);
-                bar.transform.localScale = Vector3.Scale(bar.transform.localScale, HpBarScaleBoost);
-                if (bar.GetComponent<CastleDefender.FX.BillboardY>() == null)
-                    bar.AddComponent<CastleDefender.FX.BillboardY>();
-                EnsureHpBarMaterials(bar.transform);
-                hpFillAnchor = FindChildRecursive(bar.transform, "FillAnchor");
-                hpFill = FindChildRecursive(bar.transform, "Fill");
-                if (hpFill == null)
-                    hpFill = hpFillAnchor;
-                hpImage = hpFill != null ? hpFill.GetComponent<Image>() : null;
+                var bar = CreateUnitHpBar(go.transform, out hpFill, out hpFillAnchor, out hpImage);
                 PositionHpBarOverHead(go, bar.transform, u.type);
             }
 
@@ -467,6 +459,7 @@ namespace CastleDefender.Game
                 hpBarFillAnchor = hpFillAnchor,
                 hpBarImage     = hpImage,
                 hpBarFillBaseScale = hpFill != null ? hpFill.localScale : Vector3.one,
+                hpBarFillBaseLocalPosition = hpFill != null ? hpFill.localPosition : Vector3.zero,
                 anim           = unitAnim,
                 wasMoving      = false,
                 typeKey        = u.type,
@@ -532,6 +525,74 @@ namespace CastleDefender.Game
         }
 
         // ── Animation helpers ─────────────────────────────────────────────────
+        static GameObject CreateUnitHpBar(Transform parent, out Transform fillTransform, out Transform fillAnchor, out Image fillImage)
+        {
+            var root = new GameObject("HpBarUI", typeof(RectTransform), typeof(Canvas));
+            root.transform.SetParent(parent, false);
+            root.transform.localScale = Vector3.one * 0.01f;
+
+            var canvas = root.GetComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+            canvas.sortingOrder = 200;
+
+            var rootRt = root.GetComponent<RectTransform>();
+            rootRt.sizeDelta = new Vector2(72f, 12f);
+
+            if (root.GetComponent<CastleDefender.FX.BillboardY>() == null)
+                root.AddComponent<CastleDefender.FX.BillboardY>();
+
+            CreateBarOutline(root.transform);
+
+            var anchorGO = new GameObject("FillAnchor", typeof(RectTransform));
+            anchorGO.transform.SetParent(root.transform, false);
+            var anchorRt = anchorGO.GetComponent<RectTransform>();
+            anchorRt.anchorMin = new Vector2(0.06f, 0.22f);
+            anchorRt.anchorMax = new Vector2(0.94f, 0.78f);
+            anchorRt.offsetMin = Vector2.zero;
+            anchorRt.offsetMax = Vector2.zero;
+            anchorRt.pivot = new Vector2(0f, 0.5f);
+
+            fillImage = CreateBarImage("Fill", anchorGO.transform, new Color(0.18f, 0.94f, 0.34f, 0.96f));
+            var fillRt = fillImage.rectTransform;
+            fillRt.anchorMin = new Vector2(0f, 0f);
+            fillRt.anchorMax = new Vector2(1f, 1f);
+            fillRt.offsetMin = Vector2.zero;
+            fillRt.offsetMax = Vector2.zero;
+            fillRt.pivot = new Vector2(0f, 0.5f);
+
+            fillTransform = fillRt;
+            fillAnchor = null;
+
+            return root;
+        }
+
+        static Image CreateBarImage(string name, Transform parent, Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var image = go.GetComponent<Image>();
+            image.color = color;
+            return image;
+        }
+
+        static void CreateBarOutline(Transform parent)
+        {
+            CreateBarEdge("Top", parent, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Color(0.88f, 0.96f, 1f, 0.72f));
+            CreateBarEdge("Bottom", parent, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0f, -1f), new Vector2(0f, -1f), new Color(0.88f, 0.96f, 1f, 0.72f));
+            CreateBarEdge("Left", parent, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(1f, 0f), new Vector2(1f, 0f), new Color(0.88f, 0.96f, 1f, 0.72f));
+            CreateBarEdge("Right", parent, new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(-1f, 0f), new Vector2(-1f, 0f), new Color(0.88f, 0.96f, 1f, 0.72f));
+        }
+
+        static void CreateBarEdge(string name, Transform parent, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax, Color color)
+        {
+            var edge = CreateBarImage(name, parent, color);
+            var rt = edge.rectTransform;
+            rt.anchorMin = anchorMin;
+            rt.anchorMax = anchorMax;
+            rt.offsetMin = offsetMin;
+            rt.offsetMax = offsetMax;
+        }
+
         static void PositionHpBarOverHead(GameObject unitGo, Transform barRoot, string unitType)
         {
             if (unitGo == null || barRoot == null) return;
@@ -589,38 +650,10 @@ namespace CastleDefender.Game
             return null;
         }
 
-        static void EnsureHpBarMaterials(Transform barRoot)
-        {
-            if (barRoot == null) return;
-
-            SetHpBarMeshColor(FindChildRecursive(barRoot, "Background"), new Color(0.08f, 0.08f, 0.08f, 0.92f));
-            SetHpBarMeshColor(FindChildRecursive(barRoot, "Fill"), new Color(0.18f, 0.88f, 0.28f, 1f));
-        }
-
-        static void SetHpBarMeshColor(Transform target, Color color)
-        {
-            if (target == null) return;
-
-            var renderer = target.GetComponent<Renderer>();
-            if (renderer == null) return;
-
-            var shader = Shader.Find("Universal Render Pipeline/Unlit")
-                         ?? Shader.Find("Universal Render Pipeline/Lit")
-                         ?? Shader.Find("Standard");
-            if (shader == null) return;
-
-            var material = new Material(shader);
-            if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
-            if (material.HasProperty("_Color")) material.SetColor("_Color", color);
-            renderer.material = material;
-        }
-
         static void UpdateHpBarVisual(UnitView view, float hp01)
         {
             hp01 = Mathf.Clamp01(hp01);
-
-            if (view.hpBarImage != null)
-                view.hpBarImage.fillAmount = hp01;
+            HpBarVisuals.ApplyFill(view.hpBarFill, view.hpBarImage, hp01);
 
             if (view.hpBarFillAnchor != null)
                 view.hpBarFillAnchor.localScale = Vector3.one;
@@ -636,8 +669,8 @@ namespace CastleDefender.Game
                 {
                     view.hpBarFill.localPosition = new Vector3(
                         0.5f * hp01,
-                        view.hpBarFill.localPosition.y,
-                        view.hpBarFill.localPosition.z);
+                        view.hpBarFillBaseLocalPosition.y,
+                        view.hpBarFillBaseLocalPosition.z);
                 }
             }
         }

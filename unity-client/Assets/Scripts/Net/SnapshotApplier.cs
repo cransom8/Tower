@@ -24,7 +24,7 @@ namespace CastleDefender.Net
 
         // My lane and viewing lane (ML mode)
         public int MyLaneIndex  { get; set; } = 0;
-        public int ViewingLane  { get; set; } = 0;
+        public int ViewingLane  { get; set; } = -1;
         public int TotalLanes   { get; set; } = 1;
         float _nextDebugLogAt;
 
@@ -105,7 +105,7 @@ namespace CastleDefender.Net
         {
             if (nm == null) return;
             MyLaneIndex = nm.MyLaneIndex;
-            if (ViewingLane < 0 || ViewingLane == 0)
+            if (ViewingLane < 0)
                 ViewingLane = MyLaneIndex;
         }
 

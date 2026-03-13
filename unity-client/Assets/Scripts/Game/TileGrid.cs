@@ -244,6 +244,8 @@ static readonly Vector3[][] _lanePathWaypoints =
         int          _currentBranchCfg = -1;
         bool         _subscribed;
         readonly Dictionary<int, Transform>    _towerHpFills       = new(); // tileIdx → HP bar fill Transform
+        readonly Dictionary<int, Vector3>      _towerHpFillScales  = new(); // tileIdx → base fill scale
+        readonly Dictionary<int, Vector3>      _towerHpFillPoses   = new(); // tileIdx → base fill localPosition
         readonly Dictionary<int, Animator>     _towerAnimators      = new(); // tileIdx → tower Animator
         readonly HashSet<string>               _activeProjectileIds = new(); // projectile IDs seen last snapshot
         // Reused each snapshot to avoid 10Hz GC allocs (P2)
@@ -305,6 +307,8 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             // Destroy all existing tile objects
             _towerHpFills.Clear();
+            _towerHpFillScales.Clear();
+            _towerHpFillPoses.Clear();
             _towerAnimators.Clear();
             _activeProjectileIds.Clear();
             for (int i = 0; i < _tileObjects.Length; i++)
@@ -466,14 +470,22 @@ static readonly Vector3[][] _lanePathWaypoints =
 
                         // Spawn HP bar for this tower slot
                         _towerHpFills.Remove(idx);
+                        _towerHpFillScales.Remove(idx);
+                        _towerHpFillPoses.Remove(idx);
                         if (HpBarPrefab != null)
                         {
                             var bar  = Instantiate(HpBarPrefab, _tileObjects[idx].transform);
                             // Keep bar at a fixed world-space height above tile regardless of tower scale
                             const float worldBarHeight = 1.34f;
                             bar.transform.localPosition = Vector3.up * (worldBarHeight / towerScale);
-                            var fill = bar.transform.Find("Fill");
-                            if (fill != null) _towerHpFills[idx] = fill;
+                            HpBarVisuals.EnsureStyled(bar.transform);
+                            var fill = FindChildRecursive(bar.transform, "Fill");
+                            if (fill != null)
+                            {
+                                _towerHpFills[idx] = fill;
+                                _towerHpFillScales[idx] = fill.localScale;
+                                _towerHpFillPoses[idx] = fill.localPosition;
+                            }
                             AddHpBarNotches(bar.transform, towerLevel);
                         }
                     }
@@ -481,6 +493,8 @@ static readonly Vector3[][] _lanePathWaypoints =
                     {
                         // Dead defenders have no HP bar or animator
                         _towerHpFills.Remove(idx);
+                        _towerHpFillScales.Remove(idx);
+                        _towerHpFillPoses.Remove(idx);
                         _towerAnimators.Remove(idx);
                         ApplyDeadTint(_tileObjects[idx]);
                     }
@@ -501,8 +515,16 @@ static readonly Vector3[][] _lanePathWaypoints =
                     if (_tileObjects[idx] != null && _tileTypes[idx] == "tower")
                     {
                         ApplyDebuffTint(_tileObjects[idx], t.debuffed);
-                        if (_towerHpFills.TryGetValue(idx, out var fill) && fill != null && t.maxHp > 0f)
-                            fill.localScale = new Vector3(Mathf.Clamp01(t.hp / t.maxHp), 1f, 1f);
+                        if (_towerHpFills.TryGetValue(idx, out var fill)
+                            && _towerHpFillScales.TryGetValue(idx, out var baseScale)
+                            && _towerHpFillPoses.TryGetValue(idx, out var basePos)
+                            && fill != null && t.maxHp > 0f)
+                        {
+                            float hp01 = Mathf.Clamp01(t.hp / t.maxHp);
+                            fill.localScale = new Vector3(baseScale.x * hp01, baseScale.y, baseScale.z);
+                            fill.localPosition = new Vector3(0.5f * hp01, basePos.y, basePos.z);
+                            HpBarVisuals.ApplyFill(fill, fill.GetComponent<UnityEngine.UI.Image>(), hp01);
+                        }
                     }
                 }
             }
@@ -708,6 +730,20 @@ static readonly Vector3[][] _lanePathWaypoints =
         {
             int lvl = Mathf.Clamp(level, 1, 10);
             return 1.55f + lvl * 0.10f;  // 1→1.65, 2→1.75, 3→1.85, 4→1.95 …
+        }
+
+        static Transform FindChildRecursive(Transform root, string childName)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(childName)) return null;
+            if (root.name == childName) return root;
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var found = FindChildRecursive(root.GetChild(i), childName);
+                if (found != null) return found;
+            }
+
+            return null;
         }
 
         static void AddHpBarNotches(Transform barRoot, int level)

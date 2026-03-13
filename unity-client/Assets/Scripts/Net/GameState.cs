@@ -92,7 +92,11 @@ namespace CastleDefender.Net
         public int          tickHz;
         public int          incomeIntervalTicks;
         public float        startGold;
+        public float        startIncome;
         public int          livesStart;
+        public int          teamHpStart;
+        public int          buildPhaseTicks;
+        public int          transitionPhaseTicks;
         public int          gridW;
         public int          gridH;
         public LoadoutEntry[] loadout;       // 5 unit types for this match

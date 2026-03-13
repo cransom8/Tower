@@ -15,6 +15,7 @@
 using UnityEngine;
 using System.Collections;
 using TMPro;
+using UnityEngine.UI;
 using CastleDefender.Net;
 
 namespace CastleDefender.Game
@@ -69,6 +70,8 @@ namespace CastleDefender.Game
         public TMP_Text TxtTeamHpLeft;
         [Tooltip("Right-team HP display.")]
         public TMP_Text TxtTeamHpRight;
+        Image _teamHpLeftFill;
+        Image _teamHpRightFill;
 
         const int TickHz = 20; // must match server TICK_HZ
 
@@ -100,7 +103,12 @@ namespace CastleDefender.Game
 
             var nm = CastleDefender.Net.NetworkManager.Instance;
             if (nm != null)
+            {
                 nm.OnMLMatchReady += OnMatchReadySnapCamera;
+                nm.OnMLMatchConfig += OnMatchConfigUpdateHud;
+            }
+
+            ApplyConfiguredHudDefaults();
         }
 
         void OnDisable()
@@ -111,7 +119,10 @@ namespace CastleDefender.Game
 
             var nm = CastleDefender.Net.NetworkManager.Instance;
             if (nm != null)
+            {
                 nm.OnMLMatchReady -= OnMatchReadySnapCamera;
+                nm.OnMLMatchConfig -= OnMatchConfigUpdateHud;
+            }
         }
 
         // Called when match_ready fires — lane index is now authoritative.
@@ -139,6 +150,43 @@ namespace CastleDefender.Game
             }
 
             UpdateWaveHUD(snap);
+        }
+
+        void OnMatchConfigUpdateHud(MLMatchConfig config)
+        {
+            ApplyConfiguredHudDefaults(config);
+        }
+
+        void ApplyConfiguredHudDefaults(MLMatchConfig config = null)
+        {
+            EnsureWaveHUDRefs();
+
+            var cfg = config ?? SnapshotApplier.Instance?.LatestMLMatchConfig;
+            int teamHpStart = cfg != null && cfg.teamHpStart > 0 ? cfg.teamHpStart : 20;
+            float startIncome = cfg != null && cfg.startIncome >= 0f ? cfg.startIncome : 0f;
+            float startGold = cfg != null && cfg.startGold >= 0f ? cfg.startGold : 0f;
+
+            if (TxtGoldTop != null)
+                TxtGoldTop.text = $"Gold {Mathf.FloorToInt(startGold)}";
+
+            if (TxtIncomeTop != null)
+                TxtIncomeTop.text = $"Inc {startIncome:0.0}";
+
+            UpdateTeamHpVisual(
+                TxtTeamHpLeft,
+                _teamHpLeftFill,
+                "Left",
+                teamHpStart,
+                teamHpStart,
+                new Color(1f, 0.92f, 0.2f));
+
+            UpdateTeamHpVisual(
+                TxtTeamHpRight,
+                _teamHpRightFill,
+                "Right",
+                teamHpStart,
+                teamHpStart,
+                Color.white);
         }
 
         void UpdateWaveHUD(MLSnapshot snap)
@@ -193,21 +241,31 @@ namespace CastleDefender.Game
             var hp = snap.teamHp;
             if (hp != null)
             {
-                if (TxtTeamHpLeft != null)
-                {
-                    TxtTeamHpLeft.text = $"♥ {hp.left}";
-                    TxtTeamHpLeft.color = _playerSide == "left"
-                        ? new Color(1f, 0.92f, 0.2f)   // gold — own team
-                        : new Color(1f, 1f, 1f, 0.6f);  // dim white — opponent
-                }
+                int teamHpMax = snap.teamHpMax > 0
+                    ? snap.teamHpMax
+                    : SnapshotApplier.Instance?.LatestMLMatchConfig?.teamHpStart > 0
+                        ? SnapshotApplier.Instance.LatestMLMatchConfig.teamHpStart
+                        : Mathf.Max(hp.left, hp.right, 20);
 
-                if (TxtTeamHpRight != null)
-                {
-                    TxtTeamHpRight.text = $"♥ {hp.right}";
-                    TxtTeamHpRight.color = _playerSide == "right"
+                UpdateTeamHpVisual(
+                    TxtTeamHpLeft,
+                    _teamHpLeftFill,
+                    "Left",
+                    hp.left,
+                    teamHpMax,
+                    _playerSide == "left"
                         ? new Color(1f, 0.92f, 0.2f)
-                        : new Color(1f, 1f, 1f, 0.6f);
-                }
+                        : new Color(1f, 1f, 1f, 0.6f));
+
+                UpdateTeamHpVisual(
+                    TxtTeamHpRight,
+                    _teamHpRightFill,
+                    "Right",
+                    hp.right,
+                    teamHpMax,
+                    _playerSide == "right"
+                        ? new Color(1f, 0.92f, 0.2f)
+                        : new Color(1f, 1f, 1f, 0.6f));
             }
         }
 
@@ -217,6 +275,7 @@ namespace CastleDefender.Game
             EnsureCameraPOV();
             _cameraLockCountdown = CameraLockFrames;
             EnsureWaveHUD();   // auto-create phase/round labels if not wired
+            ApplyConfiguredHudDefaults();
         }
 
         void Start()
@@ -403,9 +462,17 @@ namespace CastleDefender.Game
                 TxtGoldTop = GetOrMakeLabel(hudGO, "Txt_GoldTop", "Gold 0", 92f, 18, new Color(1f, 0.86f, 0.27f));
             if (TxtIncomeTop == null)
                 TxtIncomeTop = GetOrMakeLabel(hudGO, "Txt_IncomeTop", "Inc 0.0", 92f, 18, new Color(0.36f, 0.92f, 0.86f, 1f));
-            TxtTeamHpLeft  = GetOrMakeLabel(hudGO, "Txt_HpLeft",     "♥ 20",     80f, 16, new Color(1f, 0.92f, 0.2f));
-            TxtTeamHpRight = GetOrMakeLabel(hudGO, "Txt_HpRight",    "♥ 20",     80f, 16, Color.white);
-            Debug.Log("[GameManager] Auto-created WaveHUD panel.");
+            if (TxtTeamHpLeft == null)
+                TxtTeamHpLeft = FindHudLabel(hudGO.transform, "Txt_TeamHpLeft")
+                    ?? FindHudLabel(hudGO.transform, "Txt_HpLeft")
+                    ?? GetOrMakeLabel(hudGO, "Txt_TeamHpLeft", "Left 0/0", 110f, 16, new Color(1f, 0.92f, 0.2f));
+            if (TxtTeamHpRight == null)
+                TxtTeamHpRight = FindHudLabel(hudGO.transform, "Txt_TeamHpRight")
+                    ?? FindHudLabel(hudGO.transform, "Txt_HpRight")
+                    ?? GetOrMakeLabel(hudGO, "Txt_TeamHpRight", "Right 0/0", 110f, 16, Color.white);
+
+            _teamHpLeftFill = GetOrMakeHpBar(hudGO, "Bar_TeamHpLeft", 180f, new Color(0.95f, 0.78f, 0.16f, 1f));
+            _teamHpRightFill = GetOrMakeHpBar(hudGO, "Bar_TeamHpRight", 180f, new Color(0.32f, 0.84f, 1f, 1f));
         }
 
         void EnsureWaveHUDRefs()
@@ -427,15 +494,40 @@ namespace CastleDefender.Game
             if (TxtIncomeTop == null)
                 TxtIncomeTop = FindHudLabel(hud, "Txt_IncomeTop");
             if (TxtTeamHpLeft == null)
-                TxtTeamHpLeft = FindHudLabel(hud, "Txt_HpLeft");
+                TxtTeamHpLeft = FindHudLabel(hud, "Txt_TeamHpLeft") ?? FindHudLabel(hud, "Txt_HpLeft");
             if (TxtTeamHpRight == null)
-                TxtTeamHpRight = FindHudLabel(hud, "Txt_HpRight");
+                TxtTeamHpRight = FindHudLabel(hud, "Txt_TeamHpRight") ?? FindHudLabel(hud, "Txt_HpRight");
+            if (_teamHpLeftFill == null)
+                _teamHpLeftFill = FindHudImage(hud, "Bar_TeamHpLeft/Fill");
+            if (_teamHpRightFill == null)
+                _teamHpRightFill = FindHudImage(hud, "Bar_TeamHpRight/Fill");
         }
 
         static TMP_Text FindHudLabel(Transform parent, string name)
         {
             var child = parent.Find(name);
             return child != null ? child.GetComponent<TMP_Text>() : null;
+        }
+
+        static Image FindHudImage(Transform parent, string path)
+        {
+            var child = parent.Find(path);
+            return child != null ? child.GetComponent<Image>() : null;
+        }
+
+        static void UpdateTeamHpVisual(TMP_Text label, Image fill, string teamName, int currentHp, int maxHp, Color color)
+        {
+            if (label != null)
+            {
+                label.text = $"{teamName} {currentHp}/{maxHp}";
+                label.color = color;
+            }
+
+            if (fill != null)
+            {
+                fill.fillAmount = maxHp > 0 ? Mathf.Clamp01((float)currentHp / maxHp) : 0f;
+                fill.color = color;
+            }
         }
 
         static TMPro.TMP_Text GetOrMakeLabel(GameObject parent, string name, string defaultText, float width, int fontSize, Color color)
@@ -457,6 +549,48 @@ namespace CastleDefender.Game
             txt.alignment = TMPro.TextAlignmentOptions.Center;
             txt.fontStyle = TMPro.FontStyles.Bold;
             return txt;
+        }
+
+        static Image GetOrMakeHpBar(GameObject parent, string name, float width, Color fillColor)
+        {
+            var existing = parent.transform.Find(name);
+            if (existing != null)
+            {
+                var existingFill = existing.Find("Fill");
+                if (existingFill != null)
+                {
+                    var img = existingFill.GetComponent<Image>();
+                    if (img != null) return img;
+                }
+            }
+
+            var root = new GameObject(name);
+            root.transform.SetParent(parent.transform, false);
+            var rt = root.AddComponent<RectTransform>();
+            rt.sizeDelta = new Vector2(width, 18f);
+
+            var le = root.AddComponent<LayoutElement>();
+            le.preferredWidth = width;
+            le.preferredHeight = 18f;
+
+            var bg = root.AddComponent<Image>();
+            bg.color = new Color(0f, 0f, 0f, 0.55f);
+
+            var fillGo = new GameObject("Fill");
+            fillGo.transform.SetParent(root.transform, false);
+            var fillRt = fillGo.AddComponent<RectTransform>();
+            fillRt.anchorMin = Vector2.zero;
+            fillRt.anchorMax = Vector2.one;
+            fillRt.offsetMin = Vector2.zero;
+            fillRt.offsetMax = Vector2.zero;
+
+            var fill = fillGo.AddComponent<Image>();
+            fill.type = Image.Type.Filled;
+            fill.fillMethod = Image.FillMethod.Horizontal;
+            fill.fillOrigin = (int)Image.OriginHorizontal.Left;
+            fill.fillAmount = 1f;
+            fill.color = fillColor;
+            return fill;
         }
     }
 }

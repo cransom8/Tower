@@ -558,14 +558,13 @@ async function loadForgeWarsConfig() {
               <input id="fw-start-income" type="number" min="0" step="0.1" value="${esc(String(gp.startIncome ?? 10))}" ${canWrite ? '' : 'disabled'}>
             </div>
             <div class="form-group">
-              <label>Player Lives</label>
-              <input id="fw-lives-start" type="number" min="1" step="1" value="${esc(String(gp.livesStart ?? 20))}" ${canWrite ? '' : 'disabled'}>
-            </div>
-            <div class="form-group">
               <label>Team HP</label>
               <input id="fw-team-hp-start" type="number" min="1" step="1" value="${esc(String(gp.teamHpStart ?? 20))}" ${canWrite ? '' : 'disabled'}>
             </div>
           </div>
+          <p class="text-muted" style="font-size:12px;margin-top:10px">
+            <code>Player Lives</code> is a legacy multilane field and is now kept in sync with <code>Team HP</code> automatically for compatibility.
+          </p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:10px">
             <div class="form-group">
               <label>Build Phase Ticks</label>
@@ -616,14 +615,6 @@ async function loadForgeWarsConfig() {
           </table></div>
         </div>
       </div>
-      <div class="section">
-        <div class="section-header"><h3>Legacy Balance Data</h3></div>
-        <div class="section-body">
-          <p class="text-muted" style="font-size:12px;margin:0">
-            The older versioned <code>/admin/game-config</code> editor still exists for legacy server balance flows, but the current Forge Wars Unity client is primarily driven by the systems listed above.
-          </p>
-        </div>
-      </div>
     `);
   } catch (err) {
     setContent(`<p class="load text-danger">Error: ${esc(err.message)}</p>`);
@@ -642,11 +633,12 @@ async function saveForgeWarsSettings() {
   };
 
   const nextConfig = JSON.parse(JSON.stringify(configData.multilane));
+  const teamHpStart = Math.max(1, Math.floor(num('fw-team-hp-start', 20)));
   nextConfig.globalParams = Object.assign({}, nextConfig.globalParams || {}, {
     startGold: num('fw-start-gold', 70),
     startIncome: num('fw-start-income', 10),
-    livesStart: Math.max(1, Math.floor(num('fw-lives-start', 20))),
-    teamHpStart: Math.max(1, Math.floor(num('fw-team-hp-start', 20))),
+    livesStart: teamHpStart,
+    teamHpStart,
     buildPhaseTicks: Math.max(20, Math.floor(num('fw-build-phase-ticks', 600))),
     transitionPhaseTicks: Math.max(20, Math.floor(num('fw-transition-phase-ticks', 200))),
   });
@@ -3428,6 +3420,60 @@ function renderUnitsTab(unitTypes, displayFields) {
       </div>
     </div>
 
+    ${canWrite ? `
+      <div class="section" style="margin-bottom:18px">
+        <div class="section-header"><h3>Bulk Edit Units</h3></div>
+        <div class="section-body">
+          <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+            Apply one numeric change across many units at once. This updates the database and reloads the live unit cache.
+          </p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end">
+            <div class="form-group">
+              <label>Field</label>
+              <select id="units-bulk-field" style="width:100%">
+                <option value="hp">HP</option>
+                <option value="attack_damage">Attack Damage</option>
+                <option value="attack_speed">Attack Speed</option>
+                <option value="path_speed">Path Speed</option>
+                <option value="range">Range</option>
+                <option value="send_cost">Send Cost</option>
+                <option value="build_cost">Build Cost</option>
+                <option value="income">Income</option>
+                <option value="bounty">Bounty</option>
+                <option value="projectile_travel_ticks">Projectile Travel Ticks</option>
+                <option value="damage_reduction_pct">Damage Reduction %</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Operation</label>
+              <select id="units-bulk-operation" style="width:100%">
+                <option value="multiply">Multiply</option>
+                <option value="add">Add</option>
+                <option value="set">Set</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Value</label>
+              <input id="units-bulk-value" type="number" step="0.01" value="2" style="width:100%">
+            </div>
+            <div class="form-group">
+              <label>Scope</label>
+              <select id="units-bulk-scope" style="width:100%">
+                <option value="all">All Units</option>
+                <option value="enabled">Enabled Only</option>
+                <option value="moving">Moving Only</option>
+                <option value="fixed">Fixed Only</option>
+                <option value="both">Both-Mode Only</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <button class="btn-primary" onclick="bulkUpdateUnits()" style="width:100%">Apply Bulk Edit</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
     <div id="units-list-wrap" class="section" style="${S.units.view === 'list' ? '' : 'display:none'};overflow-x:auto">
       <table style="width:100%">
         <thead><tr>
@@ -3601,6 +3647,31 @@ async function reloadUnitTypeCache() {
 window.reloadUnitTypeCache = reloadUnitTypeCache;
 
 // ── Unit Type modal (create + edit) ────────────────────────────────────────────
+
+async function bulkUpdateUnits() {
+  const field = document.getElementById('units-bulk-field')?.value;
+  const operation = document.getElementById('units-bulk-operation')?.value;
+  const scope = document.getElementById('units-bulk-scope')?.value || 'all';
+  const value = parseFloat(document.getElementById('units-bulk-value')?.value);
+
+  if (!Number.isFinite(value)) {
+    toast('Bulk-edit value must be numeric.', 'err');
+    return;
+  }
+
+  const fieldLabel = document.getElementById('units-bulk-field')?.selectedOptions?.[0]?.textContent || field;
+  const scopeLabel = document.getElementById('units-bulk-scope')?.selectedOptions?.[0]?.textContent || scope;
+  if (!confirm(`Apply ${operation} ${fieldLabel} using ${value} for ${scopeLabel}?`)) return;
+
+  try {
+    const r = await api('POST', '/admin/unit-types/bulk-update', { field, operation, value, scope });
+    toast(`Bulk edit applied to ${r.updated} unit${r.updated === 1 ? '' : 's'}.`, 'ok');
+    await loadUnits();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+window.bulkUpdateUnits = bulkUpdateUnits;
 
 async function openUnitTypeModal(id) {
   let ut = null;

@@ -138,18 +138,58 @@ function sanitizeDisplayName(raw) {
     .slice(0, 20) || "Player";
 }
 
-const DEFAULT_MATCH_SETTINGS = Object.freeze({
-  startIncome: 10,
-});
+const gameConfig = require("../gameConfig");
+
+function getDefaultMatchSettings() {
+  const active = gameConfig.getActiveConfig("multilane");
+  const gp = active && active.globalParams ? active.globalParams : {};
+  return {
+    startGold: Number(gp.startGold) || 70,
+    startIncome: Number(gp.startIncome) || 10,
+    livesStart: Number(gp.livesStart) || 20,
+    teamHpStart: Number(gp.teamHpStart) || 20,
+    buildPhaseTicks: Number(gp.buildPhaseTicks) || 600,
+    transitionPhaseTicks: Number(gp.transitionPhaseTicks) || 200,
+  };
+}
 
 function normalizeMatchSettings(settings) {
   const src = settings && typeof settings === "object" ? settings : {};
+  const defaults = getDefaultMatchSettings();
+  const rawGold = Number(src.startGold);
   const rawIncome = Number(src.startIncome);
+  const rawLives = Number(src.livesStart);
+  const rawTeamHp = Number(src.teamHpStart);
+  const rawBuildPhaseTicks = Number(src.buildPhaseTicks);
+  const rawTransitionPhaseTicks = Number(src.transitionPhaseTicks);
+  const startGold = Number.isFinite(rawGold)
+    ? Math.max(0, Math.min(10000, Math.floor(rawGold)))
+    : defaults.startGold;
   const startIncome = Number.isFinite(rawIncome)
     ? Math.max(0, Math.min(1000, rawIncome))
-    : DEFAULT_MATCH_SETTINGS.startIncome;
+    : defaults.startIncome;
+  const livesStart = Number.isFinite(rawLives)
+    ? Math.max(1, Math.min(1000, Math.floor(rawLives)))
+    : defaults.livesStart;
+  const teamHpStart = Number.isFinite(rawTeamHp)
+    ? Math.max(1, Math.min(1000, Math.floor(rawTeamHp)))
+    : defaults.teamHpStart;
+  const buildPhaseTicks = Number.isFinite(rawBuildPhaseTicks)
+    ? Math.max(20, Math.min(7200, Math.floor(rawBuildPhaseTicks)))
+    : defaults.buildPhaseTicks;
+  const transitionPhaseTicks = Number.isFinite(rawTransitionPhaseTicks)
+    ? Math.max(20, Math.min(7200, Math.floor(rawTransitionPhaseTicks)))
+    : defaults.transitionPhaseTicks;
   const selectionMode = src.selectionMode === "random" ? "random" : "manual";
-  return { startIncome, selectionMode };
+  return {
+    startGold,
+    startIncome,
+    livesStart,
+    teamHpStart,
+    buildPhaseTicks,
+    transitionPhaseTicks,
+    selectionMode,
+  };
 }
 
 function requireAuthSocket(socket, cb) {
@@ -168,7 +208,7 @@ module.exports = {
   createCodeGenerator,
   createRateLimiters,
   createReconnectTokenHelpers,
-  DEFAULT_MATCH_SETTINGS,
+  getDefaultMatchSettings,
   installSocketAuth,
   normalizeMatchSettings,
   parseCookies,

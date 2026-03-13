@@ -12,6 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Newtonsoft.Json;
 using CastleDefender.Net;
 
@@ -48,6 +49,9 @@ namespace CastleDefender.Net
         // Cached so LoadoutPhaseManager.Start() can pick it up after scene load.
         // Cleared when ml_loadout_phase_end or ml_match_config(loadout) arrives.
         public MLLoadoutPhaseStartPayload PendingLoadoutPhase { get; private set; }
+        public MLGameOverPayload LastMLGameOver { get; private set; }
+        public ClassicGameOverPayload LastClassicGameOver { get; private set; }
+        public RematchStatusPayload LastRematchStatus { get; private set; }
 
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
@@ -338,13 +342,14 @@ namespace CastleDefender.Net
                 {
                     var p = JsonUtility.FromJson<MLGameOverPayload>(json);
                     Debug.Log($"[NM] ml_game_over winner lane={p.winnerLaneIndex}");
-                    OnMLGameOver?.Invoke(p);
+                    HandleIncomingMLGameOver(p);
                     break;
                 }
                 case "game_over":
                 {
                     var p = JsonUtility.FromJson<ClassicGameOverPayload>(json);
                     Debug.Log($"[NM] game_over winner={p.winner}");
+                    LastClassicGameOver = p;
                     OnClassicGameOver?.Invoke(p);
                     break;
                 }
@@ -352,8 +357,12 @@ namespace CastleDefender.Net
                     OnRematchVote?.Invoke(JsonUtility.FromJson<RematchVotePayload>(json));
                     break;
                 case "rematch_status":
-                    OnRematchStatus?.Invoke(JsonUtility.FromJson<RematchStatusPayload>(json));
+                {
+                    var p = JsonUtility.FromJson<RematchStatusPayload>(json);
+                    LastRematchStatus = p;
+                    OnRematchStatus?.Invoke(p);
                     break;
+                }
                 case "rematch_starting":
                     OnRematchStarting?.Invoke(JsonUtility.FromJson<RematchStartingPayload>(json));
                     break;
@@ -605,13 +614,14 @@ namespace CastleDefender.Net
             {
                 var p = FromResp<MLGameOverPayload>(resp);
                 Debug.Log($"[NM] ml_game_over winner lane={p.winnerLaneIndex}");
-                OnMLGameOver?.Invoke(p);
+                HandleIncomingMLGameOver(p);
             });
 
             _socket.OnUnityThread("game_over", resp =>
             {
                 var p = FromResp<ClassicGameOverPayload>(resp);
                 Debug.Log($"[NM] game_over winner={p.winner}");
+                LastClassicGameOver = p;
                 OnClassicGameOver?.Invoke(p);
             });
 
@@ -623,7 +633,9 @@ namespace CastleDefender.Net
 
             _socket.OnUnityThread("rematch_status", resp =>
             {
-                OnRematchStatus?.Invoke(FromResp<RematchStatusPayload>(resp));
+                var p = FromResp<RematchStatusPayload>(resp);
+                LastRematchStatus = p;
+                OnRematchStatus?.Invoke(p);
             });
 
             _socket.OnUnityThread("rematch_starting", resp =>
@@ -756,6 +768,26 @@ namespace CastleDefender.Net
                 _respSettings);
 
 #endif // !UNITY_WEBGL || UNITY_EDITOR
+
+        void HandleIncomingMLGameOver(MLGameOverPayload payload)
+        {
+            LastMLGameOver = payload;
+            LastRematchStatus = null;
+            OnMLGameOver?.Invoke(payload);
+
+            string activeScene = SceneManager.GetActiveScene().name;
+            if (activeScene != "PostGame")
+            {
+                SceneManager.LoadScene("PostGame");
+            }
+        }
+
+        public void ClearPostGameData()
+        {
+            LastMLGameOver = null;
+            LastClassicGameOver = null;
+            LastRematchStatus = null;
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         /// <summary>Send the player's confirmed loadout unit type IDs to the server.</summary>

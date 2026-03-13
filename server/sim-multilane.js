@@ -1829,6 +1829,7 @@ function createMLPublicConfig(options) {
       key: ut.key,
       name: ut.name,
       send_cost: Number(ut.send_cost) || 1,
+      income: Number(ut.income) || 0,
       ...pickSoundFields(ut),
     }));
 

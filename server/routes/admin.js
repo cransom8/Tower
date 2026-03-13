@@ -1914,6 +1914,29 @@ const UNIT_TYPE_FIELDS = [
 const UNIT_KEY_RE       = /^[a-z_][a-z0-9_]{0,63}$/;
 const VALID_DAMAGE_TYPES = ['NORMAL','PIERCE','SPLASH','SIEGE','MAGIC','PHYSICAL','TRUE'];
 const VALID_ARMOR_TYPES  = ['UNARMORED','LIGHT','MEDIUM','HEAVY','MAGIC'];
+const UNIT_BULK_NUMERIC_FIELDS = new Set([
+  'hp',
+  'attack_damage',
+  'attack_speed',
+  'range',
+  'path_speed',
+  'send_cost',
+  'build_cost',
+  'income',
+  'refund_pct',
+  'bounty',
+  'projectile_travel_ticks',
+  'damage_reduction_pct',
+]);
+const UNIT_BULK_INTEGER_FIELDS = new Set([
+  'send_cost',
+  'build_cost',
+  'income',
+  'refund_pct',
+  'bounty',
+  'projectile_travel_ticks',
+  'damage_reduction_pct',
+]);
 
 function validateUnitTypeBody(body) {
   const errs = [];
@@ -1970,6 +1993,63 @@ router.get('/unit-types', requireAdmin, async (req, res) => {
     res.json({ unitTypes: r.rows });
   } catch (err) {
     log.error('[admin] GET /unit-types error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /admin/unit-types/bulk-update
+router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'Database not configured' });
+  const db = require('../db');
+  const field = String(req.body?.field || '').trim();
+  const operation = String(req.body?.operation || '').trim();
+  const scope = String(req.body?.scope || 'all').trim();
+  const value = Number(req.body?.value);
+
+  if (!UNIT_BULK_NUMERIC_FIELDS.has(field)) {
+    return res.status(400).json({ error: 'Unsupported bulk-edit field' });
+  }
+  if (!['set', 'add', 'multiply'].includes(operation)) {
+    return res.status(400).json({ error: 'Unsupported bulk-edit operation' });
+  }
+  if (!Number.isFinite(value)) {
+    return res.status(400).json({ error: 'Bulk-edit value must be numeric' });
+  }
+
+  let whereClause = 'TRUE';
+  if (scope === 'enabled') whereClause = 'enabled = TRUE';
+  else if (scope === 'moving' || scope === 'fixed' || scope === 'both') whereClause = `behavior_mode = '${scope}'`;
+  else if (scope !== 'all') return res.status(400).json({ error: 'Unsupported bulk-edit scope' });
+
+  let expr;
+  if (operation === 'set') expr = '$1';
+  else if (operation === 'add') expr = `COALESCE(${field}, 0) + $1`;
+  else expr = `COALESCE(${field}, 0) * $1`;
+
+  if (UNIT_BULK_INTEGER_FIELDS.has(field)) {
+    expr = `ROUND((${expr})::numeric)::int`;
+  }
+
+  if (['send_cost', 'build_cost', 'income', 'refund_pct', 'bounty', 'projectile_travel_ticks', 'damage_reduction_pct', 'hp', 'attack_damage', 'attack_speed', 'range', 'path_speed'].includes(field)) {
+    expr = `GREATEST(0, ${expr})`;
+  }
+  if (field === 'projectile_travel_ticks') {
+    expr = `GREATEST(1, ${expr})`;
+  }
+
+  try {
+    const r = await db.query(
+      `UPDATE unit_types
+       SET ${field} = ${expr}, updated_at = NOW()
+       WHERE ${whereClause}
+       RETURNING id`,
+      [value]
+    );
+    const unitTypesModule = require('../unitTypes');
+    await unitTypesModule.reloadUnitTypes();
+    res.json({ ok: true, updated: r.rowCount, field, operation, value, scope });
+  } catch (err) {
+    log.error('[admin] POST /unit-types/bulk-update error', { err: err.message, field, operation, scope });
     res.status(500).json({ error: 'Server error' });
   }
 });

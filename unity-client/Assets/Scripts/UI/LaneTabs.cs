@@ -22,6 +22,7 @@ namespace CastleDefender.UI
         public Transform TabContainer;
         public Button    TabPrefab;
         public Image     EnemyLaneTint;
+        public Button    ReturnToLaneButton;
 
         [Header("Colors")]
         public Color ColorMineActive    = new Color(0.2f, 0.7f, 0.6f);
@@ -39,8 +40,9 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()
         {
-            if (NetworkManager.Instance == null) return;
-            NetworkManager.Instance.OnMLMatchReady += HandleMatchReady;
+            if (NetworkManager.Instance != null)
+                NetworkManager.Instance.OnMLMatchReady += HandleMatchReady;
+            TryInitializeFromCurrentState();
         }
 
         void OnDisable()
@@ -59,6 +61,9 @@ namespace CastleDefender.UI
         {
             _myLane  = myLane;
             _viewing = myLane;
+            if (TabContainer == null)
+                TabContainer = transform;
+            EnsureReturnButton();
 
             // Build tab buttons only if the UI references are assigned
             if (TabContainer != null)
@@ -88,15 +93,31 @@ namespace CastleDefender.UI
             }
 
             SetEnemyTint(false);
+            RefreshReturnButton();
         }
 
         // Number keys 1-4 switch lanes even when no tab UI is set up
         void Update()
         {
+            if (ReturnToLaneButton == null)
+                TryInitializeFromCurrentState();
+
             if (Input.GetKeyDown(KeyCode.Alpha1)) SwitchTo(0);
             else if (Input.GetKeyDown(KeyCode.Alpha2)) SwitchTo(1);
             else if (Input.GetKeyDown(KeyCode.Alpha3)) SwitchTo(2);
             else if (Input.GetKeyDown(KeyCode.Alpha4)) SwitchTo(3);
+        }
+
+        void TryInitializeFromCurrentState()
+        {
+            var nm = NetworkManager.Instance;
+            var sa = SnapshotApplier.Instance;
+            var ready = sa != null ? sa.LatestMLMatchReady : null;
+            if (nm == null || ready == null || ready.playerCount <= 0)
+                return;
+
+            if (_tabs == null || _tabs.Length != ready.playerCount || ReturnToLaneButton == null)
+                Init(ready.playerCount, nm.MyLaneIndex);
         }
 
         public void SwitchTo(int laneIdx)
@@ -106,6 +127,7 @@ namespace CastleDefender.UI
             RefreshColors();
             bool isEnemy = SnapshotApplier.Instance == null || !SnapshotApplier.Instance.AreLanesAllied(laneIdx, _myLane);
             SetEnemyTint(isEnemy);
+            RefreshReturnButton();
         }
 
         void RefreshColors()
@@ -164,6 +186,96 @@ namespace CastleDefender.UI
             {
                 _tintCoroutine = StartCoroutine(FadeOutAndHide(EnemyLaneTint, 0.15f));
             }
+        }
+
+        void EnsureReturnButton()
+        {
+            if (ReturnToLaneButton != null)
+                return;
+
+            var parent = TabContainer != null && TabContainer.parent != null ? TabContainer.parent : transform;
+            Button button;
+
+            if (TabPrefab != null)
+            {
+                button = Instantiate(TabPrefab, parent);
+            }
+            else
+            {
+                button = BuildFallbackButton(parent);
+            }
+
+            button.name = "Btn_ReturnToLane";
+            button.onClick.RemoveAllListeners();
+            button.onClick.AddListener(ReturnToMyLane);
+
+            var text = button.GetComponentInChildren<TMP_Text>();
+            if (text != null)
+                text.text = "Return To Lane";
+
+            var rt = button.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                rt.anchorMin = new Vector2(1f, 1f);
+                rt.anchorMax = new Vector2(1f, 1f);
+                rt.pivot = new Vector2(1f, 1f);
+                rt.anchoredPosition = new Vector2(-20f, -20f);
+            }
+
+            ReturnToLaneButton = button;
+        }
+
+        Button BuildFallbackButton(Transform parent)
+        {
+            var go = new GameObject("Btn_ReturnToLane", typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+
+            var image = go.GetComponent<Image>();
+            image.color = new Color(0.14f, 0.52f, 0.46f, 0.96f);
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.sizeDelta = new Vector2(180f, 44f);
+
+            var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+            labelGo.transform.SetParent(go.transform, false);
+
+            var labelRt = labelGo.GetComponent<RectTransform>();
+            labelRt.anchorMin = Vector2.zero;
+            labelRt.anchorMax = Vector2.one;
+            labelRt.offsetMin = new Vector2(10f, 6f);
+            labelRt.offsetMax = new Vector2(-10f, -6f);
+
+            var tmp = labelGo.GetComponent<TextMeshProUGUI>();
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.fontSize = 22f;
+            tmp.color = Color.white;
+            tmp.text = "Return To Lane";
+            if (TMP_Settings.defaultFontAsset != null)
+                tmp.font = TMP_Settings.defaultFontAsset;
+
+            var colors = go.GetComponent<Button>().colors;
+            colors.normalColor = image.color;
+            colors.highlightedColor = new Color(0.18f, 0.62f, 0.55f, 1f);
+            colors.pressedColor = new Color(0.10f, 0.38f, 0.34f, 1f);
+            colors.selectedColor = colors.highlightedColor;
+            colors.disabledColor = new Color(0.18f, 0.18f, 0.18f, 0.55f);
+            go.GetComponent<Button>().colors = colors;
+
+            return go.GetComponent<Button>();
+        }
+
+        void RefreshReturnButton()
+        {
+            if (ReturnToLaneButton == null)
+                return;
+
+            ReturnToLaneButton.gameObject.SetActive(true);
+            ReturnToLaneButton.interactable = _viewing != _myLane;
+        }
+
+        public void ReturnToMyLane()
+        {
+            SwitchTo(_myLane);
         }
 
         static IEnumerator FadeImageAlpha(Image img, float from, float to, float dur)

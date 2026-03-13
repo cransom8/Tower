@@ -48,11 +48,15 @@ namespace CastleDefender.UI
         [Tooltip("Image (Filled/Horizontal) driven by queue_update.drainProgress.")]
         public Image QueueDrainBar;
 
+        [Header("Lane Return")]
+        public Button ReturnToLaneButton;
+
         [Header("Colors")]
         public Color ColorWallOn   = new Color(0.2f,  0.7f,  0.6f,  1f);
         public Color ColorAutoOn   = new Color(0.2f,  0.7f,  0.6f,  1f);
         public Color ColorAutoOff  = new Color(0.14f, 0.12f, 0.10f, 0.92f);
         public Color ColorPhaseOff = new Color(0.35f, 0.35f, 0.35f, 0.50f); // buttons during combat/transition
+        public Color ColorReturnLane = new Color(0.10f, 0.58f, 0.52f, 0.98f);
 
         // ── Static state ──────────────────────────────────────────────────────
 
@@ -79,6 +83,8 @@ namespace CastleDefender.UI
         RenderTexture _runtimePortraitTexture;
         GameObject _runtimePortraitRoot;
         bool _isCapturingPortraits;
+        CameraController _cameraController;
+        int _laneCycleStep;
 
         // ── Autosend state ────────────────────────────────────────────────────
         Dictionary<string, bool> _autoUnits = new()
@@ -104,6 +110,7 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
+            _cameraController = FindFirstObjectByType<CameraController>();
             if (NetworkManager.Instance != null)
             {
                 NetworkManager.Instance.OnQueueUpdate   += HandleQueueUpdate;
@@ -153,6 +160,8 @@ namespace CastleDefender.UI
 
             if (QueueDrainBar != null) QueueDrainBar.fillAmount = 0f;
 
+            _laneCycleStep = 0;
+            EnsureReturnToLaneButton();
             RefreshAllAutoStrips();
         }
 
@@ -459,6 +468,7 @@ namespace CastleDefender.UI
             var lane = sa?.MyLane;
             var snap = sa?.LatestML;
             RefreshButtonPortraits();
+            RefreshReturnToLaneButton();
 
             if (lane == null || _unitCosts == null || UnitButtons.Length == 0) return;
             if (!UnitButtons[0].gameObject.activeSelf) return;
@@ -487,6 +497,217 @@ namespace CastleDefender.UI
         }
 
         // ── Click handlers ────────────────────────────────────────────────────
+
+        void EnsureReturnToLaneButton()
+        {
+            if (ReturnToLaneButton != null)
+            {
+                ReturnToLaneButton.onClick.RemoveListener(OnReturnToLaneClicked);
+                ReturnToLaneButton.onClick.AddListener(OnReturnToLaneClicked);
+                return;
+            }
+
+            var go = new GameObject("Btn_ReturnToLane", typeof(RectTransform), typeof(Image), typeof(Button));
+            var parent = transform.parent != null ? transform.parent : transform;
+            go.transform.SetParent(parent, false);
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(1f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(1f, 1f);
+            rt.sizeDelta = new Vector2(190f, 44f);
+            rt.anchoredPosition = new Vector2(-14f, -14f);
+            rt.SetAsLastSibling();
+
+            var image = go.GetComponent<Image>();
+            image.color = ColorReturnLane;
+
+            var button = go.GetComponent<Button>();
+            var colors = button.colors;
+            colors.normalColor = image.color;
+            colors.highlightedColor = new Color(0.16f, 0.70f, 0.62f, 1f);
+            colors.pressedColor = new Color(0.08f, 0.42f, 0.37f, 1f);
+            colors.selectedColor = colors.highlightedColor;
+            colors.disabledColor = new Color(0.18f, 0.18f, 0.18f, 0.55f);
+            button.colors = colors;
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.ColorTint;
+            button.onClick.AddListener(OnReturnToLaneClicked);
+
+            var outline = go.AddComponent<Outline>();
+            outline.effectColor = new Color(0.02f, 0.10f, 0.10f, 0.95f);
+            outline.effectDistance = new Vector2(2f, -2f);
+
+            var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+            labelGo.transform.SetParent(go.transform, false);
+
+            var labelRt = labelGo.GetComponent<RectTransform>();
+            labelRt.anchorMin = Vector2.zero;
+            labelRt.anchorMax = Vector2.one;
+            labelRt.offsetMin = new Vector2(8f, 4f);
+            labelRt.offsetMax = new Vector2(-8f, -4f);
+
+            var tmp = labelGo.GetComponent<TextMeshProUGUI>();
+            tmp.text = "Cycle Lanes";
+            tmp.fontSize = 22f;
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.color = Color.white;
+            if (TMP_Settings.defaultFontAsset != null)
+                tmp.font = TMP_Settings.defaultFontAsset;
+
+            ReturnToLaneButton = button;
+        }
+
+        void RefreshReturnToLaneButton()
+        {
+            if (ReturnToLaneButton == null)
+                return;
+
+            ReturnToLaneButton.gameObject.SetActive(HasAnyCycleTargets());
+            ReturnToLaneButton.interactable = true;
+        }
+
+        int GetMyBranchConfigIndex()
+        {
+            var sa = SnapshotApplier.Instance;
+            if (sa == null)
+                return Mathf.Clamp(sa != null ? sa.MyLaneIndex : 0, 0, 3);
+
+            var assignment = sa.GetLaneAssignment(sa.MyLaneIndex);
+            int branchCfg = TileGrid.GetBranchConfigIndex(assignment?.branchId);
+            if (branchCfg >= 0)
+                return branchCfg;
+
+            var lane = sa.GetLane(sa.MyLaneIndex);
+            branchCfg = TileGrid.GetBranchConfigIndex(lane?.branchId);
+            if (branchCfg >= 0)
+                return branchCfg;
+
+            return Mathf.Clamp(sa.MyLaneIndex, 0, 3);
+        }
+
+        int GetLaneIndexForBranch(int branchCfg)
+        {
+            var sa = SnapshotApplier.Instance;
+            if (sa == null)
+                return -1;
+
+            var assignments = sa.LatestMLMatchReady?.laneAssignments;
+            if (assignments != null)
+            {
+                for (int i = 0; i < assignments.Length; i++)
+                {
+                    var assignment = assignments[i];
+                    if (assignment != null && TileGrid.GetBranchConfigIndex(assignment.branchId) == branchCfg)
+                        return assignment.laneIndex;
+                }
+            }
+
+            var snap = sa.LatestML;
+            if (snap?.lanes != null)
+            {
+                for (int i = 0; i < snap.lanes.Length; i++)
+                {
+                    var lane = snap.lanes[i];
+                    if (lane != null && TileGrid.GetBranchConfigIndex(lane.branchId) == branchCfg)
+                        return lane.laneIndex;
+                }
+            }
+
+            return -1;
+        }
+
+        bool HasAnyCycleTargets()
+        {
+            return GetMyBranchConfigIndex() >= 0;
+        }
+
+        void FocusBranch(int branchCfg)
+        {
+            var sa = SnapshotApplier.Instance;
+            if (_cameraController == null)
+                _cameraController = FindFirstObjectByType<CameraController>();
+
+            int laneIndex = GetLaneIndexForBranch(branchCfg);
+            if (sa != null && laneIndex >= 0)
+                sa.ViewingLane = laneIndex;
+
+            if (_cameraController != null)
+            {
+                Vector3 p = TileGrid.TileToWorld(branchCfg, 5, 14);
+                _cameraController.PanTo(new Vector3(p.x, _cameraController.CameraTarget.position.y, p.z));
+            }
+        }
+
+        void FocusMergePoint(bool leftSide)
+        {
+            if (_cameraController == null)
+                _cameraController = FindFirstObjectByType<CameraController>();
+            if (_cameraController == null || _cameraController.CameraTarget == null)
+                return;
+
+            Vector3 p = leftSide ? new Vector3(-82f, 1f, 0f) : new Vector3(82f, 1f, 0f);
+            _cameraController.PanTo(new Vector3(p.x, _cameraController.CameraTarget.position.y, p.z));
+        }
+
+        void OnReturnToLaneClicked()
+        {
+            int myBranch = GetMyBranchConfigIndex();
+            if (myBranch < 0)
+                return;
+
+            int opponentAcrossBranch = (myBranch + 2) % 4;
+            bool mySideIsLeft = myBranch < 2;
+            int totalLanes = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.TotalLanes : 0;
+
+            if (totalLanes <= 2)
+            {
+                _laneCycleStep = (_laneCycleStep + 1) % 4;
+                switch (_laneCycleStep)
+                {
+                    case 0:
+                        FocusBranch(myBranch);
+                        break;
+                    case 1:
+                        FocusMergePoint(mySideIsLeft);
+                        break;
+                    case 2:
+                        FocusBranch(opponentAcrossBranch);
+                        break;
+                    default:
+                        FocusMergePoint(!mySideIsLeft);
+                        break;
+                }
+                return;
+            }
+
+            int teammateBranch = myBranch ^ 1;
+            int oppositeTeammateBranch = (teammateBranch + 2) % 4;
+
+            _laneCycleStep = (_laneCycleStep + 1) % 6;
+            switch (_laneCycleStep)
+            {
+                case 0:
+                    FocusBranch(myBranch);
+                    break;
+                case 1:
+                    FocusMergePoint(mySideIsLeft);
+                    break;
+                case 2:
+                    FocusBranch(teammateBranch);
+                    break;
+                case 3:
+                    FocusBranch(oppositeTeammateBranch);
+                    break;
+                case 4:
+                    FocusMergePoint(!mySideIsLeft);
+                    break;
+                default:
+                    FocusBranch(opponentAcrossBranch);
+                    break;
+            }
+        }
 
         void OnUnitClick(int idx)
         {
