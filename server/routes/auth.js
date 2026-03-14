@@ -71,7 +71,7 @@ async function issueTokens(player, res) {
 }
 
 // POST /auth/google
-// Body: { idToken: string }
+// Body: { idToken: string } or { credential: string }
 // Returns: { accessToken, refreshToken, player }
 router.post('/google', async (req, res) => {
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -79,7 +79,7 @@ router.post('/google', async (req, res) => {
     return res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
   }
   try {
-    const { idToken } = req.body;
+    const idToken = req.body?.idToken || req.body?.credential;
     if (!idToken) return res.status(400).json({ error: 'idToken required' });
 
     const googleUser = await authService.verifyGoogleToken(idToken);

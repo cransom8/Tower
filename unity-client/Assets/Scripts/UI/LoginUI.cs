@@ -1,6 +1,6 @@
 // LoginUI.cs — Mandatory sign-in screen. Shown before the Lobby.
 // If AuthManager already has a valid token, skips directly to Lobby.
-// Supports email/password (Sign In + Register tabs) and Google SSO (WebGL only).
+// Supports email/password, forgot-password, and Google SSO (WebGL only).
 //
 // SCENE SETUP (Login.unity):
 //   -- Place AuthManager + NetworkManager GameObjects here (they DontDestroyOnLoad)
@@ -59,8 +59,8 @@ namespace CastleDefender.UI
         public TMP_Text Txt_Error;
         public TMP_Text Txt_Status;
 
-        [Header("Browser Sign-In (Editor / Standalone)")]
-        public Button     Btn_Browser;        // "Sign in via Browser"
+        [Header("Auxiliary Action")]
+        public Button     Btn_Browser;        // repurposed as "Forgot Password?"
         public GameObject Obj_DevicePanel;    // shown while waiting for browser auth
         public TMP_Text   Txt_DeviceCode;     // the 6-char code to enter on the web
         public TMP_Text   Txt_DeviceStatus;   // "Waiting for browser..."
@@ -103,9 +103,10 @@ namespace CastleDefender.UI
             if (Btn_TabRegister) Btn_TabRegister.onClick.AddListener(() => SetTab(true));
             if (Btn_Submit)      Btn_Submit.onClick.AddListener(OnSubmit);
             if (Btn_Google)      Btn_Google.onClick.AddListener(OnGoogleSignIn);
-            if (Btn_Browser)     Btn_Browser.onClick.AddListener(OnBrowserSignIn);
+            if (Btn_Browser)     Btn_Browser.onClick.AddListener(OnForgotPassword);
             if (Btn_DeviceCancel)Btn_DeviceCancel.onClick.AddListener(CancelDeviceFlow);
             if (Obj_DevicePanel) Obj_DevicePanel.SetActive(false);
+            ConfigureAuxiliaryAction();
 
             SetTab(false);
             SetError("");
@@ -154,7 +155,12 @@ namespace CastleDefender.UI
                     if (Input_Email     != null) Input_Email.gameObject.SetActive(false);
                     if (Input_Password  != null) Input_Password.gameObject.SetActive(false);
                     if (Btn_Submit      != null) Btn_Submit.gameObject.SetActive(false);
+                    if (Btn_Browser     != null) Btn_Browser.gameObject.SetActive(false);
                     SetStatus("Use Google to sign in.");
+                }
+                else if (Btn_Browser != null)
+                {
+                    Btn_Browser.gameObject.SetActive(true);
                 }
             }
             catch (Exception ex)
@@ -186,6 +192,9 @@ namespace CastleDefender.UI
                 var txt = Btn_TabRegister.GetComponentInChildren<TMP_Text>();
                 if (txt != null) txt.color = register ? ColorTabActive : ColorTabInactive;
             }
+
+            if (Btn_Browser != null)
+                Btn_Browser.gameObject.SetActive(_passwordEnabled && !_isRegisterTab);
 
             SetError("");
             SetStatus("");
@@ -304,12 +313,70 @@ namespace CastleDefender.UI
 
         // ── Google SSO ────────────────────────────────────────────────────────
 
+        void ConfigureAuxiliaryAction()
+        {
+            if (Btn_Browser == null) return;
+            var txt = Btn_Browser.GetComponentInChildren<TMP_Text>();
+            if (txt != null) txt.text = "Forgot Password?";
+            Btn_Browser.gameObject.SetActive(false);
+        }
+
+        void OnForgotPassword()
+        {
+            if (_busy) return;
+
+            string email = Input_Email?.text.Trim() ?? "";
+            if (string.IsNullOrEmpty(email))
+            {
+                SetError("Enter your email first.");
+                SetStatus("");
+                return;
+            }
+
+            StartCoroutine(DoForgotPassword(email));
+        }
+
+        IEnumerator DoForgotPassword(string email)
+        {
+            _busy = true;
+            SetStatus("Sending reset email...");
+            SetBusy(true);
+            SetError("");
+
+            string url  = ResolvedBaseUrl + "/auth/forgot-password";
+            string body = JsonConvert.SerializeObject(new { email });
+
+            using var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler   = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.timeout = 15;
+            yield return req.SendWebRequest();
+
+            _busy = false;
+            SetBusy(false);
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                string err = ParseErrorBody(req.downloadHandler.text, req.error);
+                SetError(err);
+                SetStatus("");
+                yield break;
+            }
+
+            SetError("");
+            SetStatus("If that email exists, a reset link has been sent.");
+        }
+
         void OnGoogleSignIn()
         {
             if (_busy) return;
             if (string.IsNullOrEmpty(_googleClientId)) return;
 
 #if UNITY_WEBGL && !UNITY_EDITOR
+            _busy = true;
+            SetBusy(true);
+            SetError("");
             SetStatus("Opening Google sign-in...");
             JSIO_GoogleSignIn(_googleClientId, gameObject.name);
 #else
@@ -322,6 +389,8 @@ namespace CastleDefender.UI
         {
             if (string.IsNullOrEmpty(credential))
             {
+                _busy = false;
+                SetBusy(false);
                 SetError("Google sign-in was cancelled or not available.");
                 SetStatus("");
                 return;
@@ -519,6 +588,7 @@ namespace CastleDefender.UI
         {
             if (Btn_Submit != null) Btn_Submit.interactable = !busy;
             if (Btn_Google != null) Btn_Google.interactable = !busy;
+            if (Btn_Browser != null) Btn_Browser.interactable = !busy;
         }
 
         static string ParseErrorBody(string body, string fallback)
