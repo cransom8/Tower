@@ -24,7 +24,11 @@ public static class BuildWebGL
 
     public static void BuildRelease()
     {
-        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+        string userRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+        string repoRootCandidate = Path.Combine(userRoot, "castle-defender");
+        string projectRoot = Directory.Exists(Path.Combine(repoRootCandidate, "server"))
+            ? repoRootCandidate
+            : userRoot;
         string outputDirectory = Path.Combine(projectRoot, OutputFolderName);
         string outputPath = Path.Combine(outputDirectory, OutputBaseName);
 
