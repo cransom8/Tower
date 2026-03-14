@@ -139,7 +139,7 @@ app.use((req, res, next) => {
   const scriptSrc = isAdminDocument
     ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
     : isUnityClient
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; "
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://accounts.google.com https://cdn.socket.io; "
     : "script-src 'self' https://accounts.google.com https://cdn.socket.io; ";
 
   if (isAdminDocument) {
@@ -154,7 +154,7 @@ app.use((req, res, next) => {
   const hstsTtl = process.env.NODE_ENV === "production" ? 31536000 : 3600;
   res.setHeader("Strict-Transport-Security", `max-age=${hstsTtl}; includeSubDomains; preload`);
   const connectSrc = isUnityClient
-    ? "connect-src 'self' wss: ws: blob:; "
+    ? "connect-src 'self' wss: ws: blob: https://accounts.google.com https://cdn.socket.io; "
     : "connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io; ";
   const workerSrc = isUnityClient ? "worker-src blob:; " : "";
   res.setHeader(
