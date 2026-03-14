@@ -105,6 +105,12 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
+            if (!AuthManager.IsAuthenticated)
+            {
+                LoadingScreen.LoadScene("Login");
+                return;
+            }
+
             var nm = NetworkManager.Instance;
             if (nm != null)
             {
