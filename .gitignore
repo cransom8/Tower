@@ -4,11 +4,25 @@ node_modules/
 # Log files
 *.log
 
+# Unity generated folders and local IDE files
+unity-client/Library/
+unity-client/Temp/
+unity-client/UserSettings/
+unity-client/.vscode/
+unity-client/*.csproj
+unity-client/*.sln
+unity-client/*.slnx
+
 # Railway / deploy artifacts
 app.ransomforge.com
 
-# server/client/ is a redundant copy of client/ — server resolves ../client directly
+# server/client/ is a redundant copy of client/ -- server resolves ../client directly
 server/client/
+server/client_backup_*/
 
 # Untracked asset directories (large binary files)
 client/assets/
+
+# Local analysis/export scratch files
+current_hfc_assets.txt
+used_assets_block.txt

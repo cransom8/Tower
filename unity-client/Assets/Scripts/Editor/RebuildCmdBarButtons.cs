@@ -27,7 +27,7 @@ public static class RebuildCmdBarButtons
         if (cmdBar == null) { Debug.LogError("[RebuildCmdBar] CmdBar component not found."); return; }
 
         // ── Colors ────────────────────────────────────────────────────────────
-        var colBtnBg   = new Color(0.18f, 0.15f, 0.12f, 1f);
+        var colBtnBg   = new Color(0.10f, 0.09f, 0.08f, 0.96f);
         var colAutoOff = new Color(0.13f, 0.11f, 0.09f, 0.95f);
         var colText    = new Color(0.85f, 0.78f, 0.65f, 1f);   // warm cream
 
@@ -58,6 +58,18 @@ public static class RebuildCmdBarButtons
 
             // Collect the main Button
             unitButtons[i] = btnGO.GetComponent<Button>();
+            var mainBtn = unitButtons[i];
+            if (mainBtn != null)
+            {
+                var colors = mainBtn.colors;
+                colors.normalColor      = colBtnBg;
+                colors.highlightedColor = new Color(0.15f, 0.13f, 0.11f, 0.98f);
+                colors.pressedColor     = new Color(0.07f, 0.06f, 0.05f, 0.98f);
+                colors.selectedColor    = colBtnBg;
+                colors.disabledColor    = new Color(0.20f, 0.20f, 0.20f, 0.50f);
+                mainBtn.colors = colors;
+                if (mainBtn.targetGraphic == null) mainBtn.targetGraphic = btnGO.GetComponent<Image>();
+            }
 
             // Remove old AutoBadge and QueueCount (will recreate)
             foreach (string child in new[] { "AutoBadge", "QueueCount", "AutoStrip" })

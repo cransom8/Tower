@@ -75,12 +75,12 @@ namespace CastleDefender.Game
         // Each branch has an origin (world pos of col=0, row=0), a per-column
         // step direction, and a per-row step direction.
         //
-        // Col 5 is the center column.  Upper strips center at Z = +8, lower at Z = −8.
-        // origin_Z = centerZ ± 5 depending on col direction sign:
-        //   Lane 0  centerZ=+8  colDir=(0,0,−1) → origin_Z = 8+5 = 13
-        //   Lane 1  centerZ=−8  colDir=(0,0,−1) → origin_Z = −8+5 = −3
-        //   Lane 2  centerZ=+8  colDir=(0,0,+1) → origin_Z = 8−5 = 3
-        //   Lane 3  centerZ=−8  colDir=(0,0,+1) → origin_Z = −8−5 = −13
+        // Col 5 is the center column. Upper strips center at Z = +8, lower at Z = -8.
+        // Row 0 starts one tile inside the center-island edge, and row 27 ends one tile
+        // inside the split/merge-island edge. The current compact map spans:
+        //   center island edge at X = +/-11
+        //   inner split bridges from X = +/-11 to +/-38
+        //   split / merge islands from X = +/-38 to +/-49
 
         struct BranchConfig
         {
@@ -93,13 +93,11 @@ namespace CastleDefender.Game
 
         static readonly BranchConfig[] _branchConfigs =
         {
-            // Origins computed from actual scene bridges (Player_Bridge_Lane_1–4, scale 27×3×11, Y top=1):
-            //   Row 0 = spawn side (1 unit inside center-island edge), Row 27 = castle (1 tile onto split island)
-            //   Col 5 = bridge centre in Z; colDir sign places col 0 at far-Z edge
-            new BranchConfig(new Vector3(-26f, 1f, 17.5f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 0 Red   upper-left
-            new BranchConfig(new Vector3(-26f, 1f, -7.5f), new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 1 Gold  lower-left
-            new BranchConfig(new Vector3( 26f, 1f,  7.5f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 2 Blue  upper-right
-            new BranchConfig(new Vector3( 26f, 1f,-17.5f), new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 3 Green lower-right
+            // Origins computed from the current bridge layout in Game_ML.
+            new BranchConfig(new Vector3(-12f, 1f, 13f),  new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 0 Red   upper-left
+            new BranchConfig(new Vector3(-12f, 1f, -3f),  new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 1 Gold  lower-left
+            new BranchConfig(new Vector3( 12f, 1f,  3f),  new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 2 Blue  upper-right
+            new BranchConfig(new Vector3( 12f, 1f,-13f),  new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 3 Green lower-right
         };
 
         /// <summary>Maps tile (col, row) on a given branch to world space.</summary>
@@ -127,20 +125,17 @@ namespace CastleDefender.Game
 static readonly Vector3[][] _lanePathWaypoints =
         {
             // 6 waypoints per lane — units must pass through each in sequence.
-            // Y=1 = bridge top surface.  All points lie on bridges or island surfaces.
-            //   pt0 = centre-island spawn edge
-            //   pt1 = inner-bridge entry (centre-island side)
-            //   pt2 = inner-bridge bottom-quarter checkpoint (75 % toward split island)
-            //   pt3 = Island_Split exit / team-bridge entry (Z merged to 0)
-            //   pt4 = team-bridge bottom-quarter checkpoint (75 % toward castle island)
-            //   pt5 = castle island
-            //   pt1  — 4 tiles inside the centre island, clear of the build zone (grid row 0 at X=±26)
-            //   pt2  — 1 unit past the grid's castle-end (row 28, outside Rows=28 range) on Island_Split,
-            //          so TryWorldToTile returns false → no tile is blocked by this checkpoint
-            new[]{ new Vector3(  0f,1f, 12.5f), new Vector3(-22f,1f, 12.5f), new Vector3(-54f,1f, 12.5f), new Vector3(-82f,1f,0f), new Vector3(-102f,1f,0f), new Vector3(-129f,1f,0f) }, // Lane 0 Red
-            new[]{ new Vector3(  0f,1f,-12.5f), new Vector3(-22f,1f,-12.5f), new Vector3(-54f,1f,-12.5f), new Vector3(-82f,1f,0f), new Vector3(-102f,1f,0f), new Vector3(-129f,1f,0f) }, // Lane 1 Gold
-            new[]{ new Vector3(  0f,1f, 12.5f), new Vector3( 22f,1f, 12.5f), new Vector3( 54f,1f, 12.5f), new Vector3( 82f,1f,0f), new Vector3( 102f,1f,0f), new Vector3( 129f,1f,0f) }, // Lane 2 Blue
-            new[]{ new Vector3(  0f,1f,-12.5f), new Vector3( 22f,1f,-12.5f), new Vector3( 54f,1f,-12.5f), new Vector3( 82f,1f,0f), new Vector3( 102f,1f,0f), new Vector3( 129f,1f,0f) }, // Lane 3 Green
+            // Y=1 = the top surface of the islands / bridges.
+            //   pt0 = center-island staging point
+            //   pt1 = bridge entry just before the buildable lane
+            //   pt2 = one tile beyond the build grid on the split / merge island
+            //   pt3 = transition onto the team bridge (Z merged to 0)
+            //   pt4 = midpoint on the team bridge
+            //   pt5 = base-island castle anchor
+            new[]{ new Vector3(  0f,1f,  8f), new Vector3(-11f,1f,  8f), new Vector3(-40f,1f,  8f), new Vector3(-49f,1f,0f), new Vector3(-69f,1f,0f), new Vector3(-82f,1f,0f) }, // Lane 0 Red
+            new[]{ new Vector3(  0f,1f, -8f), new Vector3(-11f,1f, -8f), new Vector3(-40f,1f, -8f), new Vector3(-49f,1f,0f), new Vector3(-69f,1f,0f), new Vector3(-82f,1f,0f) }, // Lane 1 Gold
+            new[]{ new Vector3(  0f,1f,  8f), new Vector3( 11f,1f,  8f), new Vector3( 40f,1f,  8f), new Vector3( 49f,1f,0f), new Vector3( 69f,1f,0f), new Vector3( 82f,1f,0f) }, // Lane 2 Blue
+            new[]{ new Vector3(  0f,1f, -8f), new Vector3( 11f,1f, -8f), new Vector3( 40f,1f, -8f), new Vector3( 49f,1f,0f), new Vector3( 69f,1f,0f), new Vector3( 82f,1f,0f) }, // Lane 3 Green
         };
 
         /// <summary>
@@ -269,6 +264,7 @@ static readonly Vector3[][] _lanePathWaypoints =
             _tileObjects = new GameObject[Cols * Rows];
             _tileTypes   = new string[Cols * Rows];
             _towerTypes  = new string[Cols * Rows];
+            TryResolveTileMenu();
         }
 
         void OnEnable()
@@ -558,6 +554,7 @@ static readonly Vector3[][] _lanePathWaypoints =
         void Update()
         {
             TrySubscribeSnapshots();
+            TryResolveTileMenu();
 
             // Automatically become interactive only for the player's assigned lane.
             var sa = SnapshotApplier.Instance;
@@ -621,6 +618,11 @@ static readonly Vector3[][] _lanePathWaypoints =
             // but defender still exists and can be upgraded/sold).
             if (_tileTypes[idx] == "tower" || _tileTypes[idx] == "tower_mobilized")
             {
+                if (TileMenu == null)
+                {
+                    Debug.LogWarning($"[TileGrid] No TileMenu wired for lane {LaneIndex} on '{name}'.");
+                    return;
+                }
                 TileMenu?.Show(col, row, "tower", _towerTypes[idx]);
                 return;
             }
@@ -643,7 +645,41 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             // Empty floor tile: open unit placement picker
             if (_tileTypes[idx] == "floor")
+            {
+                if (TileMenu == null)
+                {
+                    Debug.LogWarning($"[TileGrid] No TileMenu wired for lane {LaneIndex} on '{name}'.");
+                    return;
+                }
                 TileMenu?.Show(col, row, "empty", null);
+            }
+        }
+
+        void TryResolveTileMenu()
+        {
+            if (TileMenu != null) return;
+
+            var menus = FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var tileMenus = new List<MonoBehaviour>();
+            foreach (var mb in menus)
+            {
+                if (mb is ITileMenu)
+                    tileMenus.Add(mb);
+            }
+
+            if (tileMenus.Count == 0) return;
+
+            tileMenus.Sort((a, b) =>
+            {
+                int siblingCompare = a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex());
+                if (siblingCompare != 0) return siblingCompare;
+                return string.CompareOrdinal(a.name, b.name);
+            });
+
+            if (LaneIndex >= 0 && LaneIndex < tileMenus.Count)
+                TileMenuBehaviour = tileMenus[LaneIndex];
+            else
+                TileMenuBehaviour = tileMenus[0];
         }
 
         // ─────────────────────────────────────────────────────────────────────

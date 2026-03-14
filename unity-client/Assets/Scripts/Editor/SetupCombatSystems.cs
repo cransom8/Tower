@@ -99,9 +99,12 @@ namespace CastleDefender.Editor
                 var wallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/WallTile.prefab");
                 var castlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Tiles/CastleTile.prefab");
                 var mainCam      = Camera.main;
-                var tileMenuUI   = Object.FindFirstObjectByType<TileMenuUI>(FindObjectsInactive.Include);
+                var tileMenus    = Object.FindObjectsByType<TileMenuUI>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                System.Array.Sort(tileMenus, (a, b) =>
+                    a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
 
                 if (floorPrefab == null) Debug.LogWarning("[SetupCombatSystems] FloorTile prefab not found — floors won't render.");
+                if (tileMenus.Length == 0) Debug.LogWarning("[SetupCombatSystems] No TileMenuUI found — tile clicks will not open a build menu.");
 
                 string[] laneNames = { "Lane_0", "Lane_1", "Lane_2", "Lane_3" };
                 for (int i = 0; i < 4; i++)
@@ -123,7 +126,7 @@ namespace CastleDefender.Editor
                     tg.HpBarPrefab       = hpBarPrefab;
                     tg.Registry          = registry;
                     tg.Cam               = mainCam;
-                    tg.TileMenuBehaviour          = (i == 0) ? tileMenuUI : null;
+                    tg.TileMenuBehaviour = i < tileMenus.Length ? tileMenus[i] : null;
                     tg.TowerSpawnYOffset = 0.54f;
 
                     Debug.Log($"[SetupCombatSystems] TileGrid lane {i} ready on {laneGO.name}.");

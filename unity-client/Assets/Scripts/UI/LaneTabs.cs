@@ -40,9 +40,7 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()
         {
-            if (NetworkManager.Instance != null)
-                NetworkManager.Instance.OnMLMatchReady += HandleMatchReady;
-            TryInitializeFromCurrentState();
+            gameObject.SetActive(false);
         }
 
         void OnDisable()

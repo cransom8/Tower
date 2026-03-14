@@ -12,6 +12,7 @@
 //       └── Btn_Close
 
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
@@ -59,6 +60,7 @@ namespace CastleDefender.UI
         bool   _initialized;
         Coroutine _scaleCoroutine;
         int _shownFrame = -1;
+        readonly List<RawImage> _placementPortraits = new();
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -150,6 +152,7 @@ namespace CastleDefender.UI
             if (PanelTileMenu != null)
                 PanelTileMenu.SetActive(false);
 
+            EnsurePlacementPortraitSlots();
             ApplyTowerButtonIcons();
 
             // Initial wiring — uses whatever _towerKeys is set to (catalog or fallback).
@@ -228,18 +231,100 @@ namespace CastleDefender.UI
         {
             var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
             for (int i = 0; i < buttons.Length; i++)
-                ApplyIcon(buttons[i], ResolvePlacementSprite(i));
+                ApplyButtonVisual(buttons[i], i);
         }
 
-        static void ApplyIcon(Button button, Sprite sprite)
+        void ApplyButtonVisual(Button button, int index)
         {
-            if (button == null || sprite == null) return;
+            if (button == null) return;
             var target = button.transform.Find("Icon")?.GetComponent<Image>() ?? button.image;
+            var portrait = index >= 0 && index < _placementPortraits.Count ? _placementPortraits[index] : null;
+            var portraitTexture = ResolvePlacementPortraitTexture(index);
+            var sprite = ResolvePlacementSprite(index);
+
+            if (portrait != null)
+            {
+                portrait.texture = portraitTexture;
+                portrait.color = portraitTexture != null ? Color.white : new Color(1f, 1f, 1f, 0f);
+            }
+
             if (target == null) return;
             target.sprite = sprite;
             target.preserveAspect = true;
             target.type = Image.Type.Simple;
-            target.color = Color.white;
+            target.color = portraitTexture != null ? new Color(1f, 1f, 1f, 0f) : Color.white;
+        }
+
+        void EnsurePlacementPortraitSlots()
+        {
+            _placementPortraits.Clear();
+            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
+            for (int i = 0; i < buttons.Length; i++)
+                _placementPortraits.Add(EnsurePlacementPortraitImage(buttons[i]));
+        }
+
+        static RawImage EnsurePlacementPortraitImage(Button btn)
+        {
+            if (btn == null) return null;
+            var existing = btn.transform.Find("PortraitFrame/Portrait")?.GetComponent<RawImage>();
+            if (existing != null) return existing;
+
+            var referenceRect = btn.transform.Find("IconBg") as RectTransform
+                ?? btn.transform.Find("Icon") as RectTransform;
+
+            var frameGO = new GameObject("PortraitFrame", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Mask));
+            frameGO.transform.SetParent(btn.transform, false);
+            var frameRt = frameGO.GetComponent<RectTransform>();
+            frameRt.pivot = new Vector2(0.5f, 0.5f);
+
+            if (referenceRect != null)
+            {
+                frameRt.anchorMin = referenceRect.anchorMin;
+                frameRt.anchorMax = referenceRect.anchorMax;
+                frameRt.anchoredPosition = referenceRect.anchoredPosition;
+                frameRt.sizeDelta = referenceRect.sizeDelta;
+                frameRt.offsetMin = referenceRect.offsetMin + new Vector2(2f, 2f);
+                frameRt.offsetMax = referenceRect.offsetMax + new Vector2(-2f, -2f);
+                frameGO.transform.SetSiblingIndex(referenceRect.GetSiblingIndex() + 1);
+            }
+            else
+            {
+                frameRt.anchorMin = new Vector2(0.10f, 0.20f);
+                frameRt.anchorMax = new Vector2(0.90f, 0.78f);
+                frameRt.offsetMin = Vector2.zero;
+                frameRt.offsetMax = Vector2.zero;
+            }
+
+            var frameImage = frameGO.GetComponent<Image>();
+            frameImage.color = new Color(0.08f, 0.12f, 0.20f, 0.96f);
+            var mask = frameGO.GetComponent<Mask>();
+            mask.showMaskGraphic = false;
+
+            var portraitGO = new GameObject("Portrait", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
+            portraitGO.transform.SetParent(frameGO.transform, false);
+            var portraitRect = portraitGO.GetComponent<RectTransform>();
+            portraitRect.anchorMin = Vector2.zero;
+            portraitRect.anchorMax = Vector2.one;
+            portraitRect.offsetMin = new Vector2(2f, 2f);
+            portraitRect.offsetMax = new Vector2(-2f, -2f);
+
+            var raw = portraitGO.GetComponent<RawImage>();
+            raw.color = new Color(1f, 1f, 1f, 0f);
+            raw.raycastTarget = false;
+            var fitter = portraitGO.AddComponent<AspectRatioFitter>();
+            fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+            fitter.aspectRatio = 1f;
+            return raw;
+        }
+
+        Texture ResolvePlacementPortraitTexture(int index)
+        {
+            var cmdBar = FindFirstObjectByType<CastleDefender.UI.CmdBar>(FindObjectsInactive.Include);
+            if (cmdBar == null || cmdBar.UnitButtons == null || index < 0 || index >= cmdBar.UnitButtons.Length)
+                return null;
+
+            var raw = cmdBar.UnitButtons[index].transform.Find("PortraitFrame/Portrait")?.GetComponent<RawImage>();
+            return raw != null ? raw.texture : null;
         }
 
         Sprite ResolvePlacementSprite(int index)
@@ -254,9 +339,6 @@ namespace CastleDefender.UI
                     if (cmdBar.UnitButtons[index].image != null && cmdBar.UnitButtons[index].image.sprite != null)
                         return cmdBar.UnitButtons[index].image.sprite;
                 }
-
-                if (cmdBar.UnitIcons != null && index < cmdBar.UnitIcons.Length && cmdBar.UnitIcons[index] != null)
-                    return cmdBar.UnitIcons[index];
             }
 
             return TowerIcons != null && index < TowerIcons.Length ? TowerIcons[index] : null;
@@ -350,6 +432,8 @@ namespace CastleDefender.UI
         void Update()
         {
             if (!PanelTileMenu.activeSelf) return;
+
+            ApplyTowerButtonIcons();
 
             float gold = SnapshotApplier.Instance?.MyLane?.gold ?? 0f;
 
@@ -661,3 +745,4 @@ namespace CastleDefender.UI
         }
     }
 }
+

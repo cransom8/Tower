@@ -3,13 +3,15 @@ using UnityEditor;
 using UnityEngine.UI;
 using TMPro;
 using CastleDefender.Game;
+using CastleDefender.UI;
 
 /// <summary>
 /// One-shot editor utility:
 ///   1. Creates Assets/Prefabs/UI/HpBar.prefab  (world-space billboard bar)
-///   2. Creates Canvas/WaveHUD panel with 5 TMP_Text labels
+///   2. Creates Canvas/WaveHUD panel with top HUD labels
 ///   3. Wires GameManager.TxtRound/Phase/Countdown/TeamHpLeft/Right
-///   4. Assigns HpBarPrefab to LaneRenderer + all 4 TileGrid components
+///   4. Wires an InfoBar component for Gold/Income top labels
+///   5. Assigns HpBarPrefab to LaneRenderer + all 4 TileGrid components
 /// Run via: Castle Defender → Setup → Setup Wave HUD
 /// </summary>
 public static class SetupWaveHUD
@@ -120,8 +122,10 @@ public static class SetupWaveHUD
         var txtRound     = GetOrCreateLabel("Txt_Round",       "Wave 1",    100f, 18, Color.white);
         var txtPhase     = GetOrCreateLabel("Txt_Phase",       "BUILD",      90f, 16, new Color(0.3f, 1f, 0.4f));
         var txtCountdown = GetOrCreateLabel("Txt_Countdown",   "30s",        60f, 16, Color.white);
-        var txtHpLeft    = GetOrCreateLabel("Txt_TeamHpLeft",  "♥ 20",       80f, 16, new Color(1f, 0.92f, 0.2f));
-        var txtHpRight   = GetOrCreateLabel("Txt_TeamHpRight", "♥ 20",       80f, 16, Color.white);
+        var txtGoldTop   = GetOrCreateLabel("Txt_GoldTop",     "Gold 0",    110f, 16, new Color(1f, 0.82f, 0.08f));
+        var txtIncomeTop = GetOrCreateLabel("Txt_IncomeTop",   "Inc 0.0",   110f, 16, new Color(0.3f, 0.95f, 1f));
+        var txtHpLeft    = GetOrCreateLabel("Txt_TeamHpLeft",  "Left 20/20", 100f, 16, new Color(1f, 0.92f, 0.2f));
+        var txtHpRight   = GetOrCreateLabel("Txt_TeamHpRight", "Right 20/20",100f, 16, Color.white);
 
         // ── 3. Wire GameManager ───────────────────────────────────────────────
         var gmGO = GameObject.Find("GameManager");
@@ -138,6 +142,25 @@ public static class SetupWaveHUD
         gm.TxtTeamHpRight = txtHpRight;
         EditorUtility.SetDirty(gm);
         Debug.Log("[SetupWaveHUD] GameManager wave HUD fields wired.");
+
+        // Keep top gold/income updating through InfoBar logic without reviving the old right rail.
+        var infoBar = hudGO.GetComponent<InfoBar>();
+        if (infoBar == null) infoBar = hudGO.AddComponent<InfoBar>();
+        Undo.RecordObject(infoBar, "Wire Top HUD InfoBar");
+        infoBar.TxtWave = txtRound;
+        infoBar.TxtPhase = txtPhase;
+        infoBar.TxtCountdown = txtCountdown;
+        infoBar.TxtGoldTop = txtGoldTop;
+        infoBar.TxtIncomeTop = txtIncomeTop;
+        infoBar.TxtTeamHpLeft = txtHpLeft;
+        infoBar.TxtTeamHpRight = txtHpRight;
+        infoBar.TxtGold = null;
+        infoBar.TxtIncome = null;
+        infoBar.TxtLives = null;
+        infoBar.TxtBarracksLv = null;
+        infoBar.BtnBarracks = null;
+        infoBar.ImgIncomeRing = null;
+        EditorUtility.SetDirty(infoBar);
 
         // ── 4. Assign HpBarPrefab to LaneRenderer and all TileGrids ──────────
         var lr = Object.FindFirstObjectByType<LaneRenderer>();

@@ -101,11 +101,17 @@ namespace CastleDefender.UI
             // HP
             if (displayHp != _prevLives)
             {
-                TxtLives.text = displayHpMax > 0 ? $"HP: {displayHp}/{displayHpMax}" : $"HP: {displayHp}";
+                string hpText = displayHpMax > 0 ? $"HP: {displayHp}/{displayHpMax}" : $"HP: {displayHp}";
+                if (TxtLives != null) TxtLives.text = hpText;
+                if (TxtTeamHpLeft != null && string.IsNullOrEmpty(TxtTeamHpLeft.text))
+                    TxtTeamHpLeft.text = hpText;
                 if (_prevLives >= 0)
                 {
-                    if (_livesFlash != null) StopCoroutine(_livesFlash);
-                    _livesFlash = StartCoroutine(FlashTmpColor(TxtLives, TxtLives.color, Color.red, 0.15f, 2));
+                    if (TxtLives != null)
+                    {
+                        if (_livesFlash != null) StopCoroutine(_livesFlash);
+                        _livesFlash = StartCoroutine(FlashTmpColor(TxtLives, TxtLives.color, Color.red, 0.15f, 2));
+                    }
                     AudioManager.I?.Play(AudioManager.SFX.LifeLost);
                     PostProcessController.I?.ImpactFlash();
                     if (FloatTextAnchor != null)
@@ -119,14 +125,17 @@ namespace CastleDefender.UI
             // Gold (flash border on change)
             if (Mathf.Abs(lane.gold - _prevGold) > 0.01f)
             {
-                TxtGold.text = $"Gold: {Mathf.FloorToInt(lane.gold)}";
+                if (TxtGold != null) TxtGold.text = $"Gold: {Mathf.FloorToInt(lane.gold)}";
                 if (TxtGoldTop != null) TxtGoldTop.text = $"Gold {Mathf.FloorToInt(lane.gold)}";
                 if (_prevGold >= 0f)
                 {
                     float delta = lane.gold - _prevGold;
-                    if (_goldFlash != null) StopCoroutine(_goldFlash);
-                    _goldFlash = StartCoroutine(FlashGraphicColor(
-                        GoldBorder, GoldNormalColor, GoldFlashColor, 0.12f, 2));
+                    if (GoldBorder != null)
+                    {
+                        if (_goldFlash != null) StopCoroutine(_goldFlash);
+                        _goldFlash = StartCoroutine(FlashGraphicColor(
+                            GoldBorder, GoldNormalColor, GoldFlashColor, 0.12f, 2));
+                    }
 
                     if (delta > 0f)
                     {
@@ -143,7 +152,7 @@ namespace CastleDefender.UI
             }
 
             // Income
-            TxtIncome.text = $"Inc: {lane.income:0.0}";
+            if (TxtIncome != null) TxtIncome.text = $"Inc: {lane.income:0.0}";
             if (TxtIncomeTop != null) TxtIncomeTop.text = $"Inc {lane.income:0.0}";
 
             // Income ring
@@ -179,13 +188,16 @@ namespace CastleDefender.UI
             // Barracks level
             if (lane.barracksLevel != _prevBarracks)
             {
-                TxtBarracksLv.text = $"Lv{lane.barracksLevel}";
-                if (_prevBarracks >= 0)
+                if (TxtBarracksLv != null)
                 {
-                    if (_barracksFlash != null) StopCoroutine(_barracksFlash);
-                    _barracksFlash = StartCoroutine(
-                        FlashTmpColor(TxtBarracksLv, TxtBarracksLv.color,
-                                      new Color(1f, 0.85f, 0.2f), 0.2f, 4));
+                    TxtBarracksLv.text = $"Lv{lane.barracksLevel}";
+                    if (_prevBarracks >= 0)
+                    {
+                        if (_barracksFlash != null) StopCoroutine(_barracksFlash);
+                        _barracksFlash = StartCoroutine(
+                            FlashTmpColor(TxtBarracksLv, TxtBarracksLv.color,
+                                          new Color(1f, 0.85f, 0.2f), 0.2f, 4));
+                    }
                 }
                 _prevBarracks = lane.barracksLevel;
             }

@@ -3,8 +3,10 @@ using CastleDefender.Game;
 
 namespace CastleDefender.UI
 {
-    static class RuntimePortraitStudio
+    public static class RuntimePortraitStudio
     {
+        public const int PortraitLayer = 31;
+
         public static UnitPrefabRegistry ResolveRegistry(UnitPrefabRegistry preferred = null)
         {
             if (preferred != null) return preferred;
@@ -23,10 +25,12 @@ namespace CastleDefender.UI
             root = new GameObject(rootName);
             root.hideFlags = HideFlags.HideAndDontSave;
             root.transform.position = new Vector3(0f, -9999f, 0f);
+            root.layer = PortraitLayer;
 
             var stagePoint = new GameObject("StagePoint").transform;
             stagePoint.SetParent(root.transform, false);
             stagePoint.localPosition = Vector3.zero;
+            stagePoint.gameObject.layer = PortraitLayer;
 
             var camGO = new GameObject("Camera");
             camGO.transform.SetParent(root.transform, false);
@@ -36,7 +40,7 @@ namespace CastleDefender.UI
             var cam = camGO.AddComponent<Camera>();
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.11f, 0.14f, 0.20f, 1f);
-            cam.cullingMask = -1;
+            cam.cullingMask = 1 << PortraitLayer;
             cam.fieldOfView = 45f;
             cam.nearClipPlane = 0.1f;
             cam.farClipPlane = 30f;
@@ -52,6 +56,7 @@ namespace CastleDefender.UI
             light.intensity = 1.35f;
             light.color = new Color(1f, 0.96f, 0.9f);
             light.shadows = LightShadows.None;
+            light.cullingMask = 1 << PortraitLayer;
 
             var fillLightGO = new GameObject("FillLight");
             fillLightGO.transform.SetParent(root.transform, false);
@@ -62,6 +67,7 @@ namespace CastleDefender.UI
             fillLight.intensity = 0.85f;
             fillLight.color = new Color(0.72f, 0.82f, 1f);
             fillLight.shadows = LightShadows.None;
+            fillLight.cullingMask = 1 << PortraitLayer;
 
             renderTexture = new RenderTexture(256, 256, 24, RenderTextureFormat.ARGB32);
             renderTexture.antiAliasing = 2;

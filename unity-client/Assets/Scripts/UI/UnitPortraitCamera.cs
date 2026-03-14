@@ -37,6 +37,7 @@ namespace CastleDefender.UI
         {
             Clear();
             if (Registry == null || Cam == null) return;
+            ClearStageChildren();
 
             var prefab = Registry.GetPrefab(key);
             if (prefab == null) return;
@@ -46,6 +47,9 @@ namespace CastleDefender.UI
             _staged = Instantiate(prefab,
                 StagePoint != null ? StagePoint.position : Cam.transform.position + Cam.transform.forward * 2f,
                 Quaternion.Euler(0f, RotationY, 0f));
+            if (StagePoint != null)
+                _staged.transform.SetParent(StagePoint, true);
+            SetLayerRecursively(_staged, RuntimePortraitStudio.PortraitLayer);
             _staged.transform.localScale = Vector3.one * scale;
 
             var renderers = _staged.GetComponentsInChildren<Renderer>();
@@ -112,7 +116,30 @@ namespace CastleDefender.UI
 
         public void Clear()
         {
-            if (_staged != null) { Destroy(_staged); _staged = null; }
+            if (_staged == null) return;
+
+            _staged.SetActive(false);
+            DestroyImmediate(_staged);
+            _staged = null;
+        }
+
+        void ClearStageChildren()
+        {
+            if (StagePoint == null) return;
+            for (int i = StagePoint.childCount - 1; i >= 0; i--)
+            {
+                var child = StagePoint.GetChild(i);
+                if (_staged != null && child.gameObject == _staged) continue;
+                DestroyImmediate(child.gameObject);
+            }
+        }
+
+        static void SetLayerRecursively(GameObject root, int layer)
+        {
+            if (root == null) return;
+            root.layer = layer;
+            foreach (Transform child in root.transform)
+                SetLayerRecursively(child.gameObject, layer);
         }
 
         Bounds CalculateBounds(Renderer[] renderers)
@@ -163,11 +190,12 @@ namespace CastleDefender.UI
         IEnumerator CaptureCoroutine(string key, Action<Texture2D> callback)
         {
             ShowUnit(key);
-            yield return new WaitForEndOfFrame();
+            yield return null;
 
             Texture2D result = null;
-            if (RenderTex != null)
+            if (Cam != null && RenderTex != null)
             {
+                Cam.Render();
                 var prev = RenderTexture.active;
                 RenderTexture.active = RenderTex;
                 result = new Texture2D(RenderTex.width, RenderTex.height, TextureFormat.RGBA32, false);

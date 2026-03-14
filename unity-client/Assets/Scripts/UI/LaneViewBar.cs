@@ -54,16 +54,7 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
-            _camCtrl = FindFirstObjectByType<CameraController>();
-
-            for (int i = 0; i < LaneButtons.Length; i++)
-            {
-                int lane = i;
-                LaneButtons[i].onClick.AddListener(() => OnLaneClicked(lane));
-
-                if (LaneLabels != null && i < LaneLabels.Length && LaneLabels[i] != null)
-                    LaneLabels[i].text = Labels[i];
-            }
+            gameObject.SetActive(false);
         }
 
         void Update() => RefreshColors();

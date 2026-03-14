@@ -241,6 +241,7 @@ app.get("/api/barracks-levels", async (_req, res) => {
 });
 
 const unityClientDirCandidates = [
+  path.join(__dirname, "client"),
   path.join(__dirname, "unity-client"),
   path.join(__dirname, "client_backup_20260307_002446"),
   path.join(__dirname, "client_backup_20260306_235052"),

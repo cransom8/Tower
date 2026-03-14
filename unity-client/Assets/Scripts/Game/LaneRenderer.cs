@@ -61,6 +61,7 @@ namespace CastleDefender.Game
             public Animator anim;
             public bool     wasMoving;
             public bool     wasAttacking;
+            public int      nextAttackVariant;
         }
 
         readonly Dictionary<string, UnitView> _units    = new();
@@ -327,7 +328,7 @@ namespace CastleDefender.Game
                         if (attacking != view.wasAttacking || moving != view.wasMoving || roundStateChanged)
                         {
                             if (attacking)
-                                TryCrossFade(view.anim, _attackStates, 0.10f);
+                                PlayAttackVariant(view);
                             else if (moving)
                                 TryCrossFade(view.anim, _walkStates, 0.15f);
                             else
@@ -419,6 +420,7 @@ namespace CastleDefender.Game
 
             foreach (var r in go.GetComponentsInChildren<Renderer>())
             {
+                UpgradeLegacyRendererMaterials(r);
                 var bridge = r.GetComponent<ToonShaderBridge>();
                 if (bridge != null) { bridge.SetBaseColor(col); bridge.SetRimColor(rim); continue; }
 
@@ -475,7 +477,7 @@ namespace CastleDefender.Game
                 renderers      = go.GetComponentsInChildren<Renderer>(),
             };
             if (hpFill != null || hpImage != null) UpdateHpBarVisual(view, 1f);
-            if (unitAnim != null) SetAnimIdle(unitAnim);   // idle until first snapshot velocity known
+            if (unitAnim != null) SetAnimIdle(view);   // idle until first snapshot velocity known
             _units[u.id] = view;
 
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, isMine ? 0.6f : 0.3f);
@@ -675,13 +677,40 @@ namespace CastleDefender.Game
             }
         }
 
-        static void SetAnimIdle(Animator anim)
+        static void SetAnimIdle(UnitView view)
         {
-            if (anim == null) return;
-            foreach (var p in anim.parameters)
+            if (view?.anim == null) return;
+            foreach (var p in view.anim.parameters)
                 if (p.name == "Speed" && p.type == AnimatorControllerParameterType.Float)
-                { anim.SetFloat("Speed", 0f); return; }
-            TryCrossFade(anim, _idleStates, 0.20f);
+                { view.anim.SetFloat("Speed", 0f); return; }
+            TryCrossFade(view.anim, _idleStates, 0.20f);
+        }
+
+        static void PlayAttackVariant(UnitView view)
+        {
+            if (view?.anim == null || view.anim.runtimeAnimatorController == null)
+                return;
+
+            var primary = Animator.StringToHash("Attack1");
+            var secondary = Animator.StringToHash("Attack2");
+            bool hasPrimary = view.anim.HasState(0, primary);
+            bool hasSecondary = view.anim.HasState(0, secondary);
+
+            if (hasPrimary || hasSecondary)
+            {
+                if (hasPrimary && hasSecondary)
+                {
+                    int next = view.nextAttackVariant % 2;
+                    view.anim.Play(next == 0 ? primary : secondary, 0, 0f);
+                    view.nextAttackVariant = (view.nextAttackVariant + 1) % 2;
+                    return;
+                }
+
+                view.anim.Play(hasPrimary ? primary : secondary, 0, 0f);
+                return;
+            }
+
+            TryCrossFade(view.anim, _attackStates, 0.10f);
         }
 
         static void TryCrossFade(Animator anim, string[] states, float transTime)
@@ -700,6 +729,68 @@ namespace CastleDefender.Game
                     return;
                 }
             }
+        }
+
+        static void UpgradeLegacyRendererMaterials(Renderer renderer)
+        {
+            if (renderer == null) return;
+            var urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit == null) return;
+
+            var shared = renderer.sharedMaterials;
+            var instanced = renderer.materials;
+            bool changed = false;
+
+            for (int i = 0; i < instanced.Length; i++)
+            {
+                var mat = instanced[i];
+                if (mat == null || mat.shader == null) continue;
+                if (mat.shader.name.StartsWith("Universal Render Pipeline"))
+                    continue;
+
+                var upgraded = new Material(urpLit);
+                var source = i < shared.Length ? shared[i] : mat;
+
+                if (source != null)
+                {
+                    CopyTextureIfPresent(source, upgraded, "_MainTex", "_BaseMap");
+                    CopyTextureIfPresent(source, upgraded, "_BumpMap", "_BumpMap");
+                    CopyTextureIfPresent(source, upgraded, "_MetallicGlossMap", "_MetallicGlossMap");
+                    CopyTextureIfPresent(source, upgraded, "_OcclusionMap", "_OcclusionMap");
+                    CopyTextureIfPresent(source, upgraded, "_EmissionMap", "_EmissionMap");
+
+                    if (source.HasProperty("_Color"))
+                        upgraded.SetColor("_BaseColor", source.GetColor("_Color"));
+                    if (source.HasProperty("_EmissionColor"))
+                        upgraded.SetColor("_EmissionColor", source.GetColor("_EmissionColor"));
+                    if (source.HasProperty("_Glossiness"))
+                        upgraded.SetFloat("_Smoothness", source.GetFloat("_Glossiness"));
+                    if (source.HasProperty("_BumpScale"))
+                        upgraded.SetFloat("_BumpScale", source.GetFloat("_BumpScale"));
+                    if (source.HasProperty("_Metallic"))
+                        upgraded.SetFloat("_Metallic", source.GetFloat("_Metallic"));
+                    if (source.HasProperty("_OcclusionStrength"))
+                        upgraded.SetFloat("_OcclusionStrength", source.GetFloat("_OcclusionStrength"));
+                }
+
+                instanced[i] = upgraded;
+                changed = true;
+            }
+
+            if (changed)
+                renderer.materials = instanced;
+        }
+
+        static void CopyTextureIfPresent(Material source, Material destination, string sourceProp, string destinationProp)
+        {
+            if (!source.HasProperty(sourceProp) || !destination.HasProperty(destinationProp))
+                return;
+
+            var tex = source.GetTexture(sourceProp);
+            if (tex == null)
+                return;
+
+            destination.SetTexture(destinationProp, tex);
         }
 
         IEnumerator PlayDeathThenDestroy(GameObject go, Animator anim)

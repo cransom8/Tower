@@ -27,19 +27,71 @@ public static class RefreshSideRailHud
             return;
         }
 
-        HideInfoBar(infoBar);
+        StyleTopInfoBar(infoBar);
         StyleCmdBar(cmdBar);
 
         EditorSceneManager.MarkSceneDirty(scene);
         AssetDatabase.SaveAssets();
-        Debug.Log("[RefreshSideRailHud] Left rail refreshed and right InfoBar hidden.");
+        Debug.Log("[RefreshSideRailHud] Left rail refreshed and top HUD restored.");
     }
 
-    static void HideInfoBar(InfoBar infoBar)
+    static void StyleTopInfoBar(InfoBar infoBar)
     {
         if (infoBar == null) return;
-        Undo.RecordObject(infoBar.gameObject, "Hide InfoBar");
-        infoBar.gameObject.SetActive(false);
+
+        var rt = infoBar.GetComponent<RectTransform>();
+        if (rt != null)
+        {
+            Undo.RecordObject(rt, "Style InfoBar Top Strip");
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, 0f);
+            rt.sizeDelta = new Vector2(0f, 54f);
+        }
+
+        var bg = infoBar.GetComponent<Image>();
+        if (bg == null) bg = Undo.AddComponent<Image>(infoBar.gameObject);
+        bg.color = new Color(0.06f, 0.06f, 0.07f, 0.90f);
+        bg.raycastTarget = false;
+
+        var hlg = infoBar.GetComponent<HorizontalLayoutGroup>();
+        if (hlg == null) hlg = Undo.AddComponent<HorizontalLayoutGroup>(infoBar.gameObject);
+        hlg.childAlignment = TextAnchor.MiddleCenter;
+        hlg.spacing = 10f;
+        hlg.padding = new RectOffset(12, 12, 8, 8);
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = true;
+        hlg.childForceExpandWidth = false;
+        hlg.childForceExpandHeight = false;
+
+        var fitter = infoBar.GetComponent<ContentSizeFitter>();
+        if (fitter != null) Undo.DestroyObjectImmediate(fitter);
+
+        var txtWave = EnsureTopStat(rt, "Txt_WaveTop", "Wave 1", Color.white, 110f);
+        var txtPhase = EnsureTopStat(rt, "Txt_PhaseTop", "BUILD", new Color(0.3f, 1f, 0.4f), 90f);
+        var txtCountdown = EnsureTopStat(rt, "Txt_CountdownTop", "30s", Color.white, 70f);
+        var txtGold = EnsureTopStat(rt, "Txt_GoldTop", "Gold 0", new Color(1f, 0.82f, 0.08f), 120f);
+        var txtIncome = EnsureTopStat(rt, "Txt_IncomeTop", "Inc 0.0", new Color(0.3f, 0.95f, 1f), 110f);
+        var txtHpLeft = EnsureTopStat(rt, "Txt_TeamHpLeftTop", "Left 20/20", new Color(1f, 0.92f, 0.2f), 120f);
+        var txtHpRight = EnsureTopStat(rt, "Txt_TeamHpRightTop", "Right 20/20", Color.white, 130f);
+
+        infoBar.TxtWave = txtWave;
+        infoBar.TxtPhase = txtPhase;
+        infoBar.TxtCountdown = txtCountdown;
+        infoBar.TxtGoldTop = txtGold;
+        infoBar.TxtIncomeTop = txtIncome;
+        infoBar.TxtTeamHpLeft = txtHpLeft;
+        infoBar.TxtTeamHpRight = txtHpRight;
+
+        if (infoBar.TxtGold != null) SetCardVisible(infoBar.TxtGold, false);
+        if (infoBar.TxtIncome != null) SetCardVisible(infoBar.TxtIncome, false);
+        if (infoBar.TxtLives != null) SetCardVisible(infoBar.TxtLives, false);
+        if (infoBar.TxtBarracksLv != null) SetCardVisible(infoBar.TxtBarracksLv, false);
+        if (infoBar.BtnBarracks != null) infoBar.BtnBarracks.gameObject.SetActive(false);
+        if (infoBar.ImgIncomeRing != null) HideGraphicCard(infoBar.ImgIncomeRing);
+
+        infoBar.gameObject.SetActive(true);
         EditorUtility.SetDirty(infoBar.gameObject);
     }
 
@@ -67,8 +119,9 @@ public static class RefreshSideRailHud
         {
             var btn = cmdBar.UnitButtons[i];
             if (btn == null) continue;
-            var iconSprite = cmdBar.UnitIcons != null && i < cmdBar.UnitIcons.Length
-                ? cmdBar.UnitIcons[i]
+            var icon = btn.transform.Find("Icon")?.GetComponent<Image>();
+            var iconSprite = icon != null && icon.sprite != null
+                ? icon.sprite
                 : btn.image != null ? btn.image.sprite : null;
             StyleSendButton(btn, iconSprite);
 
@@ -258,7 +311,7 @@ public static class RefreshSideRailHud
         {
             bg.sprite = null;
             bg.type = Image.Type.Simple;
-            bg.color = new Color(0.04f, 0.05f, 0.07f, 0.96f);
+            bg.color = new Color(0.10f, 0.09f, 0.08f, 0.96f);
         }
 
         var icon = EnsureImageChild(btn.transform, "Icon");
@@ -283,7 +336,7 @@ public static class RefreshSideRailHud
         iconBgRt.anchorMax = iconRt.anchorMax;
         iconBgRt.offsetMin = Vector2.zero;
         iconBgRt.offsetMax = Vector2.zero;
-        iconBg.color = new Color(0.11f, 0.13f, 0.16f, 0.98f);
+        iconBg.color = new Color(0.12f, 0.16f, 0.24f, 0.98f);
         iconBg.raycastTarget = false;
 
         var label = btn.transform.Find("Label")?.GetComponent<TMP_Text>();
@@ -307,7 +360,7 @@ public static class RefreshSideRailHud
         borderRt.anchorMax = Vector2.one;
         borderRt.offsetMin = Vector2.zero;
         borderRt.offsetMax = Vector2.zero;
-        border.color = new Color(0.10f, 0.45f, 0.55f, 0.35f);
+        border.color = new Color(0.18f, 0.12f, 0.08f, 0.45f);
         border.raycastTarget = false;
     }
 
@@ -447,3 +500,4 @@ public static class RefreshSideRailHud
             graphic.gameObject.SetActive(false);
     }
 }
+

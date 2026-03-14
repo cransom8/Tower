@@ -55,8 +55,9 @@ public static class RebuildTileMenuPanel
         var panelRT = panelGO.GetComponent<RectTransform>();
         if (panelRT != null)
         {
-            // Anchor center, width 240, height controlled by VLG
-            panelRT.sizeDelta = new Vector2(240f, 0f);
+            // Match the visual scale of the side rail cards instead of collapsing
+            // back to the original tiny popup size.
+            panelRT.sizeDelta = new Vector2(760f, 0f);
         }
 
         var panelImg = panelGO.GetComponent<Image>();
@@ -69,8 +70,8 @@ public static class RebuildTileMenuPanel
         if (vlg == null) vlg = Undo.AddComponent<VerticalLayoutGroup>(panelGO);
         Undo.RecordObject(vlg, "Setup VLG");
         vlg.childAlignment       = TextAnchor.UpperCenter;
-        vlg.spacing              = 4f;
-        vlg.padding              = new RectOffset(8, 8, 8, 8);
+        vlg.spacing              = 8f;
+        vlg.padding              = new RectOffset(12, 12, 12, 12);
         vlg.childControlWidth    = true;
         vlg.childControlHeight   = true;
         vlg.childForceExpandWidth  = true;
@@ -89,14 +90,14 @@ public static class RebuildTileMenuPanel
             Undo.RecordObject(infoT.gameObject, "Style Txt_TileInfo");
             var le = GetOrAdd<LayoutElement>(infoT.gameObject);
             Undo.RecordObject(le, "LE info");
-            le.preferredHeight = 22f;
-            le.minHeight       = 22f;
+            le.preferredHeight = 36f;
+            le.minHeight       = 36f;
 
             var tmp = infoT.GetComponent<TMP_Text>();
             if (tmp != null)
             {
                 Undo.RecordObject(tmp, "Style info text");
-                tmp.fontSize  = 11f;
+                tmp.fontSize  = 14f;
                 tmp.fontStyle = FontStyles.Bold;
                 tmp.color     = ColText;
                 tmp.alignment = TextAlignmentOptions.Center;
@@ -109,14 +110,14 @@ public static class RebuildTileMenuPanel
         if (upgradeT != null)
         {
             Undo.RecordObject(upgradeT.gameObject, "Style Btn_Upgrade");
-            StyleButton(upgradeT.gameObject, ColUpgrade, 36f);
+            StyleButton(upgradeT.gameObject, ColUpgrade, 48f);
 
             // Get or create text label inside the button — this becomes TxtUpgradeCost
             var existingLabel = upgradeT.GetComponentInChildren<TMP_Text>(true);
             if (existingLabel != null)
             {
                 Undo.RecordObject(existingLabel, "Style upgrade label");
-                existingLabel.fontSize  = 11f;
+                existingLabel.fontSize  = 13f;
                 existingLabel.fontStyle = FontStyles.Bold;
                 existingLabel.color     = ColText;
                 existingLabel.alignment = TextAlignmentOptions.Center;
@@ -146,7 +147,7 @@ public static class RebuildTileMenuPanel
                 if (tmp != null)
                 {
                     Undo.RecordObject(tmp, "Style moved cost text");
-                    tmp.fontSize  = 11f;
+                    tmp.fontSize  = 13f;
                     tmp.fontStyle = FontStyles.Bold;
                     tmp.color     = ColText;
                     tmp.alignment = TextAlignmentOptions.Center;
@@ -165,9 +166,9 @@ public static class RebuildTileMenuPanel
         if (removeT != null)
         {
             Undo.RecordObject(removeT.gameObject, "Style Btn_Remove");
-            StyleButton(removeT.gameObject, ColRemove, 30f);
+            StyleButton(removeT.gameObject, ColRemove, 42f);
             var lbl = removeT.GetComponentInChildren<TMP_Text>(true);
-            if (lbl != null) { Undo.RecordObject(lbl, "Remove lbl"); lbl.text = "Remove"; lbl.color = ColText; lbl.fontSize = 10f; }
+            if (lbl != null) { Undo.RecordObject(lbl, "Remove lbl"); lbl.text = "Remove"; lbl.color = ColText; lbl.fontSize = 12f; }
         }
 
         // ── Btn_Close ─────────────────────────────────────────────────────────
@@ -175,9 +176,9 @@ public static class RebuildTileMenuPanel
         if (closeT != null)
         {
             Undo.RecordObject(closeT.gameObject, "Style Btn_Close");
-            StyleButton(closeT.gameObject, ColClose, 24f);
+            StyleButton(closeT.gameObject, ColClose, 34f);
             var lbl = closeT.GetComponentInChildren<TMP_Text>(true);
-            if (lbl != null) { Undo.RecordObject(lbl, "Close lbl"); lbl.text = "Close"; lbl.color = ColSubtext; lbl.fontSize = 9f; }
+            if (lbl != null) { Undo.RecordObject(lbl, "Close lbl"); lbl.text = "Close"; lbl.color = ColSubtext; lbl.fontSize = 11f; }
         }
 
         // ── HLayout_TowerButtons — style conversion buttons ───────────────────
@@ -187,7 +188,7 @@ public static class RebuildTileMenuPanel
             var hl = hlT.GetComponent<HorizontalLayoutGroup>();
             if (hl == null) hl = Undo.AddComponent<HorizontalLayoutGroup>(hlT.gameObject);
             Undo.RecordObject(hl, "Style HLG");
-            hl.spacing              = 3f;
+            hl.spacing              = 10f;
             hl.childControlWidth    = true;
             hl.childControlHeight   = true;
             hl.childForceExpandWidth  = true;
@@ -195,8 +196,8 @@ public static class RebuildTileMenuPanel
 
             var hlLE = GetOrAdd<LayoutElement>(hlT.gameObject);
             Undo.RecordObject(hlLE, "HL LE");
-            hlLE.preferredHeight = 52f;
-            hlLE.minHeight       = 52f;
+            hlLE.preferredHeight = 128f;
+            hlLE.minHeight       = 128f;
 
             // Style each conversion button
             var convBtns = new string[] { "Btn_Archer","Btn_Fighter","Btn_Mage","Btn_Ballista","Btn_Cannon" };
@@ -208,7 +209,14 @@ public static class RebuildTileMenuPanel
                 var img = bt.GetComponent<Image>();
                 if (img != null) { Undo.RecordObject(img, "btn img"); img.color = new Color(0.18f, 0.16f, 0.13f, 1f); }
                 var lbl = bt.GetComponentInChildren<TMP_Text>(true);
-                if (lbl != null) { Undo.RecordObject(lbl, "conv lbl"); lbl.fontSize = 8f; lbl.color = ColText; lbl.alignment = TextAlignmentOptions.Bottom; }
+                var leBtn = GetOrAdd<LayoutElement>(bt.gameObject);
+                Undo.RecordObject(leBtn, "conv btn layout");
+                leBtn.preferredWidth = 136f;
+                leBtn.preferredHeight = 128f;
+                leBtn.flexibleWidth = 1f;
+                leBtn.flexibleHeight = 0f;
+
+                if (lbl != null) { Undo.RecordObject(lbl, "conv lbl"); lbl.fontSize = 11f; lbl.color = ColText; lbl.alignment = TextAlignmentOptions.Bottom; }
             }
         }
 

@@ -60,9 +60,6 @@ namespace CastleDefender.UI
 
         // ── Static state ──────────────────────────────────────────────────────
 
-        [Header("Unit Icons (assign in Inspector)")]
-        [SerializeField] public Sprite[] UnitIcons;
-
         [Header("3D Portraits")]
         [Tooltip("Optional portrait camera. If omitted, CmdBar creates a hidden runtime portrait studio.")]
         [SerializeField] UnitPortraitCamera PortraitCam;
@@ -70,8 +67,10 @@ namespace CastleDefender.UI
         [SerializeField] UnitPrefabRegistry PortraitRegistry;
 
         // ── Fallbacks ─────────────────────────────────────────────────────────
-        static readonly string[] FallbackUnitKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
-        static readonly int[]    FallbackUnitCosts  = { 1, 3, 4, 5, 6 };
+        static readonly string[] FallbackUnitKeys  = { "goblin", "kobold", "hobgoblin", "orc", "ogre" };
+        static readonly int[]    FallbackUnitCosts = { 1, 1, 2, 3, 4 };
+        static readonly Vector3 LeftSideAnchor = new Vector3(-43.5f, 1f, 0f);
+        static readonly Vector3 RightSideAnchor = new Vector3(43.5f, 1f, 0f);
 
         // ── Catalog-driven state ──────────────────────────────────────────────
         string[] _unitKeys;
@@ -87,14 +86,7 @@ namespace CastleDefender.UI
         int _laneCycleStep;
 
         // ── Autosend state ────────────────────────────────────────────────────
-        Dictionary<string, bool> _autoUnits = new()
-        {
-            ["goblin"]  = false,
-            ["orc"]     = false,
-            ["troll"]   = false,
-            ["vampire"] = false,
-            ["wyvern"]  = false,
-        };
+        Dictionary<string, bool> _autoUnits = new();
 
         // Derived: true if any unit has auto enabled
         bool AnyAutoEnabled
@@ -134,7 +126,7 @@ namespace CastleDefender.UI
                 CatalogLoader.OnCatalogReady += ApplyCatalog;
             }
 
-            ApplyUnitButtonIcons();
+            HideLegacyUnitButtonIcons();
             EnsurePortraitSlots();
             RefreshButtonPortraits();
 
@@ -241,6 +233,7 @@ namespace CastleDefender.UI
                 }
             }
             RebuildAutoDict();
+            ResetPortraitState();
             for (int i = 0; i < UnitButtons.Length; i++)
                 UnitButtons[i].gameObject.SetActive(i < count);
             Debug.Log($"[CmdBar] Match loadout applied — {count} units");
@@ -259,6 +252,7 @@ namespace CastleDefender.UI
                 _unitCosts[i] = units != null ? units[i].send_cost : FallbackUnitCosts[i];
             }
             RebuildAutoDict();
+            ResetPortraitState();
             for (int i = 0; i < UnitButtons.Length; i++)
                 UnitButtons[i].gameObject.SetActive(i < count);
             Debug.Log($"[CmdBar] Catalog applied — {count} unit types");
@@ -272,25 +266,42 @@ namespace CastleDefender.UI
             _autoUnits = newAuto;
         }
 
-        void ApplyUnitButtonIcons()
+        void ResetPortraitState()
         {
-            if (UnitButtons == null || UnitIcons == null || UnitIcons.Length == 0) return;
-            for (int i = 0; i < UnitButtons.Length && i < UnitIcons.Length; i++)
-                ApplyIcon(UnitButtons[i], UnitIcons[i]);
+            _portraitCache.Clear();
+            _capturePending.Clear();
+            _captureQueue.Clear();
+
+            if (_buttonPortraits.Count == 0) EnsurePortraitSlots();
+            for (int i = 0; i < _buttonPortraits.Count; i++)
+            {
+                var raw = _buttonPortraits[i];
+                if (raw != null)
+                {
+                    raw.texture = null;
+                    raw.color = new Color(1f, 1f, 1f, 0f);
+                }
+
+                var icon = UnitButtons != null && i < UnitButtons.Length
+                    ? UnitButtons[i].transform.Find("Icon")?.GetComponent<Image>()
+                    : null;
+                if (icon != null) icon.color = Color.white;
+            }
         }
 
-        static void ApplyIcon(Button btn, Sprite sprite)
+        void HideLegacyUnitButtonIcons()
         {
-            if (btn == null || sprite == null) return;
+            if (UnitButtons == null) return;
+            for (int i = 0; i < UnitButtons.Length; i++)
+            {
+                var icon = UnitButtons[i] != null
+                    ? UnitButtons[i].transform.Find("Icon")?.GetComponent<Image>()
+                    : null;
+                if (icon == null) continue;
 
-            var target = btn.transform.Find("Icon")?.GetComponent<Image>();
-            if (target == null) target = btn.image;
-            if (target == null) return;
-
-            target.sprite = sprite;
-            target.preserveAspect = true;
-            target.type = Image.Type.Simple;
-            target.color = Color.white;
+                icon.sprite = null;
+                icon.color = new Color(1f, 1f, 1f, 0f);
+            }
         }
 
         void EnsurePortraitSlots()
@@ -371,6 +382,10 @@ namespace CastleDefender.UI
                 {
                     raw.texture = null;
                     raw.color = new Color(1f, 1f, 1f, 0f);
+                    var emptyIcon = UnitButtons != null && i < UnitButtons.Length
+                        ? UnitButtons[i].transform.Find("Icon")?.GetComponent<Image>()
+                        : null;
+                    if (emptyIcon != null) emptyIcon.color = Color.white;
                     continue;
                 }
 
@@ -382,6 +397,10 @@ namespace CastleDefender.UI
 
                 raw.texture = null;
                 raw.color = new Color(1f, 1f, 1f, 0f);
+                var icon = UnitButtons != null && i < UnitButtons.Length
+                    ? UnitButtons[i].transform.Find("Icon")?.GetComponent<Image>()
+                    : null;
+                if (icon != null) icon.color = Color.white;
                 StartPortraitCapture(key);
             }
         }
@@ -398,7 +417,7 @@ namespace CastleDefender.UI
             var icon = UnitButtons != null && index < UnitButtons.Length
                 ? UnitButtons[index].transform.Find("Icon")?.GetComponent<Image>()
                 : null;
-            if (icon != null) icon.color = new Color(1f, 1f, 1f, 0.03f);
+            if (icon != null) icon.color = new Color(1f, 1f, 1f, 0f);
         }
 
         void StartPortraitCapture(string key)
@@ -647,7 +666,7 @@ namespace CastleDefender.UI
             if (_cameraController == null || _cameraController.CameraTarget == null)
                 return;
 
-            Vector3 p = leftSide ? new Vector3(-82f, 1f, 0f) : new Vector3(82f, 1f, 0f);
+            Vector3 p = leftSide ? LeftSideAnchor : RightSideAnchor;
             _cameraController.PanTo(new Vector3(p.x, _cameraController.CameraTarget.position.y, p.z));
         }
 
@@ -778,3 +797,4 @@ namespace CastleDefender.UI
         }
     }
 }
+
