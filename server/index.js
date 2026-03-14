@@ -133,7 +133,9 @@ app.use((req, _res, next) => {
 
 app.use((req, res, next) => {
   const isAdminDocument = req.path === "/admin.html" || req.path === "/admin";
-  const isUnityClient   = req.path.startsWith("/client");
+  const isUnityDocument = req.path === "/" || req.path === "/index.html";
+  const isUnityAsset    = req.path.startsWith("/client") || req.path.startsWith("/Build/") || req.path.startsWith("/TemplateData/");
+  const isUnityClient   = isUnityDocument || isUnityAsset;
   const scriptSrc = isAdminDocument
     ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
     : isUnityClient
