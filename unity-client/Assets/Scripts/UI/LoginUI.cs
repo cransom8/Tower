@@ -26,6 +26,7 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Networking;
+using UnityEngine.Scripting;
 using TMPro;
 using Newtonsoft.Json;
 using CastleDefender.Net;
@@ -34,6 +35,32 @@ namespace CastleDefender.UI
 {
     public class LoginUI : MonoBehaviour
     {
+        [Preserve]
+        sealed class LoginRequest
+        {
+            public string email;
+            public string password;
+        }
+
+        [Preserve]
+        sealed class RegisterRequest
+        {
+            public string email;
+            public string displayName;
+            public string password;
+        }
+
+        [Preserve]
+        sealed class ForgotPasswordRequest
+        {
+            public string email;
+        }
+
+        [Preserve]
+        sealed class GoogleAuthRequest
+        {
+            public string idToken;
+        }
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Panels")]
         public GameObject PanelLogin;
@@ -234,12 +261,11 @@ namespace CastleDefender.UI
             SetBusy(true);
 
             string url  = ResolvedBaseUrl + "/auth/login";
-            string body = JsonConvert.SerializeObject(new { email, password });
-
-            using var req = new UnityWebRequest(url, "POST");
-            req.uploadHandler   = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            req.downloadHandler = new DownloadHandlerBuffer();
-            req.SetRequestHeader("Content-Type", "application/json");
+            using var req = CreateJsonPostRequest(url, new LoginRequest
+            {
+                email = email,
+                password = password,
+            });
             req.timeout = 15;
             yield return req.SendWebRequest();
 
@@ -285,12 +311,12 @@ namespace CastleDefender.UI
             SetBusy(true);
 
             string url  = ResolvedBaseUrl + "/auth/register";
-            string body = JsonConvert.SerializeObject(new { email, displayName, password });
-
-            using var req = new UnityWebRequest(url, "POST");
-            req.uploadHandler   = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            req.downloadHandler = new DownloadHandlerBuffer();
-            req.SetRequestHeader("Content-Type", "application/json");
+            using var req = CreateJsonPostRequest(url, new RegisterRequest
+            {
+                email = email,
+                displayName = displayName,
+                password = password,
+            });
             req.timeout = 15;
             yield return req.SendWebRequest();
 
@@ -344,12 +370,10 @@ namespace CastleDefender.UI
             SetError("");
 
             string url  = ResolvedBaseUrl + "/auth/forgot-password";
-            string body = JsonConvert.SerializeObject(new { email });
-
-            using var req = new UnityWebRequest(url, "POST");
-            req.uploadHandler   = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            req.downloadHandler = new DownloadHandlerBuffer();
-            req.SetRequestHeader("Content-Type", "application/json");
+            using var req = CreateJsonPostRequest(url, new ForgotPasswordRequest
+            {
+                email = email,
+            });
             req.timeout = 15;
             yield return req.SendWebRequest();
 
@@ -405,12 +429,10 @@ namespace CastleDefender.UI
             SetBusy(true);
 
             string url  = ResolvedBaseUrl + "/auth/google";
-            string body = JsonConvert.SerializeObject(new { idToken });
-
-            using var req = new UnityWebRequest(url, "POST");
-            req.uploadHandler   = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            req.downloadHandler = new DownloadHandlerBuffer();
-            req.SetRequestHeader("Content-Type", "application/json");
+            using var req = CreateJsonPostRequest(url, new GoogleAuthRequest
+            {
+                idToken = idToken,
+            });
             req.timeout = 15;
             yield return req.SendWebRequest();
 
@@ -442,6 +464,16 @@ namespace CastleDefender.UI
         }
 
         // ── Post-login ────────────────────────────────────────────────────────
+
+        UnityWebRequest CreateJsonPostRequest(string url, object payload)
+        {
+            string body = JsonConvert.SerializeObject(payload);
+            var req = new UnityWebRequest(url, "POST");
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            return req;
+        }
 
         void OnLoginSuccess(string accessToken)
         {
