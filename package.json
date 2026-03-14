@@ -5,7 +5,9 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "dev:watch": "node --watch server/index.js",
-    "migrate": "node server/migrate.js"
+    "migrate": "node server/migrate.js",
+    "compare:db": "node server/scripts/compareDbState.js",
+    "sync:gameplay-config": "node server/scripts/syncGameplayConfig.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

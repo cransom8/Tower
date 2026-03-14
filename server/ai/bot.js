@@ -24,6 +24,12 @@ const GRID_H = simMl.GRID_H;
 const TANK_UNITS  = new Set(["ogre","troll","cyclops","hydra","oak_tree_ent","manticora","chimera","ice_golem","demon_lord"]);
 const SWARM_UNITS = new Set(["goblin","kobold","giant_rat","ghoul","harpy","fantasy_wolf"]);
 
+function clamp01(value) {
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
 function sumValues(values) {
   let total = 0;
   for (const value of values || []) total += Number(value) || 0;
@@ -109,6 +115,16 @@ function getUnitCost(lane, unitType, unitDefs) {
   return Math.ceil(def.cost * getUnitCostMultiplier(lane));
 }
 
+function getUnitDps(def) {
+  if (!def) return 0;
+  const damage = Number(def.dmg ?? def.attack_damage) || 0;
+  const attackSpeed = Number(def.attack_speed);
+  if (attackSpeed > 0) return damage * attackSpeed;
+  const atkCdTicks = Number(def.atkCdTicks ?? def.projectile_travel_ticks);
+  if (atkCdTicks > 0) return damage / atkCdTicks;
+  return damage;
+}
+
 function getTowerUpgradeCost(tile) {
   if (!tile || tile.type !== "tower" || !tile.towerType) return Infinity;
   const def = simMl.resolveTowerDef(tile.towerType);
@@ -144,7 +160,7 @@ function estimateActionCost(game, laneIndex, action, unitDefs) {
     return getBarracksUpgradeCost(lane).cost;
   }
   if (action.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    const def = simMl.resolveTowerDef(action.towerType);
+    const def = (unitDefs && unitDefs[action.towerType]) || simMl.resolveTowerDef(action.towerType);
     return def ? def.cost : 0;
   }
   if (action.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
@@ -187,6 +203,12 @@ class BotBrain {
       ? cfg.unitDefMap
       : simMl.getMovingUnitDefMap();
     this.unitTypes = Object.freeze(Object.keys(this.unitDefs));
+    this.layoutFlavor = Object.freeze({
+      preferredColumn: this.rng.nextInt(1, Math.max(1, GRID_W - 2)),
+      sideSign: this.rng.next() < 0.5 ? -1 : 1,
+      depthOffset: (this.rng.next() - 0.5) * 0.28,
+      shapeNoise: 0.18 + this.rng.next() * 0.22,
+    });
 
     this.memory = {
       nextThinkTick: 0,
@@ -226,40 +248,83 @@ class BotBrain {
     this.memory.observationDim = obs.vector.length;
   }
 
-  chooseTowerType(game, lane, targetLaneIndex, danger) {
-    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
-    const pool = loadoutKeys && loadoutKeys.length > 0 ? loadoutKeys : null;
+  getTileNoise(x, y) {
+    let hash = (this.seed ^ ((x + 1) * 73856093) ^ ((y + 1) * 19349663)) >>> 0;
+    hash ^= hash >>> 16;
+    hash = Math.imul(hash, 2246822519) >>> 0;
+    hash ^= hash >>> 13;
+    return (hash >>> 0) / 4294967295;
+  }
 
-    const pick = (type) => {
-      if (pool) return pool.includes(type) ? type : null;
-      return simMl.resolveTowerDef(type) ? type : null;
-    };
+  getNearestBuiltDistance(lane, originX, originY) {
+    if (!lane || !lane.grid) return Math.max(GRID_W, GRID_H);
+    let best = Infinity;
+    for (let x = 0; x < GRID_W; x++) {
+      for (let y = 0; y < GRID_H; y++) {
+        if (x === originX && y === originY) continue;
+        const tile = lane.grid[x] && lane.grid[x][y];
+        if (!tile || (tile.type !== "tower" && tile.type !== "dead_tower")) continue;
+        const dist = Math.abs(originX - x) + Math.abs(originY - y);
+        if (dist < best) best = dist;
+      }
+    }
+    return Number.isFinite(best) ? best : Math.max(GRID_W, GRID_H);
+  }
+
+  chooseTowerType(game, lane, targetLaneIndex, danger, context) {
+    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
+    const pool = loadoutKeys && loadoutKeys.length > 0
+      ? loadoutKeys.filter((key) => this.unitDefs[key])
+      : this.unitTypes.slice();
+    if (pool.length === 0) return this.unitTypes[0] || "goblin";
 
     const incomingMix = scanUnitMix(lane.units, lane.laneIndex);
     const roundStage = getRoundStage(game.roundNumber);
-    if (danger && incomingMix.swarm >= 4) { const t = pick("mountain_dragon"); if (t) return t; }
-    if (danger && incomingMix.heavy >= 3) { const t = pick("giant_viper");     if (t) return t; }
-    if (roundStage === "late" && danger) { const t = pick("chimera"); if (t) return t; }
-
     const targetLane = getLane(game, targetLaneIndex);
     const targetMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
-    if (targetMix.magic >= 3) { const t = pick("evil_watcher"); if (t) return t; }
+    const preferredTowerRank = new Map(this.personalityProfile.preferredTowers.map((key, index) => [key, index]));
 
-    if (this.memory.tankPressureBias > 1.0) { const t = pick("ballista"); if (t) return t; }
+    let best = null;
+    for (const key of pool) {
+      const def = this.unitDefs[key];
+      if (!def) continue;
+      const range = Number(def.range) || 0;
+      const hp = Number(def.hp) || 0;
+      const income = Number(def.income) || 0;
+      const buildCost = Number(def.build_cost ?? def.cost) || 0;
+      const dps = getUnitDps(def);
+      const isMagic = String(def.damage_type || "").toUpperCase() === "MAGIC";
+      const preferredRank = preferredTowerRank.has(key) ? preferredTowerRank.get(key) : 99;
 
-    for (const t of this.personalityProfile.preferredTowers) {
-      const chosen = pick(t);
-      if (chosen) return chosen;
+      let score = 0;
+      score += range * this.personalityProfile.towerRangeWeight * 8;
+      score += (hp / 100) * this.personalityProfile.towerHealthWeight;
+      score += (dps / 20) * this.personalityProfile.towerDamageWeight;
+      score += income * this.personalityProfile.towerIncomeWeight;
+      score += (buildCost > 0 ? 40 / buildCost : 0) * this.personalityProfile.towerCheapnessWeight;
+      score += isMagic ? this.personalityProfile.towerMagicWeight : 0;
+      score += Math.max(0, 4 - preferredRank) * 0.24;
+
+      if (danger && incomingMix.swarm >= 4) score += range * 1.8 + dps / 18;
+      if (danger && incomingMix.heavy >= 3) score += hp / 80 + dps / 16;
+      if (targetMix.magic >= 3) score += hp / 120;
+      if (this.memory.tankPressureBias > 1.0) score += hp / 90 + dps / 16;
+      if (context && context.recentLeaks > 0) score += range * 1.2 + hp / 100;
+      if (roundStage === "early") score += (buildCost > 0 ? 24 / buildCost : 0) + income * 0.3;
+      if (roundStage === "late") score += dps / 12 + range * 1.4;
+      if (context && context.pressureWindow) score += range * 0.8 + dps / 18;
+      if (context && context.ecoWindow) score += income * 0.45;
+
+      score += (this.getTileNoise(preferredRank + 1, key.length + pool.length) - 0.5) * 0.08;
+
+      if (!best || score > best.score) best = { key, score };
     }
-
-    // Fall back to first available loadout key or default
-    if (pool) return pool[0];
-    return "archer";
+    return best ? best.key : (pool[0] || "goblin");
   }
 
   findBuildTowerAction(game, lane, targetLaneIndex, danger, context) {
     if (game.roundState && game.roundState !== "build") return null;
-    const towerType = this.chooseTowerType(game, lane, targetLaneIndex, danger);
+    const towerType = this.chooseTowerType(game, lane, targetLaneIndex, danger, context);
     const candidates = [];
     const roundStage = getRoundStage(game.roundNumber);
     const defendBias = context && context.recentLeaks > 0 ? 2.2 : 0;
@@ -269,12 +334,34 @@ class BotBrain {
         if (x === CASTLE_X && y === CASTLE_Y) continue;
         const tile = lane.grid[x][y];
         if (!tile || tile.type !== "empty") continue;
-        const centerBias = 1 - Math.abs(x - CASTLE_X) / CASTLE_X;
-        let score = danger ? y : Math.abs(14 - y);
-        if (roundStage === "early") score -= y * 0.08;
-        if (roundStage === "late") score += y * 0.14;
-        score += centerBias * 0.6;
+        const depthNorm = clamp01(y / Math.max(1, GRID_H - 1));
+        const centerNorm = clamp01(1 - Math.abs(x - CASTLE_X) / Math.max(1, CASTLE_X));
+        const edgeNorm = 1 - centerNorm;
+        const desiredColumnNorm = clamp01(1 - Math.abs(x - this.layoutFlavor.preferredColumn) / Math.max(1, GRID_W - 1));
+        const sideNorm = ((x - CASTLE_X) / Math.max(1, CASTLE_X)) * this.layoutFlavor.sideSign;
+        const nearestBuiltNorm = clamp01(this.getNearestBuiltDistance(lane, x, y) / Math.max(2, GRID_W + GRID_H - 2));
+        const proximityNorm = 1 - nearestBuiltNorm;
+        const tileNoise = (this.getTileNoise(x, y) - 0.5) * this.layoutFlavor.shapeNoise;
+
+        let score = 0;
+        score += (1 - depthNorm) * this.personalityProfile.frontBias * 2.2;
+        score += depthNorm * this.personalityProfile.backBias * 2.2;
+        score += centerNorm * this.personalityProfile.centerBias * 1.25;
+        score += edgeNorm * this.personalityProfile.edgeBias * 1.25;
+        score += desiredColumnNorm * 0.95;
+        score += sideNorm * 0.28;
+        score += this.layoutFlavor.depthOffset * (depthNorm - 0.5) * 4;
+        score += this.personalityProfile.spreadBias >= 0
+          ? nearestBuiltNorm * this.personalityProfile.spreadBias
+          : proximityNorm * Math.abs(this.personalityProfile.spreadBias);
+
+        if (danger) score += depthNorm * 2.5;
+        if (context && context.pressureWindow) score += (1 - depthNorm) * 0.95;
+        if (context && context.ecoWindow) score += nearestBuiltNorm * 0.35;
+        if (roundStage === "early") score += (1 - depthNorm) * 0.65;
+        if (roundStage === "late") score += depthNorm * 0.7;
         score += defendBias;
+        score += tileNoise;
         candidates.push({ x, y, score });
       }
     }

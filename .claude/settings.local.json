@@ -84,7 +84,10 @@
       "Bash(find /c/Users/Crans/CastleDefenderClient/Assets -name \"*.json\" 2>/dev/null | grep -i \"quality\\\\|graphics\\\\|urp\\\\|render\" | head -10)",
       "Bash(find /c/Users/Crans/CastleDefenderClient/Assets -name \"*URP*\" -o -name \"*RenderPipeline*\" 2>/dev/null | head -10)",
       "Bash(find /c/Users/Crans/CastleDefenderClient/Assets -name \"SafeArea*\" -o -name \"*SafeArea*\" 2>/dev/null | head -5)",
-      "Bash(find C:/Users/Crans/castle-defender/server -name \"*.js\" -type f 2>/dev/null | head -20)"
+      "Bash(find C:/Users/Crans/castle-defender/server -name \"*.js\" -type f 2>/dev/null | head -20)",
+      "mcp__coplay-mcp__list_files",
+      "Bash(tasklist /FI \"IMAGENAME eq Unity.exe\")",
+      "Bash(powershell -Command \"Get-Process -Name ''Unity'' -ErrorAction SilentlyContinue | Select-Object Id,Name,Path\")"
     ]
   }
 }

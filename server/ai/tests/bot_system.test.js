@@ -3,8 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { setUnitTypesForTests } = require("../../server/unitTypes");
-const simMl = require("../../server/sim-multilane");
+const { setUnitTypesForTests } = require("../../unitTypes");
+const simMl = require("../../sim-multilane");
 const { BotBrain } = require("../bot");
 const { createBotController, runHeadlessMatch, captureStateLite } = require("../sim_runner");
 
@@ -113,6 +113,36 @@ test("smoke: bot produces at least one non-idle action within 10 ticks", () => {
   });
   const earlyAction = result.replayLog.actions.find((evt) => evt.laneIndex === 0 && evt.tick <= 10);
   assert.ok(earlyAction, "expected a bot action from lane 0 within first 10 ticks");
+});
+
+test("personalities diverge on first defensive build from identical state", () => {
+  const personalities = ["RUSH", "ECO", "PRESSURE", "ADAPTIVE"];
+  const signatures = new Set();
+
+  for (const personality of personalities) {
+    const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 80, startIncome: 8 });
+    const lane = game.lanes[0];
+    lane.lives = 6;
+    lane.gold = 80;
+    lane.income = 8;
+    lane.autosend.loadoutKeys = ["archer", "fighter", "mage", "ballista", "cannon"];
+    lane.autosend.enabledUnits = Object.fromEntries(lane.autosend.loadoutKeys.map((key) => [key, false]));
+
+    const bot = new BotBrain({
+      laneIndex: 0,
+      difficulty: "hard",
+      personality,
+      seed: `personality-build-${personality}`,
+      unitDefMap: Object.fromEntries(lane.autosend.loadoutKeys.map((key) => [key, simMl.resolveUnitDef(key)])),
+    });
+
+    bot.memory.nextThinkTick = 0;
+    const action = bot.tick({ game, runtime: { laneLeakHistory: { 0: [1] }, recentLifeLossByLane: { 0: 1 } } });
+    assert.equal(action.type, "BUILD_TOWER", `expected ${personality} to choose a build action`);
+    signatures.add(`${action.towerType}@${action.tileId}`);
+  }
+
+  assert.ok(signatures.size >= 2, "expected at least two distinct opening build signatures across personalities");
 });
 
 test("ffa targeting: bot picks a target and retargets when target is removed", () => {
