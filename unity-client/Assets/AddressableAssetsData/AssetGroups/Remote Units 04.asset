@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Units 04
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Units 04
+  m_GUID: d327ec17c0034df42b0303ed511d442e
+  m_SerializeEntries:
+  - m_GUID: 46b95e7012bd5bc40adc5cfc3e545600
+    m_Address: units/orc
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - orc
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e91d5ed1e32e58445b15fef4961ad9c3
+    m_Address: units/giant_viper
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - giant_viper
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: a9feefcf678628a48bc901c8ba3e74a9, type: 2}
+    - {fileID: 11400000, guid: ea76bbe74d3dd504e99de71246a28170, type: 2}

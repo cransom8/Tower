@@ -1,0 +1,180 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 468a46d0ae32c3544b7d98094e6448a9, type: 3}
+  m_Name: AddressableAssetSettings
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetSettings
+  m_DefaultGroup: 1fe742d087c0c5449bd774a61d6ab826
+  m_currentHash:
+    serializedVersion: 2
+    Hash: 00000000000000000000000000000000
+  m_OptimizeCatalogSize: 0
+  m_BuildRemoteCatalog: 1
+  m_CatalogRequestsTimeout: 0
+  m_DisableCatalogUpdateOnStart: 0
+  m_InternalIdNamingMode: 0
+  m_InternalBundleIdMode: 1
+  m_AssetLoadMode: 0
+  m_BundledAssetProviderType:
+    m_AssemblyName: Unity.ResourceManager, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
+    m_ClassName: UnityEngine.ResourceManagement.ResourceProviders.BundledAssetProvider
+  m_AssetBundleProviderType:
+    m_AssemblyName: Unity.ResourceManager, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
+    m_ClassName: UnityEngine.ResourceManagement.ResourceProviders.AssetBundleProvider
+  m_IgnoreUnsupportedFilesInBuild: 0
+  m_UniqueBundleIds: 0
+  m_EnableJsonCatalog: 0
+  m_NonRecursiveBuilding: 1
+  m_AllowNestedBundleFolders: 0
+  m_CCDEnabled: 0
+  m_maxConcurrentWebRequests: 3
+  m_UseUWRForLocalBundles: 0
+  m_BundleTimeout: 0
+  m_BundleRetryCount: 0
+  m_BundleRedirectLimit: -1
+  m_SharedBundleSettings: 0
+  m_SharedBundleSettingsCustomGroupIndex: 0
+  m_ContiguousBundles: 1
+  m_StripUnityVersionFromBundleBuild: 0
+  m_DisableVisibleSubAssetRepresentations: 0
+  m_BuiltInBundleNaming: 0
+  mBuiltInBundleCustomNaming: 
+  m_MonoScriptBundleNaming: 0
+  m_CheckForContentUpdateRestrictionsOption: 0
+  m_MonoScriptBundleCustomNaming: 
+  m_RemoteCatalogBuildPath:
+    m_Id: 165fb4a3ad8d19e4aa002d6fc764a7ce
+  m_RemoteCatalogLoadPath:
+    m_Id: 247226ff3fd294f46b8dfca266320b8c
+  m_ContentStateBuildPathProfileVariableName: 
+  m_CustomContentStateBuildPath: 
+  m_ContentStateBuildPath: 
+  m_BuildAddressablesWithPlayerBuild: 0
+  m_overridePlayerVersion: '[UnityEditor.PlayerSettings.bundleVersion]'
+  m_GroupAssets:
+  - {fileID: 11400000, guid: bea7571088c2d4445882948a6e00d2eb, type: 2}
+  - {fileID: 11400000, guid: eee8ac6865ac5cd44b3a0841972df6a4, type: 2}
+  - {fileID: 11400000, guid: fbf0c9d5c7d630744942db58f3989590, type: 2}
+  - {fileID: 11400000, guid: f925dbaa7a17b4c408378ca01f44c966, type: 2}
+  - {fileID: 11400000, guid: e8c929ef04d401440b2c9bc0e38764af, type: 2}
+  - {fileID: 11400000, guid: 4f2bff48ab734b243a5a74591aacb1c4, type: 2}
+  - {fileID: 11400000, guid: a6fc72f51794cae438b1c7a3c9efc2cc, type: 2}
+  - {fileID: 11400000, guid: d9cdfffabea09544981be7bde3d2a7e3, type: 2}
+  - {fileID: 11400000, guid: dcf5a28e1f43fa14e9d77066ed172811, type: 2}
+  - {fileID: 11400000, guid: f797151507e94354e810822c30e8a6e6, type: 2}
+  m_BuildSettings:
+    m_LogResourceManagerExceptions: 1
+    m_BundleBuildPath: Temp/com.unity.addressables/AssetBundles
+  m_ProfileSettings:
+    m_Profiles:
+    - m_InheritedParent: 
+      m_Id: 402f3ad95697ab34094633a684fb6287
+      m_ProfileName: Default
+      m_Values:
+      - m_Id: 165fb4a3ad8d19e4aa002d6fc764a7ce
+        m_Value: 'ServerData/[BuildTarget]'
+      - m_Id: 247226ff3fd294f46b8dfca266320b8c
+        m_Value: '{CastleDefender.Net.RemoteAddressablesRuntimePath.RemoteLoadPath}/[BuildTarget]'
+      - m_Id: 2c619633ac440a34ca2951fc552de6ed
+        m_Value: '[UnityEditor.EditorUserBuildSettings.activeBuildTarget]'
+      - m_Id: 6339a64a184249d4ea866cd99dbc371d
+        m_Value: '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]'
+      - m_Id: 97707ebfa0a741345b776fd2e66b205b
+        m_Value: '[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]'
+    m_ProfileEntryNames:
+    - m_Id: 165fb4a3ad8d19e4aa002d6fc764a7ce
+      m_Name: Remote.BuildPath
+      m_InlineUsage: 0
+    - m_Id: 247226ff3fd294f46b8dfca266320b8c
+      m_Name: Remote.LoadPath
+      m_InlineUsage: 0
+    - m_Id: 2c619633ac440a34ca2951fc552de6ed
+      m_Name: BuildTarget
+      m_InlineUsage: 0
+    - m_Id: 6339a64a184249d4ea866cd99dbc371d
+      m_Name: Local.LoadPath
+      m_InlineUsage: 0
+    - m_Id: 97707ebfa0a741345b776fd2e66b205b
+      m_Name: Local.BuildPath
+      m_InlineUsage: 0
+    m_ProfileVersion: 1
+  m_LabelTable:
+    m_LabelNames:
+    - default
+    - unit
+    - goblin
+    - kobold
+    - hobgoblin
+    - orc
+    - ogre
+    - troll
+    - cyclops
+    - ghoul
+    - skeleton_knight
+    - undead_warrior
+    - mummy
+    - vampire
+    - giant_viper
+    - darkness_spider
+    - lizard_warrior
+    - dragonide
+    - wyvern
+    - hydra
+    - mountain_dragon
+    - werewolf
+    - harpy
+    - griffin
+    - manticora
+    - chimera
+    - evil_watcher
+    - oak_tree_ent
+    - ice_golem
+    - demon_lord
+    - skin
+    - tt_peasant
+    - tt_scout
+    - tt_settler
+    - tt_light_infantry
+    - tt_spearman
+    - tt_archer
+    - tt_crossbowman
+    - tt_heavy_infantry
+    - tt_halberdier
+    - tt_heavy_swordman
+    - tt_light_cavalry
+    - tt_heavy_cavalry
+    - tt_priest
+    - tt_high_priest
+    - tt_mage
+    - tt_paladin
+    - tt_commander
+    - tt_king
+    - tt_mounted_scout
+    - tt_mounted_knight
+    - tt_mounted_mage
+    - tt_mounted_paladin
+    - tt_mounted_priest
+    - tt_mounted_king
+    - giant_rat
+    - fantasy_wolf
+  m_SchemaTemplates: []
+  m_GroupTemplateObjects:
+  - {fileID: 11400000, guid: 6f3c7d2740ebece46bcf3cb48fdd252c, type: 2}
+  m_InitializationObjects: []
+  m_CertificateHandlerType:
+    m_AssemblyName: 
+    m_ClassName: 
+  m_ActivePlayerDataBuilderIndex: 2
+  m_DataBuilders:
+  - {fileID: 11400000, guid: a366e29c9ddca284ab5469c322ba9726, type: 2}
+  - {fileID: 11400000, guid: 57479f547da0bb948b15a18f08d07475, type: 2}
+  - {fileID: 11400000, guid: 97e791c3a20eb374d957a23e36c17072, type: 2}
+  m_ActiveProfileId: 402f3ad95697ab34094633a684fb6287

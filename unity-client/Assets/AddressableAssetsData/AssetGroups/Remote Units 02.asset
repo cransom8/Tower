@@ -1,0 +1,65 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Units 02
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Units 02
+  m_GUID: 61ff3d509f1d5aa468d57a0aba6ce8aa
+  m_SerializeEntries:
+  - m_GUID: 31ac62305d486dc4c838d6af0ac2184d
+    m_Address: units/manticora
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - manticora
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 54f014f3cd0120a4c8cc995bfa362da5
+    m_Address: units/oak_tree_ent
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - oak_tree_ent
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 745c0d8fad9112c48a312f59a723edd7
+    m_Address: units/undead_warrior
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - undead_warrior
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: acbed4bda4b4c3946b62431133c93eff
+    m_Address: units/hobgoblin
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - hobgoblin
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: d89d194afc9cc9a4aa37607eb492731c
+    m_Address: units/ice_golem
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - ice_golem
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e3ead0c238774324ab46a062753bc58a
+    m_Address: units/hydra
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - hydra
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 8db7d2cc8fbe91543b88bed9e7036627, type: 2}
+    - {fileID: 11400000, guid: 0e1e7136d9a0d364da5acc258949a5bc, type: 2}
