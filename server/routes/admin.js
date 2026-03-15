@@ -1440,12 +1440,10 @@ router.post('/assets/upload-image', requireAdmin, requirePermission('config.writ
       return res.status(400).json({ error: 'Image too large. Max size is 2MB.' });
     }
 
-    const rootCandidates = [
-      path.join(__dirname, '..', '..', 'admin-client'),
-      path.join(__dirname, '..', 'admin-client'),
-    ];
-    const adminAssetRoot =
-      rootCandidates.find((p) => fs.existsSync(path.join(p, 'assets')) ) || rootCandidates[0];
+    const adminAssetRoot = path.join(__dirname, '..', 'admin-client');
+    if (!fs.existsSync(path.join(adminAssetRoot, 'assets'))) {
+      throw new Error(`Admin asset root missing at ${adminAssetRoot}`);
+    }
     const uploadDir = path.join(adminAssetRoot, 'assets', 'uploads', 'towers');
     await fsp.mkdir(uploadDir, { recursive: true });
 

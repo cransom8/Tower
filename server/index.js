@@ -298,17 +298,8 @@ const unityClientDirCandidates = [
   path.join(__dirname, "client_backup_20260306_235052"),
 ];
 
-const adminClientDirCandidates = [
-  path.join(__dirname, "..", "admin-client"),
-  path.join(__dirname, "admin-client"),
-  path.join(__dirname, "client_backup_20260306_233552"),
-];
-
-const adminAssetDirCandidates = [
-  path.join(__dirname, "..", "admin-client", "assets"),
-  path.join(__dirname, "admin-client", "assets"),
-  path.join(__dirname, "client_backup_20260306_233552", "assets"),
-];
+const adminClientDir = path.join(__dirname, "admin-client");
+const adminAssetDir = path.join(adminClientDir, "assets");
 
 const unityAddressablesDirCandidates = [
   path.join(__dirname, "..", "unity-client", "ServerData"),
@@ -321,14 +312,14 @@ const unityClientDir =
   unityClientDirCandidates[0];
 log.info("unity client dir", { unityClientDir });
 
-const adminClientDir =
-  adminClientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "admin.html"))) ||
-  adminClientDirCandidates[0];
+if (!fs.existsSync(path.join(adminClientDir, "admin.html"))) {
+  throw new Error(`Admin client missing at ${adminClientDir}. Deploy server/admin-client with the release.`);
+}
 log.info("admin client dir", { adminClientDir });
 
-const adminAssetDir =
-  adminAssetDirCandidates.find((dir) => fs.existsSync(dir)) ||
-  adminAssetDirCandidates[0];
+if (!fs.existsSync(adminAssetDir)) {
+  throw new Error(`Admin asset dir missing at ${adminAssetDir}. Deploy server/admin-client/assets with the release.`);
+}
 log.info("admin asset dir", { adminAssetDir });
 
 const unityAddressablesDir =
@@ -382,10 +373,8 @@ function sendUnityClientFile(res, filename) {
 }
 
 function sendAdminClientFile(res, filename) {
-  const candidate = [adminClientDir, ...adminClientDirCandidates]
-    .map((dir) => path.join(dir, filename))
-    .find((filePath) => fs.existsSync(filePath));
-  if (candidate) return res.sendFile(candidate);
+  const candidate = path.join(adminClientDir, filename);
+  if (fs.existsSync(candidate)) return res.sendFile(candidate);
   return res.status(404).json({ error: `${filename} not found` });
 }
 
