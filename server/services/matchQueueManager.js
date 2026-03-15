@@ -7,6 +7,28 @@ const crypto = require('crypto');
 const GAME_TYPES    = new Set(['line_wars', 'survival']);
 const MATCH_FORMATS = new Set(['1v1', '2v2', 'ffa']);
 const VALID_DIFFS   = new Set(['easy', 'medium', 'hard', 'insane']);
+const GAME_TYPE_ALIASES = new Map([
+  ['linewars', 'line_wars'],
+  ['line_wars', 'line_wars'],
+  ['forgewars', 'line_wars'],
+  ['forge_wars', 'line_wars'],
+  ['multilane', 'line_wars'],
+  ['pvp', 'line_wars'],
+  ['public', 'line_wars'],
+  ['survival', 'survival'],
+  ['wave_defense', 'survival'],
+]);
+const MATCH_FORMAT_ALIASES = new Map([
+  ['1v1', '1v1'],
+  ['duel', '1v1'],
+  ['solo', '1v1'],
+  ['2v2', '2v2'],
+  ['teams', '2v2'],
+  ['team', '2v2'],
+  ['ffa', 'ffa'],
+  ['freeforall', 'ffa'],
+  ['free_for_all', 'ffa'],
+]);
 
 // Total player-slots needed to launch a match per format
 const FORMAT_SLOTS = { '1v1': 2, '2v2': 4, 'ffa': 4 };
@@ -14,6 +36,46 @@ const FORMAT_SLOTS = { '1v1': 2, '2v2': 4, 'ffa': 4 };
 
 function makeBucketKey(gameType, matchFormat, ranked) {
   return `${gameType}:${matchFormat}:${ranked ? '1' : '0'}`;
+}
+
+function normalizeGameType(gameType, fallback = 'line_wars') {
+  const raw = String(gameType || '').trim();
+  if (!raw) return fallback;
+  const canonical = GAME_TYPE_ALIASES.get(raw.toLowerCase());
+  return canonical && GAME_TYPES.has(canonical) ? canonical : null;
+}
+
+function normalizeMatchFormat(matchFormat, fallback = '2v2') {
+  const raw = String(matchFormat || '').trim();
+  if (!raw) return fallback;
+  const compact = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  const canonical = MATCH_FORMAT_ALIASES.get(compact) || MATCH_FORMAT_ALIASES.get(raw.toLowerCase());
+  return canonical && MATCH_FORMATS.has(canonical) ? canonical : null;
+}
+
+function normalizeQueueRequest({ gameType, matchFormat, ranked } = {}) {
+  let normalizedGameType = normalizeGameType(gameType);
+  let normalizedMatchFormat = normalizeMatchFormat(matchFormat);
+  let normalizedRanked = typeof ranked === 'boolean' ? ranked : !!ranked;
+  const legacyTokens = [gameType, matchFormat]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+
+  for (const legacyToken of legacyTokens) {
+    if (normalizedGameType && normalizedMatchFormat) break;
+    const legacyMatch = legacyToken.match(/^(?:(ranked|casual)[_:])?(1v1|2v2|ffa)(?:[_:](ranked|casual))?$/);
+    if (!legacyMatch) continue;
+    normalizedGameType = normalizedGameType || 'line_wars';
+    normalizedMatchFormat = normalizedMatchFormat || legacyMatch[2];
+    const legacyRankToken = legacyMatch[1] || legacyMatch[3];
+    if (legacyRankToken) normalizedRanked = legacyRankToken === 'ranked';
+  }
+
+  return {
+    gameType: normalizedGameType,
+    matchFormat: normalizedMatchFormat,
+    ranked: normalizedRanked,
+  };
 }
 
 // ── Public queue validation ───────────────────────────────────────────────────
@@ -45,8 +107,8 @@ function _getQ(key) {
  */
 function addToQueue(partyId, entry) {
   removeFromQueue(partyId);
-  const gameType    = GAME_TYPES.has(entry.gameType)       ? entry.gameType    : 'line_wars';
-  const matchFormat = MATCH_FORMATS.has(entry.matchFormat) ? entry.matchFormat : '2v2';
+  const gameType    = normalizeGameType(entry.gameType) || 'line_wars';
+  const matchFormat = normalizeMatchFormat(entry.matchFormat) || '2v2';
   const ranked      = !!entry.ranked;
   const key         = makeBucketKey(gameType, matchFormat, ranked);
   _getQ(key).push({ ...entry, partyId, gameType, matchFormat, ranked });
@@ -263,8 +325,8 @@ function createLobby({ hostSocketId, hostDisplayName, gameType, matchFormat, pvp
     lobbyId,
     code,
     hostSocketId,
-    gameType:    GAME_TYPES.has(gameType)       ? gameType    : 'line_wars',
-    matchFormat: MATCH_FORMATS.has(matchFormat) ? matchFormat : '2v2',
+    gameType:    normalizeGameType(gameType) || 'line_wars',
+    matchFormat: normalizeMatchFormat(matchFormat) || '2v2',
     pvpMode:     pvpMode || matchFormat || '2v2',
     botSlots:    [],                           // [{ difficulty }]
     settings:    { startIncome: 10, ...(settings || {}) },
@@ -478,7 +540,7 @@ module.exports = {
   // Constants
   GAME_TYPES, MATCH_FORMATS, VALID_DIFFS, FORMAT_SLOTS,
   // Queue helpers
-  makeBucketKey, validatePublicPartySize,
+  makeBucketKey, normalizeGameType, normalizeMatchFormat, normalizeQueueRequest, validatePublicPartySize,
   addToQueue, removeFromQueue, getQueueEntry,
   getQueuePlayerCount, getQueueStats,
   startMatchmakingLoop, stopMatchmakingLoop,

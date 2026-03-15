@@ -28,6 +28,26 @@ const ACCESS_TOKEN_TTL    = '15m';
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+const DEFAULT_RATING_MODES = [
+  '2v2_ranked',
+  '2v2_casual',
+  '1v1_ranked',
+  '1v1_casual',
+  'ffa_ranked',
+  'ffa_casual',
+];
+
+async function seedDefaultRatings(playerId) {
+  const valuesSql = DEFAULT_RATING_MODES
+    .map((mode, index) => `($1, $${index + 2}, 1500, 350, 450)`)
+    .join(',\n            ');
+  await db.query(
+    `INSERT INTO ratings (player_id, mode, mu, sigma, rating)
+     VALUES ${valuesSql}
+     ON CONFLICT DO NOTHING`,
+    [playerId, ...DEFAULT_RATING_MODES]
+  );
+}
 
 // ── Google ────────────────────────────────────────────────────────────────────
 
@@ -86,13 +106,7 @@ async function findOrCreatePlayer(googleId, suggestedName) {
   const player = res.rows[0];
 
   // Seed default ratings for all modes
-  await db.query(
-    `INSERT INTO ratings (player_id, mode, mu, sigma, rating)
-     VALUES ($1, '2v2_ranked', 1500, 350, 450),
-            ($1, '2v2_casual', 1500, 350, 450)
-     ON CONFLICT DO NOTHING`,
-    [player.id]
-  );
+  await seedDefaultRatings(player.id);
 
   return player;
 }
@@ -134,13 +148,7 @@ async function registerWithPassword(email, displayName, password) {
   );
   const player = res.rows[0];
 
-  await db.query(
-    `INSERT INTO ratings (player_id, mode, mu, sigma, rating)
-     VALUES ($1, '2v2_ranked', 1500, 350, 450),
-            ($1, '2v2_casual', 1500, 350, 450)
-     ON CONFLICT DO NOTHING`,
-    [player.id]
-  );
+  await seedDefaultRatings(player.id);
 
   return player;
 }

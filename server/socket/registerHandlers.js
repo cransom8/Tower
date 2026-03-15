@@ -163,7 +163,7 @@ function registerSocketHandlers({
         const party = partiesById.get(ticket.partyId);
         return count + (party ? party.members.length : 1);
       }, 0);
-      room.pvpMode = matchFormat === "ffa" ? "ffa" : "2v2";
+      room.pvpMode = matchFormat === "ffa" ? "ffa" : matchFormat;
 
       sessionBySocketId.set(host.sid, { code, roomId, laneIndex: 0, mode: "multilane" });
       room.playerTeamsBySocketId.set(host.sid, teamAssignments[0]);
@@ -897,9 +897,13 @@ function registerSocketHandlers({
       if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) {
         return socket.emit("error_message", { message: "Too many requests. Please wait." });
       }
-      const { GAME_TYPES, MATCH_FORMATS, validatePublicPartySize } = matchmaker;
-      if (!GAME_TYPES.has(gameType)) return socket.emit("error_message", { message: "Invalid game type." });
-      if (!MATCH_FORMATS.has(matchFormat)) return socket.emit("error_message", { message: "Invalid match format." });
+      const { normalizeQueueRequest, validatePublicPartySize } = matchmaker;
+      const normalizedQueue = normalizeQueueRequest({ gameType, matchFormat, ranked });
+      if (!normalizedQueue.gameType) return socket.emit("error_message", { message: "Invalid game type." });
+      if (!normalizedQueue.matchFormat) return socket.emit("error_message", { message: "Invalid match format." });
+      gameType = normalizedQueue.gameType;
+      matchFormat = normalizedQueue.matchFormat;
+      ranked = normalizedQueue.ranked;
 
       const isRankedReq = !!ranked;
       if (isRankedReq && !isEnabled("ranked_queue_enabled"))
@@ -908,9 +912,6 @@ function registerSocketHandlers({
         return socket.emit("error_message", { message: "Casual queue is currently disabled." });
       if (matchFormat === "ffa" && !isEnabled("public_ffa_enabled"))
         return socket.emit("error_message", { message: "Public FFA matchmaking is currently disabled." });
-      if (matchFormat === "1v1" && isRankedReq && !isEnabled("1v1_ranked_enabled"))
-        return socket.emit("error_message", { message: "Ranked 1v1 is not yet enabled." });
-
       requireAuthSocket(socket, () => {
         if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
 
