@@ -2126,9 +2126,17 @@ router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.w
   }
 
   let whereClause = 'TRUE';
-  if (scope === 'enabled') whereClause = 'enabled = TRUE';
-  else if (scope === 'moving' || scope === 'fixed' || scope === 'both') whereClause = `behavior_mode = '${scope}'`;
-  else if (scope !== 'all') return res.status(400).json({ error: 'Unsupported bulk-edit scope' });
+  if (scope === 'enabled') {
+    whereClause = 'enabled = TRUE';
+  } else if (scope === 'moving') {
+    whereClause = 'COALESCE(send_cost, 0) > 0 AND NOT (COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0)';
+  } else if (scope === 'fixed') {
+    whereClause = 'COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0 AND COALESCE(send_cost, 0) <= 0';
+  } else if (scope === 'both') {
+    whereClause = 'COALESCE(send_cost, 0) > 0 AND COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0';
+  } else if (scope !== 'all') {
+    return res.status(400).json({ error: 'Unsupported bulk-edit scope' });
+  }
 
   let expr;
   if (operation === 'set') expr = '$1';
