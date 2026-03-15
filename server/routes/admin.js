@@ -1937,6 +1937,57 @@ const UNIT_BULK_INTEGER_FIELDS = new Set([
   'projectile_travel_ticks',
   'damage_reduction_pct',
 ]);
+const REMOTE_CONTENT_TEXT_FIELDS = new Set([
+  'content_key',
+  'addressables_label',
+  'prefab_address',
+  'placeholder_key',
+  'catalog_url',
+  'content_url',
+  'version_tag',
+  'content_hash',
+]);
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeRemoteContentBody(body = {}) {
+  const normalized = {};
+  for (const field of REMOTE_CONTENT_TEXT_FIELDS) {
+    if (body[field] !== undefined) {
+      const raw = body[field];
+      normalized[field] = raw == null ? null : String(raw).trim() || null;
+    }
+  }
+  if (body.dependency_keys !== undefined) {
+    normalized.dependency_keys = Array.isArray(body.dependency_keys)
+      ? body.dependency_keys.map((v) => String(v || '').trim()).filter(Boolean)
+      : body.dependency_keys;
+  }
+  if (body.metadata !== undefined) normalized.metadata = body.metadata;
+  if (body.is_critical !== undefined) normalized.is_critical = !!body.is_critical;
+  if (body.enabled !== undefined) normalized.enabled = !!body.enabled;
+  return normalized;
+}
+
+function validateRemoteContentBody(body) {
+  const errs = [];
+  if (body.content_key !== undefined && body.content_key !== null && !UNIT_KEY_RE.test(body.content_key)) {
+    errs.push('content_key must be lowercase letters/numbers/underscores, 1–64 chars');
+  }
+  if (body.dependency_keys !== undefined) {
+    if (!Array.isArray(body.dependency_keys)) {
+      errs.push('dependency_keys must be an array of strings');
+    } else if (body.dependency_keys.some((v) => !UNIT_KEY_RE.test(String(v)))) {
+      errs.push('dependency_keys must contain lowercase letters/numbers/underscores only');
+    }
+  }
+  if (body.metadata !== undefined && !isPlainObject(body.metadata)) {
+    errs.push('metadata must be a plain object');
+  }
+  return errs;
+}
 
 function validateUnitTypeBody(body) {
   const errs = [];
@@ -1972,15 +2023,62 @@ function validateUnitTypeBody(body) {
 function unitTypeQuery(db, whereClause, vals) {
   return db.query(`
     SELECT u.*,
+      CASE
+        WHEN ucm.id IS NULL THEN NULL
+        ELSE json_build_object(
+          'id', ucm.id,
+          'content_key', ucm.content_key,
+          'addressables_label', ucm.addressables_label,
+          'prefab_address', ucm.prefab_address,
+          'placeholder_key', ucm.placeholder_key,
+          'catalog_url', ucm.catalog_url,
+          'content_url', ucm.content_url,
+          'version_tag', ucm.version_tag,
+          'content_hash', ucm.content_hash,
+          'dependency_keys', ucm.dependency_keys,
+          'metadata', ucm.metadata,
+          'is_critical', ucm.is_critical,
+          'enabled', ucm.enabled
+        )
+      END AS remote_content,
       COALESCE(json_agg(
         json_build_object('ability_key', a.ability_key, 'params', a.params)
         ORDER BY a.id
       ) FILTER (WHERE a.id IS NOT NULL), '[]') AS abilities
     FROM unit_types u
+    LEFT JOIN unit_content_metadata ucm ON ucm.unit_type_id = u.id
     LEFT JOIN unit_type_ability_assignments a ON a.unit_type_id = u.id
     ${whereClause || ''}
-    GROUP BY u.id
+    GROUP BY u.id, ucm.id
     ORDER BY u.id
+  `, vals);
+}
+
+function skinQuery(db, whereClause = '', vals = []) {
+  return db.query(`
+    SELECT s.*,
+      CASE
+        WHEN scm.id IS NULL THEN NULL
+        ELSE json_build_object(
+          'id', scm.id,
+          'content_key', scm.content_key,
+          'addressables_label', scm.addressables_label,
+          'prefab_address', scm.prefab_address,
+          'placeholder_key', scm.placeholder_key,
+          'catalog_url', scm.catalog_url,
+          'content_url', scm.content_url,
+          'version_tag', scm.version_tag,
+          'content_hash', scm.content_hash,
+          'dependency_keys', scm.dependency_keys,
+          'metadata', scm.metadata,
+          'is_critical', scm.is_critical,
+          'enabled', scm.enabled
+        )
+      END AS remote_content
+    FROM skin_catalog s
+    LEFT JOIN skin_content_metadata scm ON scm.skin_catalog_id = s.id
+    ${whereClause}
+    ORDER BY s.unit_type, s.name, s.id
   `, vals);
 }
 
@@ -1993,6 +2091,19 @@ router.get('/unit-types', requireAdmin, async (req, res) => {
     res.json({ unitTypes: r.rows });
   } catch (err) {
     log.error('[admin] GET /unit-types error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/skins
+router.get('/skins', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ skins: [] });
+  const db = require('../db');
+  try {
+    const r = await skinQuery(db);
+    res.json({ skins: r.rows });
+  } catch (err) {
+    log.error('[admin] GET /skins error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -2135,6 +2246,93 @@ router.patch('/unit-types/:id', requireAdmin, requirePermission('config.write'),
   }
 });
 
+// PUT /admin/unit-types/:id/content
+router.put('/unit-types/:id/content', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const normalized = normalizeRemoteContentBody(req.body || {});
+  const errs = validateRemoteContentBody(normalized);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+
+  const shouldDelete =
+    !normalized.content_key &&
+    !normalized.addressables_label &&
+    !normalized.prefab_address &&
+    !normalized.placeholder_key &&
+    !normalized.catalog_url &&
+    !normalized.content_url &&
+    !normalized.version_tag &&
+    !normalized.content_hash &&
+    normalized.dependency_keys === undefined &&
+    normalized.metadata === undefined &&
+    normalized.is_critical === undefined &&
+    normalized.enabled === undefined;
+
+  try {
+    const exists = await db.query('SELECT id, key FROM unit_types WHERE id = $1', [id]);
+    if (!exists.rows[0]) return res.status(404).json({ error: 'Unit type not found' });
+
+    if (shouldDelete) {
+      await db.query('DELETE FROM unit_content_metadata WHERE unit_type_id = $1', [id]);
+    } else {
+      const row = await db.query('SELECT content_key FROM unit_content_metadata WHERE unit_type_id = $1', [id]);
+      const contentKey = normalized.content_key || row.rows[0]?.content_key || exists.rows[0].key;
+      await db.query(
+        `INSERT INTO unit_content_metadata (
+           unit_type_id, content_key, addressables_label, prefab_address, placeholder_key,
+           catalog_url, content_url, version_tag, content_hash, dependency_keys, metadata,
+           is_critical, enabled, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           $6, $7, COALESCE($8, '1'), $9, COALESCE($10, '[]'::jsonb), COALESCE($11, '{}'::jsonb),
+           COALESCE($12, TRUE), COALESCE($13, TRUE), NOW()
+         )
+         ON CONFLICT (unit_type_id) DO UPDATE SET
+           content_key = EXCLUDED.content_key,
+           addressables_label = EXCLUDED.addressables_label,
+           prefab_address = EXCLUDED.prefab_address,
+           placeholder_key = EXCLUDED.placeholder_key,
+           catalog_url = EXCLUDED.catalog_url,
+           content_url = EXCLUDED.content_url,
+           version_tag = EXCLUDED.version_tag,
+           content_hash = EXCLUDED.content_hash,
+           dependency_keys = EXCLUDED.dependency_keys,
+           metadata = EXCLUDED.metadata,
+           is_critical = EXCLUDED.is_critical,
+           enabled = EXCLUDED.enabled,
+           updated_at = NOW()`,
+        [
+          id,
+          contentKey,
+          normalized.addressables_label ?? null,
+          normalized.prefab_address ?? null,
+          normalized.placeholder_key ?? null,
+          normalized.catalog_url ?? null,
+          normalized.content_url ?? null,
+          normalized.version_tag ?? null,
+          normalized.content_hash ?? null,
+          normalized.dependency_keys !== undefined ? JSON.stringify(normalized.dependency_keys) : null,
+          normalized.metadata !== undefined ? JSON.stringify(normalized.metadata) : null,
+          normalized.is_critical ?? null,
+          normalized.enabled ?? null,
+        ]
+      );
+    }
+
+    await audit(db, 'upsert_unit_content_metadata', 'unit_type', id, normalized, req.adminEmail, req.ip);
+    require('../unitTypes').reloadUnitTypes().catch(() => {});
+    const refreshed = await unitTypeQuery(db, 'WHERE u.id=$1', [id]);
+    res.json({ remoteContent: refreshed.rows[0]?.remote_content || null, unitType: refreshed.rows[0] || null });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'content_key already exists' });
+    log.error('[admin] PUT /unit-types/:id/content error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /admin/unit-types/:id
 router.delete('/unit-types/:id', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
@@ -2149,6 +2347,92 @@ router.delete('/unit-types/:id', requireAdmin, requirePermission('config.write')
     res.json({ deleted: true });
   } catch (err) {
     log.error('[admin] DELETE /unit-types/:id error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /admin/skins/:skinKey/content
+router.put('/skins/:skinKey/content', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const skinKey = String(req.params.skinKey || '').trim();
+  if (!skinKey) return res.status(400).json({ error: 'Invalid skin key' });
+
+  const normalized = normalizeRemoteContentBody(req.body || {});
+  const errs = validateRemoteContentBody(normalized);
+  if (errs.length) return res.status(400).json({ error: errs.join('; ') });
+
+  const shouldDelete =
+    !normalized.content_key &&
+    !normalized.addressables_label &&
+    !normalized.prefab_address &&
+    !normalized.placeholder_key &&
+    !normalized.catalog_url &&
+    !normalized.content_url &&
+    !normalized.version_tag &&
+    !normalized.content_hash &&
+    normalized.dependency_keys === undefined &&
+    normalized.metadata === undefined &&
+    normalized.is_critical === undefined &&
+    normalized.enabled === undefined;
+
+  try {
+    const exists = await db.query('SELECT id FROM skin_catalog WHERE skin_key = $1', [skinKey]);
+    if (!exists.rows[0]) return res.status(404).json({ error: 'Skin not found' });
+
+    if (shouldDelete) {
+      await db.query('DELETE FROM skin_content_metadata WHERE skin_catalog_id = $1', [exists.rows[0].id]);
+    } else {
+      const row = await db.query('SELECT content_key FROM skin_content_metadata WHERE skin_catalog_id = $1', [exists.rows[0].id]);
+      const contentKey = normalized.content_key || row.rows[0]?.content_key || skinKey;
+      await db.query(
+        `INSERT INTO skin_content_metadata (
+           skin_catalog_id, content_key, addressables_label, prefab_address, placeholder_key,
+           catalog_url, content_url, version_tag, content_hash, dependency_keys, metadata,
+           is_critical, enabled, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           $6, $7, COALESCE($8, '1'), $9, COALESCE($10, '[]'::jsonb), COALESCE($11, '{}'::jsonb),
+           COALESCE($12, FALSE), COALESCE($13, TRUE), NOW()
+         )
+         ON CONFLICT (skin_catalog_id) DO UPDATE SET
+           content_key = EXCLUDED.content_key,
+           addressables_label = EXCLUDED.addressables_label,
+           prefab_address = EXCLUDED.prefab_address,
+           placeholder_key = EXCLUDED.placeholder_key,
+           catalog_url = EXCLUDED.catalog_url,
+           content_url = EXCLUDED.content_url,
+           version_tag = EXCLUDED.version_tag,
+           content_hash = EXCLUDED.content_hash,
+           dependency_keys = EXCLUDED.dependency_keys,
+           metadata = EXCLUDED.metadata,
+           is_critical = EXCLUDED.is_critical,
+           enabled = EXCLUDED.enabled,
+           updated_at = NOW()`,
+        [
+          exists.rows[0].id,
+          contentKey,
+          normalized.addressables_label ?? null,
+          normalized.prefab_address ?? null,
+          normalized.placeholder_key ?? null,
+          normalized.catalog_url ?? null,
+          normalized.content_url ?? null,
+          normalized.version_tag ?? null,
+          normalized.content_hash ?? null,
+          normalized.dependency_keys !== undefined ? JSON.stringify(normalized.dependency_keys) : null,
+          normalized.metadata !== undefined ? JSON.stringify(normalized.metadata) : null,
+          normalized.is_critical ?? null,
+          normalized.enabled ?? null,
+        ]
+      );
+    }
+
+    await audit(db, 'upsert_skin_content_metadata', 'skin', skinKey, normalized, req.adminEmail, req.ip);
+    const refreshed = await skinQuery(db, 'WHERE s.skin_key = $1', [skinKey]);
+    res.json({ remoteContent: refreshed.rows[0]?.remote_content || null, skin: refreshed.rows[0] || null });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'content_key already exists' });
+    log.error('[admin] PUT /skins/:skinKey/content error', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

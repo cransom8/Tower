@@ -4,6 +4,31 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
-  m_configObjects: {}
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/Bootstrap.unity
+    guid: 957e7381751777a4990598b4ab328a84
+  - enabled: 1
+    path: Assets/Scenes/Login.unity
+    guid: d9c8f450845b2de429e1b57295916e6c
+  - enabled: 1
+    path: Assets/Scenes/Lobby.unity
+    guid: 744e6e3bc3bfd2b468420aa30835f774
+  - enabled: 1
+    path: Assets/Scenes/Loading.unity
+    guid: 90086f6fdd2bcca4eb30c4c255a308bb
+  - enabled: 1
+    path: Assets/Scenes/Loadout.unity
+    guid: 72dfc9bb200acab4285c28c0572487f5
+  - enabled: 1
+    path: Assets/Scenes/Game_ML.unity
+    guid: 825b9b19178b44e4bbbba94bcf2ddf8d
+  - enabled: 1
+    path: Assets/Scenes/PostGame.unity/PostGame.unity
+    guid: dad9eb76e96341f499aa29165fc3f63f
+  - enabled: 1
+    path: Assets/Scenes/Game_Classic.unity
+    guid: 6e8a9b8bfb8e91446bfcc448db2e06ab
+  m_configObjects:
+    com.unity.addressableassets: {fileID: 11400000, guid: e2f7393ed18775f47b7fb7e45aec79aa, type: 2}
   m_UseUCBPForAssetBundles: 0

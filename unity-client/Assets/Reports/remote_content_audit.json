@@ -1,0 +1,957 @@
+{
+    "generatedAt": "2026-03-15T07:57:08.2352528Z",
+    "registryPath": "Assets/Registry/UnitPrefabRegistry.asset",
+    "units": [
+        {
+            "kind": "unit",
+            "key": "goblin",
+            "unitType": "goblin",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_goblin.prefab",
+            "assetGuid": "7d8a9a68a27399947bc44c7117a88d93",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/goblin",
+            "addressableLabels": [
+                "goblin",
+                "unit"
+            ],
+            "recommendedContentKey": "goblin",
+            "recommendedAddressablesLabel": "goblin",
+            "recommendedPrefabAddress": "units/goblin",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "kobold",
+            "unitType": "kobold",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_kobold.prefab",
+            "assetGuid": "903aef66cc7cefc46aee27b2a5d14472",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/kobold",
+            "addressableLabels": [
+                "kobold",
+                "unit"
+            ],
+            "recommendedContentKey": "kobold",
+            "recommendedAddressablesLabel": "kobold",
+            "recommendedPrefabAddress": "units/kobold",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "hobgoblin",
+            "unitType": "hobgoblin",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_hobgoblin.prefab",
+            "assetGuid": "acbed4bda4b4c3946b62431133c93eff",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/hobgoblin",
+            "addressableLabels": [
+                "hobgoblin",
+                "unit"
+            ],
+            "recommendedContentKey": "hobgoblin",
+            "recommendedAddressablesLabel": "hobgoblin",
+            "recommendedPrefabAddress": "units/hobgoblin",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "orc",
+            "unitType": "orc",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_orc.prefab",
+            "assetGuid": "46b95e7012bd5bc40adc5cfc3e545600",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/orc",
+            "addressableLabels": [
+                "orc",
+                "unit"
+            ],
+            "recommendedContentKey": "orc",
+            "recommendedAddressablesLabel": "orc",
+            "recommendedPrefabAddress": "units/orc",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "ogre",
+            "unitType": "ogre",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_ogre.prefab",
+            "assetGuid": "ff0f021e5b0c2dd45969c89a13996d75",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/ogre",
+            "addressableLabels": [
+                "ogre",
+                "unit"
+            ],
+            "recommendedContentKey": "ogre",
+            "recommendedAddressablesLabel": "ogre",
+            "recommendedPrefabAddress": "units/ogre",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "troll",
+            "unitType": "troll",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_troll.prefab",
+            "assetGuid": "ec3b6630249c4d64997f2f543f17fc69",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/troll",
+            "addressableLabels": [
+                "troll",
+                "unit"
+            ],
+            "recommendedContentKey": "troll",
+            "recommendedAddressablesLabel": "troll",
+            "recommendedPrefabAddress": "units/troll",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "cyclops",
+            "unitType": "cyclops",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_cyclops.prefab",
+            "assetGuid": "5d845c2fa5772d64a9e902a1cecadac6",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/cyclops",
+            "addressableLabels": [
+                "cyclops",
+                "unit"
+            ],
+            "recommendedContentKey": "cyclops",
+            "recommendedAddressablesLabel": "cyclops",
+            "recommendedPrefabAddress": "units/cyclops",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "ghoul",
+            "unitType": "ghoul",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_ghoul.prefab",
+            "assetGuid": "efe5ee49c2510d84f883f1603f5d56ac",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/ghoul",
+            "addressableLabels": [
+                "ghoul",
+                "unit"
+            ],
+            "recommendedContentKey": "ghoul",
+            "recommendedAddressablesLabel": "ghoul",
+            "recommendedPrefabAddress": "units/ghoul",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "skeleton_knight",
+            "unitType": "skeleton_knight",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_skeleton_knight.prefab",
+            "assetGuid": "0890e3d3941655a4184bae9bcd1d7353",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/skeleton_knight",
+            "addressableLabels": [
+                "skeleton_knight",
+                "unit"
+            ],
+            "recommendedContentKey": "skeleton_knight",
+            "recommendedAddressablesLabel": "skeleton_knight",
+            "recommendedPrefabAddress": "units/skeleton_knight",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "undead_warrior",
+            "unitType": "undead_warrior",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_undead_warrior.prefab",
+            "assetGuid": "745c0d8fad9112c48a312f59a723edd7",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/undead_warrior",
+            "addressableLabels": [
+                "undead_warrior",
+                "unit"
+            ],
+            "recommendedContentKey": "undead_warrior",
+            "recommendedAddressablesLabel": "undead_warrior",
+            "recommendedPrefabAddress": "units/undead_warrior",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "mummy",
+            "unitType": "mummy",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_mummy.prefab",
+            "assetGuid": "ad405f3b7601d1c4e8ca0e4bcc5ace47",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/mummy",
+            "addressableLabels": [
+                "mummy",
+                "unit"
+            ],
+            "recommendedContentKey": "mummy",
+            "recommendedAddressablesLabel": "mummy",
+            "recommendedPrefabAddress": "units/mummy",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "vampire",
+            "unitType": "vampire",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_vampire.prefab",
+            "assetGuid": "bce56b09cc3045e45954ef482db16125",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/vampire",
+            "addressableLabels": [
+                "unit",
+                "vampire"
+            ],
+            "recommendedContentKey": "vampire",
+            "recommendedAddressablesLabel": "vampire",
+            "recommendedPrefabAddress": "units/vampire",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "giant_viper",
+            "unitType": "giant_viper",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_giant_viper.prefab",
+            "assetGuid": "e91d5ed1e32e58445b15fef4961ad9c3",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/giant_viper",
+            "addressableLabels": [
+                "giant_viper",
+                "unit"
+            ],
+            "recommendedContentKey": "giant_viper",
+            "recommendedAddressablesLabel": "giant_viper",
+            "recommendedPrefabAddress": "units/giant_viper",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "darkness_spider",
+            "unitType": "darkness_spider",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_darkness_spider.prefab",
+            "assetGuid": "2998a8227ed4d0b489de47d522a89ede",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/darkness_spider",
+            "addressableLabels": [
+                "darkness_spider",
+                "unit"
+            ],
+            "recommendedContentKey": "darkness_spider",
+            "recommendedAddressablesLabel": "darkness_spider",
+            "recommendedPrefabAddress": "units/darkness_spider",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "lizard_warrior",
+            "unitType": "lizard_warrior",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_lizard_warrior.prefab",
+            "assetGuid": "3a56fb6285749e044ac5b658413f7413",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/lizard_warrior",
+            "addressableLabels": [
+                "lizard_warrior",
+                "unit"
+            ],
+            "recommendedContentKey": "lizard_warrior",
+            "recommendedAddressablesLabel": "lizard_warrior",
+            "recommendedPrefabAddress": "units/lizard_warrior",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "dragonide",
+            "unitType": "dragonide",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_dragonide.prefab",
+            "assetGuid": "9ab829a698d6c2f44adbc501c1dcab88",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/dragonide",
+            "addressableLabels": [
+                "dragonide",
+                "unit"
+            ],
+            "recommendedContentKey": "dragonide",
+            "recommendedAddressablesLabel": "dragonide",
+            "recommendedPrefabAddress": "units/dragonide",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "wyvern",
+            "unitType": "wyvern",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_wyvern.prefab",
+            "assetGuid": "cbe72ca99324f91409be40862ffc0f19",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/wyvern",
+            "addressableLabels": [
+                "unit",
+                "wyvern"
+            ],
+            "recommendedContentKey": "wyvern",
+            "recommendedAddressablesLabel": "wyvern",
+            "recommendedPrefabAddress": "units/wyvern",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "hydra",
+            "unitType": "hydra",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_hydra.prefab",
+            "assetGuid": "e3ead0c238774324ab46a062753bc58a",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/hydra",
+            "addressableLabels": [
+                "hydra",
+                "unit"
+            ],
+            "recommendedContentKey": "hydra",
+            "recommendedAddressablesLabel": "hydra",
+            "recommendedPrefabAddress": "units/hydra",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "mountain_dragon",
+            "unitType": "mountain_dragon",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_mountain_dragon.prefab",
+            "assetGuid": "0d96a8f77c162b64790022dc086760f8",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/mountain_dragon",
+            "addressableLabels": [
+                "mountain_dragon",
+                "unit"
+            ],
+            "recommendedContentKey": "mountain_dragon",
+            "recommendedAddressablesLabel": "mountain_dragon",
+            "recommendedPrefabAddress": "units/mountain_dragon",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "werewolf",
+            "unitType": "werewolf",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_werewolf.prefab",
+            "assetGuid": "e8681fa5cadc52e4db86f36d49531ca5",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/werewolf",
+            "addressableLabels": [
+                "unit",
+                "werewolf"
+            ],
+            "recommendedContentKey": "werewolf",
+            "recommendedAddressablesLabel": "werewolf",
+            "recommendedPrefabAddress": "units/werewolf",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "harpy",
+            "unitType": "harpy",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_harpy.prefab",
+            "assetGuid": "0667415b01e76884cba42083e2cb68e7",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/harpy",
+            "addressableLabels": [
+                "harpy",
+                "unit"
+            ],
+            "recommendedContentKey": "harpy",
+            "recommendedAddressablesLabel": "harpy",
+            "recommendedPrefabAddress": "units/harpy",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "griffin",
+            "unitType": "griffin",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_griffin.prefab",
+            "assetGuid": "938a7ee8cf2318f4698d8ede62d86f63",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/griffin",
+            "addressableLabels": [
+                "griffin",
+                "unit"
+            ],
+            "recommendedContentKey": "griffin",
+            "recommendedAddressablesLabel": "griffin",
+            "recommendedPrefabAddress": "units/griffin",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "manticora",
+            "unitType": "manticora",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_manticora.prefab",
+            "assetGuid": "31ac62305d486dc4c838d6af0ac2184d",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/manticora",
+            "addressableLabels": [
+                "manticora",
+                "unit"
+            ],
+            "recommendedContentKey": "manticora",
+            "recommendedAddressablesLabel": "manticora",
+            "recommendedPrefabAddress": "units/manticora",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "chimera",
+            "unitType": "chimera",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_chimera.prefab",
+            "assetGuid": "e297ec5bfb121ea4d8d4f2b1462c7139",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/chimera",
+            "addressableLabels": [
+                "chimera",
+                "unit"
+            ],
+            "recommendedContentKey": "chimera",
+            "recommendedAddressablesLabel": "chimera",
+            "recommendedPrefabAddress": "units/chimera",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "evil_watcher",
+            "unitType": "evil_watcher",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_evil_watcher.prefab",
+            "assetGuid": "f81c4c2b075ae0f4ca87efd4c7ffebff",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/evil_watcher",
+            "addressableLabels": [
+                "evil_watcher",
+                "unit"
+            ],
+            "recommendedContentKey": "evil_watcher",
+            "recommendedAddressablesLabel": "evil_watcher",
+            "recommendedPrefabAddress": "units/evil_watcher",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "oak_tree_ent",
+            "unitType": "oak_tree_ent",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_oak_tree_ent.prefab",
+            "assetGuid": "54f014f3cd0120a4c8cc995bfa362da5",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/oak_tree_ent",
+            "addressableLabels": [
+                "oak_tree_ent",
+                "unit"
+            ],
+            "recommendedContentKey": "oak_tree_ent",
+            "recommendedAddressablesLabel": "oak_tree_ent",
+            "recommendedPrefabAddress": "units/oak_tree_ent",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "ice_golem",
+            "unitType": "ice_golem",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_ice_golem.prefab",
+            "assetGuid": "d89d194afc9cc9a4aa37607eb492731c",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/ice_golem",
+            "addressableLabels": [
+                "ice_golem",
+                "unit"
+            ],
+            "recommendedContentKey": "ice_golem",
+            "recommendedAddressablesLabel": "ice_golem",
+            "recommendedPrefabAddress": "units/ice_golem",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "demon_lord",
+            "unitType": "demon_lord",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_demon_lord.prefab",
+            "assetGuid": "5728b873e0893b44f884697fdab3eff5",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/demon_lord",
+            "addressableLabels": [
+                "demon_lord",
+                "unit"
+            ],
+            "recommendedContentKey": "demon_lord",
+            "recommendedAddressablesLabel": "demon_lord",
+            "recommendedPrefabAddress": "units/demon_lord",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "giant_rat",
+            "unitType": "giant_rat",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_giant_rat.prefab",
+            "assetGuid": "26a427142a8a3584a8996bf10d8e3e9c",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/giant_rat",
+            "addressableLabels": [
+                "unit",
+                "giant_rat"
+            ],
+            "recommendedContentKey": "giant_rat",
+            "recommendedAddressablesLabel": "giant_rat",
+            "recommendedPrefabAddress": "units/giant_rat",
+            "warnings": []
+        },
+        {
+            "kind": "unit",
+            "key": "fantasy_wolf",
+            "unitType": "fantasy_wolf",
+            "assetPath": "Assets/Prefabs/Units/HFC/Unit_fantasy_wolf.prefab",
+            "assetGuid": "cb199b960f13ee642b6305dfba722e8b",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "units/fantasy_wolf",
+            "addressableLabels": [
+                "unit",
+                "fantasy_wolf"
+            ],
+            "recommendedContentKey": "fantasy_wolf",
+            "recommendedAddressablesLabel": "fantasy_wolf",
+            "recommendedPrefabAddress": "units/fantasy_wolf",
+            "warnings": []
+        }
+    ],
+    "skins": [
+        {
+            "kind": "skin",
+            "key": "tt_peasant",
+            "unitType": "goblin",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_peasant",
+            "recommendedAddressablesLabel": "tt_peasant",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_scout",
+            "unitType": "kobold",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_scout",
+            "recommendedAddressablesLabel": "tt_scout",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_settler",
+            "unitType": "giant_rat",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_settler",
+            "recommendedAddressablesLabel": "tt_settler",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_light_infantry",
+            "unitType": "hobgoblin",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_light_infantry",
+            "recommendedAddressablesLabel": "tt_light_infantry",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_spearman",
+            "unitType": "ghoul",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_spearman",
+            "recommendedAddressablesLabel": "tt_spearman",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_archer",
+            "unitType": "harpy",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_archer",
+            "recommendedAddressablesLabel": "tt_archer",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_crossbowman",
+            "unitType": "darkness_spider",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_crossbowman",
+            "recommendedAddressablesLabel": "tt_crossbowman",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_infantry",
+            "unitType": "orc",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_heavy_infantry",
+            "recommendedAddressablesLabel": "tt_heavy_infantry",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_halberdier",
+            "unitType": "troll",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_halberdier",
+            "recommendedAddressablesLabel": "tt_halberdier",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_swordman",
+            "unitType": "ogre",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_heavy_swordman",
+            "recommendedAddressablesLabel": "tt_heavy_swordman",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_light_cavalry",
+            "unitType": "werewolf",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_light_cavalry",
+            "recommendedAddressablesLabel": "tt_light_cavalry",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_cavalry",
+            "unitType": "wyvern",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_heavy_cavalry",
+            "recommendedAddressablesLabel": "tt_heavy_cavalry",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_priest",
+            "unitType": "undead_warrior",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_priest",
+            "recommendedAddressablesLabel": "tt_priest",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_high_priest",
+            "unitType": "mummy",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_high_priest",
+            "recommendedAddressablesLabel": "tt_high_priest",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mage",
+            "unitType": "evil_watcher",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mage",
+            "recommendedAddressablesLabel": "tt_mage",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_paladin",
+            "unitType": "griffin",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_paladin",
+            "recommendedAddressablesLabel": "tt_paladin",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_commander",
+            "unitType": "manticora",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_commander",
+            "recommendedAddressablesLabel": "tt_commander",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_king",
+            "unitType": "cyclops",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_king",
+            "recommendedAddressablesLabel": "tt_king",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_scout",
+            "unitType": "fantasy_wolf",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_scout",
+            "recommendedAddressablesLabel": "tt_mounted_scout",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_knight",
+            "unitType": "skeleton_knight",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_knight",
+            "recommendedAddressablesLabel": "tt_mounted_knight",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_mage",
+            "unitType": "vampire",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_mage",
+            "recommendedAddressablesLabel": "tt_mounted_mage",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_paladin",
+            "unitType": "chimera",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_paladin",
+            "recommendedAddressablesLabel": "tt_mounted_paladin",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_priest",
+            "unitType": "lizard_warrior",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_priest",
+            "recommendedAddressablesLabel": "tt_mounted_priest",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_king",
+            "unitType": "demon_lord",
+            "assetPath": "",
+            "assetGuid": "",
+            "hasPrefab": false,
+            "isAddressable": false,
+            "addressableAddress": "",
+            "addressableLabels": [],
+            "recommendedContentKey": "tt_mounted_king",
+            "recommendedAddressablesLabel": "tt_mounted_king",
+            "recommendedPrefabAddress": "",
+            "warnings": [
+                "Missing prefab reference."
+            ]
+        }
+    ],
+    "warnings": []
+}

@@ -279,17 +279,26 @@ function createMultilaneRuntime({
 
   // ── Loadout-phase helpers ────────────────────────────────────────────────
 
-  // Returns the full sendable unit catalog (same shape as loadoutEntry()).
+  // Returns the buildable loadout catalog used by ml_loadout_confirm validation.
   function buildAvailableUnits() {
     return getAllUnitTypes()
-      .filter(ut => ut && ut.enabled && Number(ut.send_cost) > 0)
+      .filter(ut =>
+        ut &&
+        ut.enabled &&
+        Number(ut.send_cost) > 0 &&
+        Number(ut.build_cost) > 0 &&
+        Number(ut.range) > 0
+      )
       .map(ut => ({
         id:            ut.id,
         key:           ut.key,
         name:          ut.name,
         send_cost:     Number(ut.send_cost)     || 0,
+        build_cost:    Number(ut.build_cost)    || 0,
         hp:            Number(ut.hp)            || 0,
         attack_damage: Number(ut.attack_damage) || 0,
+        attack_speed:  Number(ut.attack_speed)  || 1,
+        range:         Number(ut.range)         || 0,
         path_speed:    Number(ut.path_speed)    || 0,
         income:        Number(ut.income)        || 0,
         damage_type:   ut.damage_type  || "NORMAL",
@@ -450,26 +459,38 @@ function createMultilaneRuntime({
 
     // ── LOADOUT SELECTION PHASE ──────────────────────────────────────────
     const selectionMode = (room.settings && room.settings.selectionMode) || "manual";
+    const loadoutTimeoutMs = 60_000;
     room.loadoutConfirms = new Map();
+    if (!room.loadoutByLane) room.loadoutByLane = [];
+    await Promise.all(
+      aiList.map(async (ai) => {
+        const loadout = await resolveLoadout(null, null, null);
+        const laneIdx = ai.laneIndex;
+        room.loadoutByLane[laneIdx] = loadout;
+        if (game.lanes[laneIdx]) {
+          const keys = loadout.map((ut) => ut.key);
+          game.lanes[laneIdx].autosend.loadoutKeys = keys;
+          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map((k) => [k, false]));
+        }
+      })
+    ).catch((err) => log.error("[loadout] ai pre-resolve error", { err: err.message }));
     io.to(roomId).emit("ml_loadout_phase_start", {
       code,
-      timeoutSeconds: 25,
+      timeoutSeconds: Math.ceil(loadoutTimeoutMs / 1000),
       selectionMode,
       availableUnits: buildAvailableUnits(),
     });
     if (selectionMode !== "random") {
-      await waitForLoadoutConfirms(room, roomId, 25_000);
+      await waitForLoadoutConfirms(room, roomId, loadoutTimeoutMs);
     }
     // ─────────────────────────────────────────────────────────────────────
 
-    if (!room.loadoutByLane) room.loadoutByLane = [];
     await Promise.all([
       ...room.players.map(async (sid) => {
         const sock = io.sockets.sockets.get(sid);
         if (!sock) return;
         const laneIdx = room.laneBySocketId.get(sid);
-        const loadout = await resolveLoadout(sock.playerId || null, sock.pendingLoadoutSlot, sock.pendingUnitTypeIds);
-        sock.pendingLoadoutSlot = null;
+        const loadout = await resolveLoadout(sock.playerId || null, sock.pendingUnitTypeIds);
         sock.pendingUnitTypeIds = null;
         room.loadoutByLane[laneIdx] = loadout;
         if (game.lanes[laneIdx]) {
@@ -492,16 +513,6 @@ function createMultilaneRuntime({
           }
         }
         sock.emit("ml_match_config", { loadout });
-      }),
-      ...aiList.map(async (ai) => {
-        const loadout = await resolveLoadout(null, null, null);
-        const laneIdx = ai.laneIndex;
-        room.loadoutByLane[laneIdx] = loadout;
-        if (game.lanes[laneIdx]) {
-          const keys = loadout.map((ut) => ut.key);
-          game.lanes[laneIdx].autosend.loadoutKeys = keys;
-          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map(k => [k, false]));
-        }
       }),
     ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
     // ticks begin only after all loadouts are resolved (await above ensures this)

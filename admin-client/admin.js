@@ -3688,7 +3688,10 @@ async function openUnitTypeModal(id) {
   }
 
   const v = (f, def = '') => ut ? (ut[f] ?? def) : def;
+  const rc = ut?.remote_content || {};
+  const rcv = (f, def = '') => rc ? (rc[f] ?? def) : def;
   const chk = (f) => ut ? (ut[f] ? 'checked' : '') : '';
+  const rcChk = (f, def = false) => rc ? (rc[f] ? 'checked' : '') : (def ? 'checked' : '');
 
   const sel = (f, opts) => `<select id="ut-${f}" style="width:100%">${
     opts.map(o => `<option value="${o}" ${v(f) === o ? 'selected' : ''}>${o}</option>`).join('')
@@ -3817,6 +3820,22 @@ async function openUnitTypeModal(id) {
       <div class="form-group"><label>Death</label>${inp('sound_death')}</div>
     </div>
 
+    <h4 style="margin:16px 0 8px">Remote Content Metadata</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="form-group"><label>Content Key</label><input id="ut-rc-content_key" type="text" value="${esc(String(rcv('content_key', v('key'))))}" style="width:100%"></div>
+      <div class="form-group"><label>Addressables Label</label><input id="ut-rc-addressables_label" type="text" value="${esc(String(rcv('addressables_label')))}" style="width:100%"></div>
+      <div class="form-group"><label>Prefab Address</label><input id="ut-rc-prefab_address" type="text" value="${esc(String(rcv('prefab_address')))}" style="width:100%"></div>
+      <div class="form-group"><label>Placeholder Key</label><input id="ut-rc-placeholder_key" type="text" value="${esc(String(rcv('placeholder_key')))}" style="width:100%"></div>
+      <div class="form-group"><label>Catalog URL</label><input id="ut-rc-catalog_url" type="text" value="${esc(String(rcv('catalog_url')))}" style="width:100%"></div>
+      <div class="form-group"><label>Content URL</label><input id="ut-rc-content_url" type="text" value="${esc(String(rcv('content_url')))}" style="width:100%"></div>
+      <div class="form-group"><label>Version Tag</label><input id="ut-rc-version_tag" type="text" value="${esc(String(rcv('version_tag', '1')))}" style="width:100%"></div>
+      <div class="form-group"><label>Content Hash</label><input id="ut-rc-content_hash" type="text" value="${esc(String(rcv('content_hash')))}" style="width:100%"></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Dependency Keys (comma-separated)</label><input id="ut-rc-dependency_keys" type="text" value="${esc((rcv('dependency_keys', []) || []).join(', '))}" style="width:100%"></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Metadata JSON</label><textarea id="ut-rc-metadata" rows="6" style="width:100%;font-family:monospace">${esc(JSON.stringify(rcv('metadata', {}), null, 2))}</textarea></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ut-rc-is_critical" ${rcChk('is_critical', true)}><label for="ut-rc-is_critical" style="margin:0">Gameplay Critical</label></div>
+      <div class="form-group" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ut-rc-enabled" ${rcChk('enabled', true)}><label for="ut-rc-enabled" style="margin:0">Remote Content Enabled</label></div>
+    </div>
+
     ${id != null ? `
       <h4 style="margin:16px 0 8px">Abilities</h4>
       <div>${abilityRows}</div>
@@ -3893,6 +3912,35 @@ function readUnitTypeForm() {
   };
 }
 
+function readUnitRemoteContentForm() {
+  const g = (id) => document.getElementById(id);
+  const dependencyKeys = (g('ut-rc-dependency_keys')?.value || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  const metadataText = g('ut-rc-metadata')?.value.trim() || '{}';
+  let metadata = {};
+  try {
+    metadata = metadataText ? JSON.parse(metadataText) : {};
+  } catch (err) {
+    throw new Error(`Metadata JSON is invalid: ${err.message}`);
+  }
+  return {
+    content_key: g('ut-rc-content_key')?.value.trim() || null,
+    addressables_label: g('ut-rc-addressables_label')?.value.trim() || null,
+    prefab_address: g('ut-rc-prefab_address')?.value.trim() || null,
+    placeholder_key: g('ut-rc-placeholder_key')?.value.trim() || null,
+    catalog_url: g('ut-rc-catalog_url')?.value.trim() || null,
+    content_url: g('ut-rc-content_url')?.value.trim() || null,
+    version_tag: g('ut-rc-version_tag')?.value.trim() || null,
+    content_hash: g('ut-rc-content_hash')?.value.trim() || null,
+    dependency_keys: dependencyKeys,
+    metadata,
+    is_critical: g('ut-rc-is_critical')?.checked ?? true,
+    enabled: g('ut-rc-enabled')?.checked ?? true,
+  };
+}
+
 async function uploadSelectedUnitAssets() {
   const assetFields = [
     { fileId: 'ut-icon_url-file', urlId: 'ut-icon_url', uploadOptions: { maxWidth: 256, maxHeight: 256, outputMimeType: 'image/png' } },
@@ -3918,12 +3966,19 @@ async function saveUnitType(id) {
   try {
     await uploadSelectedUnitAssets();
     const body = readUnitTypeForm();
+    const remoteContent = readUnitRemoteContentForm();
+    let savedUnitType = null;
     if (id != null) {
-      await api('PATCH', `/admin/unit-types/${id}`, body);
+      const result = await api('PATCH', `/admin/unit-types/${id}`, body);
+      savedUnitType = result.unitType || { id };
       toast('Unit type updated');
     } else {
-      await api('POST', '/admin/unit-types', body);
+      const result = await api('POST', '/admin/unit-types', body);
+      savedUnitType = result.unitType;
       toast('Unit type created');
+    }
+    if (savedUnitType?.id != null) {
+      await api('PUT', `/admin/unit-types/${savedUnitType.id}/content`, remoteContent);
     }
     document.getElementById('modal-overlay').classList.add('hidden');
     loadUnits();

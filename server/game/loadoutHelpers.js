@@ -29,23 +29,12 @@ function createLoadoutHelpers({ db, unitTypes }) {
     };
   }
 
-  async function resolveLoadout(playerId, loadoutSlot, inlineUnitTypeIds) {
+  async function resolveLoadout(_playerId, inlineUnitTypeIds) {
     const all = unitTypes.getAllUnitTypes();
     const byId = {};
     for (const ut of all) byId[ut.id] = ut;
 
     let ids = null;
-
-    if (Number.isInteger(loadoutSlot) && loadoutSlot >= 0 && loadoutSlot <= 3 && db && playerId) {
-      try {
-        const row = await db
-          .query("SELECT unit_type_ids FROM loadouts WHERE player_id = $1 AND slot = $2", [playerId, loadoutSlot])
-          .then((result) => result.rows[0]);
-        if (row) ids = row.unit_type_ids;
-      } catch {
-        // Fall through to guest/default loadout resolution.
-      }
-    }
 
     if (!ids && Array.isArray(inlineUnitTypeIds) && inlineUnitTypeIds.length === 5) {
       ids = inlineUnitTypeIds;
@@ -57,7 +46,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
     if (ids) {
       const resolved = ids
         .map((id) => byId[id])
-        .filter(isSendable);
+        .filter(isBuildable);
       if (resolved.length === 5) return resolved.map(loadoutEntry);
     }
 
@@ -79,7 +68,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
     const allowedIds = new Set(
       unitTypes
         .getAllUnitTypes()
-        .filter((ut) => ut.enabled && Number(ut.send_cost) > 0)
+        .filter((ut) => ut.enabled && Number(ut.send_cost) > 0 && Number(ut.build_cost) > 0 && Number(ut.range) > 0)
         .map((ut) => ut.id)
     );
     return unitTypeIds.every((id) => {
@@ -88,15 +77,9 @@ function createLoadoutHelpers({ db, unitTypes }) {
     });
   }
 
-  function validateLoadoutSelection(socket, loadoutSlot, unitTypeIds) {
-    // null/undefined = use default loadout (guests + players who skip loadout step)
-    if (loadoutSlot == null) return true;
-    const validSlot = Number.isInteger(loadoutSlot) && loadoutSlot >= 0 && loadoutSlot <= 3;
-    if (!validSlot) {
-      socket.emit("error_message", { message: "Invalid loadout slot." });
-      return false;
-    }
-    // Guests without a saved/inline loadout are allowed — resolveLoadout falls back to defaults.
+  function validateLoadoutSelection(_socket, _loadoutSlot, _unitTypeIds) {
+    // Saved preset loadout slots are deprecated. Keep accepting legacy payloads
+    // so older clients do not fail validation, but ignore loadoutSlot entirely.
     return true;
   }
 

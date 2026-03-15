@@ -711,7 +711,6 @@ function registerSocketHandlers({
         if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
         const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
         const normalizedSettings = normalizeMatchSettings(settings);
-        socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
         socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
         const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
         const room = mlRoomsByCode.get(code);
@@ -749,7 +748,6 @@ function registerSocketHandlers({
           const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
           const room = mlRoomsByCode.get(code);
           room.pvpMode = pvpMode === "ffa" ? "ffa" : "2v2";
-          socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
           socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
           sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
           socket.join(roomId);
@@ -770,7 +768,6 @@ function registerSocketHandlers({
           const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
           room.playerNames.set(socket.id, playerDisplayName);
           if (room.aiPlayers) room.aiPlayers.forEach((ai, idx) => { ai.laneIndex = room.players.length + idx; });
-          socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
           socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
           sessionBySocketId.set(socket.id, { code: privateCode, roomId: room.roomId, laneIndex, mode: "multilane" });
           socket.join(room.roomId);
@@ -857,7 +854,6 @@ function registerSocketHandlers({
           party.status = "queued";
           party.queueMode = queueMode;
           party.queueEnteredAt = Date.now();
-          socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
           socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
 
           matchmaker.addToQueue(partyId, {
@@ -978,7 +974,6 @@ function registerSocketHandlers({
           party.status = "queued";
           party.queueMode = matchmaker.makeBucketKey(gameType, matchFormat, isRanked);
           party.queueEnteredAt = Date.now();
-          socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
           socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
 
           matchmaker.addToQueue(partyId, {
@@ -1008,7 +1003,6 @@ function registerSocketHandlers({
         return socket.emit("error_message", { message: "Private lobbies are currently disabled." });
       if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
       const lobbyName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
-      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
 
       const existingLobby = matchmaker.getLobbyForSocket(socket.id);
@@ -1041,7 +1035,6 @@ function registerSocketHandlers({
       const normalizedCode = String(code || "").trim().toUpperCase();
       if (normalizedCode.length !== 6) return socket.emit("lobby_error", { message: "Invalid lobby code." });
       const lobbyName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
-      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
 
       const existingLobby = matchmaker.getLobbyForSocket(socket.id);
@@ -1169,7 +1162,6 @@ function registerSocketHandlers({
       if (launchErr) return socket.emit("lobby_error", { message: launchErr });
 
       launchLobby.status = "starting";
-      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : socket.pendingLoadoutSlot;
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : socket.pendingUnitTypeIds;
 
       const hostName = sanitizeDisplayName(launchLobby.members.get(socket.id)?.name || "Player");
@@ -1240,7 +1232,6 @@ function registerSocketHandlers({
       if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
       const normalizedSettings = normalizeMatchSettings(settings);
       const { code, roomId } = createMLRoom(socket.id, displayName, normalizedSettings);
-      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
       sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
       socket.join(roomId);
@@ -1275,7 +1266,6 @@ function registerSocketHandlers({
       room.playerTeamsBySocketId.set(socket.id, assignedTeam);
       room.playerNames.set(socket.id, sanitizeDisplayName(displayName));
       if (room.aiPlayers) room.aiPlayers.forEach((ai, idx) => { ai.laneIndex = room.players.length + idx; });
-      socket.pendingLoadoutSlot = Number.isInteger(loadoutSlot) ? loadoutSlot : null;
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
       sessionBySocketId.set(socket.id, { code: normalized, roomId: room.roomId, laneIndex, mode: "multilane" });
       socket.join(room.roomId);
@@ -1491,7 +1481,40 @@ function registerSocketHandlers({
     });
     // ─────────────────────────────────────────────────────────────────────
 
-    socket.on("player_action", ({ type, data }) => {
+    socket.on("player_action", (rawPayload) => {
+      let payload = rawPayload;
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          payload = null;
+        }
+      }
+
+      const type = typeof payload?.type === "string" ? payload.type : null;
+      const data =
+        payload && typeof payload === "object"
+          ? (payload.data && typeof payload.data === "object" ? payload.data : payload)
+          : null;
+
+      if (typeof type !== "string") {
+        let preview = null;
+        try {
+          preview = typeof rawPayload === "string"
+            ? rawPayload
+            : JSON.stringify(rawPayload);
+        } catch {
+          preview = "[unserializable]";
+        }
+        log.warn("[player_action] invalid payload shape", {
+          socketId: socket.id,
+          mode: sessionBySocketId.get(socket.id)?.mode || null,
+          rawType: typeof rawPayload,
+          normalizedType: type,
+          preview,
+        });
+      }
+
       if (!checkActionRateLimit(socket.id)) {
         socket.emit("error_message", { message: "Action rate limit exceeded." });
         return;
@@ -1510,7 +1533,16 @@ function registerSocketHandlers({
         if (!lane) return socket.emit("error_message", { message: "Lane not found" });
         if (lane.eliminated) return socket.emit("error_message", { message: "You have been eliminated." });
         const result = applyMultilaneAction(entry, session.laneIndex, { type, data });
-        if (!result.ok) return socket.emit("error_message", { message: result.reason || "Action rejected" });
+        if (!result.ok) {
+          log.warn("[player_action] rejected", {
+            socketId: socket.id,
+            laneIndex: session.laneIndex,
+            type,
+            reason: result.reason || "Action rejected",
+            data,
+          });
+          return socket.emit("error_message", { message: result.reason || "Action rejected" });
+        }
         socket.emit("action_applied", {
           type,
           laneIndex: session.laneIndex,
@@ -1525,7 +1557,15 @@ function registerSocketHandlers({
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
       const room = mlRoomsByCode.get(session.code);
-      if (!room || gamesByRoomId.has(room.roomId)) return;
+      if (!room) return;
+      const activeEntry = gamesByRoomId.get(room.roomId);
+      if (activeEntry) {
+        if (activeEntry.game && activeEntry.game.phase === "ended") {
+          stopMLGame(room.roomId, session.code);
+        } else {
+          return;
+        }
+      }
       if (!room.rematchVotes) room.rematchVotes = new Set();
       if (room.rematchVotes.has(socket.id)) return;
       room.rematchVotes.add(socket.id);

@@ -3,6 +3,7 @@
 const express      = require('express');
 const router       = express.Router();
 const { requireAuth } = require('../middleware/auth');
+const { formatPublicSkin } = require('../remoteContent');
 
 const db  = process.env.DATABASE_URL ? require('../db') : null;
 const log = require('../logger');
@@ -14,10 +15,31 @@ router.get('/', async (req, res) => {
   if (!db) return res.json({ catalog: [], owned: [], equipped: {} });
   try {
     const catalogQ = await db.query(
-      `SELECT skin_key, unit_type, name, description, price, currency, preview_url
-       FROM skin_catalog WHERE enabled = true ORDER BY unit_type, name`
+      `SELECT s.skin_key, s.unit_type, s.name, s.description, s.price, s.currency, s.preview_url,
+              CASE
+                WHEN scm.id IS NULL THEN NULL
+                ELSE json_build_object(
+                  'id', scm.id,
+                  'content_key', scm.content_key,
+                  'addressables_label', scm.addressables_label,
+                  'prefab_address', scm.prefab_address,
+                  'placeholder_key', scm.placeholder_key,
+                  'catalog_url', scm.catalog_url,
+                  'content_url', scm.content_url,
+                  'version_tag', scm.version_tag,
+                  'content_hash', scm.content_hash,
+                  'dependency_keys', scm.dependency_keys,
+                  'metadata', scm.metadata,
+                  'is_critical', scm.is_critical,
+                  'enabled', scm.enabled
+                )
+              END AS remote_content
+         FROM skin_catalog s
+         LEFT JOIN skin_content_metadata scm ON scm.skin_catalog_id = s.id
+        WHERE s.enabled = true
+        ORDER BY s.unit_type, s.name`
     );
-    const catalog = catalogQ.rows;
+    const catalog = catalogQ.rows.map((row) => formatPublicSkin(row));
 
     let owned   = [];
     let equipped = {};

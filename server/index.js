@@ -17,6 +17,7 @@ const gameConfig = require("./gameConfig");
 const log = require("./logger");
 const matchmaker = require("./services/matchQueueManager");
 const simMl = require("./sim-multilane");
+const { buildContentManifest, formatPublicUnitType } = require("./remoteContent");
 const unitTypes = require("./unitTypes");
 const { stringToSeed } = require("./sim-core");
 const { createLoadoutHelpers } = require("./game/loadoutHelpers");
@@ -191,6 +192,9 @@ app.get("/config", async (_req, res) => {
   });
 });
 
+// Legacy compatibility endpoint. The current Unity client no longer fetches
+// tower catalog data at startup, but we are keeping this route for future
+// base/camp work and any older tools that still expect it.
 app.get("/api/towers", async (_req, res) => {
   if (!db) return res.json({ towers: [] });
   try {
@@ -214,7 +218,10 @@ app.get("/api/towers", async (_req, res) => {
 });
 
 app.get("/api/unit-types", async (_req, res) => {
-  const all = unitTypes.getAllUnitTypes().filter((ut) => ut.enabled && ut.display_to_players !== false);
+  const all = unitTypes
+    .getAllUnitTypes()
+    .filter((ut) => ut.enabled && ut.display_to_players !== false)
+    .map((ut) => formatPublicUnitType(ut));
   let displayFields = null;
   if (db) {
     try {
@@ -225,6 +232,48 @@ app.get("/api/unit-types", async (_req, res) => {
     }
   }
   res.json({ unitTypes: all, displayFields });
+});
+
+app.get("/api/content-manifest", async (_req, res) => {
+  const allUnitTypes = unitTypes
+    .getAllUnitTypes()
+    .filter((ut) => ut.enabled && ut.display_to_players !== false);
+  let skins = [];
+
+  if (db) {
+    try {
+      const result = await db.query(
+        `SELECT s.skin_key, s.unit_type, s.name, s.enabled,
+                CASE
+                  WHEN scm.id IS NULL THEN NULL
+                  ELSE json_build_object(
+                    'id', scm.id,
+                    'content_key', scm.content_key,
+                    'addressables_label', scm.addressables_label,
+                    'prefab_address', scm.prefab_address,
+                    'placeholder_key', scm.placeholder_key,
+                    'catalog_url', scm.catalog_url,
+                    'content_url', scm.content_url,
+                    'version_tag', scm.version_tag,
+                    'content_hash', scm.content_hash,
+                    'dependency_keys', scm.dependency_keys,
+                    'metadata', scm.metadata,
+                    'is_critical', scm.is_critical,
+                    'enabled', scm.enabled
+                  )
+                END AS remote_content
+           FROM skin_catalog s
+           LEFT JOIN skin_content_metadata scm ON scm.skin_catalog_id = s.id
+          WHERE s.enabled = true
+          ORDER BY s.unit_type, s.name`
+      );
+      skins = result.rows;
+    } catch (err) {
+      log.error("[api] GET /api/content-manifest skins query error", { err: err.message });
+    }
+  }
+
+  res.json(buildContentManifest({ unitTypes: allUnitTypes, skins }));
 });
 
 app.get("/api/barracks-levels", async (_req, res) => {
@@ -261,6 +310,11 @@ const adminAssetDirCandidates = [
   path.join(__dirname, "client_backup_20260306_233552", "assets"),
 ];
 
+const unityAddressablesDirCandidates = [
+  path.join(__dirname, "..", "unity-client", "ServerData"),
+  path.join(__dirname, "unity-client", "ServerData"),
+];
+
 // Unity WebGL build is served from the dedicated Unity client path.
 const unityClientDir =
   unityClientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "index.html"))) ||
@@ -276,6 +330,11 @@ const adminAssetDir =
   adminAssetDirCandidates.find((dir) => fs.existsSync(dir)) ||
   adminAssetDirCandidates[0];
 log.info("admin asset dir", { adminAssetDir });
+
+const unityAddressablesDir =
+  unityAddressablesDirCandidates.find((dir) => fs.existsSync(dir)) ||
+  unityAddressablesDirCandidates[0];
+log.info("unity addressables dir", { unityAddressablesDir });
 
 // Unity WebGL Brotli middleware — must run BEFORE express.static.
 // Unity builds output .js.br / .wasm.br / .data.br files that need
@@ -311,6 +370,7 @@ function unityWebGLMiddleware(baseDir) {
 
 app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
+app.use("/addressables", express.static(unityAddressablesDir, { index: false }));
 app.use("/assets", express.static(adminAssetDir, { index: false }));
 
 function sendUnityClientFile(res, filename) {

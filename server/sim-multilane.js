@@ -53,12 +53,11 @@ const SPLASH_RADIUS_TILES = 1.5;
 const SEND_INTERVAL_TICKS = 5;     // ticks between send-queue drains (0.25s at 20Hz)
 const QUEUE_CAP = 200;             // max units in send queue per lane
 const MIN_UNIT_SPACING = 0.8;      // minimum pathIdx gap enforced by applySeparation
-const MAX_ATTACKERS_PER_DEFENDER = 4; // max wave units that lock onto the same defender tile
 const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 
 // Mobile defender constants
 const DEFENDER_BASE_SPEED   = 0.15;
-const ATTACKER_ENGAGE_RANGE = 6.0;    // how far attackers look for mobile defenders
+const ENGAGEMENT_RANGE_PADDING = 2.0; // extra leash beyond attack range before a unit opens fire
 const MERGE_STAGING_COLS    = [2, 4, 5, 6, 8];
 const SEP_DAMP              = 0.35;
 const SEP_MAX_PUSH          = 0.10;
@@ -988,6 +987,27 @@ function getUnitAttackRange(typeKey) {
   return 1.5;  // melee default
 }
 
+function getUnitEngagementRange(typeKey) {
+  // Engagement and attack are intentionally separate:
+  // units should commit to nearby defenders well before they are in attack range,
+  // and the leash is large enough to cover the full active combat zone.
+  return Math.max(getUnitAttackRange(typeKey) + ENGAGEMENT_RANGE_PADDING, GRID_H);
+}
+
+function isSplitZoneUnit(unit) {
+  return Number(unit.posY) < GRID_H;
+}
+
+function isMergeZoneUnit(unit) {
+  return !isSplitZoneUnit(unit);
+}
+
+function canEngageDefenderInZone(attacker, defender) {
+  if (!defender || !defender.isDefender || defender.hp <= 0) return false;
+  if (isSplitZoneUnit(attacker)) return defender.defState === "split_guard";
+  return defender.defState === "merge_guard";
+}
+
 function _doAttack(game, lane, attacker, target) {
   const stats    = getTowerStats(attacker.type, 1);
   const uDef     = resolveUnitDef(attacker.type);
@@ -1527,22 +1547,19 @@ function mlTick(game) {
       // Validate stale target
       if (u.combatTarget && u.combatTarget.unitId) {
         const t = lane.units.find(x => x.id === u.combatTarget.unitId && x.hp > 0);
-        if (!t) u.combatTarget = null;
+        if (!t || !canEngageDefenderInZone(u, t)) u.combatTarget = null;
       }
 
-      // Acquire target: nearest mobile defender within ATTACKER_ENGAGE_RANGE
+      // Acquire target: nearest mobile defender in the same combat zone within engagement range.
+      // Do not cap attackers per defender: if a defender is alive, wave units should commit
+      // instead of pathing past it toward the castle.
       if (!u.combatTarget) {
-        const occupancy = {};
-        for (const ou of lane.units) {
-          if (ou.isWaveUnit && ou.hp > 0 && ou.combatTarget && ou.combatTarget.unitId)
-            occupancy[ou.combatTarget.unitId] = (occupancy[ou.combatTarget.unitId] || 0) + 1;
-        }
+        const engageRange = getUnitEngagementRange(u.type);
         let best = null, bestDist = Infinity;
         for (const du of lane.units) {
-          if (!du.isDefender || du.hp <= 0) continue;
+          if (!canEngageDefenderInZone(u, du)) continue;
           const dd = dist2D(u, du);
-          if (dd > ATTACKER_ENGAGE_RANGE) continue;
-          if ((occupancy[du.id] || 0) >= MAX_ATTACKERS_PER_DEFENDER) continue;
+          if (dd > engageRange) continue;
           if (dd < bestDist) { bestDist = dd; best = du; }
         }
         if (best) u.combatTarget = { unitId: best.id };
