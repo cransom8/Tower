@@ -137,10 +137,14 @@ app.use((req, res, next) => {
   const isUnityDocument = req.path === "/" || req.path === "/index.html";
   const isUnityAsset    = req.path.startsWith("/client") || req.path.startsWith("/Build/") || req.path.startsWith("/TemplateData/");
   const isUnityClient   = isUnityDocument || isUnityAsset;
+  const gcsCdnHost = process.env.BUILD_CDN_URL || process.env.ADDRESSABLES_CDN_URL
+    ? new URL((process.env.BUILD_CDN_URL || process.env.ADDRESSABLES_CDN_URL)).origin
+    : null;
+  const gcsCdnSrc = gcsCdnHost ? ` ${gcsCdnHost}` : "";
   const scriptSrc = isAdminDocument
     ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
     : isUnityClient
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://accounts.google.com https://cdn.socket.io; "
+    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `
     : "script-src 'self' https://accounts.google.com https://cdn.socket.io; ";
 
   if (isAdminDocument) {
@@ -154,10 +158,6 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   const hstsTtl = process.env.NODE_ENV === "production" ? 31536000 : 3600;
   res.setHeader("Strict-Transport-Security", `max-age=${hstsTtl}; includeSubDomains; preload`);
-  const gcsCdnHost = process.env.ADDRESSABLES_CDN_URL
-    ? new URL(process.env.ADDRESSABLES_CDN_URL).origin
-    : null;
-  const gcsCdnSrc = gcsCdnHost ? ` ${gcsCdnHost}` : "";
   const connectSrc = isUnityClient
     ? `connect-src 'self' wss: ws: blob: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `
     : `connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `;
