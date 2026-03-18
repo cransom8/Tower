@@ -368,6 +368,15 @@ app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityCli
 if (process.env.ADDRESSABLES_CDN_URL) {
   const cdnBase = process.env.ADDRESSABLES_CDN_URL.replace(/\/$/, "");
   log.info("addressables served from CDN", { cdnBase });
+  // Handle CORS preflight explicitly — browsers cannot follow redirects for OPTIONS
+  // requests, so the redirect approach fails at the preflight stage. Return CORS headers
+  // directly here; the GCS bucket handles CORS on the actual GET response.
+  app.options("/addressables/*", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Max-Age", "86400");
+    res.status(204).end();
+  });
   app.use("/addressables", (req, res) => {
     res.redirect(302, `${cdnBase}${req.path}`);
   });
