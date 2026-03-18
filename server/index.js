@@ -521,8 +521,32 @@ app.get("/", (_req, res) => {
     .find((p) => fs.existsSync(p));
   if (!candidate) return res.status(404).json({ error: "index.html not found" });
   const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
-  const html = fs.readFileSync(candidate, "utf8")
+  let html = fs.readFileSync(candidate, "utf8")
     .replace(/var buildUrl = "Build"/, `var buildUrl = "${buildCdnBase}/Build"`);
+
+  // If addressables are on a CDN, inject a script that rewrites XHR/fetch requests
+  // from the app server path to the CDN directly — before Unity loads. This avoids
+  // CORS preflight redirect failures (browsers cannot follow redirects for OPTIONS).
+  if (process.env.ADDRESSABLES_CDN_URL) {
+    const addrCdn = process.env.ADDRESSABLES_CDN_URL.replace(/\/$/, "");
+    const shim = `<script>
+(function(){
+  var CDN="${addrCdn}";
+  function rw(u){
+    if(typeof u!=="string")return u;
+    var prefix=window.location.origin+"/addressables";
+    if(u.indexOf(prefix)===0)return CDN+u.slice(prefix.length);
+    return u;
+  }
+  var xo=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){arguments[1]=rw(u);return xo.apply(this,arguments);};
+  var fo=window.fetch;
+  window.fetch=function(u,o){return fo.call(this,rw(u),o);};
+})();
+</script>`;
+    html = html.replace("</head>", shim + "</head>");
+  }
+
   res.setHeader("Content-Type", "text/html");
   res.send(html);
 });
