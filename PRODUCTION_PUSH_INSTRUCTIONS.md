@@ -54,6 +54,18 @@ What that script does:
 
 This means the production web client is not deployed from the Unity repo directly. It becomes production by being copied into the server repo and then pushed from the server repo.
 
+Important:
+
+- The production `Build/*` payload is now served from GCS when `BUILD_CDN_URL` is set.
+- Uploading `server/client/Build` with a plain `gcloud storage rsync` is not sufficient for Brotli builds, because the `.br` files must be served with `Content-Encoding: br`.
+- Use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\upload-build.ps1
+```
+
+- That script uploads the build files and sets the correct `Content-Type`, `Content-Encoding`, and `Cache-Control` metadata on GCS.
+
 ## How the server serves the Unity client
 
 The production server resolves its Unity client from:
@@ -63,7 +75,8 @@ The production server resolves its Unity client from:
 Relevant behavior:
 
 - It prefers `server/client` as the Unity client directory.
-- It serves `/`, `/Build/*`, `/TemplateData/*`, and `/client/*` from that Unity build output.
+- It serves `/`, `/Build/*`, `/TemplateData/*`, and `/client/*` from that Unity build output when `BUILD_CDN_URL` is not set.
+- When `BUILD_CDN_URL` is set, `/` rewrites Unity's `buildUrl` to the GCS-hosted `Build` path instead.
 - It sets the correct headers for Unity Brotli WebGL files like:
   - `.framework.js.unityweb`
   - `.wasm.unityweb`
@@ -78,11 +91,18 @@ Relevant behavior:
 4. Verify the server repo's Unity client output changed:
    - `C:\Users\Crans\RansomForge\castle-defender\server\client`
    - Especially `index.html`, `Build`, and `TemplateData`
-5. In `C:\Users\Crans\RansomForge\castle-defender`, review git status.
-6. Commit the server repo changes, including refreshed `server/client` assets.
-7. Push `main` to `origin`.
-8. Railway redeploys the app from the pushed server repo.
-9. Verify on `https://app.ransomforge.com`.
+5. Upload the GCS-served WebGL build with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\upload-build.ps1
+```
+
+6. Upload refreshed addressables to GCS.
+7. In `C:\Users\Crans\RansomForge\castle-defender`, review git status.
+8. Commit the server repo changes that are still tracked locally, such as refreshed streaming-addressables metadata.
+9. Push `main` to `origin`.
+10. Railway redeploys the app from the pushed server repo.
+11. Verify on `https://app.ransomforge.com`.
 
 ## Commands to use after build completes
 
