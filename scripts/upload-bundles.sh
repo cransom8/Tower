@@ -6,8 +6,8 @@
 # Run this after every Unity Addressables build (when ServerData/WebGL/ changes).
 #
 # GCS layout:
-#   addressables/catalog.bin, catalog.hash, settings.json  (catalogs — no-cache)
-#   addressables/WebGL/*.bundle                            (bundles — Unity appends /WebGL/ to RemoteLoadPath)
+#   addressables/WebGL/catalog.bin, catalog.hash, settings.json  (catalogs — Unity appends /WebGL/ to RemoteLoadPath)
+#   addressables/WebGL/*.bundle                                   (bundles — same /WebGL/ prefix)
 
 set -euo pipefail
 
@@ -23,16 +23,17 @@ fi
 
 GSUTIL_CMD="${GSUTIL_CMD:-gsutil}"
 
-echo "==> Uploading catalog and settings to gs://$BUCKET/addressables/"
+echo "==> Uploading catalog and settings to gs://$BUCKET/addressables/WebGL/"
 echo "    Source: $SERVERDATA_DIR/{catalog.*,settings.json}"
 echo ""
 
-# Upload catalogs and settings to the root of addressables/ (no WebGL/ prefix).
+# Upload catalogs and settings to addressables/WebGL/ — Unity appends /WebGL/ to
+# RemoteLoadPath for EVERYTHING including catalog URLs (see settings.json).
 for f in catalog.bin catalog.hash catalog_1.0.bin catalog_1.0.hash settings.json; do
   src="$SERVERDATA_DIR/$f"
   if [ -f "$src" ]; then
-    "$GSUTIL_CMD" cp "$src" "gs://$BUCKET/addressables/$f"
-    "$GSUTIL_CMD" setmeta -h "Cache-Control:public, max-age=0, must-revalidate" "gs://$BUCKET/addressables/$f" 2>/dev/null || true
+    "$GSUTIL_CMD" cp "$src" "gs://$BUCKET/addressables/WebGL/$f"
+    "$GSUTIL_CMD" setmeta -h "Cache-Control:public, max-age=0, must-revalidate" "gs://$BUCKET/addressables/WebGL/$f" 2>/dev/null || true
   fi
 done
 
@@ -47,5 +48,5 @@ echo ""
 
 echo ""
 echo "==> Upload complete!"
-echo "    Catalogs : https://storage.googleapis.com/$BUCKET/addressables/"
+echo "    Catalogs : https://storage.googleapis.com/$BUCKET/addressables/WebGL/"
 echo "    Bundles  : https://storage.googleapis.com/$BUCKET/addressables/WebGL/"
