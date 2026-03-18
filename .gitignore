@@ -16,8 +16,7 @@ unity-client/*.slnx
 # Railway / deploy artifacts
 app.ransomforge.com
 
-# server/client/ is a redundant copy of client/ -- server resolves ../client directly
-server/client/
+# server/client_backup dirs are large and not needed in git
 server/client_backup_*/
 
 # Untracked asset directories (large binary files)
