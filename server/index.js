@@ -371,32 +371,35 @@ if (process.env.ADDRESSABLES_CDN_URL) {
   // Proxy GCS responses directly — redirecting to GCS causes CORS failures because
   // Unity WebGL's internal XHR wrapper does not trigger standard browser CORS redirect
   // handling. By proxying, the browser sees everything as same-origin (no CORS needed).
-  app.use("/addressables", async (req, res) => {
+  const https = require("https");
+  const cdnUrl = new URL(cdnBase + "/");
+  app.use("/addressables", (req, res) => {
     if (req.method === "OPTIONS") {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       res.setHeader("Access-Control-Max-Age", "86400");
       return res.status(204).end();
     }
-    const upstreamUrl = `${cdnBase}${req.path}`;
-    try {
-      const upstream = await fetch(upstreamUrl, { method: req.method });
-      if (!upstream.ok) {
-        return res.status(upstream.status).end();
+    // Disable socket timeouts so large bundles (50-100MB) aren't cut mid-stream
+    req.socket.setTimeout(0);
+    res.socket && res.socket.setTimeout(0);
+    const upstreamPath = cdnUrl.pathname.replace(/\/$/, "") + req.path;
+    const proxyReq = https.request(
+      { hostname: cdnUrl.hostname, path: upstreamPath, method: req.method },
+      (proxyRes) => {
+        const fwd = ["content-type", "content-length", "content-encoding", "cache-control", "etag", "last-modified", "accept-ranges"];
+        for (const h of fwd) {
+          if (proxyRes.headers[h]) res.setHeader(h, proxyRes.headers[h]);
+        }
+        res.status(proxyRes.statusCode);
+        proxyRes.pipe(res);
       }
-      // Forward relevant headers
-      const fwd = ["content-type", "content-length", "content-encoding", "cache-control", "etag", "last-modified"];
-      for (const h of fwd) {
-        const v = upstream.headers.get(h);
-        if (v) res.setHeader(h, v);
-      }
-      res.status(upstream.status);
-      const { Readable } = require("stream");
-      Readable.fromWeb(upstream.body).pipe(res);
-    } catch (err) {
-      log.error("addressables proxy error", { upstreamUrl, err: err.message });
-      res.status(502).end();
-    }
+    );
+    proxyReq.on("error", (err) => {
+      log.error("addressables proxy error", { path: req.path, err: err.message });
+      if (!res.headersSent) res.status(502).end();
+    });
+    proxyReq.end();
   });
 } else {
   log.info("addressables served from local filesystem", { unityAddressablesDir });
