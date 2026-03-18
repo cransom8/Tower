@@ -363,6 +363,13 @@ function unityWebGLMiddleware(baseDir) {
   };
 }
 
+if (process.env.BUILD_CDN_URL) {
+  const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
+  log.info("WebGL build files served from CDN", { buildCdnBase });
+  app.use("/Build", (req, res) => {
+    res.redirect(302, `${buildCdnBase}/Build${req.path}`);
+  });
+}
 app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 if (process.env.ADDRESSABLES_CDN_URL) {

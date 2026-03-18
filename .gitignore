@@ -19,6 +19,9 @@ app.ransomforge.com
 # server/client_backup dirs are large and not needed in git
 server/client_backup_*/
 
+# WebGL build files served from GCS (too large for git)
+server/client/Build/
+
 # Untracked asset directories (large binary files)
 client/assets/
 
