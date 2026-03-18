@@ -363,13 +363,6 @@ function unityWebGLMiddleware(baseDir) {
   };
 }
 
-if (process.env.BUILD_CDN_URL) {
-  const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
-  log.info("WebGL build files served from CDN", { buildCdnBase });
-  app.use("/Build", (req, res) => {
-    res.redirect(302, `${buildCdnBase}/Build${req.path}`);
-  });
-}
 app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 if (process.env.ADDRESSABLES_CDN_URL) {
@@ -512,7 +505,18 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
   return true;
 };
 
-app.get("/", (_req, res) => sendUnityClientFile(res, "index.html"));
+app.get("/", (_req, res) => {
+  if (!process.env.BUILD_CDN_URL) return sendUnityClientFile(res, "index.html");
+  const candidate = [unityClientDir, ...unityClientDirCandidates]
+    .map((dir) => path.join(dir, "index.html"))
+    .find((p) => fs.existsSync(p));
+  if (!candidate) return res.status(404).json({ error: "index.html not found" });
+  const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
+  const html = fs.readFileSync(candidate, "utf8")
+    .replace(/var buildUrl = "Build"/, `var buildUrl = "${buildCdnBase}/Build"`);
+  res.setHeader("Content-Type", "text/html");
+  res.send(html);
+});
 app.get("/admin", (_req, res) => sendAdminClientFile(res, "admin.html"));
 app.get("/admin.html", (_req, res) => sendAdminClientFile(res, "admin.html"));
 app.get("/admin.css", (_req, res) => sendAdminClientFile(res, "admin.css"));
