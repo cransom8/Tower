@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Units 10
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Units 10
+  m_GUID: 9f1ceac5ef8e3d24ea8b0993c98945f0
+  m_SerializeEntries:
+  - m_GUID: cb199b960f13ee642b6305dfba722e8b
+    m_Address: units/fantasy_wolf
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - fantasy_wolf
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: cbe72ca99324f91409be40862ffc0f19
+    m_Address: units/wyvern
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - unit
+    - wyvern
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 2da6b84b257adff43b4adc3bdaaebcfb, type: 2}
+    - {fileID: 11400000, guid: 35133f61cb05cce44b22e59345598266, type: 2}

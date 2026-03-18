@@ -1,0 +1,11 @@
+.git/
+.env
+node_modules/
+unity-client/
+*.log
+*.md
+.gitignore
+.gitattributes
+scripts/
+railway.json
+Dockerfile

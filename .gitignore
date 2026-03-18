@@ -1,0 +1,43 @@
+node_modules/
+.env
+
+# Log files
+*.log
+
+# Unity generated folders and local IDE files
+unity-client/Library/
+unity-client/Temp/
+unity-client/UserSettings/
+unity-client/.vscode/
+unity-client/*.csproj
+unity-client/*.sln
+unity-client/*.slnx
+
+# Railway / deploy artifacts
+app.ransomforge.com
+
+# server/client/ is a redundant copy of client/ -- server resolves ../client directly
+server/client/
+server/client_backup_*/
+
+# Untracked asset directories (large binary files)
+client/assets/
+
+# Third-party Unity asset packs (re-download from Unity Asset Store)
+unity-client/Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/
+unity-client/Assets/Dimensional-3D-Design/
+unity-client/Assets/ToonyTinyPeople/
+
+# Addressable bundles live in GCS, not git
+unity-client/ServerData/WebGL/**/*.bundle
+unity-client/ServerData/**/*.bundle
+
+# Local analysis/export scratch files
+current_hfc_assets.txt
+used_assets_block.txt
+
+# Plan-marked removable test assets
+unity-client/Assets/Resources/PerformanceTestRunInfo.json
+unity-client/Assets/Resources/PerformanceTestRunInfo.json.meta
+unity-client/Assets/Resources/PerformanceTestRunSettings.json
+unity-client/Assets/Resources/PerformanceTestRunSettings.json.meta

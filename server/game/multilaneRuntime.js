@@ -1,0 +1,874 @@
+"use strict";
+
+async function loadDefaultWaveConfig(db) {
+  if (!db) return [];
+  try {
+    const cr = await db.query(`SELECT id FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`);
+    if (!cr.rows[0]) return [];
+    const wr = await db.query(
+      `SELECT wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult
+       FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`,
+      [cr.rows[0].id]
+    );
+    return wr.rows;
+  } catch {
+    return [];
+  }
+}
+
+function createMultilaneRuntime({
+  aiRuntime,
+  db,
+  getAllUnitTypes,
+  disconnectGrace,
+  generateCode,
+  gamesByRoomId,
+  io,
+  issueReconnectToken,
+  log,
+  logMatchEnd,
+  logMatchStart,
+  mlRoomsByCode,
+  normalizeMatchSettings,
+  ratingService,
+  resolveLoadout,
+  sanitizeDisplayName,
+  seasonService,
+  sessionBySocketId,
+  simMl,
+  socketByPlayerId,
+  stringToSeed,
+  RECONNECT_GRACE_MS,
+}) {
+  function createMLRoom(hostSocketId, displayName, settings) {
+    let code;
+    do code = generateCode(6);
+    while (mlRoomsByCode.has(code));
+
+    const roomId = `mlroom_${code}`;
+    const room = {
+      roomId,
+      players: [hostSocketId],
+      laneBySocketId: new Map([[hostSocketId, 0]]),
+      playerTeamsBySocketId: new Map([[hostSocketId, "red"]]),
+      readySet: new Set(),
+      playerNames: new Map([[hostSocketId, sanitizeDisplayName(displayName)]]),
+      createdAt: Date.now(),
+      mode: "multilane",
+      hostSocketId,
+      aiPlayers: [],
+      settings: normalizeMatchSettings(settings),
+    };
+    mlRoomsByCode.set(code, room);
+    return { code, roomId };
+  }
+
+  function countMlTeams(room) {
+    const counts = { red: 0, blue: 0 };
+    for (const sid of room.players || []) {
+      const team = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
+      counts[team] += 1;
+    }
+    for (const ai of room.aiPlayers || []) {
+      const team = ai.team === "blue" ? "blue" : "red";
+      counts[team] += 1;
+    }
+    return counts;
+  }
+
+  function pickBalancedMlTeam(room) {
+    const counts = countMlTeams(room);
+    return counts.red <= counts.blue ? "red" : "blue";
+  }
+
+  const FFA_TEAMS = ["red", "blue", "green", "purple"];
+
+  function ffaTeamForLane(laneIndex) {
+    return FFA_TEAMS[laneIndex] || `p${laneIndex}`;
+  }
+
+  function validateMlTeamSetup(room) {
+    if (room.pvpMode === "ffa") return { ok: true };
+    const total = (room.players?.length || 0) + (room.aiPlayers?.length || 0);
+    if (total !== 4) return { ok: true };
+    const counts = countMlTeams(room);
+    if (counts.red !== 2 || counts.blue !== 2) {
+      return { ok: false, reason: "For 4-player matches, assign exactly 2 Red and 2 Blue before starting." };
+    }
+    return { ok: true };
+  }
+
+  function capFirst(value) {
+    return String(value || "").charAt(0).toUpperCase() + String(value || "").slice(1);
+  }
+
+  function buildRematchStatus(room) {
+    const votes = room && room.rematchVotes ? Array.from(room.rematchVotes) : [];
+    const acceptedLaneIndices = votes
+      .map((sid) => room.laneBySocketId.get(sid))
+      .filter((laneIndex) => Number.isInteger(laneIndex))
+      .sort((a, b) => a - b);
+    const acceptedDisplayNames = acceptedLaneIndices.map((laneIndex) => {
+      const sid = room.players.find((playerSid) => room.laneBySocketId.get(playerSid) === laneIndex);
+      return sid ? (room.playerNames.get(sid) || "Player") : `Lane ${laneIndex + 1}`;
+    });
+    const needed = room && Array.isArray(room.players) ? room.players.length : 0;
+    return {
+      count: acceptedLaneIndices.length,
+      needed,
+      acceptedLaneIndices,
+      acceptedDisplayNames,
+      allAccepted: needed > 0 && acceptedLaneIndices.length >= needed,
+    };
+  }
+
+  function mlLobbyUpdatePayload(code, room) {
+    const humanPlayers = room.players.map((sid) => ({
+      laneIndex: room.laneBySocketId.get(sid),
+      displayName: room.playerNames.get(sid) || "Player",
+      ready: room.readySet.has(sid),
+      isAI: false,
+      team: room.playerTeamsBySocketId?.get(sid) || "red",
+    }));
+    const aiPlayers = (room.aiPlayers || []).map((ai) => ({
+      laneIndex: ai.laneIndex,
+      displayName: ai.displayName || `CPU (${capFirst(ai.difficulty)})`,
+      ready: true,
+      isAI: true,
+      difficulty: ai.difficulty,
+      team: ai.team || "red",
+      takeover: !!ai.takeover,
+    }));
+    const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
+    return {
+      code,
+      players,
+      hostLaneIndex: 0,
+      settings: normalizeMatchSettings(room.settings),
+      pvpMode: room.pvpMode || "2v2",
+    };
+  }
+
+  function buildMlMatchSeed(roomId, code, laneAssignments) {
+    const parts = laneAssignments
+      .slice()
+      .sort((a, b) => a.laneIndex - b.laneIndex)
+      .map((assignment) => `${assignment.laneIndex}:${assignment.team}:${assignment.isAI ? "ai" : "human"}`);
+    return `${roomId}:${code}:${parts.join("|")}`;
+  }
+
+  function getSlotDefinition(simMl, playerCount, laneIndex, laneTeams) {
+    const config = simMl.createMLPublicConfig({ playerCount, laneTeams });
+    const defs = config && Array.isArray(config.slotDefinitions) ? config.slotDefinitions : [];
+    return defs.find((slot) => Number(slot.laneIndex) === Number(laneIndex)) || null;
+  }
+
+  function resolveDefaultMultilaneTarget(game, sourceLaneIndex) {
+    if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1) return null;
+    const sourceLane = game.lanes[sourceLaneIndex];
+    if (!sourceLane) return null;
+    const total = Math.min(Number(game.playerCount) || game.lanes.length, game.lanes.length);
+    for (let step = 1; step < total; step += 1) {
+      const idx = (sourceLaneIndex + step) % total;
+      const lane = game.lanes[idx];
+      if (!lane || lane.eliminated) continue;
+      if (lane.team === sourceLane.team) continue;
+      return idx;
+    }
+    return null;
+  }
+
+  function getLaneDisplayName(room, laneIndex) {
+    const sid = room.players.find((socketId) => room.laneBySocketId.get(socketId) === laneIndex);
+    if (sid) return room.playerNames.get(sid) || "Player";
+    const ai = (room.aiPlayers || []).find((entry) => entry.laneIndex === laneIndex);
+    if (ai) return ai.displayName || `CPU (${capFirst(ai.difficulty)})`;
+    return `Lane ${Number(laneIndex) + 1}`;
+  }
+
+  function buildFinalStats(room, game) {
+    return game.lanes.map((lane) => ({
+      laneIndex: lane.laneIndex,
+      displayName: getLaneDisplayName(room, lane.laneIndex),
+      team: lane.team,
+      side: lane.side,
+      income: lane.income,
+      buildValue: simMl.getLaneBuildValue(lane),
+      gold: Math.floor(lane.gold),
+      totalSendSpend: lane.totalSendSpend,
+      totalSendCount: lane.totalSendCount || 0,
+      totalBuildSpend: lane.totalBuildSpend || 0,
+      totalLeaksTaken: lane.totalLeaksTaken,
+      biggestLeakTaken: lane.biggestLeakTaken || 0,
+      wavesHeld: lane.wavesHeld || 0,
+      wavesLeaked: lane.wavesLeaked || 0,
+      longestHoldStreak: lane.longestHoldStreak || 0,
+      lives: lane.lives,
+      teamHp: game.teamHp[lane.side],
+      eliminated: lane.eliminated,
+    }));
+  }
+
+  function buildOutcomePayload(room, entry) {
+    const game = entry.game;
+    const winnerLane = Number.isInteger(game.officialWinnerLane) ? game.officialWinnerLane : game.winner;
+    const pvpDurationSec = Number.isInteger(game.pvpResolvedAtTick)
+      ? Math.round(game.pvpResolvedAtTick / (simMl.TICK_HZ || 20))
+      : Math.round((Date.now() - (game.startedAt || Date.now())) / 1000);
+    const survivalDurationSec = game.continuedIntoSurvival && Number.isInteger(game.survivalStartedAtTick)
+      ? Math.max(0, Math.round((game.tick - game.survivalStartedAtTick) / (simMl.TICK_HZ || 20)))
+      : 0;
+    const survivalExtraRounds = game.continuedIntoSurvival && Number.isInteger(game.survivalStartRound)
+      ? Math.max(0, game.roundNumber - game.survivalStartRound)
+      : 0;
+
+    return {
+      winnerLaneIndex: winnerLane,
+      winnerName: winnerLane !== null && winnerLane !== undefined ? getLaneDisplayName(room, winnerLane) : "Unknown",
+      winningTeam: game.officialWinningTeam || null,
+      winningSide: game.officialWinningSide || null,
+      losingTeam: game.losingTeam || null,
+      losingSide: game.losingSide || null,
+      finalRound: game.roundNumber,
+      gameDuration: pvpDurationSec,
+      causeLoss: game.losingSide ? `Lives reduced to 0 on Wave ${game.roundNumber}` : "Lives reduced to 0",
+      finalStats: buildFinalStats(room, game),
+      waveSnapshots: game.roundSnapshots,
+      matchState: game.matchState || (game.phase === "ended" ? "final_game_over" : "active_pvp"),
+      continuedIntoSurvival: !!game.continuedIntoSurvival,
+      survivalDuration: survivalDurationSec,
+      survivalExtraRounds,
+      pvpWinnerLaneIndex: winnerLane,
+    };
+  }
+
+  function getWinningHumanLaneIndices(room, game) {
+    if (!room || !game || !game.officialWinningTeam) return [];
+    return room.players
+      .map((sid) => room.laneBySocketId.get(sid))
+      .filter((laneIndex) => {
+        if (!Number.isInteger(laneIndex)) return false;
+        const lane = game.lanes[laneIndex];
+        return !!lane && !lane.eliminated && lane.team === game.officialWinningTeam;
+      });
+  }
+
+  function handlePostWinDecision(roomId, code, decision, sid) {
+    const room = mlRoomsByCode.get(code);
+    const entry = gamesByRoomId.get(roomId);
+    if (!room || !entry || !entry.game) return { ok: false, reason: "Game not active" };
+    const game = entry.game;
+    if (game.matchState !== "pvp_resolved" || !game.awaitingPostWinDecision) {
+      return { ok: false, reason: "No pending post-win decision" };
+    }
+    const laneIndex = room.laneBySocketId.get(sid);
+    const lane = Number.isInteger(laneIndex) ? game.lanes[laneIndex] : null;
+    if (!lane || lane.eliminated || lane.team !== game.officialWinningTeam) {
+      return { ok: false, reason: "Only active winners can decide" };
+    }
+
+    if (decision === "continue") {
+      game.awaitingPostWinDecision = false;
+      game.matchState = "survival_continuation";
+      game.continuedIntoSurvival = true;
+      game.survivalStartedAtTick = game.tick;
+      game.survivalStartRound = game.roundNumber;
+      log.info("[ml-game] survival continuation selected", {
+        roomId,
+        code,
+        decisionByLane: laneIndex,
+        officialWinnerLane: game.officialWinnerLane,
+        winningTeam: game.officialWinningTeam,
+        round: game.roundNumber,
+      });
+      io.to(roomId).emit("ml_survival_continuation_started", {
+        winnerLaneIndex: game.officialWinnerLane,
+        winningTeam: game.officialWinningTeam,
+        winningSide: game.officialWinningSide,
+      });
+      return { ok: true };
+    }
+
+    if (decision === "end_now") {
+      game.awaitingPostWinDecision = false;
+      game.phase = "ended";
+      game.matchState = "final_game_over";
+      game.winner = game.officialWinnerLane;
+      log.info("[ml-game] winners ended match immediately", {
+        roomId,
+        code,
+        decisionByLane: laneIndex,
+        officialWinnerLane: game.officialWinnerLane,
+        winningTeam: game.officialWinningTeam,
+        round: game.roundNumber,
+      });
+      return { ok: true };
+    }
+
+    return { ok: false, reason: "Unknown post-win decision" };
+  }
+
+  function applyMultilaneAction(entry, laneIndex, action) {
+    const result = simMl.applyMLAction(entry.game, laneIndex, action);
+    const tracker = entry.botController && entry.botController.runtimeTracker;
+    if (tracker) {
+      if (!result.ok) {
+        tracker.recordInvalidAction(laneIndex);
+      } else if (action && action.type === "spawn_unit") {
+        const requestedTarget = Number(action.data && action.data.targetLaneIndex);
+        const targetLaneIndex = Number.isInteger(requestedTarget)
+          ? requestedTarget
+          : resolveDefaultMultilaneTarget(entry.game, laneIndex);
+        tracker.recordSendEvent(
+          laneIndex,
+          targetLaneIndex,
+          action.data && action.data.unitType,
+          1,
+          1,
+          entry.game.tick
+        );
+      }
+    }
+    return result;
+  }
+
+  function addRuntimeBot(entry, botConfig) {
+    if (!entry || !botConfig || !Number.isInteger(botConfig.laneIndex)) return null;
+    if (!entry.botController) {
+      entry.botController = aiRuntime.createBotController({
+        game: entry.game,
+        seed: `${entry.game.matchSeed || "match"}:runtime`,
+        tickMs: simMl.TICK_MS,
+        botTickMs: 500,
+        runtimeOptions: { waveTickInterval: simMl.INCOME_INTERVAL_TICKS || 240 },
+        botConfigs: [botConfig],
+      });
+      return entry.botController;
+    }
+    if (typeof entry.botController.addBot === "function") {
+      entry.botController.addBot(botConfig);
+    }
+    return entry.botController;
+  }
+
+  function removeRuntimeBot(entry, laneIndex) {
+    if (!entry || !entry.botController || !Number.isInteger(laneIndex)) return null;
+    if (typeof entry.botController.removeBot === "function") {
+      return entry.botController.removeBot(laneIndex);
+    }
+    return null;
+  }
+
+  function attachTakeoverBot(room, entry, laneIndex, options) {
+    if (!room || !entry || !Number.isInteger(laneIndex)) return null;
+    const lane = entry.game && entry.game.lanes && entry.game.lanes[laneIndex];
+    if (!lane || lane.eliminated) return null;
+    if (!room.aiPlayers) room.aiPlayers = [];
+    const existing = room.aiPlayers.find((ai) => ai.laneIndex === laneIndex);
+    if (existing) return existing;
+    const opt = options && typeof options === "object" ? options : {};
+    const aiEntry = {
+      laneIndex,
+      difficulty: opt.difficulty || "hard",
+      team: opt.team || lane.team || "red",
+      displayName: opt.displayName || `Takeover AI (${capFirst(opt.difficulty || "hard")})`,
+      takeover: true,
+      humanDisplayName: opt.humanDisplayName || opt.displayName || "Player",
+      playerId: opt.playerId || null,
+    };
+    room.aiPlayers.push(aiEntry);
+    addRuntimeBot(entry, {
+      laneIndex,
+      difficulty: aiEntry.difficulty,
+      seedSuffix: `takeover:${laneIndex}`,
+    });
+    return aiEntry;
+  }
+
+  function detachTakeoverBot(room, entry, laneIndex) {
+    if (!room || !Number.isInteger(laneIndex)) return null;
+    const idx = (room.aiPlayers || []).findIndex((ai) => ai.laneIndex === laneIndex && ai.takeover);
+    if (idx === -1) return null;
+    const [removed] = room.aiPlayers.splice(idx, 1);
+    removeRuntimeBot(entry, laneIndex);
+    return removed;
+  }
+
+  function _bucketToDbMode(queueMode) {
+    if (!queueMode) return 'multilane';
+    if (queueMode === 'ranked_2v2') return '2v2_ranked'; // legacy
+    const parts = queueMode.split(':');
+    if (parts.length !== 3 || parts[0] !== 'line_wars') return 'multilane';
+    const [, matchFormat, rankedFlag] = parts;
+    const isRanked = rankedFlag === '1';
+    if (matchFormat === '2v2') return isRanked ? '2v2_ranked' : '2v2_casual';
+    if (matchFormat === '1v1') return isRanked ? '1v1_ranked' : '1v1_casual';
+    if (matchFormat === 'ffa') return isRanked ? 'ffa_ranked' : 'ffa_casual';
+    return 'multilane';
+  }
+
+  // ── Loadout-phase helpers ────────────────────────────────────────────────
+
+  // Returns the buildable loadout catalog used by ml_loadout_confirm validation.
+  function buildAvailableUnits() {
+    return getAllUnitTypes()
+      .filter(ut =>
+        ut &&
+        ut.enabled &&
+        Number(ut.send_cost) > 0 &&
+        Number(ut.build_cost) > 0 &&
+        Number(ut.range) > 0
+      )
+      .map(ut => ({
+        id:            ut.id,
+        key:           ut.key,
+        name:          ut.name,
+        send_cost:     Number(ut.send_cost)     || 0,
+        build_cost:    Number(ut.build_cost)    || 0,
+        hp:            Number(ut.hp)            || 0,
+        attack_damage: Number(ut.attack_damage) || 0,
+        attack_speed:  Number(ut.attack_speed)  || 1,
+        range:         Number(ut.range)         || 0,
+        path_speed:    Number(ut.path_speed)    || 0,
+        income:        Number(ut.income)        || 0,
+        damage_type:   ut.damage_type  || "NORMAL",
+        armor_type:    ut.armor_type   || "UNARMORED",
+      }));
+  }
+
+  // Waits for all human players to emit ml_loadout_confirm, or until timeoutMs.
+  // Stores confirmed unit-type-ID arrays on sock.pendingUnitTypeIds so the
+  // existing resolveLoadout() call picks them up as inline selections.
+  // Emits ml_loadout_phase_end to the room when done.
+  function waitForLoadoutConfirms(room, roomId, timeoutMs) {
+    const humanSockets = room.players
+      .map(sid => io.sockets.sockets.get(sid))
+      .filter(Boolean);
+    if (humanSockets.length === 0) return Promise.resolve();
+
+    return new Promise(resolve => {
+      let resolved = false;
+      const handlers = new Map(); // sock → listener fn
+
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        room._loadoutPhaseResolve  = null;
+        room._loadoutPhaseDeadline = null;
+        for (const [sock, fn] of handlers) sock.removeListener("ml_loadout_confirm", fn);
+        io.to(roomId).emit("ml_loadout_phase_end", {
+          code:   room.code || "",
+          reason: reason || "all_confirmed",
+        });
+        resolve();
+      };
+
+      room._loadoutPhaseResolve  = () => done("all_confirmed");
+      room._loadoutPhaseDeadline = Date.now() + timeoutMs;
+
+      for (const sock of humanSockets) {
+        const fn = (data) => {
+          const ids = Array.isArray(data && data.unitTypeIds) ? data.unitTypeIds : null;
+          if (!ids || ids.length !== 5) return;
+          sock.pendingUnitTypeIds = ids.map(Number);
+          // Check if every human has now confirmed
+          const allDone = humanSockets.every(s => Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5);
+          if (allDone) done("all_confirmed");
+        };
+        handlers.set(sock, fn);
+        sock.on("ml_loadout_confirm", fn);
+      }
+
+      const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
+  async function startMLGame(roomId, code) {
+    if (gamesByRoomId.has(roomId)) return;
+    const room = mlRoomsByCode.get(code);
+    if (!room) return;
+
+    const aiList = room.aiPlayers || [];
+    const playerCount = room.players.length + aiList.length;
+    const laneAssignments = [
+      ...room.players.map((sid) => ({
+        laneIndex: room.laneBySocketId.get(sid),
+        displayName: room.playerNames.get(sid) || "Player",
+        isAI: false,
+        team: room.playerTeamsBySocketId?.get(sid) || "red",
+      })),
+      ...aiList.map((ai) => ({
+        laneIndex: ai.laneIndex,
+        displayName: ai.displayName || `CPU (${capFirst(ai.difficulty)})`,
+        isAI: true,
+        team: ai.team || "red",
+      })),
+    ];
+
+    const laneTeams = new Array(playerCount).fill("red");
+    for (const assignment of laneAssignments) {
+      if (
+        Number.isInteger(assignment.laneIndex) &&
+        assignment.laneIndex >= 0 &&
+        assignment.laneIndex < playerCount
+      ) {
+        laneTeams[assignment.laneIndex] = assignment.team || "red";
+      }
+    }
+
+    for (const assignment of laneAssignments) {
+      const slot = getSlotDefinition(simMl, playerCount, assignment.laneIndex, laneTeams);
+      if (!slot) continue;
+      assignment.side = slot.side;
+      assignment.slotKey = slot.slotKey;
+      assignment.slotColor = slot.slotColor;
+      assignment.branchId = slot.branchId;
+      assignment.branchLabel = slot.branchLabel;
+      assignment.castleSide = slot.castleSide;
+    }
+
+    const matchSeedStr = buildMlMatchSeed(roomId, code, laneAssignments);
+    const matchSeedNum = stringToSeed(matchSeedStr);
+    const publicConfig = simMl.createMLPublicConfig({ ...room.settings, playerCount, laneTeams });
+    const game = simMl.createMLGame(playerCount, {
+      ...room.settings,
+      laneTeams,
+      matchSeed: matchSeedNum,
+    });
+
+    // Load wave config from DB (async; game starts with empty config then gets populated)
+    loadDefaultWaveConfig(db).then(waves => {
+      game.waveConfig = waves;
+      log.info(`[ml-game] wave config loaded: ${waves.length} waves`, { roomId });
+    }).catch(err => {
+      log.error('[ml-game] failed to load wave config', { err: err.message });
+    });
+
+    io.to(roomId).emit("ml_match_ready", {
+      code,
+      playerCount,
+      laneAssignments,
+      battlefieldTopology: publicConfig.battlefieldTopology,
+      aiEngine: "new_bot_controller_v1",
+    });
+    io.to(roomId).emit("ml_match_config", publicConfig);
+
+    // ── EARLY GAME ENTRY: register before loadout so rejoin_game works during scene transition ──
+    const playerSnapshot = room.players
+      .map((sid) => {
+        const sock = io.sockets.sockets.get(sid);
+        return sock?.playerId ? { playerId: sock.playerId, laneIndex: room.laneBySocketId.get(sid) } : null;
+      })
+      .filter(Boolean);
+    const dbMode = _bucketToDbMode(room.queueMode);
+    const eliminatedNotified = new Set();
+    const snapshotEveryNTicks = 2;
+    const gameEntry = {
+      game,
+      tickHandle: null,
+      mode: "multilane",
+      snapshotEveryNTicks,
+      eliminatedNotified,
+      botController: null,
+      matchIdPromise: null,
+      playerSnapshot,
+      dbMode,
+      partyASize: room.partyASize || 1,
+      pvpResolvedEmitted: false,
+    };
+    gamesByRoomId.set(roomId, gameEntry);
+    for (const sid of room.players) {
+      const sock = io.sockets.sockets.get(sid);
+      if (!sock) continue;
+      const laneIdx = room.laneBySocketId.get(sid);
+      const token = issueReconnectToken(roomId, code, "multilane", String(laneIdx), sock);
+      sock.emit("reconnect_token", { token, gracePeriodMs: RECONNECT_GRACE_MS });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── LOADOUT SELECTION PHASE ──────────────────────────────────────────
+    const selectionMode = (room.settings && room.settings.selectionMode) || "manual";
+    const loadoutTimeoutMs = 60_000;
+    room.loadoutConfirms = new Map();
+    if (!room.loadoutByLane) room.loadoutByLane = [];
+    await Promise.all(
+      aiList.map(async (ai) => {
+        const loadout = await resolveLoadout(null, null, null);
+        const laneIdx = ai.laneIndex;
+        room.loadoutByLane[laneIdx] = loadout;
+        if (game.lanes[laneIdx]) {
+          const keys = loadout.map((ut) => ut.key);
+          game.lanes[laneIdx].autosend.loadoutKeys = keys;
+          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map((k) => [k, false]));
+        }
+      })
+    ).catch((err) => log.error("[loadout] ai pre-resolve error", { err: err.message }));
+    io.to(roomId).emit("ml_loadout_phase_start", {
+      code,
+      timeoutSeconds: Math.ceil(loadoutTimeoutMs / 1000),
+      selectionMode,
+      availableUnits: buildAvailableUnits(),
+    });
+    if (selectionMode !== "random") {
+      await waitForLoadoutConfirms(room, roomId, loadoutTimeoutMs);
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    await Promise.all([
+      ...room.players.map(async (sid) => {
+        const sock = io.sockets.sockets.get(sid);
+        if (!sock) return;
+        const laneIdx = room.laneBySocketId.get(sid);
+        const loadout = await resolveLoadout(sock.playerId || null, sock.pendingUnitTypeIds);
+        sock.pendingUnitTypeIds = null;
+        room.loadoutByLane[laneIdx] = loadout;
+        if (game.lanes[laneIdx]) {
+          const keys = loadout.map((ut) => ut.key);
+          game.lanes[laneIdx].autosend.loadoutKeys = keys;
+          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map(k => [k, false]));
+          // Load equipped skins for this player
+          if (db && sock.playerId) {
+            try {
+              const skinRows = await db.query(
+                `SELECT pse.unit_type, pse.skin_key
+                   FROM player_skin_equip pse
+                   JOIN skin_catalog s ON s.skin_key = pse.skin_key
+                  WHERE pse.player_id = $1
+                    AND s.enabled = true`,
+                [sock.playerId]
+              );
+              game.lanes[laneIdx].equippedSkins = Object.fromEntries(
+                skinRows.rows.map(r => [r.unit_type, r.skin_key])
+              );
+            } catch (err) {
+              log.error('[skins] failed to load equipped skins', { err: err.message });
+            }
+          }
+        }
+        sock.emit("ml_match_config", { loadout });
+      }),
+    ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
+    // ticks begin only after all loadouts are resolved (await above ensures this)
+
+    const botController = aiList.length > 0
+      ? aiRuntime.createBotController({
+          game,
+          seed: matchSeedStr,
+          tickMs: simMl.TICK_MS,
+          botTickMs: 500,
+          runtimeOptions: { waveTickInterval: simMl.INCOME_INTERVAL_TICKS || 240 },
+          botConfigs: aiList.map((ai) => ({
+            laneIndex: ai.laneIndex,
+            difficulty: ai.difficulty,
+          })),
+        })
+      : null;
+
+    if (aiList.length > 0) {
+      log.info("ml ai engine active", {
+        roomId,
+        code,
+        aiEngine: aiRuntime.__engine || "new_bot_controller_v1",
+        botCount: botController ? botController.getBotCount() : 0,
+      });
+    }
+
+    gameEntry.botController = botController;
+    gameEntry.matchIdPromise = logMatchStart(roomId, dbMode);
+    const matchIdPromise = gameEntry.matchIdPromise;
+    let localTick = 0;
+
+    const tickHandle = setInterval(() => {
+      const entry = gamesByRoomId.get(roomId);
+      if (!entry) return;
+
+      const prevLite = entry.botController ? aiRuntime.captureStateLite(entry.game) : null;
+      if (entry.botController) entry.botController.onBeforeSimTick(entry.game);
+      simMl.mlTick(entry.game);
+      if (entry.botController && prevLite) {
+        const nextLite = aiRuntime.captureStateLite(entry.game);
+        entry.botController.onAfterSimTick(prevLite, nextLite);
+      }
+
+      localTick += 1;
+
+      if (entry.game.matchState === "pvp_resolved" && !entry.pvpResolvedEmitted) {
+        entry.pvpResolvedEmitted = true;
+        log.info("[ml-game] pvp resolved", {
+          roomId,
+          code,
+          officialWinnerLane: entry.game.officialWinnerLane,
+          winningTeam: entry.game.officialWinningTeam,
+          winningSide: entry.game.officialWinningSide,
+          losingTeam: entry.game.losingTeam,
+          losingSide: entry.game.losingSide,
+          round: entry.game.roundNumber,
+          winnerHumanLanes: getWinningHumanLaneIndices(room, entry.game),
+        });
+        io.to(roomId).emit("ml_pvp_resolved", {
+          ...buildOutcomePayload(room, entry),
+          winnerLaneIndices: getWinningHumanLaneIndices(room, entry.game),
+          waitingForDecision: true,
+        });
+      }
+
+      for (const lane of entry.game.lanes) {
+        if (lane.eliminated && !entry.eliminatedNotified.has(lane.laneIndex)) {
+          entry.eliminatedNotified.add(lane.laneIndex);
+          const eliminatedSid = room.players.find((sid) => room.laneBySocketId.get(sid) === lane.laneIndex);
+          const aiEntry = (room.aiPlayers || []).find((ai) => ai.laneIndex === lane.laneIndex);
+          const displayName = eliminatedSid
+            ? room.playerNames.get(eliminatedSid) || "Player"
+            : aiEntry
+              ? (aiEntry.displayName || `CPU (${capFirst(aiEntry.difficulty)})`)
+              : "Player";
+          io.to(roomId).emit("ml_player_eliminated", { laneIndex: lane.laneIndex, displayName });
+          if (eliminatedSid) {
+            io.to(eliminatedSid).emit("ml_spectator_join", { laneIndex: lane.laneIndex });
+          }
+        }
+      }
+
+      // Drain pending round events from sim
+      const pendingEvents = entry.game._pendingEvents || [];
+      entry.game._pendingEvents = [];
+      for (const evt of pendingEvents) {
+        io.to(roomId).emit(evt.type, evt);
+      }
+
+      // Drain combat log events (buffered by combatLog.js when COMBAT_LOG=true)
+      if (entry.game._combatLog && entry.game._combatLog.length > 0) {
+        if (!entry.combatEvents) entry.combatEvents = [];
+        entry.combatEvents.push(...entry.game._combatLog);
+        entry.game._combatLog = [];
+      }
+
+      if (localTick % snapshotEveryNTicks === 0) {
+        io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+      }
+
+      if (entry.game.phase === "ended") {
+        const finalPayload = buildOutcomePayload(room, entry);
+        log.info("[ml-game] final game over", {
+          roomId,
+          code,
+          winnerLaneIndex: finalPayload.winnerLaneIndex,
+          winningTeam: finalPayload.winningTeam,
+          matchState: finalPayload.matchState,
+          continuedIntoSurvival: finalPayload.continuedIntoSurvival,
+          finalRound: finalPayload.finalRound,
+          survivalDuration: finalPayload.survivalDuration,
+        });
+        io.to(roomId).emit("ml_game_over", finalPayload);
+        const winnerLane = finalPayload.winnerLaneIndex;
+        const snapshots = entry.playerSnapshot.map((player) => ({
+          ...player,
+          result: winnerLane === null
+            ? "draw"
+            : entry.game.lanes[player.laneIndex]?.team === entry.game.lanes[winnerLane]?.team
+              ? "win"
+              : "loss",
+        }));
+
+        const endPromise = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
+        if (db && entry.combatEvents && entry.combatEvents.length > 0) {
+          Promise.resolve(entry.matchIdPromise).then(matchId => {
+            if (matchId) db.query(
+              'UPDATE matches SET combat_log=$1 WHERE id=$2',
+              [JSON.stringify(entry.combatEvents), matchId]
+            ).catch(() => {});
+          });
+        }
+        if (db && entry.game.roundSnapshots && entry.game.roundSnapshots.length > 0) {
+          Promise.resolve(entry.matchIdPromise).then(matchId => {
+            if (matchId) db.query(
+              'UPDATE matches SET wave_stats=$1 WHERE id=$2',
+              [JSON.stringify(entry.game.roundSnapshots), matchId]
+            ).catch(() => {});
+          });
+        }
+        if (ratingService && db && entry.dbMode && entry.dbMode.endsWith("_ranked")) {
+          Promise.all([endPromise, entry.matchIdPromise])
+            .then(([, matchId]) =>
+              ratingService.updateRatings(db, matchId, entry.dbMode, snapshots, entry.partyASize)
+            )
+            .then((updates) => {
+              for (const update of updates) {
+                const sid = socketByPlayerId.get(update.playerId);
+                if (!sid) continue;
+                const totalMatches = (update.wins || 0) + (update.losses || 0);
+                const isPlacement = totalMatches < 10;
+                io.to(sid).emit("rating_update", {
+                  mode: entry.dbMode,
+                  newRating: Math.round(update.newRating),
+                  delta: Math.round(update.delta),
+                  isPlacement,
+                  placementProgress: isPlacement ? `${totalMatches}/10` : null,
+                });
+              }
+
+              if (seasonService && updates.length > 0) {
+                seasonService
+                  .getActiveSeason(db)
+                  .then((season) => {
+                    if (!season) return;
+                    for (const update of updates) {
+                      seasonService.updatePeakRating(db, season.id, update.playerId, entry.dbMode, update.newRating);
+                    }
+                  })
+                  .catch(() => {});
+              }
+            })
+            .catch((err) => log.error("[rating] error:", { err: err.message }));
+        }
+
+        stopMLGame(roomId, code);
+      }
+    }, simMl.TICK_MS);
+
+    gameEntry.tickHandle = tickHandle;
+    log.info(`[ml-game] started ${roomId}`);
+  }
+
+  function stopMLGame(roomId, code) {
+    const entry = gamesByRoomId.get(roomId);
+    if (!entry) return;
+    clearInterval(entry.tickHandle);
+    if (entry.botController && typeof entry.botController.stop === "function") {
+      try {
+        entry.botController.stop();
+      } catch {
+        // Ignore AI shutdown failures during cleanup.
+      }
+    }
+    gamesByRoomId.delete(roomId);
+    log.info(`[ml-game] stopped ${roomId}`);
+    const handle = setTimeout(() => {
+      mlRoomsByCode.delete(code);
+      log.info(`[ml-room] cleaned up ${code}`);
+    }, 60_000);
+    const room = mlRoomsByCode.get(code);
+    if (room) room._cleanupHandle = handle;
+  }
+  return {
+    applyMultilaneAction,
+    attachTakeoverBot,
+    buildAvailableUnits,
+    buildRematchStatus,
+    capFirst,
+    countMlTeams,
+    createMLRoom,
+    detachTakeoverBot,
+    ffaTeamForLane,
+    handlePostWinDecision,
+    mlLobbyUpdatePayload,
+    pickBalancedMlTeam,
+    startMLGame,
+    stopMLGame,
+    validateMlTeamSetup,
+  };
+}
+
+module.exports = { createMultilaneRuntime };

@@ -1,0 +1,173 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Portraits
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Portraits
+  m_GUID: 7a7ab000c759e4a49bd22318e9155cf0
+  m_SerializeEntries:
+  - m_GUID: 02cfaa07d6ba250488b6db03bd49262f
+    m_Address: portraits/evil_watcher
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0957c3bd3c47c9640ba68bf0eb76fbc3
+    m_Address: portraits/chimera
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0c1ba006dd81d9b48a93c8b5b3568c56
+    m_Address: portraits/ogre
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0c8c7a2226cc27740b02a552eef06e39
+    m_Address: portraits/hobgoblin
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0eff66aca32338540a570e4d0ecd5d37
+    m_Address: portraits/darkness_spider
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 156b79da721f6b741b6ad2da790425d7
+    m_Address: portraits/mountain_dragon
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 208bfa60cff8f1f478470b16ce3614f9
+    m_Address: portraits/skeleton_knight
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 2c0904d3de8877c43b166d289e752b1f
+    m_Address: portraits/harpy
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3475e00b2b8607f4da7861ee3977be63
+    m_Address: portraits/vampire
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 36280fa1e7e040a4bb4242b58cd87eb2
+    m_Address: portraits/troll
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 36838fbe2114fa4469af4564a821a468
+    m_Address: portraits/wyvern
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3d78b2e481c16374e836009aba9624db
+    m_Address: portraits/fantasy_wolf
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3f4cbe63c612e624e86a63cad4bfce0e
+    m_Address: portraits/cyclops
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 55f8a31db6f1ced4fb59884947a41a9d
+    m_Address: portraits/orc
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6b9a898a25b90c844a5b1cb5fdc202f3
+    m_Address: portraits/hydra
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6c3f7085f14742649bd9a438bbd25b6f
+    m_Address: portraits/giant_viper
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 9800943f9998d7841af3c5fa75d1c4dd
+    m_Address: portraits/oak_tree_ent
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a6df93a3b1304ae48b2cc4c279b31328
+    m_Address: portraits/demon_lord
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: af3b93d7400c6c143a1c80cef7bc8c65
+    m_Address: portraits/griffin
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b0029a79cfa27c643b78a14c4a45d9df
+    m_Address: portraits/giant_rat
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b5df939493b1dcb4784da7f588e55204
+    m_Address: portraits/goblin
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bc81e1595ecce774ba69816f796474d1
+    m_Address: portraits/werewolf
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bcdc3ea49aff29e4ab0f4aa5a249bbe5
+    m_Address: portraits/undead_warrior
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: cb224b2cadefb0d49a5938bea9e67fc9
+    m_Address: portraits/dragonide
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: d2387cf2ceda633458b9e194c9de0b81
+    m_Address: portraits/ice_golem
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e47185fffa992b24bb0f209515772108
+    m_Address: portraits/ghoul
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e6fd67a9d7dc0844e80626d1bd024ba0
+    m_Address: portraits/kobold
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f60ce8e3e4d7a8c428c50f3c4cb0ace2
+    m_Address: portraits/lizard_warrior
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f62747f3a77032e48a0127e436e7f41f
+    m_Address: portraits/manticora
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f87378e5412996a4ebdf46029266d99e
+    m_Address: portraits/mummy
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: dffac334c3c898848bcf6422ea7a5ae6, type: 2}
+    - {fileID: 11400000, guid: 1cc38fae9c41d9a4e967ce04c7778d91, type: 2}

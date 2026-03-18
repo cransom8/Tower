@@ -1,0 +1,2 @@
+server/client/Build/*.br filter=lfs diff=lfs merge=lfs -text
+server/client/Build/*.js filter=lfs diff=lfs merge=lfs -text
