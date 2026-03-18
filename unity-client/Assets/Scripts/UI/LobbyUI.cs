@@ -447,10 +447,7 @@ namespace CastleDefender.UI
         {
             if (!_awaitingLoadoutScene) return;
             _awaitingLoadoutScene = false;
-            LoadingScreen.LoadSceneWithRemoteContentGate(
-                "Loadout",
-                preloadT1Gameplay: true,
-                portraitKeys: ExtractPortraitKeys(payload));
+            LoadingScreen.LoadScene("Loadout");
         }
 
         void HandleLobbyCreated(LobbyCreatedPayload p)

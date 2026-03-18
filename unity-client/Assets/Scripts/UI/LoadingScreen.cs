@@ -163,6 +163,12 @@ public class LoadingScreen : MonoBehaviour
         Scene newScene = SceneManager.GetSceneByName(_pendingScene);
         SceneManager.SetActiveScene(newScene);
 
+        if (_pendingScene == "Game_ML")
+        {
+            yield return null;
+            NetworkManager.Instance?.Emit("ml_game_scene_ready");
+        }
+
         for (int i = 0; i < SceneManager.sceneCount; i++)
         {
             Scene s = SceneManager.GetSceneAt(i);

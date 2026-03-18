@@ -60,7 +60,10 @@ namespace CastleDefender.UI
         readonly string[]        _selNames  = new string[5];
         readonly List<GameObject> _cards    = new();
         readonly Dictionary<string, Texture2D> _portraitCache = new();
+        readonly Dictionary<string, List<RawImage>> _pendingPortraitTargets = new(StringComparer.OrdinalIgnoreCase);
         float _timerRemaining;
+        Coroutine _portraitWarmupRoutine;
+        Coroutine _criticalWarmupRoutine;
 
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()
@@ -81,6 +84,8 @@ namespace CastleDefender.UI
             nm.OnMLLoadoutPhaseEnd   -= HandlePhaseEnd;
             nm.OnMLMatchConfig       -= HandleMatchConfig;
             _portraitCache.Clear();
+            _pendingPortraitTargets.Clear();
+            StopWarmupRoutines();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -104,9 +109,12 @@ namespace CastleDefender.UI
             Array.Fill(_selected, -1);
             Array.Fill(_selNames, null);
             _cards.Clear();
+            _pendingPortraitTargets.Clear();
+            StopWarmupRoutines();
 
             if (_panelRoot != null) Destroy(_panelRoot);
             BuildPanel();
+            StartBackgroundWarmup();
 
             if (payload.selectionMode == "random")
             {
@@ -138,15 +146,19 @@ namespace CastleDefender.UI
         // Timer
         void Update()
         {
-            if (_state != PhaseState.Active) return;
-            _timerRemaining -= Time.deltaTime;
-            if (_txtTimer != null)
+            if (_state == PhaseState.Active)
             {
-                int secs = Mathf.CeilToInt(_timerRemaining);
-                _txtTimer.text  = secs > 0 ? $"{secs}s" : "0s";
-                _txtTimer.color = _timerRemaining < 5f ? ColorTimerUrgent : ColorTimerNormal;
+                _timerRemaining -= Time.deltaTime;
+                if (_txtTimer != null)
+                {
+                    int secs = Mathf.CeilToInt(_timerRemaining);
+                    _txtTimer.text  = secs > 0 ? $"{secs}s" : "0s";
+                    _txtTimer.color = _timerRemaining < 5f ? ColorTimerUrgent : ColorTimerNormal;
+                }
+                if (_timerRemaining <= 0f) SubmitConfirm();
             }
-            if (_timerRemaining <= 0f) SubmitConfirm();
+
+            RefreshPendingPortraits();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -531,7 +543,114 @@ namespace CastleDefender.UI
                 return;
             }
 
-            Debug.LogWarning($"[LoadoutPhaseManager] Portrait '{key}' was not ready when the loadout panel was built. Loadout entry should have been gated until centralized portrait preload completed.");
+            target.texture = null;
+            target.color = new Color(1f, 1f, 1f, 0f);
+
+            if (!_pendingPortraitTargets.TryGetValue(key, out var targets))
+            {
+                targets = new List<RawImage>();
+                _pendingPortraitTargets[key] = targets;
+            }
+
+            if (!targets.Contains(target))
+                targets.Add(target);
+        }
+
+        void StartBackgroundWarmup()
+        {
+            _portraitWarmupRoutine = StartCoroutine(WarmPortraitsInBackground());
+            _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
+        }
+
+        void StopWarmupRoutines()
+        {
+            if (_portraitWarmupRoutine != null)
+            {
+                StopCoroutine(_portraitWarmupRoutine);
+                _portraitWarmupRoutine = null;
+            }
+
+            if (_criticalWarmupRoutine != null)
+            {
+                StopCoroutine(_criticalWarmupRoutine);
+                _criticalWarmupRoutine = null;
+            }
+        }
+
+        IEnumerator WarmPortraitsInBackground()
+        {
+            var remoteContent = RemoteContentManager.EnsureInstance();
+            if (remoteContent == null || _available == null || _available.Length == 0)
+                yield break;
+
+            var keys = new List<string>(_available.Length);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < _available.Length; i++)
+            {
+                string key = _available[i]?.key?.Trim();
+                if (string.IsNullOrWhiteSpace(key) || !seen.Add(key))
+                    continue;
+
+                keys.Add(key);
+            }
+
+            if (keys.Count == 0)
+                yield break;
+
+            yield return remoteContent.EnsurePortraitsReady(
+                keys,
+                requester: "LoadoutPhaseManager.BackgroundPortraitWarmup");
+
+            RefreshPendingPortraits();
+            _portraitWarmupRoutine = null;
+        }
+
+        IEnumerator WarmCriticalContentInBackground()
+        {
+            var remoteContent = RemoteContentManager.EnsureInstance();
+            if (remoteContent == null)
+                yield break;
+
+            yield return remoteContent.PreloadCriticalContentForSession(
+                requester: "LoadoutPhaseManager.BackgroundGameplayWarmup");
+
+            _criticalWarmupRoutine = null;
+        }
+
+        void RefreshPendingPortraits()
+        {
+            if (_pendingPortraitTargets.Count == 0)
+                return;
+
+            var remoteContent = RemoteContentManager.Instance;
+            if (remoteContent == null)
+                return;
+
+            List<string> resolvedKeys = null;
+            foreach (var entry in _pendingPortraitTargets)
+            {
+                if (!remoteContent.TryGetLoadedPortraitTexture(entry.Key, out var portrait) || portrait == null)
+                    continue;
+
+                _portraitCache[entry.Key] = portrait;
+                foreach (var target in entry.Value)
+                {
+                    if (target == null)
+                        continue;
+
+                    target.texture = portrait;
+                    target.color = Color.white;
+                }
+
+                resolvedKeys ??= new List<string>();
+                resolvedKeys.Add(entry.Key);
+            }
+
+            if (resolvedKeys == null)
+                return;
+
+            for (int i = 0; i < resolvedKeys.Count; i++)
+                _pendingPortraitTargets.Remove(resolvedKeys[i]);
         }
 
         float TotalCardHeight => CardHeight + PortraitFrameHeight + CardTextExtraHeight;

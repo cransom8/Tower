@@ -166,10 +166,7 @@ namespace CastleDefender.UI
             if (_transitioningToLoadout) return;
             _transitioningToLoadout = true;
             NetworkManager.Instance?.ClearPostGameData();
-            LoadingScreen.LoadSceneWithRemoteContentGate(
-                "Loadout",
-                preloadT1Gameplay: true,
-                portraitKeys: ExtractPortraitKeys(payload ?? NetworkManager.Instance?.PendingLoadoutPhase));
+            LoadingScreen.LoadScene("Loadout");
         }
 
         static string[] ExtractPortraitKeys(MLLoadoutPhaseStartPayload payload)

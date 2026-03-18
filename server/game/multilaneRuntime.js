@@ -483,6 +483,39 @@ function createMultilaneRuntime({
       const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
     });
   }
+
+  function waitForGameplaySceneReady(room, roomId, timeoutMs) {
+    const humanSockets = room.players
+      .map((sid) => io.sockets.sockets.get(sid))
+      .filter(Boolean);
+    if (humanSockets.length === 0) return Promise.resolve("no_players");
+
+    return new Promise((resolve) => {
+      let resolved = false;
+      const handlers = new Map();
+      const ready = new Set();
+
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        for (const [sock, fn] of handlers) sock.removeListener("ml_game_scene_ready", fn);
+        resolve(reason || "all_ready");
+      };
+
+      for (const sock of humanSockets) {
+        const fn = () => {
+          ready.add(sock.id);
+          if (ready.size >= humanSockets.length)
+            done("all_ready");
+        };
+        handlers.set(sock, fn);
+        sock.on("ml_game_scene_ready", fn);
+      }
+
+      const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
+    });
+  }
   // ────────────────────────────────────────────────────────────────────────
 
   async function startMLGame(roomId, code) {
@@ -616,6 +649,8 @@ function createMultilaneRuntime({
     }
     // ─────────────────────────────────────────────────────────────────────
 
+    const gameplayReadyPromise = waitForGameplaySceneReady(room, roomId, 20_000);
+
     await Promise.all([
       ...room.players.map(async (sid) => {
         const sock = io.sockets.sockets.get(sid);
@@ -650,6 +685,12 @@ function createMultilaneRuntime({
         sock.emit("ml_match_config", { loadout });
       }),
     ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
+    const gameplayReadyReason = await gameplayReadyPromise;
+    log.info("[ml-game] gameplay scene ready wait complete", {
+      roomId,
+      code,
+      reason: gameplayReadyReason,
+    });
     // ticks begin only after all loadouts are resolved (await above ensures this)
 
     const botController = aiList.length > 0

@@ -1597,6 +1597,16 @@ function registerSocketHandlers({
     });
     // ─────────────────────────────────────────────────────────────────────
 
+    socket.on("ml_game_scene_ready", () => {
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      log.info("[ml-game] client reported gameplay scene ready", {
+        code: session.code,
+        laneIndex: session.laneIndex,
+        socketId: socket.id,
+      });
+    });
+
     socket.on("player_action", (rawPayload) => {
       let payload = rawPayload;
       if (typeof payload === "string") {
