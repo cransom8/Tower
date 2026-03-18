@@ -367,18 +367,36 @@ app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { i
 app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 if (process.env.ADDRESSABLES_CDN_URL) {
   const cdnBase = process.env.ADDRESSABLES_CDN_URL.replace(/\/$/, "");
-  log.info("addressables served from CDN", { cdnBase });
-  // Browsers cannot follow redirects for CORS preflight (OPTIONS) requests — the
-  // Fetch spec forbids it. Handle OPTIONS directly so the preflight passes, then
-  // redirect GET/HEAD to GCS (which has * CORS and handles the actual response).
-  app.use("/addressables", (req, res) => {
+  log.info("addressables proxied from CDN", { cdnBase });
+  // Proxy GCS responses directly — redirecting to GCS causes CORS failures because
+  // Unity WebGL's internal XHR wrapper does not trigger standard browser CORS redirect
+  // handling. By proxying, the browser sees everything as same-origin (no CORS needed).
+  app.use("/addressables", async (req, res) => {
     if (req.method === "OPTIONS") {
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
       res.setHeader("Access-Control-Max-Age", "86400");
       return res.status(204).end();
     }
-    res.redirect(302, `${cdnBase}${req.path}`);
+    const upstreamUrl = `${cdnBase}${req.path}`;
+    try {
+      const upstream = await fetch(upstreamUrl, { method: req.method });
+      if (!upstream.ok) {
+        return res.status(upstream.status).end();
+      }
+      // Forward relevant headers
+      const fwd = ["content-type", "content-length", "content-encoding", "cache-control", "etag", "last-modified"];
+      for (const h of fwd) {
+        const v = upstream.headers.get(h);
+        if (v) res.setHeader(h, v);
+      }
+      res.status(upstream.status);
+      const { Readable } = require("stream");
+      Readable.fromWeb(upstream.body).pipe(res);
+    } catch (err) {
+      log.error("addressables proxy error", { upstreamUrl, err: err.message });
+      res.status(502).end();
+    }
   });
 } else {
   log.info("addressables served from local filesystem", { unityAddressablesDir });
@@ -521,31 +539,8 @@ app.get("/", (_req, res) => {
     .find((p) => fs.existsSync(p));
   if (!candidate) return res.status(404).json({ error: "index.html not found" });
   const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
-  let html = fs.readFileSync(candidate, "utf8")
+  const html = fs.readFileSync(candidate, "utf8")
     .replace(/var buildUrl = "Build"/, `var buildUrl = "${buildCdnBase}/Build"`);
-
-  // If addressables are on a CDN, inject a script that rewrites XHR/fetch requests
-  // from the app server path to the CDN directly — before Unity loads. This avoids
-  // CORS preflight redirect failures (browsers cannot follow redirects for OPTIONS).
-  if (process.env.ADDRESSABLES_CDN_URL) {
-    const addrCdn = process.env.ADDRESSABLES_CDN_URL.replace(/\/$/, "");
-    const shim = `<script>
-(function(){
-  var CDN="${addrCdn}";
-  function rw(u){
-    if(typeof u!=="string")return u;
-    var prefix=window.location.origin+"/addressables";
-    if(u.indexOf(prefix)===0)return CDN+u.slice(prefix.length);
-    return u;
-  }
-  var xo=XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open=function(m,u){arguments[1]=rw(u);return xo.apply(this,arguments);};
-  var fo=window.fetch;
-  window.fetch=function(u,o){return fo.call(this,rw(u),o);};
-})();
-</script>`;
-    html = html.replace("</head>", shim + "</head>");
-  }
 
   res.setHeader("Content-Type", "text/html");
   res.send(html);
