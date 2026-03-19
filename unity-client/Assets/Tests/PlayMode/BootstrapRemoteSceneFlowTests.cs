@@ -76,7 +76,7 @@ public class BootstrapRemoteSceneFlowTests
     }
 
     [UnityTest]
-    public IEnumerator Addressables_Init_Failure_Shows_Retry_UI()
+    public IEnumerator Addressables_Init_Failure_Retries_Into_Login()
     {
         yield return LoadBootstrapFresh();
         RemoteContentVerification.SetFailureCount(RemoteContentVerification.FaultKind.AddressablesInitialization, 1);
@@ -85,10 +85,12 @@ public class BootstrapRemoteSceneFlowTests
         yield return WaitForRetryUi("Addressables catalog failed to initialize.");
 
         Assert.That(SceneManager.GetActiveScene().name, Is.EqualTo("Bootstrap"), "Bootstrap should stay active when the first remote scene fails.");
+        ClickRetryButton();
+        yield return WaitForActiveScene("Login");
     }
 
     [UnityTest]
-    public IEnumerator Lobby_Content_Manifest_Failure_Shows_Retry_UI()
+    public IEnumerator Lobby_Content_Manifest_Failure_Retries_Into_Lobby()
     {
         yield return LoadBootstrapFresh();
         yield return WaitForActiveScene("Login");
@@ -99,6 +101,38 @@ public class BootstrapRemoteSceneFlowTests
 
         Assert.That(SceneManager.GetActiveScene().name, Is.EqualTo("Login"), "Login should stay active when lobby entry content cannot be prepared.");
         Assert.That(SceneManager.GetSceneByName("Lobby").isLoaded, Is.False, "Lobby should not load when the manifest gate fails.");
+        ClickRetryButton();
+        yield return WaitForActiveScene("Lobby");
+    }
+
+    [UnityTest]
+    public IEnumerator GameMl_To_PostGame_Remote_Scene_Catalog_Failure_Retries_Successfully()
+    {
+        yield return LoadToGameMl();
+
+        RemoteContentVerification.SetFailureCount(RemoteContentVerification.FaultKind.RemoteSceneCatalogLookup, 1);
+        LoadingScreen.LoadScene("PostGame");
+        yield return WaitForRetryUi("Remote scene catalog lookup failed.");
+
+        Assert.That(SceneManager.GetActiveScene().name, Is.EqualTo("Game_ML"), "Game_ML should stay active when the next remote scene is missing from the active catalog.");
+        Assert.That(SceneManager.GetSceneByName("PostGame").isLoaded, Is.False, "PostGame should not load when the catalog lookup fails.");
+        ClickRetryButton();
+        yield return WaitForActiveScene("PostGame");
+    }
+
+    [UnityTest]
+    public IEnumerator PostGame_To_Lobby_Remote_Scene_Bundle_Failure_Retries_Successfully()
+    {
+        yield return LoadToPostGame();
+
+        RemoteContentVerification.SetFailureCount(RemoteContentVerification.FaultKind.RemoteSceneBundleDownload, 1);
+        LoadingScreen.LoadScene("Lobby");
+        yield return WaitForRetryUi("Remote scene bundle download failed.");
+
+        Assert.That(SceneManager.GetActiveScene().name, Is.EqualTo("PostGame"), "PostGame should stay active when the next scene bundle download fails.");
+        Assert.That(SceneManager.GetSceneByName("Lobby").isLoaded, Is.False, "Lobby should not load when the scene bundle download fails.");
+        ClickRetryButton();
+        yield return WaitForActiveScene("Lobby");
     }
 
     static IEnumerator LoadBootstrapFresh()
@@ -107,7 +141,34 @@ public class BootstrapRemoteSceneFlowTests
         yield return null;
     }
 
+    static IEnumerator LoadToGameMl()
+    {
+        yield return LoadBootstrapFresh();
+        yield return WaitForActiveSceneStatic("Login");
+
+        LoadingScreen.LoadScene("Lobby");
+        yield return WaitForActiveSceneStatic("Lobby");
+
+        LoadingScreen.LoadScene("Loadout");
+        yield return WaitForActiveSceneStatic("Loadout");
+
+        LoadingScreen.LoadSceneWithRemoteContentGate("Game_ML", preloadEnvironment: true);
+        yield return WaitForActiveSceneStatic("Game_ML", timeoutSeconds: 75f);
+    }
+
+    static IEnumerator LoadToPostGame()
+    {
+        yield return LoadToGameMl();
+        LoadingScreen.LoadScene("PostGame");
+        yield return WaitForActiveSceneStatic("PostGame");
+    }
+
     IEnumerator WaitForActiveScene(string sceneName, float timeoutSeconds = DefaultTimeoutSeconds)
+    {
+        yield return WaitForActiveSceneStatic(sceneName, timeoutSeconds);
+    }
+
+    static IEnumerator WaitForActiveSceneStatic(string sceneName, float timeoutSeconds = DefaultTimeoutSeconds)
     {
         float deadline = Time.realtimeSinceStartup + timeoutSeconds;
         while (Time.realtimeSinceStartup < deadline)
@@ -158,6 +219,18 @@ public class BootstrapRemoteSceneFlowTests
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
         var button = typeof(LoadingScreen).GetField("_retryButton", Flags)?.GetValue(loadingScreen) as Button;
         return button != null && button.gameObject.activeInHierarchy;
+    }
+
+    static void ClickRetryButton()
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var loadingScreen = LoadingScreen.Instance;
+        Assert.That(loadingScreen, Is.Not.Null, "LoadingScreen should exist when retry UI is visible.");
+
+        var button = typeof(LoadingScreen).GetField("_retryButton", Flags)?.GetValue(loadingScreen) as Button;
+        Assert.That(button, Is.Not.Null, "Retry button should exist when retry UI is visible.");
+        Assert.That(button.gameObject.activeInHierarchy, Is.True, "Retry button should be visible before clicking it.");
+        button.onClick.Invoke();
     }
 
     static string[] GetTrackedRemoteSceneNames()

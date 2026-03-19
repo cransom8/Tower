@@ -64,6 +64,7 @@ namespace CastleDefender.UI
         [SerializeField] float settingsRightInset = 10f;
         [SerializeField] float settingsPanelGap = 10f;
         [SerializeField] float settingsButtonSpacing = 6f;
+        [SerializeField] float settingsValueWidth = 32f;
         [SerializeField] float settingsZoomStep = 2f;
         [SerializeField] float settingsTiltStep = 8f;
         [SerializeField] float settingsRotateStep = 20f;
@@ -117,6 +118,9 @@ namespace CastleDefender.UI
         MyStatsHudWidget _myStatsWidget;
         WaveStatusHudWidget _waveStatusWidget;
         FloatingSettingsPanel _settingsPanelWidget;
+        TMP_Text _txtSettingsTiltValue;
+        TMP_Text _txtSettingsZoomValue;
+        TMP_Text _txtSettingsRotationValue;
 
         CollapsibleHudCard _myStatsCard;
         CollapsibleHudCard _teamStatsCard;
@@ -153,6 +157,8 @@ namespace CastleDefender.UI
                 RefreshHud();
             else if (previewInEditMode)
                 RefreshPreviewHud();
+
+            RefreshSettingsPanelValues();
         }
 
         void RebuildHud()
@@ -848,29 +854,59 @@ namespace CastleDefender.UI
             var titleLayout = title.gameObject.AddComponent<LayoutElement>();
             titleLayout.preferredHeight = 16f;
 
-            var grid = new GameObject("Grid", typeof(RectTransform), typeof(GridLayoutGroup), typeof(LayoutElement));
-            grid.transform.SetParent(panel.transform, false);
-            var gridLayoutElement = grid.GetComponent<LayoutElement>();
-            gridLayoutElement.preferredHeight = settingsPanelSize.y - 34f;
-            gridLayoutElement.flexibleHeight = 1f;
+            var rows = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            rows.transform.SetParent(panel.transform, false);
+            var rowsLayoutElement = rows.GetComponent<LayoutElement>();
+            rowsLayoutElement.preferredHeight = settingsPanelSize.y - 34f;
+            rowsLayoutElement.flexibleHeight = 1f;
 
-            var gridLayout = grid.GetComponent<GridLayoutGroup>();
-            float innerWidth = settingsPanelSize.x - 20f;
-            float cellWidth = (innerWidth - settingsButtonSpacing) * 0.5f;
-            gridLayout.cellSize = new Vector2(cellWidth, 42f);
-            gridLayout.spacing = new Vector2(settingsButtonSpacing, settingsButtonSpacing);
-            gridLayout.padding = new RectOffset(0, 0, 0, 0);
-            gridLayout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-            gridLayout.constraintCount = 2;
-            gridLayout.childAlignment = TextAnchor.UpperCenter;
-            gridLayout.startAxis = GridLayoutGroup.Axis.Horizontal;
+            var rowsLayout = rows.GetComponent<VerticalLayoutGroup>();
+            rowsLayout.childAlignment = TextAnchor.UpperCenter;
+            rowsLayout.childControlWidth = true;
+            rowsLayout.childControlHeight = false;
+            rowsLayout.childForceExpandWidth = true;
+            rowsLayout.childForceExpandHeight = false;
+            rowsLayout.spacing = settingsButtonSpacing;
+            rowsLayout.padding = new RectOffset(0, 0, 0, 0);
 
-            var tiltUpButton = CreateSettingsActionButton(grid.transform, "TiltUp", "Tilt +", new Color(0.16f, 0.24f, 0.32f, 0.98f));
-            var tiltDownButton = CreateSettingsActionButton(grid.transform, "TiltDown", "Tilt -", new Color(0.16f, 0.24f, 0.32f, 0.98f));
-            var zoomInButton = CreateSettingsActionButton(grid.transform, "ZoomIn", "Zoom +", new Color(0.18f, 0.28f, 0.22f, 0.98f));
-            var zoomOutButton = CreateSettingsActionButton(grid.transform, "ZoomOut", "Zoom -", new Color(0.18f, 0.28f, 0.22f, 0.98f));
-            var rotateLeftButton = CreateSettingsActionButton(grid.transform, "RotateLeft", "Rot L", new Color(0.28f, 0.20f, 0.16f, 0.98f));
-            var rotateRightButton = CreateSettingsActionButton(grid.transform, "RotateRight", "Rot R", new Color(0.28f, 0.20f, 0.16f, 0.98f));
+            CreateSettingsActionRow(
+                rows.transform,
+                "TiltRow",
+                "TiltUp",
+                "Tilt +",
+                new Color(0.16f, 0.24f, 0.32f, 0.98f),
+                out var tiltUpButton,
+                out _txtSettingsTiltValue,
+                "TiltDown",
+                "Tilt -",
+                new Color(0.16f, 0.24f, 0.32f, 0.98f),
+                out var tiltDownButton);
+
+            CreateSettingsActionRow(
+                rows.transform,
+                "ZoomRow",
+                "ZoomIn",
+                "Zoom +",
+                new Color(0.18f, 0.28f, 0.22f, 0.98f),
+                out var zoomInButton,
+                out _txtSettingsZoomValue,
+                "ZoomOut",
+                "Zoom -",
+                new Color(0.18f, 0.28f, 0.22f, 0.98f),
+                out var zoomOutButton);
+
+            CreateSettingsActionRow(
+                rows.transform,
+                "RotateRow",
+                "RotateLeft",
+                "Rot L",
+                new Color(0.28f, 0.20f, 0.16f, 0.98f),
+                out var rotateLeftButton,
+                out _txtSettingsRotationValue,
+                "RotateRight",
+                "Rot R",
+                new Color(0.28f, 0.20f, 0.16f, 0.98f),
+                out var rotateRightButton);
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
@@ -912,22 +948,78 @@ namespace CastleDefender.UI
             rotateRightButton.onClick.AddListener(() => AdjustCameraRotation(settingsRotateStep));
         }
 
+        void CreateSettingsActionRow(
+            Transform parent,
+            string name,
+            string leftButtonName,
+            string leftLabel,
+            Color leftButtonColor,
+            out Button leftButton,
+            out TMP_Text valueLabel,
+            string rightButtonName,
+            string rightLabel,
+            Color rightButtonColor,
+            out Button rightButton)
+        {
+            var row = new GameObject(name, typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            row.transform.SetParent(parent, false);
+
+            var rowLayoutElement = row.GetComponent<LayoutElement>();
+            rowLayoutElement.preferredHeight = 42f;
+            rowLayoutElement.flexibleWidth = 1f;
+
+            var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.MiddleCenter;
+            rowLayout.childControlWidth = true;
+            rowLayout.childControlHeight = true;
+            rowLayout.childForceExpandWidth = false;
+            rowLayout.childForceExpandHeight = false;
+            rowLayout.spacing = settingsButtonSpacing * 0.5f;
+            rowLayout.padding = new RectOffset(0, 0, 0, 0);
+
+            leftButton = CreateSettingsActionButton(row.transform, leftButtonName, leftLabel, leftButtonColor);
+            valueLabel = CreateSettingsValueDisplay(row.transform, "Value");
+            rightButton = CreateSettingsActionButton(row.transform, rightButtonName, rightLabel, rightButtonColor);
+        }
+
         Button CreateSettingsActionButton(Transform parent, string name, string label, Color backgroundColor)
         {
             var buttonGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
             buttonGo.transform.SetParent(parent, false);
             buttonGo.GetComponent<Image>().color = backgroundColor;
             var layout = buttonGo.GetComponent<LayoutElement>();
+            layout.minWidth = 44f;
             layout.flexibleWidth = 1f;
             layout.flexibleHeight = 1f;
 
-            var labelText = CreateText(buttonGo.transform, "Label", label, 11, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            var labelText = CreateText(buttonGo.transform, "Label", label, 10, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
             labelText.rectTransform.anchorMin = Vector2.zero;
             labelText.rectTransform.anchorMax = Vector2.one;
             labelText.rectTransform.offsetMin = new Vector2(4f, 2f);
             labelText.rectTransform.offsetMax = new Vector2(-4f, -2f);
 
             return buttonGo.GetComponent<Button>();
+        }
+
+        TMP_Text CreateSettingsValueDisplay(Transform parent, string name)
+        {
+            var valueGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            valueGo.transform.SetParent(parent, false);
+            valueGo.GetComponent<Image>().color = new Color(0.10f, 0.14f, 0.18f, 0.98f);
+
+            var layout = valueGo.GetComponent<LayoutElement>();
+            layout.minWidth = settingsValueWidth;
+            layout.preferredWidth = settingsValueWidth;
+            layout.flexibleWidth = 0f;
+            layout.flexibleHeight = 1f;
+
+            var valueText = CreateText(valueGo.transform, "Label", "--", 11, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 0.96f));
+            valueText.rectTransform.anchorMin = Vector2.zero;
+            valueText.rectTransform.anchorMax = Vector2.one;
+            valueText.rectTransform.offsetMin = new Vector2(2f, 2f);
+            valueText.rectTransform.offsetMax = new Vector2(-2f, -2f);
+
+            return valueText;
         }
 
         void AdjustCameraTilt(float delta)
@@ -949,6 +1041,40 @@ namespace CastleDefender.UI
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
                 controller.AdjustRotation(delta);
+        }
+
+        void RefreshSettingsPanelValues()
+        {
+            if (_txtSettingsTiltValue == null && _txtSettingsZoomValue == null && _txtSettingsRotationValue == null)
+                return;
+
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller == null)
+            {
+                SetSettingsValue(_txtSettingsTiltValue, "--");
+                SetSettingsValue(_txtSettingsZoomValue, "--");
+                SetSettingsValue(_txtSettingsRotationValue, "--");
+                return;
+            }
+
+            SetSettingsValue(_txtSettingsTiltValue, FormatSettingsValue(controller.CurrentTilt));
+            SetSettingsValue(_txtSettingsZoomValue, FormatSettingsValue(controller.CurrentZoom));
+            SetSettingsValue(_txtSettingsRotationValue, FormatSettingsValue(controller.CurrentRotation));
+        }
+
+        static void SetSettingsValue(TMP_Text label, string value)
+        {
+            if (label != null)
+                label.text = value;
+        }
+
+        static string FormatSettingsValue(float value)
+        {
+            float roundedValue = Mathf.Round(value * 10f) * 0.1f;
+            if (Mathf.Approximately(roundedValue, Mathf.Round(roundedValue)))
+                return Mathf.RoundToInt(roundedValue).ToString();
+
+            return roundedValue.ToString("0.#");
         }
 
         void CreateWaveStatusChip(Transform parent, string name, string tag, string value, Color accentColor)

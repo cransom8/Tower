@@ -22,7 +22,6 @@ namespace CastleDefender.Editor
             ("Loading", "Assets/Scenes/Loading.unity"),
             ("Loadout", "Assets/Scenes/Loadout.unity"),
             ("Game_ML", "Assets/Scenes/Game_ML.unity"),
-            ("Game_Classic", "Assets/Scenes/Game_Classic.unity"),
             ("PostGame", "Assets/Scenes/PostGame.unity"),
         };
 

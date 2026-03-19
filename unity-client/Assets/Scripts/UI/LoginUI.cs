@@ -27,6 +27,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Networking;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.Scripting;
 using TMPro;
 using Newtonsoft.Json;
@@ -545,6 +546,18 @@ namespace CastleDefender.UI
 
             if (delay > 0f)
                 yield return new WaitForSeconds(delay);
+
+            float deadline = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                if (!LoadingScreen.IsTransitionInProgress
+                    && string.Equals(SceneManager.GetActiveScene().name, "Login", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                yield return null;
+            }
 
             ReleaseLoginAudioListener();
             EnsurePersistentEventSystem();

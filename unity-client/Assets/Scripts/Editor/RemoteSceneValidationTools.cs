@@ -105,6 +105,35 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/Remote Scene Validation/Transition/PostGame")]
         public static void TransitionToPostGame() => RunTransition(() => LoadingScreen.LoadScene("PostGame"));
 
+        [MenuItem("Castle Defender/Remote Scene Validation/Retry Failed Transition")]
+        public static void RetryFailedTransition()
+        {
+            if (!Application.isPlaying)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] Enter Play Mode first.");
+                return;
+            }
+
+            var loadingScreen = LoadingScreen.Instance;
+            if (loadingScreen == null)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] No LoadingScreen instance is active.");
+                return;
+            }
+
+            const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            if (typeof(LoadingScreen).GetField("_retryButton", Flags)?.GetValue(loadingScreen) is not UnityEngine.UI.Button button
+                || button == null
+                || !button.gameObject.activeInHierarchy)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] Retry button is not currently visible.");
+                return;
+            }
+
+            button.onClick.Invoke();
+            s_framesUntilLog = 150;
+        }
+
         static void RunTransition(System.Action transition)
         {
             if (!Application.isPlaying)

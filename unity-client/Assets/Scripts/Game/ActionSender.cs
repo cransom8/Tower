@@ -7,7 +7,6 @@
 //   ActionSender.SetAutosend(true, enabledUnits, loadoutKeys);
 
 using System.Collections.Generic;
-using Newtonsoft.Json.Linq;
 using UnityEngine;
 using CastleDefender.Net;
 
@@ -15,65 +14,66 @@ namespace CastleDefender.Game
 {
     public static class ActionSender
     {
-        static void SendAction(string type, JObject data = null)
+        static void SendAction(string type, object data = null)
         {
             Debug.Log($"[ActionSender] SendAction type={type} connected={NetworkManager.Instance?.IsConnected}");
-            var payload = new JObject { ["type"] = type };
-            if (data != null) payload["data"] = data;
+            object payload = data == null
+                ? new { type }
+                : new { type, data };
             NetworkManager.Instance?.Emit("player_action", payload);
         }
 
         public static void PlaceUnit(int col, int row, string unitTypeKey)
         {
             Debug.Log($"[ActionSender] PlaceUnit col={col} row={row} unitTypeKey={unitTypeKey}");
-            SendAction("place_unit", new JObject
+            SendAction("place_unit", new
             {
-                ["gridX"] = col,
-                ["gridY"] = row,
-                ["unitTypeKey"] = unitTypeKey
+                gridX = col,
+                gridY = row,
+                unitTypeKey
             });
         }
 
         public static void SellTower(int col, int row)
-            => SendAction("sell_tower", new JObject { ["gridX"] = col, ["gridY"] = row });
+            => SendAction("sell_tower", new { gridX = col, gridY = row });
 
         public static void UpgradeTower(int col, int row, string towerType = null)
-            => SendAction("upgrade_tower", new JObject
+            => SendAction("upgrade_tower", new
             {
-                ["gridX"] = col,
-                ["gridY"] = row,
-                ["x"] = col,
-                ["y"] = row,
-                ["col"] = col,
-                ["row"] = row,
-                ["towerType"] = towerType
+                gridX = col,
+                gridY = row,
+                x = col,
+                y = row,
+                col,
+                row,
+                towerType
             });
 
         public static void UpgradeBarracks()
             => SendAction("upgrade_barracks");
 
         public static void SpawnUnit(string unitType)
-            => SendAction("spawn_unit", new JObject { ["unitType"] = unitType });
+            => SendAction("spawn_unit", new { unitType });
 
         public static void SetAutosend(bool enabled, Dictionary<string, bool> enabledUnits, string[] loadoutKeys)
-            => SendAction("set_autosend", new JObject
+            => SendAction("set_autosend", new
             {
-                ["enabled"] = enabled,
-                ["enabledUnits"] = JObject.FromObject(enabledUnits),
-                ["loadoutKeys"] = new JArray(loadoutKeys)
+                enabled,
+                enabledUnits,
+                loadoutKeys
             });
 
         public static void ClassicSpawnUnit(string unitType)
-            => SendAction("spawn_unit", new JObject { ["unitType"] = unitType });
+            => SendAction("spawn_unit", new { unitType });
 
         public static void ClassicBuildTower(string slot, string towerType)
-            => SendAction("build_tower", new JObject { ["slot"] = slot, ["towerType"] = towerType });
+            => SendAction("build_tower", new { slot, towerType });
 
         public static void ClassicUpgradeTower(string slot)
-            => SendAction("upgrade_tower", new JObject { ["slot"] = slot });
+            => SendAction("upgrade_tower", new { slot });
 
         public static void ClassicSellTower(string slot)
-            => SendAction("sell_tower", new JObject { ["slot"] = slot });
+            => SendAction("sell_tower", new { slot });
 
         public static void CreateMLRoom(string displayName = "Player")
             => NetworkManager.Instance.Emit("create_ml_room", new { displayName });

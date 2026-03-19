@@ -26,6 +26,8 @@ namespace CastleDefender.Net
             T1GameplayDownload,
             PortraitDownload,
             EnvironmentDownload,
+            RemoteSceneCatalogLookup,
+            RemoteSceneBundleDownload,
         }
 
         const int MaxEvents = 256;
@@ -203,6 +205,8 @@ namespace CastleDefender.Net
                 FaultKind.T1GameplayDownload => "remote_content_verification_fail_t1_download",
                 FaultKind.PortraitDownload => "remote_content_verification_fail_portrait_download",
                 FaultKind.EnvironmentDownload => "remote_content_verification_fail_environment_download",
+                FaultKind.RemoteSceneCatalogLookup => "remote_content_verification_fail_scene_catalog_lookup",
+                FaultKind.RemoteSceneBundleDownload => "remote_content_verification_fail_scene_bundle_download",
                 _ => "remote_content_verification_unknown",
             };
         }
@@ -216,6 +220,8 @@ namespace CastleDefender.Net
                 FaultKind.T1GameplayDownload => "T1 gameplay download",
                 FaultKind.PortraitDownload => "portrait download",
                 FaultKind.EnvironmentDownload => "environment download",
+                FaultKind.RemoteSceneCatalogLookup => "remote scene catalog lookup",
+                FaultKind.RemoteSceneBundleDownload => "remote scene bundle download",
                 _ => "unknown",
             };
         }

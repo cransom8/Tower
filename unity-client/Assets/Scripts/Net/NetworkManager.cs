@@ -908,8 +908,17 @@ namespace CastleDefender.Net
             string json = data != null ? JsonConvert.SerializeObject(data) : "";
             JSIO_Emit(eventName, json);
 #else
-            if (data == null) _socket.Emit(eventName);
-            else              _socket.Emit(eventName, data);
+            if (data == null)
+            {
+                _socket.Emit(eventName);
+            }
+            else
+            {
+                // Keep native/editor payloads aligned with the WebGL path so gameplay
+                // actions serialize as plain JSON objects instead of library-specific wrappers.
+                string json = JsonConvert.SerializeObject(data);
+                _socket.EmitStringAsJSON(eventName, json);
+            }
 #endif
         }
 

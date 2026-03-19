@@ -5,6 +5,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.ResourceManagement.ResourceLocations;
 using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -20,6 +21,7 @@ public class LoadingScreen : MonoBehaviour
     const string BootstrapSceneName = "Bootstrap";
 
     public static LoadingScreen Instance { get; private set; }
+    public static bool IsTransitionInProgress => _transitionInProgress;
 
     [Header("UI References")]
     public Image progressBar;
@@ -245,6 +247,63 @@ public class LoadingScreen : MonoBehaviour
         float startTime = Time.realtimeSinceStartup;
         if (loadingLabel)
             loadingLabel.text = "Loading scene";
+        SetProgressTarget(0.68f);
+
+        if (RemoteContentVerification.ConsumeFailure(
+                RemoteContentVerification.FaultKind.RemoteSceneCatalogLookup,
+                $"LoadingScreen.ValidateSceneCatalog:{_pendingScene}",
+                out string forcedSceneCatalogFailure))
+        {
+            FailTransition("Remote scene catalog lookup failed.", forcedSceneCatalogFailure);
+            yield break;
+        }
+
+        AsyncOperationHandle<IList<IResourceLocation>> sceneLocationHandle;
+        try
+        {
+            sceneLocationHandle = Addressables.LoadResourceLocationsAsync(_pendingScene, typeof(SceneInstance));
+        }
+        catch (Exception ex)
+        {
+            FailTransition(
+                "Remote scene catalog lookup failed.",
+                $"Addressables threw while resolving scene '{_pendingScene}' in the active catalog: {ex.Message}");
+            yield break;
+        }
+
+        while (sceneLocationHandle.IsValid() && !sceneLocationHandle.IsDone)
+            yield return null;
+
+        if (!sceneLocationHandle.IsValid())
+        {
+            FailTransition(
+                "Remote scene catalog lookup failed.",
+                $"Scene catalog lookup for '{_pendingScene}' became invalid before completion.");
+            yield break;
+        }
+
+        bool sceneCatalogResolved = sceneLocationHandle.Status == AsyncOperationStatus.Succeeded
+            && sceneLocationHandle.Result != null
+            && sceneLocationHandle.Result.Count > 0;
+        if (sceneLocationHandle.IsValid())
+            Addressables.Release(sceneLocationHandle);
+
+        if (!sceneCatalogResolved)
+        {
+            FailTransition(
+                "Remote scene catalog lookup failed.",
+                BuildMissingSceneCatalogMessage(_pendingScene));
+            yield break;
+        }
+
+        if (RemoteContentVerification.ConsumeFailure(
+                RemoteContentVerification.FaultKind.RemoteSceneBundleDownload,
+                $"LoadingScreen.LoadSceneAsync:{_pendingScene}",
+                out string forcedSceneBundleFailure))
+        {
+            FailTransition("Remote scene bundle download failed.", forcedSceneBundleFailure);
+            yield break;
+        }
 
         AsyncOperationHandle<SceneInstance> loadHandle;
         try
@@ -277,7 +336,7 @@ public class LoadingScreen : MonoBehaviour
                 Addressables.Release(loadHandle);
 
             FailTransition(
-                "Remote scene load failed.",
+                BuildRemoteSceneLoadFailureTitle(loadHandle),
                 BuildHandleFailureMessage($"Scene '{_pendingScene}' could not be loaded from Addressables.", loadHandle));
             yield break;
         }
@@ -580,6 +639,34 @@ public class LoadingScreen : MonoBehaviour
             return fallback;
 
         return $"{fallback} {detail}";
+    }
+
+    static string BuildMissingSceneCatalogMessage(string sceneName)
+    {
+        return
+            $"Scene '{sceneName}' is missing from the active Addressables catalog. " +
+            "Rebuild Addressables, clear the catalog/cache, and confirm the active player is loading the latest remote catalog.";
+    }
+
+    static string BuildRemoteSceneLoadFailureTitle(AsyncOperationHandle<SceneInstance> handle)
+    {
+        string detail = handle.OperationException?.Message ?? string.Empty;
+        if (detail.IndexOf("No Location found", StringComparison.OrdinalIgnoreCase) >= 0
+            || detail.IndexOf("InvalidKeyException", StringComparison.OrdinalIgnoreCase) >= 0
+            || detail.IndexOf("catalog", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "Remote scene catalog lookup failed.";
+        }
+
+        if (detail.IndexOf("download", StringComparison.OrdinalIgnoreCase) >= 0
+            || detail.IndexOf("bundle", StringComparison.OrdinalIgnoreCase) >= 0
+            || detail.IndexOf("UnityWebRequest", StringComparison.OrdinalIgnoreCase) >= 0
+            || detail.IndexOf("request", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "Remote scene bundle download failed.";
+        }
+
+        return "Remote scene load failed.";
     }
 
     static bool HasPendingRemotePreparation()

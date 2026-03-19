@@ -30,6 +30,12 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/Remote Content Verification/Fail Environment Download Once")]
         public static void FailEnvironmentOnce() => SetFailOnce(RemoteContentVerification.FaultKind.EnvironmentDownload);
 
+        [MenuItem("Castle Defender/Remote Content Verification/Fail Remote Scene Catalog Lookup Once")]
+        public static void FailRemoteSceneCatalogLookupOnce() => SetFailOnce(RemoteContentVerification.FaultKind.RemoteSceneCatalogLookup);
+
+        [MenuItem("Castle Defender/Remote Content Verification/Fail Remote Scene Bundle Download Once")]
+        public static void FailRemoteSceneBundleDownloadOnce() => SetFailOnce(RemoteContentVerification.FaultKind.RemoteSceneBundleDownload);
+
         [MenuItem("Castle Defender/Remote Content Verification/Dump Evidence To Console")]
         public static void DumpEvidence()
         {

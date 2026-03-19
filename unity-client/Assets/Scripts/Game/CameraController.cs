@@ -73,6 +73,9 @@ public class CameraController : MonoBehaviour
     float _defaultYaw;
 
     public static bool IsLmbPanning { get; private set; }
+    public float CurrentZoom => _targetOrtho;
+    public float CurrentTilt => _targetTilt;
+    public float CurrentRotation => Mathf.DeltaAngle(0f, _targetYaw);
 
     void Start()
     {
