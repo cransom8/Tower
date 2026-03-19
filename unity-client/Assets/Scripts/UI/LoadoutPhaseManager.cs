@@ -154,9 +154,11 @@ namespace CastleDefender.UI
             _pendingPortraitTargets.Clear();
             StopWarmupRoutines();
 
-            // Hide preparation overlay, show loadout panel
+            // Hide preparation overlay, show loadout panel (player strip built inside BuildPanel)
             HidePrepOverlay();
             if (_panelRoot != null) Destroy(_panelRoot);
+            _playerPanelRoot = null;  // destroyed with _panelRoot above
+            _playerRows.Clear();
             BuildPanel();
             StartBackgroundWarmup();
 
@@ -514,6 +516,9 @@ namespace CastleDefender.UI
             // Spawn unit cards
             BuildCards();
 
+            // Player readiness strip — horizontal row just above confirm button
+            BuildPlayerPanel();
+
             // Confirm button
             _btnConfirm = MakeButton(_panelRoot.transform, "Btn_Confirm", "Confirm", 42f);
             _txtConfirmLabel = _btnConfirm.GetComponentInChildren<TMP_Text>();
@@ -865,7 +870,7 @@ namespace CastleDefender.UI
             ShowPrepOverlay();
             if (_txtPrepStatus != null) _txtPrepStatus.text = "Preparing Battlefield";
             if (_txtPrepDetail != null) _txtPrepDetail.text = "Waiting for players...";
-            BuildPlayerPanel();
+            // Player panel is already built and visible from HandlePhaseStart — no rebuild needed.
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -874,75 +879,73 @@ namespace CastleDefender.UI
         void BuildPlayerPanel()
         {
             if (_playerPanelRoot != null) return;
-            if (_prepOverlay == null) return;
+            // If called before _panelRoot exists (shouldn't happen), skip.
+            if (_panelRoot == null) return;
 
             _playerPanelRoot = new GameObject("Panel_Players");
-            _playerPanelRoot.transform.SetParent(_prepOverlay.transform, false);
+            _playerPanelRoot.transform.SetParent(_panelRoot.transform, false);
+
             var le = _playerPanelRoot.AddComponent<LayoutElement>();
-            le.flexibleWidth = 1f;
-            var vlg = _playerPanelRoot.AddComponent<VerticalLayoutGroup>();
-            vlg.childAlignment     = TextAnchor.UpperCenter;
-            vlg.childForceExpandWidth  = true;
-            vlg.childForceExpandHeight = false;
-            vlg.spacing = 8f;
+            le.preferredHeight = 46f;
+            le.flexibleWidth   = 1f;
+
+            var bg = _playerPanelRoot.AddComponent<Image>();
+            bg.color = new Color(0.07f, 0.07f, 0.13f, 0.9f);
+
+            var hlg = _playerPanelRoot.AddComponent<HorizontalLayoutGroup>();
+            hlg.childAlignment         = TextAnchor.MiddleCenter;
+            hlg.childForceExpandWidth  = true;
+            hlg.childForceExpandHeight = true;
+            hlg.spacing = 6f;
+            hlg.padding = new RectOffset(4, 4, 2, 2);
+
             _playerRows.Clear();
         }
 
         void UpdatePlayerPanel(MLPlayerPreparationState[] players)
         {
-            if (_prepOverlay == null || _state == PhaseState.Done) return;
-            if (_playerPanelRoot == null) BuildPlayerPanel();
+            if (_state == PhaseState.Done) return;
             if (_playerPanelRoot == null) return;
 
             int myLane = NetworkManager.Instance?.MyLaneIndex ?? -1;
 
-            // Add missing rows
+            // Add missing columns (one per player, side by side)
             while (_playerRows.Count < players.Length)
             {
-                var rowGO = new GameObject($"Row_{_playerRows.Count}");
-                rowGO.transform.SetParent(_playerPanelRoot.transform, false);
-                var rowLE = rowGO.AddComponent<LayoutElement>();
-                rowLE.preferredHeight = 28f;
-                var hlg = rowGO.AddComponent<HorizontalLayoutGroup>();
-                hlg.childAlignment      = TextAnchor.MiddleLeft;
-                hlg.childForceExpandWidth  = false;
-                hlg.childForceExpandHeight = true;
-                hlg.spacing = 10f;
-                hlg.padding = new RectOffset(8, 8, 2, 2);
-                var rowBg = rowGO.AddComponent<Image>();
-                rowBg.color = new Color(0.1f, 0.1f, 0.16f, 0.8f);
+                var colGO = new GameObject($"Col_{_playerRows.Count}");
+                colGO.transform.SetParent(_playerPanelRoot.transform, false);
+                var colBG = colGO.AddComponent<Image>();
+                colBG.color = new Color(0.1f, 0.1f, 0.16f, 0.85f);
+                var colVLG = colGO.AddComponent<VerticalLayoutGroup>();
+                colVLG.childAlignment        = TextAnchor.MiddleCenter;
+                colVLG.childForceExpandWidth = true;
+                colVLG.childForceExpandHeight = false;
+                colVLG.spacing = 2f;
+                colVLG.padding = new RectOffset(6, 6, 4, 4);
 
-                var nameTxt = MakeLabel(rowGO.transform, "Txt_Name", "", 14, Color.white, 28f);
-                nameTxt.alignment = TextAlignmentOptions.Left;
-                var nameLE = nameTxt.gameObject.GetComponent<LayoutElement>();
-                if (nameLE == null) nameLE = nameTxt.gameObject.AddComponent<LayoutElement>();
-                nameLE.preferredWidth = 160f;
+                var nameTxt = MakeLabel(colGO.transform, "Txt_Name", "", 11, Color.white, 15f);
+                nameTxt.alignment = TextAlignmentOptions.Center;
 
-                // Progress bar container
-                var barBG = new GameObject("BarBG");
-                barBG.transform.SetParent(rowGO.transform, false);
-                var barBGImg = barBG.AddComponent<Image>();
-                barBGImg.color = new Color(0.15f, 0.15f, 0.2f);
-                var barBGLE = barBG.AddComponent<LayoutElement>();
-                barBGLE.preferredWidth  = 120f;
-                barBGLE.preferredHeight = 12f;
+                // Thin progress bar
+                var barBGGO = new GameObject("BarBG");
+                barBGGO.transform.SetParent(colGO.transform, false);
+                var barBGLE = barBGGO.AddComponent<LayoutElement>();
+                barBGLE.preferredHeight = 5f;
+                barBGLE.flexibleWidth   = 1f;
+                barBGGO.AddComponent<Image>().color = new Color(0.15f, 0.15f, 0.2f);
 
                 var barFillGO = new GameObject("BarFill");
-                barFillGO.transform.SetParent(barBG.transform, false);
+                barFillGO.transform.SetParent(barBGGO.transform, false);
                 var barFillRT = barFillGO.AddComponent<RectTransform>();
-                barFillRT.anchorMin = new Vector2(0f, 0f);
-                barFillRT.anchorMax = new Vector2(0f, 1f);
-                barFillRT.pivot     = new Vector2(0f, 0.5f);
+                barFillRT.anchorMin = Vector2.zero;
+                barFillRT.anchorMax = new Vector2(0f, 1f);  // X updated per-frame
                 barFillRT.offsetMin = Vector2.zero;
-                barFillRT.offsetMax = new Vector2(0f, 0f);
+                barFillRT.offsetMax = Vector2.zero;
                 var barFillImg = barFillGO.AddComponent<Image>();
                 barFillImg.color = new Color(0.2f, 0.7f, 0.3f);
 
-                var stateTxt = MakeLabel(rowGO.transform, "Txt_State", "", 13, new Color(0.8f, 0.8f, 0.8f), 28f);
-                stateTxt.alignment = TextAlignmentOptions.Right;
-                var stateLE = stateTxt.gameObject.GetComponent<LayoutElement>();
-                if (stateLE == null) stateLE = stateTxt.gameObject.AddComponent<LayoutElement>();
-                stateLE.preferredWidth = 130f;
+                var stateTxt = MakeLabel(colGO.transform, "Txt_State", "", 10, new Color(0.75f, 0.75f, 0.75f), 13f);
+                stateTxt.alignment = TextAlignmentOptions.Center;
 
                 _playerRows.Add((nameTxt, stateTxt, barFillImg));
             }
@@ -954,7 +957,7 @@ namespace CastleDefender.UI
                 bool isMe = p.laneIndex == myLane;
 
                 row.name.text  = isMe ? $"<b>{p.displayName}</b>" : p.displayName;
-                row.name.color = isMe ? new Color(0.9f, 0.95f, 1f) : Color.white;
+                row.name.color = isMe ? new Color(0.85f, 0.95f, 1f) : Color.white;
 
                 string stateText;
                 Color  stateColor;
@@ -970,8 +973,8 @@ namespace CastleDefender.UI
                 }
                 else
                 {
-                    stateText  = "Preparing loadout";
-                    stateColor = new Color(0.7f, 0.7f, 0.7f);
+                    stateText  = "Preparing...";
+                    stateColor = new Color(0.6f, 0.6f, 0.6f);
                 }
 
                 row.state.text  = stateText;
@@ -980,10 +983,8 @@ namespace CastleDefender.UI
                 if (row.bar != null)
                 {
                     float pct = p.gameplayReady ? 1f : Mathf.Clamp01(p.contentPercent);
-                    var   barRT = row.bar.rectTransform;
-                    float maxW  = 120f;
-                    barRT.offsetMax = new Vector2(pct * maxW, 0f);
-                    row.bar.color  = p.gameplayReady
+                    row.bar.rectTransform.anchorMax = new Vector2(pct, 1f);
+                    row.bar.color = p.gameplayReady
                         ? new Color(0.2f, 0.7f, 0.3f)
                         : new Color(0.3f, 0.55f, 0.9f);
                 }

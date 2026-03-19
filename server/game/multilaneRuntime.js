@@ -532,13 +532,18 @@ function createMultilaneRuntime({
         contentState:   (sock && sock._contentProgress?.state)   || "Preparing",
       };
     });
+    // AI players simulate a brief 3-second "load" so their bars animate in real-time.
+    // _aiReadyAt is set when the match prep starts; before that, we ramp 0→1 over 3s.
+    const now = Date.now();
+    const aiReady = room._aiReadyAt ? now >= room._aiReadyAt : false;
+    const aiElapsed = room._aiReadyAt ? Math.min(1, (now - (room._aiReadyAt - 3000)) / 3000) : 0;
     const aiPlayers = (room.aiPlayers || []).map(ai => ({
       laneIndex:      ai.laneIndex,
       displayName:    ai.displayName || "CPU",
       loadoutReady:   true,
-      gameplayReady:  true,
-      contentPercent: 1.0,
-      contentState:   "Ready",
+      gameplayReady:  aiReady,
+      contentPercent: aiReady ? 1.0 : aiElapsed,
+      contentState:   aiReady ? "Ready" : "Loading...",
     }));
     const players = [...humanPlayers, ...aiPlayers];
     io.to(roomId).emit("ml_match_preparation_state", { players });
@@ -779,9 +784,19 @@ function createMultilaneRuntime({
       selectionMode,
       availableUnits: buildAvailableUnits(),
     });
+
+    // AI players animate 0→100% over 3 seconds from loadout phase start.
+    room._aiReadyAt = Date.now() + 3000;
+
+    // Broadcast initial preparation state immediately so clients can populate
+    // the player panel, then keep broadcasting every 1.5s during unit selection.
+    broadcastPreparationState(room, roomId);
+    const loadoutPhaseInterval = setInterval(() => broadcastPreparationState(room, roomId), 1500);
+
     if (selectionMode !== "random") {
       await waitForLoadoutConfirms(room, roomId, loadoutTimeoutMs);
     }
+    clearInterval(loadoutPhaseInterval);
     // ─────────────────────────────────────────────────────────────────────
 
     // ── BARRIER 2: All players must have gameplay-critical assets before match starts ──
