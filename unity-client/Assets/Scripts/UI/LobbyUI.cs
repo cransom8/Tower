@@ -436,11 +436,35 @@ namespace CastleDefender.UI
             // PendingLoadoutPhase ends up null.  The flag is cleared in HandleLoadoutPhaseStart.
             _awaitingLoadoutScene = true;
 
+            // Emit ml_loadout_ready once critical content is ready.
+            // We do this here (before the Loadout scene loads) to break the circular
+            // dependency: server Barrier 1 waits for ml_loadout_ready before emitting
+            // ml_loadout_phase_start, which is what causes the Loadout scene to load.
+            StartCoroutine(WaitForContentAndEmitLoadoutReady());
+
             // If PendingLoadoutPhase was already cached by NetworkManager (extremely
             // fast server), handle it now rather than waiting for the event.
             var nm = NetworkManager.Instance;
             if (nm != null && nm.PendingLoadoutPhase != null)
                 HandleLoadoutPhaseStart(nm.PendingLoadoutPhase);
+        }
+
+        IEnumerator WaitForContentAndEmitLoadoutReady()
+        {
+            // Wait for any in-progress lobby warmup to finish first
+            while (_lobbyWarmupRoutine != null)
+                yield return null;
+
+            // If critical content wasn't completed during lobby warmup, run it now
+            var rc = RemoteContentManager.EnsureInstance();
+            if (!rc.HasCompletedCriticalPreload)
+            {
+                Debug.Log("[Lobby] Critical content not yet ready — running preload before emitting loadout ready");
+                yield return rc.PreloadCriticalContentForSession(requester: "LobbyUI.MatchReady");
+            }
+
+            Debug.Log("[Lobby] Emitting ml_loadout_ready");
+            NetworkManager.Instance?.Emit("ml_loadout_ready");
         }
 
         void HandleLoadoutPhaseStart(MLLoadoutPhaseStartPayload payload)

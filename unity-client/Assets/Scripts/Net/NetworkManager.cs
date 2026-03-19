@@ -63,8 +63,10 @@ namespace CastleDefender.Net
         public event Action<MLMatchConfig>            OnMLMatchConfig;
 
         // ── Loadout phase events ──────────────────────────────────────────────
-        public event Action<MLLoadoutPhaseStartPayload>  OnMLLoadoutPhaseStart;
-        public event Action<MLLoadoutPhaseEndPayload>    OnMLLoadoutPhaseEnd;
+        public event Action<MLLoadoutPhaseStartPayload>       OnMLLoadoutPhaseStart;
+        public event Action<MLLoadoutPhaseEndPayload>         OnMLLoadoutPhaseEnd;
+        public event Action<MLMatchPreparationStatePayload>   OnMLMatchPreparationState;
+        public event Action<MLMatchCancelledPayload>          OnMLMatchCancelled;
 
         // ── Classic Lobby events ──────────────────────────────────────────────
         public event Action<ClassicRoomCreatedPayload>  OnClassicRoomCreated;
@@ -189,6 +191,8 @@ namespace CastleDefender.Net
             JSIO_On("ml_match_config");
             JSIO_On("ml_loadout_phase_start");
             JSIO_On("ml_loadout_phase_end");
+            JSIO_On("ml_match_preparation_state");
+            JSIO_On("ml_match_cancelled");
             JSIO_On("room_created");
             JSIO_On("room_joined");
             JSIO_On("match_ready");
@@ -314,6 +318,19 @@ namespace CastleDefender.Net
                     PendingLoadoutPhase = null;
                     Debug.Log($"[NM] ml_loadout_phase_end reason={p.reason}");
                     OnMLLoadoutPhaseEnd?.Invoke(p);
+                    break;
+                }
+                case "ml_match_preparation_state":
+                {
+                    var p = JsonUtility.FromJson<MLMatchPreparationStatePayload>(json);
+                    OnMLMatchPreparationState?.Invoke(p);
+                    break;
+                }
+                case "ml_match_cancelled":
+                {
+                    var p = JsonUtility.FromJson<MLMatchCancelledPayload>(json);
+                    Debug.LogWarning($"[NM] ml_match_cancelled reason={p.reason} message={p.message}");
+                    OnMLMatchCancelled?.Invoke(p);
                     break;
                 }
                 case "room_created":
@@ -605,6 +622,18 @@ namespace CastleDefender.Net
                 PendingLoadoutPhase = null;
                 Debug.Log($"[NM] ml_loadout_phase_end reason={p.reason}");
                 OnMLLoadoutPhaseEnd?.Invoke(p);
+            });
+
+            _socket.OnUnityThread("ml_match_preparation_state", resp =>
+            {
+                OnMLMatchPreparationState?.Invoke(FromResp<MLMatchPreparationStatePayload>(resp));
+            });
+
+            _socket.OnUnityThread("ml_match_cancelled", resp =>
+            {
+                var p = FromResp<MLMatchCancelledPayload>(resp);
+                Debug.LogWarning($"[NM] ml_match_cancelled reason={p.reason} message={p.message}");
+                OnMLMatchCancelled?.Invoke(p);
             });
 
             // ── Classic Lobby ─────────────────────────────────────────────────

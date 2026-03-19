@@ -24,7 +24,7 @@ EditorBuildSettings:
     path: Assets/Scenes/Game_ML.unity
     guid: 825b9b19178b44e4bbbba94bcf2ddf8d
   - enabled: 1
-    path: Assets/Scenes/PostGame.unity/PostGame.unity
+    path: Assets/Scenes/PostGame.unity
     guid: dad9eb76e96341f499aa29165fc3f63f
   - enabled: 1
     path: Assets/Scenes/Game_Classic.unity

@@ -154,6 +154,22 @@ namespace CastleDefender.UI
         void HandleMatchReady(MLMatchReadyPayload _)
         {
             if (_rematchLabel != null) _rematchLabel.text = "Preparing rematch...";
+            // Emit ml_loadout_ready once critical content is ready (same as LobbyUI.WaitForContentAndEmitLoadoutReady).
+            // Server Barrier 1 blocks ml_loadout_phase_start until all clients emit this.
+            StartCoroutine(WaitForContentAndEmitLoadoutReady());
+        }
+
+        System.Collections.IEnumerator WaitForContentAndEmitLoadoutReady()
+        {
+            var rc = RemoteContentManager.EnsureInstance();
+            if (!rc.HasCompletedCriticalPreload)
+            {
+                Debug.Log("[PostGame] Critical content not yet ready — running preload before emitting loadout ready");
+                yield return rc.PreloadCriticalContentForSession(requester: "PostGame.MatchReady");
+            }
+
+            Debug.Log("[PostGame] Emitting ml_loadout_ready");
+            NetworkManager.Instance?.Emit("ml_loadout_ready");
         }
 
         void HandleLoadoutPhaseStart(MLLoadoutPhaseStartPayload payload)

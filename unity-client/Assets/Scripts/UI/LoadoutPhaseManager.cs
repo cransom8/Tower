@@ -14,6 +14,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 using CastleDefender.Net;
@@ -43,7 +44,7 @@ namespace CastleDefender.UI
 
 
         // ── Phase state ───────────────────────────────────────────────────────
-        enum PhaseState { Idle, Active, Confirming, Done }
+        enum PhaseState { Idle, PreparingLoadout, Active, Confirming, WaitingForMatch, Done }
         PhaseState _state = PhaseState.Idle;
 
         // ── Panel references (created at runtime) ─────────────────────────────
@@ -53,6 +54,15 @@ namespace CastleDefender.UI
         Button         _btnConfirm;
         TMP_Text       _txtConfirmLabel;
         Transform      _gridParent;
+
+        // ── Preparation overlay (shown before loadout phase starts) ───────────
+        GameObject _prepOverlay;
+        TMP_Text   _txtPrepStatus;
+        TMP_Text   _txtPrepDetail;
+
+        // ── Per-player status panel ───────────────────────────────────────────
+        GameObject              _playerPanelRoot;
+        readonly List<(TMP_Text name, TMP_Text state, Image bar)> _playerRows = new();
 
         // ── Data ──────────────────────────────────────────────────────────────
         LoadoutEntry[]           _available;
@@ -64,6 +74,12 @@ namespace CastleDefender.UI
         float _timerRemaining;
         Coroutine _portraitWarmupRoutine;
         Coroutine _criticalWarmupRoutine;
+        Coroutine _environmentWarmupRoutine;
+
+        // ── Readiness tracking ────────────────────────────────────────────────
+        bool _loadoutReadyEmitted;
+        bool _portraitWarmupDone;
+        bool _criticalWarmupDone;
 
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()
@@ -71,18 +87,22 @@ namespace CastleDefender.UI
             EnsureEventSystem();
             var nm = NetworkManager.Instance;
             if (nm == null) return;
-            nm.OnMLLoadoutPhaseStart += HandlePhaseStart;
-            nm.OnMLLoadoutPhaseEnd   += HandlePhaseEnd;
-            nm.OnMLMatchConfig       += HandleMatchConfig;
+            nm.OnMLLoadoutPhaseStart      += HandlePhaseStart;
+            nm.OnMLLoadoutPhaseEnd        += HandlePhaseEnd;
+            nm.OnMLMatchConfig            += HandleMatchConfig;
+            nm.OnMLMatchPreparationState  += HandlePreparationState;
+            nm.OnMLMatchCancelled         += HandleMatchCancelled;
         }
 
         void OnDisable()
         {
             var nm = NetworkManager.Instance;
             if (nm == null) return;
-            nm.OnMLLoadoutPhaseStart -= HandlePhaseStart;
-            nm.OnMLLoadoutPhaseEnd   -= HandlePhaseEnd;
-            nm.OnMLMatchConfig       -= HandleMatchConfig;
+            nm.OnMLLoadoutPhaseStart      -= HandlePhaseStart;
+            nm.OnMLLoadoutPhaseEnd        -= HandlePhaseEnd;
+            nm.OnMLMatchConfig            -= HandleMatchConfig;
+            nm.OnMLMatchPreparationState  -= HandlePreparationState;
+            nm.OnMLMatchCancelled         -= HandleMatchCancelled;
             _portraitCache.Clear();
             _pendingPortraitTargets.Clear();
             StopWarmupRoutines();
@@ -91,9 +111,26 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         void Start()
         {
+            BuildPrepOverlay();
+
+            // LobbyUI / PostGameSceneController already emits ml_loadout_ready and
+            // ensures critical content is ready before the server sends ml_loadout_phase_start.
+            // If that preload completed, skip the redundant warmup coroutine here.
+            var rc = RemoteContentManager.EnsureInstance();
+            if (rc != null && rc.HasCompletedCriticalPreload)
+            {
+                _criticalWarmupDone = true;
+                // Still emit ml_loadout_ready as safety net (server deduplicates)
+                TryEmitLoadoutReady();
+            }
+            else
+            {
+                _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
+            }
+
             // ml_loadout_phase_start may have fired before this scene finished
-            // loading (race condition).  NetworkManager caches it so we can pick
-            // it up here on the first frame after scene init.
+            // loading (reconnect / race condition).  NetworkManager caches it so
+            // we can pick it up here on the first frame after scene init.
             var nm = NetworkManager.Instance;
             if (nm == null) return;
             var pending = nm.PendingLoadoutPhase;
@@ -106,12 +143,19 @@ namespace CastleDefender.UI
             _available = payload.availableUnits ?? Array.Empty<LoadoutEntry>();
             _timerRemaining = Mathf.Max(1f, payload.timeoutSeconds);
 
+            // Reset readiness tracking for this phase
+            _loadoutReadyEmitted = false;
+            _portraitWarmupDone  = false;
+            _criticalWarmupDone  = false;
+
             Array.Fill(_selected, -1);
             Array.Fill(_selNames, null);
             _cards.Clear();
             _pendingPortraitTargets.Clear();
             StopWarmupRoutines();
 
+            // Hide preparation overlay, show loadout panel
+            HidePrepOverlay();
             if (_panelRoot != null) Destroy(_panelRoot);
             BuildPanel();
             StartBackgroundWarmup();
@@ -135,11 +179,59 @@ namespace CastleDefender.UI
         void HandleMatchConfig(MLMatchConfig cfg)
         {
             if (cfg.loadout == null || cfg.loadout.Length == 0) return;
-            // Loadout resolved — leave the Loadout scene and enter the game
-            _state = PhaseState.Done;
-            if (_txtStatus != null) _txtStatus.text = "Loading game...";
+            // Loadout resolved — switch to "Preparing battlefield / Waiting for players" state
+            _state = PhaseState.WaitingForMatch;
+            if (_txtStatus  != null) _txtStatus.text  = "Loadout locked";
             if (_btnConfirm != null) _btnConfirm.interactable = false;
-            LoadingScreen.LoadSceneWithRemoteContentGate("Game_ML", preloadT1Gameplay: true, preloadEnvironment: true);
+            ShowWaitingForMatchOverlay();
+
+            // Skip redundant preload steps if the environment warmup from the lobby
+            // already completed these downloads (prevents a second "Preparing content" flash).
+            var rc = RemoteContentManager.EnsureInstance();
+            bool needT1  = rc == null || !rc.HasCompletedCriticalPreload;
+            bool needEnv = rc == null || !rc.AreEnvironmentAssetsReady(RemoteContentManager.GameMlEnvironmentAddress);
+            LoadingScreen.LoadSceneWithRemoteContentGate("Game_ML",
+                preloadT1Gameplay:  needT1,
+                preloadEnvironment: needEnv);
+        }
+
+        void HandlePreparationState(MLMatchPreparationStatePayload payload)
+        {
+            if (payload?.players == null) return;
+            UpdatePlayerPanel(payload.players);
+            // Also refresh the waiting overlay detail text
+            if (_state == PhaseState.WaitingForMatch && _txtPrepDetail != null)
+            {
+                int ready  = 0;
+                int total  = 0;
+                foreach (var p in payload.players)
+                {
+                    total++;
+                    if (p.gameplayReady) ready++;
+                }
+                _txtPrepDetail.text = ready >= total
+                    ? "All players ready — starting match..."
+                    : $"Waiting for players ({ready}/{total} ready)";
+            }
+        }
+
+        void HandleMatchCancelled(MLMatchCancelledPayload payload)
+        {
+            Debug.LogWarning($"[LoadoutPhase] Match cancelled: {payload?.message}");
+            _state = PhaseState.Done;
+            if (_panelRoot != null) _panelRoot.SetActive(false);
+            HidePrepOverlay();
+            // Show cancellation message then return to lobby
+            StartCoroutine(ShowCancelledAndReturn(payload?.message ?? "Match cancelled."));
+        }
+
+        IEnumerator ShowCancelledAndReturn(string message)
+        {
+            ShowPrepOverlay();
+            if (_txtPrepStatus != null) _txtPrepStatus.text = "Match Cancelled";
+            if (_txtPrepDetail != null) _txtPrepDetail.text = message;
+            yield return new WaitForSeconds(3f);
+            SceneManager.LoadScene("Lobby");
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -558,8 +650,15 @@ namespace CastleDefender.UI
 
         void StartBackgroundWarmup()
         {
-            _portraitWarmupRoutine = StartCoroutine(WarmPortraitsInBackground());
-            _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
+            // Critical content warmup is intentionally started in Start() so it
+            // begins before ml_loadout_phase_start arrives (the server waits for
+            // ml_loadout_ready before sending that event).  Restart here only if it
+            // was stopped by StopWarmupRoutines() before completing (reconnect path).
+            if (!_criticalWarmupDone)
+                _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
+
+            _portraitWarmupRoutine    = StartCoroutine(WarmPortraitsInBackground());
+            _environmentWarmupRoutine = StartCoroutine(WarmEnvironmentInBackground());
         }
 
         void StopWarmupRoutines()
@@ -575,13 +674,23 @@ namespace CastleDefender.UI
                 StopCoroutine(_criticalWarmupRoutine);
                 _criticalWarmupRoutine = null;
             }
+
+            if (_environmentWarmupRoutine != null)
+            {
+                StopCoroutine(_environmentWarmupRoutine);
+                _environmentWarmupRoutine = null;
+            }
         }
 
         IEnumerator WarmPortraitsInBackground()
         {
             var remoteContent = RemoteContentManager.EnsureInstance();
             if (remoteContent == null || _available == null || _available.Length == 0)
+            {
+                _portraitWarmupDone = true;
+                TryEmitLoadoutReady();
                 yield break;
+            }
 
             var keys = new List<string>(_available.Length);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -595,7 +704,11 @@ namespace CastleDefender.UI
             }
 
             if (keys.Count == 0)
+            {
+                _portraitWarmupDone = true;
+                TryEmitLoadoutReady();
                 yield break;
+            }
 
             yield return remoteContent.EnsurePortraitsReady(
                 keys,
@@ -603,18 +716,60 @@ namespace CastleDefender.UI
 
             RefreshPendingPortraits();
             _portraitWarmupRoutine = null;
+            _portraitWarmupDone = true;
+            TryEmitLoadoutReady();
         }
 
         IEnumerator WarmCriticalContentInBackground()
         {
             var remoteContent = RemoteContentManager.EnsureInstance();
             if (remoteContent == null)
+            {
+                _criticalWarmupDone = true;
+                TryEmitLoadoutReady();
                 yield break;
+            }
 
             yield return remoteContent.PreloadCriticalContentForSession(
+                (progress, status) =>
+                {
+                    NetworkManager.Instance?.Emit("ml_content_progress",
+                        new { percent = Mathf.Clamp01(progress * 0.5f), state = status ?? "Preparing loadout content" });
+                    UpdatePrepOverlayStatus(status ?? "Preparing loadout content", Mathf.Clamp01(progress));
+                },
                 requester: "LoadoutPhaseManager.BackgroundGameplayWarmup");
 
             _criticalWarmupRoutine = null;
+            _criticalWarmupDone = true;
+            TryEmitLoadoutReady();
+        }
+
+        IEnumerator WarmEnvironmentInBackground()
+        {
+            var remoteContent = RemoteContentManager.EnsureInstance();
+            if (remoteContent == null)
+            {
+                _environmentWarmupRoutine = null;
+                yield break;
+            }
+
+            yield return remoteContent.EnsureEnvironmentReady(
+                RemoteContentManager.GameMlEnvironmentAddress,
+                requester: "LoadoutPhaseManager.BackgroundEnvironmentWarmup");
+
+            _environmentWarmupRoutine = null;
+        }
+
+        void TryEmitLoadoutReady()
+        {
+            if (_loadoutReadyEmitted) return;
+            if (!_criticalWarmupDone) return;   // portraits are not blocking; they load during selection
+            _loadoutReadyEmitted = true;
+            NetworkManager.Instance?.Emit("ml_loadout_ready");
+            NetworkManager.Instance?.Emit("ml_content_progress",
+                new { percent = 0.5f, state = "Selecting units" });
+            Debug.Log("[LoadoutPhase] ml_loadout_ready emitted");
+            UpdatePrepOverlayStatus("Ready — waiting for loadout", 1f);
         }
 
         void RefreshPendingPortraits()
@@ -654,6 +809,186 @@ namespace CastleDefender.UI
         }
 
         float TotalCardHeight => CardHeight + PortraitFrameHeight + CardTextExtraHeight;
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Preparation overlay (shown while downloading loadout-critical assets)
+
+        void BuildPrepOverlay()
+        {
+            if (_prepOverlay != null) return;
+            Canvas canvas = null;
+            foreach (var c in FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+                if (c.gameObject.scene == gameObject.scene) { canvas = c; break; }
+            if (canvas == null) return;
+
+            _prepOverlay = new GameObject("Panel_Prep");
+            _prepOverlay.transform.SetParent(canvas.transform, false);
+            var rt = _prepOverlay.AddComponent<RectTransform>();
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            var bg = _prepOverlay.AddComponent<Image>();
+            bg.color = new Color(0.04f, 0.04f, 0.08f, 0.97f);
+
+            var vlg = _prepOverlay.AddComponent<VerticalLayoutGroup>();
+            vlg.childAlignment     = TextAnchor.MiddleCenter;
+            vlg.childForceExpandWidth  = true;
+            vlg.childForceExpandHeight = false;
+            vlg.spacing = 14f;
+            vlg.padding = new RectOffset(40, 40, 60, 60);
+
+            _txtPrepStatus = MakeLabel(_prepOverlay.transform, "Txt_PrepStatus", "Preparing Match Assets", 24, Color.white, 36f);
+            _txtPrepDetail = MakeLabel(_prepOverlay.transform, "Txt_PrepDetail", "Downloading content...", 16, new Color(0.75f, 0.75f, 0.75f), 26f);
+        }
+
+        void HidePrepOverlay()
+        {
+            if (_prepOverlay != null) _prepOverlay.SetActive(false);
+        }
+
+        void ShowPrepOverlay()
+        {
+            if (_prepOverlay == null) BuildPrepOverlay();
+            if (_prepOverlay != null) _prepOverlay.SetActive(true);
+        }
+
+        void UpdatePrepOverlayStatus(string detail, float progress)
+        {
+            ShowPrepOverlay();
+            if (_txtPrepDetail != null)
+                _txtPrepDetail.text = detail;
+        }
+
+        void ShowWaitingForMatchOverlay()
+        {
+            ShowPrepOverlay();
+            if (_txtPrepStatus != null) _txtPrepStatus.text = "Preparing Battlefield";
+            if (_txtPrepDetail != null) _txtPrepDetail.text = "Waiting for players...";
+            BuildPlayerPanel();
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Per-player status panel
+
+        void BuildPlayerPanel()
+        {
+            if (_playerPanelRoot != null) return;
+            if (_prepOverlay == null) return;
+
+            _playerPanelRoot = new GameObject("Panel_Players");
+            _playerPanelRoot.transform.SetParent(_prepOverlay.transform, false);
+            var le = _playerPanelRoot.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f;
+            var vlg = _playerPanelRoot.AddComponent<VerticalLayoutGroup>();
+            vlg.childAlignment     = TextAnchor.UpperCenter;
+            vlg.childForceExpandWidth  = true;
+            vlg.childForceExpandHeight = false;
+            vlg.spacing = 8f;
+            _playerRows.Clear();
+        }
+
+        void UpdatePlayerPanel(MLPlayerPreparationState[] players)
+        {
+            if (_prepOverlay == null || _state == PhaseState.Done) return;
+            if (_playerPanelRoot == null) BuildPlayerPanel();
+            if (_playerPanelRoot == null) return;
+
+            int myLane = NetworkManager.Instance?.MyLaneIndex ?? -1;
+
+            // Add missing rows
+            while (_playerRows.Count < players.Length)
+            {
+                var rowGO = new GameObject($"Row_{_playerRows.Count}");
+                rowGO.transform.SetParent(_playerPanelRoot.transform, false);
+                var rowLE = rowGO.AddComponent<LayoutElement>();
+                rowLE.preferredHeight = 28f;
+                var hlg = rowGO.AddComponent<HorizontalLayoutGroup>();
+                hlg.childAlignment      = TextAnchor.MiddleLeft;
+                hlg.childForceExpandWidth  = false;
+                hlg.childForceExpandHeight = true;
+                hlg.spacing = 10f;
+                hlg.padding = new RectOffset(8, 8, 2, 2);
+                var rowBg = rowGO.AddComponent<Image>();
+                rowBg.color = new Color(0.1f, 0.1f, 0.16f, 0.8f);
+
+                var nameTxt = MakeLabel(rowGO.transform, "Txt_Name", "", 14, Color.white, 28f);
+                nameTxt.alignment = TextAlignmentOptions.Left;
+                var nameLE = nameTxt.gameObject.GetComponent<LayoutElement>();
+                if (nameLE == null) nameLE = nameTxt.gameObject.AddComponent<LayoutElement>();
+                nameLE.preferredWidth = 160f;
+
+                // Progress bar container
+                var barBG = new GameObject("BarBG");
+                barBG.transform.SetParent(rowGO.transform, false);
+                var barBGImg = barBG.AddComponent<Image>();
+                barBGImg.color = new Color(0.15f, 0.15f, 0.2f);
+                var barBGLE = barBG.AddComponent<LayoutElement>();
+                barBGLE.preferredWidth  = 120f;
+                barBGLE.preferredHeight = 12f;
+
+                var barFillGO = new GameObject("BarFill");
+                barFillGO.transform.SetParent(barBG.transform, false);
+                var barFillRT = barFillGO.AddComponent<RectTransform>();
+                barFillRT.anchorMin = new Vector2(0f, 0f);
+                barFillRT.anchorMax = new Vector2(0f, 1f);
+                barFillRT.pivot     = new Vector2(0f, 0.5f);
+                barFillRT.offsetMin = Vector2.zero;
+                barFillRT.offsetMax = new Vector2(0f, 0f);
+                var barFillImg = barFillGO.AddComponent<Image>();
+                barFillImg.color = new Color(0.2f, 0.7f, 0.3f);
+
+                var stateTxt = MakeLabel(rowGO.transform, "Txt_State", "", 13, new Color(0.8f, 0.8f, 0.8f), 28f);
+                stateTxt.alignment = TextAlignmentOptions.Right;
+                var stateLE = stateTxt.gameObject.GetComponent<LayoutElement>();
+                if (stateLE == null) stateLE = stateTxt.gameObject.AddComponent<LayoutElement>();
+                stateLE.preferredWidth = 130f;
+
+                _playerRows.Add((nameTxt, stateTxt, barFillImg));
+            }
+
+            for (int i = 0; i < players.Length && i < _playerRows.Count; i++)
+            {
+                var p   = players[i];
+                var row = _playerRows[i];
+                bool isMe = p.laneIndex == myLane;
+
+                row.name.text  = isMe ? $"<b>{p.displayName}</b>" : p.displayName;
+                row.name.color = isMe ? new Color(0.9f, 0.95f, 1f) : Color.white;
+
+                string stateText;
+                Color  stateColor;
+                if (p.gameplayReady)
+                {
+                    stateText  = "Ready";
+                    stateColor = new Color(0.3f, 0.9f, 0.4f);
+                }
+                else if (p.loadoutReady)
+                {
+                    stateText  = string.IsNullOrEmpty(p.contentState) ? "Downloading" : p.contentState;
+                    stateColor = new Color(0.9f, 0.8f, 0.3f);
+                }
+                else
+                {
+                    stateText  = "Preparing loadout";
+                    stateColor = new Color(0.7f, 0.7f, 0.7f);
+                }
+
+                row.state.text  = stateText;
+                row.state.color = stateColor;
+
+                if (row.bar != null)
+                {
+                    float pct = p.gameplayReady ? 1f : Mathf.Clamp01(p.contentPercent);
+                    var   barRT = row.bar.rectTransform;
+                    float maxW  = 120f;
+                    barRT.offsetMax = new Vector2(pct * maxW, 0f);
+                    row.bar.color  = p.gameplayReady
+                        ? new Color(0.2f, 0.7f, 0.3f)
+                        : new Color(0.3f, 0.55f, 0.9f);
+                }
+            }
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         // UI helpers

@@ -166,7 +166,8 @@ public class LoadingScreen : MonoBehaviour
         if (_pendingScene == "Game_ML")
         {
             yield return null;
-            NetworkManager.Instance?.Emit("ml_game_scene_ready");
+            NetworkManager.Instance?.Emit("ml_gameplay_ready");
+            NetworkManager.Instance?.Emit("ml_content_progress", new { percent = 1.0f, state = "Ready" });
         }
 
         for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -255,6 +256,8 @@ public class LoadingScreen : MonoBehaviour
                 SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
                 if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                     loadingLabel.text = status;
+                NetworkManager.Instance?.Emit("ml_content_progress",
+                    new { percent = Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)), state = status ?? "Downloading match assets" });
             }, requester: $"LoadingScreen.SceneGate:{_pendingScene}");
 
             if (!remoteContent.HasCompletedCriticalPreload)
@@ -311,6 +314,8 @@ public class LoadingScreen : MonoBehaviour
                     SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
                     if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                         loadingLabel.text = status;
+                    NetworkManager.Instance?.Emit("ml_content_progress",
+                        new { percent = Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)), state = status ?? "Preparing environment" });
                 },
                 requester: $"LoadingScreen.EnvironmentGate:{_pendingScene}");
 

@@ -516,6 +516,114 @@ function createMultilaneRuntime({
       const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
     });
   }
+
+  // ── Phase-based readiness helpers ────────────────────────────────────────
+
+  // Broadcasts current per-player preparation state to all room members.
+  function broadcastPreparationState(room, roomId) {
+    const humanPlayers = room.players.map(sid => {
+      const sock = io.sockets.sockets.get(sid);
+      return {
+        laneIndex:      room.laneBySocketId.get(sid),
+        displayName:    room.playerNames?.get(sid) || "Player",
+        loadoutReady:   !!(sock && sock._loadoutReady),
+        gameplayReady:  !!(sock && sock._gameplayReady),
+        contentPercent: (sock && sock._contentProgress?.percent) || 0,
+        contentState:   (sock && sock._contentProgress?.state)   || "Preparing",
+      };
+    });
+    const aiPlayers = (room.aiPlayers || []).map(ai => ({
+      laneIndex:      ai.laneIndex,
+      displayName:    ai.displayName || "CPU",
+      loadoutReady:   true,
+      gameplayReady:  true,
+      contentPercent: 1.0,
+      contentState:   "Ready",
+    }));
+    const players = [...humanPlayers, ...aiPlayers];
+    io.to(roomId).emit("ml_match_preparation_state", { players });
+  }
+
+  // Cancels a match in progress, cleaning up the game entry and notifying clients.
+  function cancelMatch(roomId, code, reason) {
+    log.warn("[ml-game] match cancelled", { roomId, code, reason });
+    const entry = gamesByRoomId.get(roomId);
+    if (entry) {
+      if (entry.tickHandle) clearInterval(entry.tickHandle);
+      gamesByRoomId.delete(roomId);
+    }
+    io.to(roomId).emit("ml_match_cancelled", {
+      code,
+      reason,
+      message: "A player did not finish downloading in time.",
+    });
+  }
+
+  // Waits for all human players to signal ml_loadout_ready.
+  // The flag socket._loadoutReady is set by the registerHandlers ml_loadout_ready handler,
+  // which also calls room._loadoutReadyResolve() when all players are ready.
+  // Resolves with { reason: "all_ready" | "no_players" | "timeout" }.
+  function waitForLoadoutReady(room, roomId, timeoutMs) {
+    const humanSockets = room.players
+      .map(sid => io.sockets.sockets.get(sid))
+      .filter(Boolean);
+    if (humanSockets.length === 0) return Promise.resolve({ reason: "no_players" });
+
+    // Fast path: all already signalled before we started waiting
+    if (humanSockets.every(s => s._loadoutReady)) {
+      broadcastPreparationState(room, roomId);
+      return Promise.resolve({ reason: "all_ready" });
+    }
+
+    return new Promise(resolve => {
+      let resolved = false;
+
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        room._loadoutReadyResolve = null;
+        resolve({ reason });
+      };
+
+      room._loadoutReadyResolve = () => done("all_ready");
+
+      const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
+    });
+  }
+
+  // Waits for all human players to signal ml_gameplay_ready.
+  // The flag socket._gameplayReady is set by the registerHandlers ml_gameplay_ready handler,
+  // which also calls room._gameplayReadyResolve() when all players are ready.
+  // Resolves with { reason: "all_ready" | "no_players" | "timeout" }.
+  function waitForGameplayReady(room, roomId, timeoutMs) {
+    const humanSockets = room.players
+      .map(sid => io.sockets.sockets.get(sid))
+      .filter(Boolean);
+    if (humanSockets.length === 0) return Promise.resolve({ reason: "no_players" });
+
+    // Fast path: all already signalled before we started waiting
+    if (humanSockets.every(s => s._gameplayReady)) {
+      broadcastPreparationState(room, roomId);
+      return Promise.resolve({ reason: "all_ready" });
+    }
+
+    return new Promise(resolve => {
+      let resolved = false;
+
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        room._gameplayReadyResolve = null;
+        resolve({ reason });
+      };
+
+      room._gameplayReadyResolve = () => done("all_ready");
+
+      const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
+    });
+  }
   // ────────────────────────────────────────────────────────────────────────
 
   async function startMLGame(roomId, code) {
@@ -638,6 +746,29 @@ function createMultilaneRuntime({
         }
       })
     ).catch((err) => log.error("[loadout] ai pre-resolve error", { err: err.message }));
+
+    // ── Clear per-match socket state to prevent stale flags from prior matches ──
+    for (const sid of room.players) {
+      const sock = io.sockets.sockets.get(sid);
+      if (sock) {
+        sock._loadoutReady      = false;
+        sock._gameplayReady     = false;
+        sock.pendingUnitTypeIds = null;
+        sock._contentProgress   = null;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── BARRIER 1: All players must have loadout-critical assets before loadout starts ──
+    log.info("[ml-game] waiting for loadout ready", { roomId, code });
+    const loadoutReadyResult = await waitForLoadoutReady(room, roomId, 120_000);
+    log.info("[ml-game] loadout ready wait complete", { roomId, code, reason: loadoutReadyResult.reason });
+    if (loadoutReadyResult.reason === "timeout") {
+      cancelMatch(roomId, code, "loadout_ready_timeout");
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     io.to(roomId).emit("ml_loadout_phase_start", {
       code,
       timeoutSeconds: Math.ceil(loadoutTimeoutMs / 1000),
@@ -649,7 +780,10 @@ function createMultilaneRuntime({
     }
     // ─────────────────────────────────────────────────────────────────────
 
-    const gameplayReadyPromise = waitForGameplaySceneReady(room, roomId, 20_000);
+    // ── BARRIER 2: All players must have gameplay-critical assets before match starts ──
+    // Start waiting now so the timer runs in parallel with per-player loadout resolution
+    // (clients begin downloading gameplay content as soon as they receive ml_match_config).
+    const gameplayReadyPromise = waitForGameplayReady(room, roomId, 300_000);
 
     await Promise.all([
       ...room.players.map(async (sid) => {
@@ -685,13 +819,18 @@ function createMultilaneRuntime({
         sock.emit("ml_match_config", { loadout });
       }),
     ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
-    const gameplayReadyReason = await gameplayReadyPromise;
-    log.info("[ml-game] gameplay scene ready wait complete", {
+
+    const gameplayReadyResult = await gameplayReadyPromise;
+    log.info("[ml-game] gameplay ready wait complete", {
       roomId,
       code,
-      reason: gameplayReadyReason,
+      reason: gameplayReadyResult.reason,
     });
-    // ticks begin only after all loadouts are resolved (await above ensures this)
+    if (gameplayReadyResult.reason === "timeout") {
+      cancelMatch(roomId, code, "gameplay_ready_timeout");
+      return;
+    }
+    // ticks begin only after all players are gameplay_ready
 
     const botController = aiList.length > 0
       ? aiRuntime.createBotController({

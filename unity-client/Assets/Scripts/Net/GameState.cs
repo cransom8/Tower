@@ -830,4 +830,31 @@ namespace CastleDefender.Net
         public string end_date;     // ISO date string
         public bool   is_active;
     }
+
+    // ─── Phase-based readiness protocol ──────────────────────────────────────
+
+    [Serializable]
+    public class MLPlayerPreparationState
+    {
+        public int    laneIndex;
+        public string displayName;
+        public bool   loadoutReady;
+        public bool   gameplayReady;
+        public float  contentPercent;   // 0–1
+        public string contentState;     // human-readable status, e.g. "Downloading battlefield"
+    }
+
+    [Serializable]
+    public class MLMatchPreparationStatePayload
+    {
+        public MLPlayerPreparationState[] players;
+    }
+
+    [Serializable]
+    public class MLMatchCancelledPayload
+    {
+        public string code;
+        public string reason;
+        public string message;
+    }
 }

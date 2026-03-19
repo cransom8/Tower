@@ -1600,11 +1600,58 @@ function registerSocketHandlers({
     socket.on("ml_game_scene_ready", () => {
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
-      log.info("[ml-game] client reported gameplay scene ready", {
+      log.info("[ml-game] client reported gameplay scene ready (legacy)", {
         code: session.code,
         laneIndex: session.laneIndex,
         socketId: socket.id,
       });
+    });
+
+    socket.on("ml_loadout_ready", () => {
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      socket._loadoutReady = true;
+      log.info("[ml-game] client loadout ready", {
+        code: session.code,
+        laneIndex: session.laneIndex,
+        socketId: socket.id,
+      });
+      const room = mlRoomsByCode.get(session.code);
+      if (!room || !room._loadoutReadyResolve) return;
+      const allReady = room.players.every(sid => {
+        const s = io.sockets.sockets.get(sid);
+        return s && s._loadoutReady;
+      });
+      if (allReady) room._loadoutReadyResolve();
+    });
+
+    socket.on("ml_gameplay_ready", () => {
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      socket._gameplayReady = true;
+      log.info("[ml-game] client gameplay ready", {
+        code: session.code,
+        laneIndex: session.laneIndex,
+        socketId: socket.id,
+      });
+      const room = mlRoomsByCode.get(session.code);
+      if (!room || !room._gameplayReadyResolve) return;
+      const allReady = room.players.every(sid => {
+        const s = io.sockets.sockets.get(sid);
+        return s && s._gameplayReady;
+      });
+      if (allReady) room._gameplayReadyResolve();
+    });
+
+    socket.on("ml_content_progress", (rawPayload) => {
+      let payload = rawPayload;
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch { payload = null; }
+      }
+      const percent = typeof payload?.percent === "number"
+        ? Math.max(0, Math.min(1, payload.percent)) : 0;
+      const state = typeof payload?.state === "string" ? payload.state : "Preparing";
+      socket._contentProgress = { percent, state };
     });
 
     socket.on("player_action", (rawPayload) => {
