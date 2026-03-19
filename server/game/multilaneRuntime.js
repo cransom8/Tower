@@ -581,6 +581,7 @@ function createMultilaneRuntime({
       const done = (reason) => {
         if (resolved) return;
         resolved = true;
+        clearInterval(broadcastInterval);
         clearTimeout(timeoutHandle);
         room._loadoutReadyResolve = null;
         resolve({ reason });
@@ -588,6 +589,7 @@ function createMultilaneRuntime({
 
       room._loadoutReadyResolve = () => done("all_ready");
 
+      const broadcastInterval = setInterval(() => broadcastPreparationState(room, roomId), 1000);
       const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
     });
   }
@@ -614,6 +616,7 @@ function createMultilaneRuntime({
       const done = (reason) => {
         if (resolved) return;
         resolved = true;
+        clearInterval(broadcastInterval);
         clearTimeout(timeoutHandle);
         room._gameplayReadyResolve = null;
         resolve({ reason });
@@ -621,6 +624,7 @@ function createMultilaneRuntime({
 
       room._gameplayReadyResolve = () => done("all_ready");
 
+      const broadcastInterval = setInterval(() => broadcastPreparationState(room, roomId), 1000);
       const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
     });
   }
