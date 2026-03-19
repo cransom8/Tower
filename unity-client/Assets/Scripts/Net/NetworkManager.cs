@@ -874,7 +874,7 @@ namespace CastleDefender.Net
             string activeScene = SceneManager.GetActiveScene().name;
             if (activeScene != "PostGame")
             {
-                SceneManager.LoadScene("PostGame");
+                LoadingScreen.LoadScene("PostGame");
             }
         }
 

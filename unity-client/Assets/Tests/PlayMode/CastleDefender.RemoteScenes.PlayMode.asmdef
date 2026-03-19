@@ -1,11 +1,11 @@
 {
-    "name": "CastleDefender.Net",
-    "rootNamespace": "CastleDefender.Net",
+    "name": "CastleDefender.RemoteScenes.PlayMode",
     "references": [
-        "SocketIOUnityAssembly",
-        "Unity.TextMeshPro",
-        "Unity.Addressables",
-        "Unity.ResourceManager"
+        "CastleDefender.Net",
+        "Unity.TextMeshPro"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

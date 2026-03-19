@@ -9,16 +9,7 @@ public static class BuildWebGL
 {
     const string TempBuildFolderName = "WebGLBuild_Auto";
     const string OutputBaseName = "WebGLBuild";
-    static readonly string[] FallbackScenes =
-    {
-        "Assets/Scenes/Bootstrap.unity",
-        "Assets/Scenes/Login.unity",
-        "Assets/Scenes/Loading.unity",
-        "Assets/Scenes/Lobby.unity",
-        "Assets/Scenes/Loadout.unity",
-        "Assets/Scenes/Game_ML.unity",
-        "Assets/Scenes/PostGame.unity",
-    };
+    const string BootstrapScenePath = "Assets/Scenes/Bootstrap.unity";
 
     [MenuItem("Castle Defender/Build/Build WebGL Release")]
     public static void BuildReleaseMenu() => BuildRelease();
@@ -33,20 +24,11 @@ public static class BuildWebGL
             Directory.Delete(tempBuildDirectory, true);
         Directory.CreateDirectory(tempBuildDirectory);
 
-        var enabledScenes = EditorBuildSettings.scenes
-            .Where(scene => scene.enabled && File.Exists(Path.Combine(unityProjectRoot, scene.path.Replace('/', Path.DirectorySeparatorChar))))
-            .Select(scene => scene.path)
-            .ToArray();
+        string bootstrapSceneAbsolutePath = Path.Combine(unityProjectRoot, BootstrapScenePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(bootstrapSceneAbsolutePath))
+            throw new BuildFailedException($"Bootstrap scene not found at '{BootstrapScenePath}'.");
 
-        if (enabledScenes.Length == 0)
-        {
-            enabledScenes = FallbackScenes
-                .Where(scenePath => File.Exists(Path.Combine(unityProjectRoot, scenePath.Replace('/', Path.DirectorySeparatorChar))))
-                .ToArray();
-        }
-
-        if (enabledScenes.Length == 0)
-            throw new BuildFailedException("No enabled scenes found in Build Settings, and no fallback scenes were found under Assets/Scenes.");
+        var buildScenes = new[] { BootstrapScenePath };
 
         var previousCompression = PlayerSettings.WebGL.compressionFormat;
         bool previousDecompressionFallback = PlayerSettings.WebGL.decompressionFallback;
@@ -65,7 +47,7 @@ public static class BuildWebGL
 
             var options = new BuildPlayerOptions
             {
-                scenes = enabledScenes,
+                scenes = buildScenes,
                 locationPathName = tempBuildDirectory,
                 target = BuildTarget.WebGL,
                 options = BuildOptions.CompressWithLz4HC

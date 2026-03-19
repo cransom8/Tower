@@ -241,7 +241,7 @@ namespace CastleDefender.UI
             if (_txtPrepStatus != null) _txtPrepStatus.text = "Match Cancelled";
             if (_txtPrepDetail != null) _txtPrepDetail.text = message;
             yield return new WaitForSeconds(3f);
-            SceneManager.LoadScene("Lobby");
+            LoadingScreen.LoadScene("Lobby");
         }
 
         // ─────────────────────────────────────────────────────────────────────

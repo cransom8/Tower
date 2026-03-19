@@ -1,18 +1,24 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using CastleDefender.Net;
 using TMPro;
 using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
+namespace CastleDefender.Net
+{
 /// <summary>
-/// Loading screen controller. Place on the LoadingScreen GameObject in Loading.unity.
+/// Persistent bootstrap-owned loading overlay and scene transition service.
 /// Call LoadingScreen.LoadScene("Game_ML") from any script to transition scenes.
 /// </summary>
 public class LoadingScreen : MonoBehaviour
 {
+    const string BootstrapSceneName = "Bootstrap";
+
     public static LoadingScreen Instance { get; private set; }
 
     [Header("UI References")]
@@ -43,8 +49,6 @@ public class LoadingScreen : MonoBehaviour
         "Ballistas outrange all other towers - great for back-line sniping.",
     };
 
-    const string LoadingSceneName = "Loading";
-
     static string _pendingScene;
     static bool _pendingLobbyEntryPreparation;
     static bool _pendingT1GameplayPreload;
@@ -52,6 +56,10 @@ public class LoadingScreen : MonoBehaviour
     static string[] _pendingPortraitKeys = Array.Empty<string>();
     static bool _transitionInProgress;
 
+    readonly Dictionary<string, AsyncOperationHandle<SceneInstance>> _loadedSceneHandles =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    Coroutine _activeTransition;
     float _tipTimer;
     int _tipIndex;
     float _dotTimer;
@@ -66,64 +74,66 @@ public class LoadingScreen : MonoBehaviour
 
     public static void LoadScene(string sceneName)
     {
-        if (_transitionInProgress)
-        {
-            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+        var instance = EnsureInstance();
+        if (instance == null)
             return;
-        }
 
-        _transitionInProgress = true;
-        _pendingScene = sceneName;
-        _pendingLobbyEntryPreparation = false;
-        _pendingT1GameplayPreload = false;
-        _pendingEnvironmentPreload = false;
-        _pendingPortraitKeys = Array.Empty<string>();
-        DisableLoadedSceneAudioListeners();
-        SceneManager.LoadScene(LoadingSceneName, LoadSceneMode.Additive);
+        instance.BeginTransition(sceneName, lobbyEntryPreparation: false, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
     }
 
     public static void LoadSceneWithCriticalContentPreload(string sceneName)
     {
-        if (_transitionInProgress)
-        {
-            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+        var instance = EnsureInstance();
+        if (instance == null)
             return;
-        }
 
-        _transitionInProgress = true;
-        _pendingScene = sceneName;
-        _pendingLobbyEntryPreparation = true;
-        _pendingT1GameplayPreload = false;
-        _pendingEnvironmentPreload = false;
-        _pendingPortraitKeys = Array.Empty<string>();
-        DisableLoadedSceneAudioListeners();
-        SceneManager.LoadScene(LoadingSceneName, LoadSceneMode.Additive);
+        instance.BeginTransition(sceneName, lobbyEntryPreparation: true, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
     }
 
-    public static void LoadSceneWithRemoteContentGate(string sceneName, bool preloadT1Gameplay = false, IEnumerable<string> portraitKeys = null, bool preloadEnvironment = false)
+    public static void LoadSceneWithRemoteContentGate(
+        string sceneName,
+        bool preloadT1Gameplay = false,
+        IEnumerable<string> portraitKeys = null,
+        bool preloadEnvironment = false)
     {
-        if (_transitionInProgress)
-        {
-            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+        var instance = EnsureInstance();
+        if (instance == null)
             return;
-        }
 
-        _transitionInProgress = true;
-        _pendingScene = sceneName;
-        _pendingLobbyEntryPreparation = false;
-        _pendingT1GameplayPreload = preloadT1Gameplay;
-        _pendingEnvironmentPreload = preloadEnvironment;
-        _pendingPortraitKeys = NormalizeKeys(portraitKeys);
-        DisableLoadedSceneAudioListeners();
-        SceneManager.LoadScene(LoadingSceneName, LoadSceneMode.Additive);
+        instance.BeginTransition(
+            sceneName,
+            lobbyEntryPreparation: false,
+            preloadT1Gameplay: preloadT1Gameplay,
+            portraitKeys: portraitKeys,
+            preloadEnvironment: preloadEnvironment);
+    }
+
+    static LoadingScreen EnsureInstance()
+    {
+        if (Instance != null)
+            return Instance;
+
+        Debug.Log("[LoadingScreen] Creating runtime singleton instance.");
+        var go = new GameObject(nameof(LoadingScreen));
+        return go.AddComponent<LoadingScreen>();
     }
 
     void Awake()
     {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
         Instance = this;
+        DontDestroyOnLoad(gameObject);
+        Debug.Log("[LoadingScreen] Awake completed; runtime overlay will be built if needed.");
+
+        BuildRuntimeOverlayIfNeeded();
         ConfigureProgressBar();
         SetProgressImmediate(0f);
-        if (canvasGroup) canvasGroup.alpha = 0f;
+        SetOverlayImmediate(false);
     }
 
     void OnDestroy()
@@ -132,18 +142,7 @@ public class LoadingScreen : MonoBehaviour
             Instance = null;
 
         _transitionInProgress = false;
-    }
-
-    void Start()
-    {
-        if (string.IsNullOrEmpty(_pendingScene))
-            _pendingScene = "Lobby";
-
-        if (!HasPendingRemotePreparation() && tips.Length > 0 && tipText)
-            tipText.text = tips[UnityEngine.Random.Range(0, tips.Length)];
-
-        HideRetryAction();
-        StartCoroutine(LoadRoutine());
+        _activeTransition = null;
     }
 
     void Update()
@@ -153,45 +152,166 @@ public class LoadingScreen : MonoBehaviour
         TickDots();
     }
 
+    void BeginTransition(
+        string sceneName,
+        bool lobbyEntryPreparation,
+        bool preloadT1Gameplay,
+        IEnumerable<string> portraitKeys,
+        bool preloadEnvironment)
+    {
+        if (_transitionInProgress)
+        {
+            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+            return;
+        }
+
+        _pendingScene = sceneName;
+        _pendingLobbyEntryPreparation = lobbyEntryPreparation;
+        _pendingT1GameplayPreload = preloadT1Gameplay;
+        _pendingEnvironmentPreload = preloadEnvironment;
+        _pendingPortraitKeys = NormalizeKeys(portraitKeys);
+        _retryRequested = false;
+        _transitionInProgress = true;
+        _suppressTipRotation = false;
+        _suppressDotAnimation = false;
+        _tipTimer = 0f;
+        _dotTimer = 0f;
+        _dotCount = 0;
+
+        Debug.Log(
+            $"[LoadingScreen] Begin transition to '{sceneName}' " +
+            $"(lobbyGate={lobbyEntryPreparation}, preloadT1={preloadT1Gameplay}, preloadEnvironment={preloadEnvironment}, portraits={_pendingPortraitKeys.Length}).");
+
+        if (!HasPendingRemotePreparation() && tips.Length > 0 && tipText)
+        {
+            _tipIndex = UnityEngine.Random.Range(0, tips.Length);
+            tipText.text = tips[_tipIndex];
+        }
+
+        HideRetryAction();
+        DisableLoadedSceneAudioListeners();
+
+        if (_activeTransition != null)
+            StopCoroutine(_activeTransition);
+
+        _activeTransition = StartCoroutine(LoadRoutine());
+    }
+
+    void RestartPendingTransition()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingScene))
+            return;
+
+        HideRetryAction();
+        _retryRequested = false;
+        _transitionInProgress = true;
+        if (_activeTransition != null)
+            StopCoroutine(_activeTransition);
+        _activeTransition = StartCoroutine(LoadRoutine());
+    }
+
     IEnumerator LoadRoutine()
     {
         yield return StartCoroutine(FadeCG(canvasGroup, 1f, fadeInDuration));
 
+        var remoteContent = RemoteContentManager.EnsureInstance();
+        if (loadingLabel)
+            loadingLabel.text = "Initializing remote content system";
+
+        yield return remoteContent.EnsureAddressablesReady((progress, status) =>
+        {
+            SetProgressTarget(Mathf.Lerp(0.02f, 0.14f, Mathf.Clamp01(progress)));
+            if (loadingLabel && !string.IsNullOrWhiteSpace(status))
+                loadingLabel.text = status;
+        }, requester: $"LoadingScreen.BootstrapInit:{_pendingScene}");
+
+        if (!remoteContent.AreAddressablesInitialized)
+        {
+            FailTransition(
+                "Addressables catalog failed to initialize.",
+                string.IsNullOrWhiteSpace(remoteContent.LastError)
+                    ? "The game cannot load remote scenes until the Addressables catalog is available."
+                    : remoteContent.LastError);
+            yield break;
+        }
+
         if (HasPendingRemotePreparation())
+        {
             yield return StartCoroutine(PreparePendingRemoteContentWithRetry());
+            if (!_transitionInProgress)
+                yield break;
+        }
 
         float startTime = Time.realtimeSinceStartup;
-        SetAudioListenersEnabledForNonLoadingScenes(false);
+        if (loadingLabel)
+            loadingLabel.text = "Loading scene";
 
-        AsyncOperation op = SceneManager.LoadSceneAsync(_pendingScene, LoadSceneMode.Additive);
-        op.allowSceneActivation = false;
-
-        while (op.progress < 0.9f)
+        AsyncOperationHandle<SceneInstance> loadHandle;
+        try
         {
-            SetProgressTarget(Mathf.Lerp(0.72f, 0.9f, Mathf.Clamp01(op.progress / 0.9f)));
+            loadHandle = Addressables.LoadSceneAsync(_pendingScene, LoadSceneMode.Additive, activateOnLoad: false);
+        }
+        catch (Exception ex)
+        {
+            FailTransition("Remote scene load failed.", $"Addressables threw before loading scene '{_pendingScene}': {ex.Message}");
+            yield break;
+        }
+
+        while (loadHandle.IsValid() && !loadHandle.IsDone)
+        {
+            SetProgressTarget(Mathf.Lerp(0.72f, 0.92f, Mathf.Clamp01(loadHandle.PercentComplete)));
             if (loadingLabel)
                 loadingLabel.text = "Loading scene";
             yield return null;
         }
 
+        if (!loadHandle.IsValid())
+        {
+            FailTransition("Remote scene load failed.", $"Scene handle for '{_pendingScene}' became invalid before the load completed.");
+            yield break;
+        }
+
+        if (loadHandle.Status != AsyncOperationStatus.Succeeded)
+        {
+            if (loadHandle.IsValid())
+                Addressables.Release(loadHandle);
+
+            FailTransition(
+                "Remote scene load failed.",
+                BuildHandleFailureMessage($"Scene '{_pendingScene}' could not be loaded from Addressables.", loadHandle));
+            yield break;
+        }
+
         float elapsed = Time.realtimeSinceStartup - startTime;
         if (elapsed < minDisplayTime)
-            yield return new WaitForSeconds(minDisplayTime - elapsed);
+            yield return new WaitForSecondsRealtime(minDisplayTime - elapsed);
 
         if (loadingLabel)
             loadingLabel.text = "Finalizing scene";
-        SetProgressTarget(0.94f);
+        SetProgressTarget(0.96f);
 
-        SetAudioListenersEnabledForScene(LoadingSceneName, false);
-        op.allowSceneActivation = true;
-        yield return new WaitUntil(() => op.isDone);
+        AsyncOperation activation = loadHandle.Result.ActivateAsync();
+        while (activation != null && !activation.isDone)
+            yield return null;
 
-        if (loadingLabel)
-            loadingLabel.text = "Starting game";
-        yield return StartCoroutine(FillBar(1f, 0.18f));
+        Scene newScene = loadHandle.Result.Scene;
+        if (!newScene.IsValid())
+            newScene = SceneManager.GetSceneByName(_pendingScene);
 
-        Scene newScene = SceneManager.GetSceneByName(_pendingScene);
+        if (!newScene.IsValid() || !newScene.isLoaded)
+        {
+            if (loadHandle.IsValid())
+                Addressables.Release(loadHandle);
+
+            FailTransition(
+                "Remote scene activation failed.",
+                $"Scene '{_pendingScene}' finished downloading, but Unity did not report it as a loaded scene.");
+            yield break;
+        }
+
+        RegisterLoadedSceneHandle(_pendingScene, loadHandle);
         SceneManager.SetActiveScene(newScene);
+        Debug.Log($"[LoadingScreen] Activated remote scene '{_pendingScene}'. Tracked handles: {BuildTrackedSceneSummary()}");
 
         if (_pendingScene == "Game_ML")
         {
@@ -200,18 +320,71 @@ public class LoadingScreen : MonoBehaviour
             NetworkManager.Instance?.Emit("ml_content_progress", new { percent = 1.0f, state = "Ready" });
         }
 
-        for (int i = 0; i < SceneManager.sceneCount; i++)
-        {
-            Scene s = SceneManager.GetSceneAt(i);
-            if (s.name != _pendingScene && s.name != LoadingSceneName)
-                SceneManager.UnloadSceneAsync(s);
-        }
-
+        yield return StartCoroutine(UnloadPreviousScenesExcept(_pendingScene));
         SetAudioListenersEnabledForScene(_pendingScene, true);
 
+        if (loadingLabel)
+            loadingLabel.text = "Starting game";
+        yield return StartCoroutine(FillBar(1f, 0.18f));
         yield return StartCoroutine(FadeCG(canvasGroup, 0f, fadeOutDuration));
+
+        _activeTransition = null;
         _transitionInProgress = false;
-        SceneManager.UnloadSceneAsync(LoadingSceneName);
+        SetOverlayImmediate(false);
+    }
+
+    void RegisterLoadedSceneHandle(string sceneName, AsyncOperationHandle<SceneInstance> handle)
+    {
+        if (string.IsNullOrWhiteSpace(sceneName) || !handle.IsValid())
+            return;
+
+        _loadedSceneHandles[sceneName] = handle;
+    }
+
+    IEnumerator UnloadPreviousScenesExcept(string sceneName)
+    {
+        var sceneNames = new List<string>(_loadedSceneHandles.Keys);
+        for (int i = 0; i < sceneNames.Count; i++)
+        {
+            string loadedSceneName = sceneNames[i];
+            if (string.Equals(loadedSceneName, sceneName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!_loadedSceneHandles.TryGetValue(loadedSceneName, out AsyncOperationHandle<SceneInstance> handle))
+                continue;
+
+            if (!handle.IsValid())
+            {
+                _loadedSceneHandles.Remove(loadedSceneName);
+                continue;
+            }
+
+            var unloadHandle = Addressables.UnloadSceneAsync(handle, false);
+            while (unloadHandle.IsValid() && !unloadHandle.IsDone)
+                yield return null;
+
+            string unloadStatus = unloadHandle.IsValid() ? unloadHandle.Status.ToString() : "Invalid";
+            Debug.Log(
+                $"[LoadingScreen] Unloaded previous remote scene '{loadedSceneName}' via Addressables " +
+                $"(status={unloadStatus}).");
+            if (unloadHandle.IsValid())
+                Addressables.Release(unloadHandle);
+            _loadedSceneHandles.Remove(loadedSceneName);
+        }
+
+        for (int i = SceneManager.sceneCount - 1; i >= 0; i--)
+        {
+            Scene scene = SceneManager.GetSceneAt(i);
+            if (!scene.isLoaded
+                || string.Equals(scene.name, sceneName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(scene.name, BootstrapSceneName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            Debug.Log($"[LoadingScreen] Unloading non-bootstrap fallback scene '{scene.name}' via SceneManager.");
+            yield return SceneManager.UnloadSceneAsync(scene);
+        }
     }
 
     IEnumerator PreparePendingRemoteContentWithRetry()
@@ -260,11 +433,11 @@ public class LoadingScreen : MonoBehaviour
                     if (tipText)
                         tipText.text = "Addressables could not initialize, so this session will use bundled local assets.";
                     SetProgressTarget(0.72f);
-                    yield return new WaitForSeconds(0.35f);
+                    yield return new WaitForSecondsRealtime(0.35f);
                     yield break;
                 }
 
-                ShowBlockingFailure(
+                FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required lobby content could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
                         ? "The game cannot safely enter the lobby until the required manifest and catalog are available."
@@ -293,7 +466,7 @@ public class LoadingScreen : MonoBehaviour
 
             if (!remoteContent.HasCompletedCriticalPreload)
             {
-                ShowBlockingFailure(
+                FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required gameplay content could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
                         ? "The game cannot safely continue until the required gameplay bundles are downloaded."
@@ -320,7 +493,7 @@ public class LoadingScreen : MonoBehaviour
 
             if (!remoteContent.ArePortraitsReady(_pendingPortraitKeys))
             {
-                ShowBlockingFailure(
+                FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required portraits could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
                         ? "The game cannot open the loadout screen until the required portraits are ready."
@@ -352,7 +525,7 @@ public class LoadingScreen : MonoBehaviour
 
             if (!remoteContent.AreEnvironmentAssetsReady(RemoteContentManager.GameMlEnvironmentAddress))
             {
-                ShowBlockingFailure(
+                FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required match environment could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
                         ? "The match cannot safely start until the required remote environment is ready."
@@ -400,24 +573,21 @@ public class LoadingScreen : MonoBehaviour
         };
     }
 
+    static string BuildHandleFailureMessage<T>(string fallback, AsyncOperationHandle<T> handle)
+    {
+        string detail = handle.OperationException?.Message;
+        if (string.IsNullOrWhiteSpace(detail))
+            return fallback;
+
+        return $"{fallback} {detail}";
+    }
+
     static bool HasPendingRemotePreparation()
     {
         return _pendingLobbyEntryPreparation
             || _pendingT1GameplayPreload
             || _pendingEnvironmentPreload
             || (_pendingPortraitKeys?.Length ?? 0) > 0;
-    }
-
-    static void SetAudioListenersEnabledForNonLoadingScenes(bool enabled)
-    {
-        for (int i = 0; i < SceneManager.sceneCount; i++)
-        {
-            Scene scene = SceneManager.GetSceneAt(i);
-            if (scene.name == LoadingSceneName)
-                continue;
-
-            SetAudioListenersEnabledForScene(scene.name, enabled);
-        }
     }
 
     static void SetAudioListenersEnabledForScene(string sceneName, bool enabled)
@@ -432,9 +602,7 @@ public class LoadingScreen : MonoBehaviour
         foreach (GameObject root in scene.GetRootGameObjects())
         {
             foreach (AudioListener listener in root.GetComponentsInChildren<AudioListener>(true))
-            {
                 listener.enabled = enabled;
-            }
         }
     }
 
@@ -450,17 +618,128 @@ public class LoadingScreen : MonoBehaviour
         }
     }
 
-    void ShowBlockingFailure(string title, string detail)
+    void FailTransition(string title, string detail)
     {
+        Debug.LogError($"[LoadingScreen] Transition failed. title='{title}' detail='{detail}'");
+        _suppressTipRotation = true;
+        _suppressDotAnimation = true;
         if (loadingLabel)
             loadingLabel.text = title;
         if (tipText)
             tipText.text = detail;
-        if (progressBar)
-            progressBar.fillAmount = 0f;
-        _displayedProgress = 0f;
-        _targetProgress = 0f;
+
+        SetProgressImmediate(0f);
+        Scene activeScene = SceneManager.GetActiveScene();
+        if (activeScene.IsValid())
+            SetAudioListenersEnabledForScene(activeScene.name, true);
+        _activeTransition = null;
+        _transitionInProgress = false;
         ShowRetryAction("Retry");
+    }
+
+    void BuildRuntimeOverlayIfNeeded()
+    {
+        bool hasWiredUi = progressBar != null && tipText != null && loadingLabel != null && canvasGroup != null;
+        if (hasWiredUi)
+            return;
+
+        var canvas = GetComponent<Canvas>();
+        if (canvas == null)
+            canvas = gameObject.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 4000;
+
+        var scaler = GetComponent<CanvasScaler>();
+        if (scaler == null)
+            scaler = gameObject.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+
+        if (GetComponent<GraphicRaycaster>() == null)
+            gameObject.AddComponent<GraphicRaycaster>();
+
+        canvasGroup = GetComponent<CanvasGroup>();
+        if (canvasGroup == null)
+            canvasGroup = gameObject.AddComponent<CanvasGroup>();
+
+        var backdrop = CreatePanel(
+            "Backdrop",
+            transform,
+            new Color(0.05f, 0.06f, 0.09f, 0.94f),
+            Vector2.zero,
+            Vector2.one);
+
+        loadingLabel = CreateText(
+            "LoadingLabel",
+            backdrop.transform,
+            36f,
+            FontStyles.Bold,
+            TextAlignmentOptions.Center,
+            "Loading");
+        Stretch(loadingLabel.rectTransform, new Vector2(0.18f, 0.56f), new Vector2(0.82f, 0.70f));
+
+        tipText = CreateText(
+            "TipText",
+            backdrop.transform,
+            24f,
+            FontStyles.Normal,
+            TextAlignmentOptions.Center,
+            "Preparing game...");
+        tipText.enableWordWrapping = true;
+        Stretch(tipText.rectTransform, new Vector2(0.16f, 0.30f), new Vector2(0.84f, 0.52f));
+
+        var progressBg = CreatePanel(
+            "ProgressBackground",
+            backdrop.transform,
+            new Color(1f, 1f, 1f, 0.12f),
+            new Vector2(0.23f, 0.21f),
+            new Vector2(0.77f, 0.25f));
+
+        var fillGo = new GameObject("ProgressFill", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        fillGo.transform.SetParent(progressBg.transform, false);
+        progressBar = fillGo.GetComponent<Image>();
+        progressBar.color = new Color(0.28f, 0.76f, 0.48f, 1f);
+        Stretch(progressBar.rectTransform, Vector2.zero, Vector2.one);
+    }
+
+    static GameObject CreatePanel(string name, Transform parent, Color color, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        go.transform.SetParent(parent, false);
+        var rect = go.GetComponent<RectTransform>();
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        go.GetComponent<Image>().color = color;
+        return go;
+    }
+
+    static TextMeshProUGUI CreateText(
+        string name,
+        Transform parent,
+        float fontSize,
+        FontStyles style,
+        TextAlignmentOptions alignment,
+        string value)
+    {
+        var go = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+        go.transform.SetParent(parent, false);
+        var text = go.GetComponent<TextMeshProUGUI>();
+        text.fontSize = fontSize;
+        text.fontStyle = style;
+        text.alignment = alignment;
+        text.color = Color.white;
+        text.text = value;
+        return text;
+    }
+
+    static void Stretch(RectTransform rect, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
     }
 
     void EnsureRetryAction()
@@ -523,13 +802,19 @@ public class LoadingScreen : MonoBehaviour
         HideRetryAction();
         if (loadingLabel)
             loadingLabel.text = "Retrying...";
+
+        if (!_transitionInProgress)
+            RestartPendingTransition();
     }
 
     void TickTips()
     {
-        if (_suppressTipRotation) return;
-        if (tips.Length == 0 || !tipText) return;
-        _tipTimer += Time.deltaTime;
+        if (_suppressTipRotation)
+            return;
+        if (tips.Length == 0 || !tipText)
+            return;
+
+        _tipTimer += Time.unscaledDeltaTime;
         if (_tipTimer >= tipRotateTime)
         {
             _tipTimer = 0f;
@@ -547,9 +832,12 @@ public class LoadingScreen : MonoBehaviour
 
     void TickDots()
     {
-        if (_suppressDotAnimation) return;
-        if (!loadingLabel) return;
-        _dotTimer += Time.deltaTime;
+        if (_suppressDotAnimation)
+            return;
+        if (!loadingLabel)
+            return;
+
+        _dotTimer += Time.unscaledDeltaTime;
         if (_dotTimer >= 0.4f)
         {
             _dotTimer = 0f;
@@ -560,12 +848,13 @@ public class LoadingScreen : MonoBehaviour
 
     void TickProgress()
     {
-        if (!progressBar) return;
+        if (!progressBar)
+            return;
 
         _displayedProgress = Mathf.MoveTowards(
             _displayedProgress,
             _targetProgress,
-            progressLerpSpeed * Time.deltaTime);
+            progressLerpSpeed * Time.unscaledDeltaTime);
         progressBar.fillAmount = _displayedProgress;
     }
 
@@ -584,7 +873,8 @@ public class LoadingScreen : MonoBehaviour
 
     void ConfigureProgressBar()
     {
-        if (!progressBar) return;
+        if (!progressBar)
+            return;
 
         progressBar.type = Image.Type.Filled;
         progressBar.fillMethod = Image.FillMethod.Horizontal;
@@ -592,27 +882,48 @@ public class LoadingScreen : MonoBehaviour
         progressBar.fillClockwise = true;
     }
 
+    void SetOverlayImmediate(bool visible)
+    {
+        if (!canvasGroup)
+            return;
+
+        canvasGroup.alpha = visible ? 1f : 0f;
+        canvasGroup.interactable = visible;
+        canvasGroup.blocksRaycasts = visible;
+    }
+
     static IEnumerator FadeCG(CanvasGroup cg, float target, float duration)
     {
-        if (!cg) yield break;
+        if (!cg)
+            yield break;
+
+        cg.interactable = target > 0f;
+        cg.blocksRaycasts = target > 0f;
+
         float start = cg.alpha;
-        for (float t = 0; t < duration; t += Time.deltaTime)
+        for (float t = 0; t < duration; t += Time.unscaledDeltaTime)
         {
             cg.alpha = Mathf.Lerp(start, target, t / duration);
             yield return null;
         }
+
         cg.alpha = target;
+        cg.interactable = target > 0f;
+        cg.blocksRaycasts = target > 0f;
     }
 
     static IEnumerator FadeTMP(TextMeshProUGUI tmp, float target, float duration)
     {
-        if (!tmp) yield break;
+        if (!tmp)
+            yield break;
+
         float start = tmp.alpha;
-        for (float t = 0; t < duration; t += Time.deltaTime)
+        for (float t = 0; t < duration; t += Time.unscaledDeltaTime)
         {
             tmp.alpha = Mathf.Lerp(start, target, t / duration);
             yield return null;
         }
+
         tmp.alpha = target;
     }
 
@@ -620,12 +931,13 @@ public class LoadingScreen : MonoBehaviour
     {
         float start = _displayedProgress;
         float clampedTarget = Mathf.Clamp01(target);
-        for (float t = 0; t < duration; t += Time.deltaTime)
+        for (float t = 0; t < duration; t += Time.unscaledDeltaTime)
         {
             float value = Mathf.Lerp(start, clampedTarget, t / duration);
             SetProgressImmediate(value);
             yield return null;
         }
+
         SetProgressImmediate(clampedTarget);
     }
 
@@ -647,4 +959,15 @@ public class LoadingScreen : MonoBehaviour
 
         return normalized.ToArray();
     }
+
+    string BuildTrackedSceneSummary()
+    {
+        if (_loadedSceneHandles.Count == 0)
+            return "<none>";
+
+        var names = new List<string>(_loadedSceneHandles.Keys);
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return string.Join(", ", names);
+    }
+}
 }

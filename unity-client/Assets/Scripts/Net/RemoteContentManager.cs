@@ -32,6 +32,7 @@ namespace CastleDefender.Net
         public bool HasManifest => Manifest != null;
         public bool HasCompletedLobbyEntryPreparation { get; private set; }
         public bool HasCompletedCriticalPreload { get; private set; }
+        public bool AreAddressablesInitialized => _addressablesReady;
         public string LastError { get; private set; }
         public float LastProgress { get; private set; }
         public string LastStatus { get; private set; } = "";
@@ -539,6 +540,21 @@ namespace CastleDefender.Net
             {
                 LastFailureStage = CriticalPreloadFailureStage.ManifestDownload;
                 LastError = "Could not download the content manifest.";
+            }
+        }
+
+        public IEnumerator EnsureAddressablesReady(Action<float, string> onProgress = null, string requester = null)
+        {
+            RemoteContentVerification.RecordAwaitOnly(requester ?? "unknown", "addressables");
+            LastError = null;
+            LastFailureStage = CriticalPreloadFailureStage.None;
+            LastAddressablesCallError = null;
+
+            yield return InitializeAddressables(onProgress);
+            if (!_addressablesReady && string.IsNullOrWhiteSpace(LastError))
+            {
+                LastFailureStage = CriticalPreloadFailureStage.AddressablesInitialization;
+                LastError = "Addressables failed to initialize.";
             }
         }
 

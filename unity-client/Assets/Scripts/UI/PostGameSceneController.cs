@@ -1,7 +1,6 @@
 using System;
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
 using TMPro;
 using CastleDefender.Net;
 using CastleDefender.Game;
@@ -217,7 +216,7 @@ namespace CastleDefender.UI
         void OnLobby()
         {
             NetworkManager.Instance?.ClearPostGameData();
-            SceneManager.LoadScene("Lobby");
+            LoadingScreen.LoadScene("Lobby");
         }
 
         void OnStats()

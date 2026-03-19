@@ -13,7 +13,6 @@
 
 using System.Collections;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 namespace CastleDefender.Net
 {
@@ -22,11 +21,18 @@ namespace CastleDefender.Net
         [Tooltip("Name of the first scene to load after singletons have initialised.")]
         [SerializeField] string FirstScene = "Login";
 
+        void Awake()
+        {
+            Debug.Log($"[BootstrapManager] Awake on '{gameObject.scene.name}'.");
+        }
+
         IEnumerator Start()
         {
+            Debug.Log($"[BootstrapManager] Start beginning. FirstScene='{FirstScene}'.");
             // Give all Awake() calls one frame to complete before transitioning.
             yield return null;
-            SceneManager.LoadScene(FirstScene);
+            Debug.Log($"[BootstrapManager] Requesting LoadingScreen transition to '{FirstScene}'.");
+            LoadingScreen.LoadScene(FirstScene);
         }
     }
 }
