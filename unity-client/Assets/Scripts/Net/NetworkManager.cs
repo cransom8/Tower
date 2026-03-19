@@ -49,6 +49,12 @@ namespace CastleDefender.Net
         // Cached so LoadoutPhaseManager.Start() can pick it up after scene load.
         // Cleared when ml_loadout_phase_end or ml_match_config(loadout) arrives.
         public MLLoadoutPhaseStartPayload PendingLoadoutPhase { get; private set; }
+
+        // Last preparation state — replayed in LoadoutPhaseManager.Start() because
+        // the Loadout scene may still be loading when the first broadcast arrives.
+        public MLMatchPreparationStatePayload LastPreparationState { get; private set; }
+        public MLMatchReadyPayload LastMLMatchReady { get; private set; }
+
         public string CurrentMLMatchState { get; private set; } = "active_pvp";
         public MLPvPResolvedPayload LastMLPvPResolved { get; private set; }
         public MLGameOverPayload LastMLGameOver { get; private set; }
@@ -289,6 +295,8 @@ namespace CastleDefender.Net
                     CurrentMLMatchState = "active_pvp";
                     LastMLPvPResolved = null;
                     LastMLGameOver = null;
+                    LastPreparationState = null;
+                    LastMLMatchReady = p;
                     Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                     OnMLMatchReady?.Invoke(p);
                     break;
@@ -323,6 +331,7 @@ namespace CastleDefender.Net
                 case "ml_match_preparation_state":
                 {
                     var p = JsonUtility.FromJson<MLMatchPreparationStatePayload>(json);
+                    LastPreparationState = p;
                     OnMLMatchPreparationState?.Invoke(p);
                     break;
                 }
@@ -593,6 +602,8 @@ namespace CastleDefender.Net
                 CurrentMLMatchState = "active_pvp";
                 LastMLPvPResolved = null;
                 LastMLGameOver = null;
+                LastPreparationState = null;
+                LastMLMatchReady = p;
                 Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                 OnMLMatchReady?.Invoke(p);
             });
@@ -626,7 +637,9 @@ namespace CastleDefender.Net
 
             _socket.OnUnityThread("ml_match_preparation_state", resp =>
             {
-                OnMLMatchPreparationState?.Invoke(FromResp<MLMatchPreparationStatePayload>(resp));
+                var p = FromResp<MLMatchPreparationStatePayload>(resp);
+                LastPreparationState = p;
+                OnMLMatchPreparationState?.Invoke(p);
             });
 
             _socket.OnUnityThread("ml_match_cancelled", resp =>

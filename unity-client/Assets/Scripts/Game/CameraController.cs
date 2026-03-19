@@ -1,100 +1,93 @@
-using UnityEngine;
-using UnityEngine.EventSystems;
 using CastleDefender.Game;
 using CastleDefender.Net;
+using UnityEngine;
+using UnityEngine.EventSystems;
 
 /// <summary>
-/// Top-down camera pan + zoom — works with the straight-down camera used in Game_ML.
+/// Orthographic gameplay camera with pan, zoom, and tilt controls.
 ///
-/// Controls:
-///   Desktop : scroll wheel = zoom in/out
-///             LMB drag     = pan (when wall-mode is off)
-///             MMB drag     = pan (always)
-///             R key        = reset view to default position
-///   Mobile  : 1-finger drag = pan, 2-finger pinch = zoom
+/// Desktop:
+///   Scroll wheel = zoom
+///   LMB drag     = pan when not starting over UI
+///   RMB/MMB drag = pan
+///   R            = reset
 ///
-/// Pan is pixel-accurate: dragging keeps the world point under the cursor
-/// in place regardless of the current zoom level.
+/// Mobile:
+///   1-finger drag = pan
+///   2-finger pinch = zoom
+///
+/// The camera keeps a ground focus point so tilt and zoom preserve the
+/// current play area instead of rotating around the camera's own position.
 /// </summary>
 public class CameraController : MonoBehaviour
 {
-    // ── Inspector ──────────────────────────────────────────────────────────────
     [Header("References")]
-    public Transform CameraTarget;   // Transform to move (assigned to cam.transform by GameManager)
-    public Camera    MainCam;        // Main Camera
+    public Transform CameraTarget;
+    public Camera MainCam;
 
     [Header("Zoom")]
-    public float OrthoSizeMin  = 4f;
-    public float OrthoSizeMax  = 80f;   // large enough to see the full 4-bridge map
-    public float ZoomSpeed     = 4f;
-    public float PinchSpeed    = 0.02f;
+    public float OrthoSizeMin = 4f;
+    public float OrthoSizeMax = 80f;
+    public float ZoomSpeed = 4f;
+    public float PinchSpeed = 0.02f;
     public float ZoomSmoothing = 8f;
 
+    [Header("Tilt")]
+    public float TiltMin = 0f;
+    public float TiltMax = 52f;
+    public float TiltSmoothing = 10f;
+    public float DefaultTiltStep = 8f;
+
     [Header("Pan")]
-    public float PanSmoothing  = 12f;
-    public float KeyPanSpeed   = 20f;
+    public float PanSmoothing = 12f;
+    public float KeyPanSpeed = 20f;
+
+    [Header("Focus Plane")]
+    public float FocusPlaneY = 0f;
 
     [Header("Grid Bounds (world XZ)")]
     [Tooltip("Uncheck to allow free movement anywhere on the map.")]
     public bool EnableBoundsClamp = false;
     public Vector2 BoundsMin = new Vector2(-140f, -25f);
-    public Vector2 BoundsMax = new Vector2( 140f,  25f);
+    public Vector2 BoundsMax = new Vector2(140f, 25f);
 
-    // ── State ─────────────────────────────────────────────────────────────────
     Vector3 _targetPos;
-    float   _targetOrtho;
-    bool    _isPanning;
+    Quaternion _targetRotation;
+    Vector3 _targetFocus;
+    float _targetOrtho;
+    float _targetTilt;
+    float _targetYaw;
+    float _cameraHeight = 20f;
+    bool _isPanning;
     Vector2 _lastPan;
-    float   _pinchStartDist;
-    float   _pinchStartOrtho;
 
-    // LMB drag pan (non-wall mode only)
-    bool    _lmbDragStarted;
-    bool    _lmbBlocked;
+    bool _lmbDragStarted;
+    bool _lmbBlocked;
     Vector2 _lmbDownPos;
     Vector2 _lastLmbPos;
     const float LmbDragThreshold = 12f;
 
-    // Default view restored by R key
-    Vector3 _defaultPos;
-    float   _defaultOrtho;
+    Vector3 _defaultFocus;
+    float _defaultOrtho;
+    float _defaultTilt;
+    float _defaultYaw;
 
-    /// <summary>True while a left-mouse drag pan is in progress.</summary>
     public static bool IsLmbPanning { get; private set; }
-
-    // ─────────────────────────────────────────────────────────────────────────
 
     void Start()
     {
-        if (MainCam == null) MainCam = Camera.main ?? FindFirstObjectByType<Camera>();
-        if (MainCam == null) return;
-
-        if (CameraTarget == null)
-            CameraTarget = MainCam.transform;
+        EnsureCameraReferences();
+        if (MainCam == null)
+            return;
 
         ConfigureBoundsFromGrid();
-
-        _targetPos   = CameraTarget.position;
-        _targetOrtho = Mathf.Clamp(MainCam.orthographicSize, OrthoSizeMin, OrthoSizeMax);
-
-        _defaultPos   = _targetPos;
-        _defaultOrtho = _targetOrtho;
+        SyncCameraStateFromTransform(true);
     }
 
     void Update()
     {
-        // If the camera we were given got destroyed (e.g. previous scene unloaded),
-        // try to find a replacement in the current scene.
-        if (MainCam == null)
-        {
-            MainCam = Camera.main ?? FindFirstObjectByType<Camera>();
-            if (MainCam == null) return;
-            CameraTarget = MainCam.transform;
-            ConfigureBoundsFromGrid();
-            SnapToCurrentPosition();
+        if (!EnsureCameraReferences())
             return;
-        }
-        if (CameraTarget == null) CameraTarget = MainCam.transform;
 
         ScrollZoom();
         KeyboardInput();
@@ -105,42 +98,39 @@ public class CameraController : MonoBehaviour
         ApplySmoothing();
     }
 
-    // ── Desktop scroll zoom ───────────────────────────────────────────────────
+    bool EnsureCameraReferences()
+    {
+        if (MainCam == null)
+            MainCam = Camera.main ?? FindFirstObjectByType<Camera>();
+        if (MainCam == null)
+            return false;
+
+        if (CameraTarget == null)
+            CameraTarget = MainCam.transform;
+
+        return CameraTarget != null;
+    }
 
     void ScrollZoom()
     {
+        if (IsPointerOverUi())
+            return;
+
         float scroll = Input.GetAxis("Mouse ScrollWheel");
-        if (Mathf.Abs(scroll) > 0.001f)
-        {
-            // Zoom toward the cursor: compute world point under cursor before/after
-            // and shift _targetPos to compensate, so the point stays fixed.
-            Vector3 worldBefore = ScreenToWorld(Input.mousePosition);
-            _targetOrtho = Mathf.Clamp(_targetOrtho - scroll * ZoomSpeed,
-                                       OrthoSizeMin, OrthoSizeMax);
-            // Apply zoom immediately for the world-point calculation (undo smoothing for 1 frame)
-            float prevOrtho = MainCam.orthographicSize;
-            MainCam.orthographicSize = _targetOrtho;
-            Vector3 worldAfter = ScreenToWorld(Input.mousePosition);
-            MainCam.orthographicSize = prevOrtho;
+        if (Mathf.Abs(scroll) <= 0.001f)
+            return;
 
-            Vector3 shift = worldBefore - worldAfter;
-            shift.y = 0f;
-            _targetPos += shift;
-            ClampTargetPos();
-        }
+        AdjustZoom(-scroll * ZoomSpeed, Input.mousePosition);
     }
-
-    // ── Desktop LMB pan (non-wall mode only) ─────────────────────────────────
 
     void LmbPan()
     {
         if (Input.GetMouseButtonDown(0))
         {
-            _lmbDownPos     = Input.mousePosition;
+            _lmbDownPos = Input.mousePosition;
             _lmbDragStarted = false;
-            IsLmbPanning    = false;
-
-            _lmbBlocked = EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+            IsLmbPanning = false;
+            _lmbBlocked = IsPointerOverUi();
         }
 
         if (!_lmbBlocked && Input.GetMouseButton(0))
@@ -151,87 +141,89 @@ public class CameraController : MonoBehaviour
             if (_lmbDragStarted)
             {
                 IsLmbPanning = true;
-                Pan((Vector2)Input.mousePosition - _lastLmbPos);
+                PanBetweenScreenPoints(_lastLmbPos, Input.mousePosition);
             }
         }
 
         if (Input.GetMouseButtonUp(0))
         {
             _lmbDragStarted = false;
-            IsLmbPanning    = false;
+            IsLmbPanning = false;
         }
 
         _lastLmbPos = Input.mousePosition;
     }
 
-    // ── Desktop RMB / MMB pan ────────────────────────────────────────────────
-
     void RmbPan()
     {
-        // Right mouse button (1) or middle mouse button (2) both pan
-        bool pressed   = Input.GetMouseButton(1)    || Input.GetMouseButton(2);
-        bool pressedDn = Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2);
-        bool pressedUp = Input.GetMouseButtonUp(1)   || Input.GetMouseButtonUp(2);
+        bool pressed = Input.GetMouseButton(1) || Input.GetMouseButton(2);
+        bool pressedDown = Input.GetMouseButtonDown(1) || Input.GetMouseButtonDown(2);
+        bool pressedUp = Input.GetMouseButtonUp(1) || Input.GetMouseButtonUp(2);
 
-        if (pressedDn) { _isPanning = true; _lastPan = Input.mousePosition; }
-        if (pressedUp)   _isPanning = false;
+        if (pressedDown)
+        {
+            _isPanning = !IsPointerOverUi();
+            _lastPan = Input.mousePosition;
+        }
+
+        if (pressedUp)
+            _isPanning = false;
+
         if (_isPanning && pressed)
-            Pan((Vector2)Input.mousePosition - _lastPan);
+            PanBetweenScreenPoints(_lastPan, Input.mousePosition);
+
         _lastPan = Input.mousePosition;
     }
 
-    // ── Keyboard pan / zoom (WASD + Q/E) ─────────────────────────────────────
-
     void KeyboardInput()
     {
-        float h = Input.GetAxisRaw("Horizontal"); // A/D or Left/Right
-        float v = Input.GetAxisRaw("Vertical");   // W/S or Up/Down
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
 
         if (h != 0f || v != 0f)
         {
             Vector3 right = Vector3.ProjectOnPlane(MainCam.transform.right, Vector3.up).normalized;
-            Vector3 fwd   = Vector3.ProjectOnPlane(MainCam.transform.up,    Vector3.up).normalized;
-            if (right.sqrMagnitude < 0.001f) right = Vector3.right;
-            if (fwd.sqrMagnitude   < 0.001f) fwd   = Vector3.forward;
-
+            Vector3 upOnGround = Quaternion.Euler(0f, _targetYaw, 0f) * Vector3.forward;
             float speed = KeyPanSpeed * (MainCam.orthographicSize / 10f) * Time.deltaTime;
-            _targetPos += (right * h + fwd * v) * speed;
-            ClampTargetPos();
+            TranslateFocus((right * h + upOnGround * v) * speed);
         }
 
-        // Q = zoom in, E = zoom out
         if (Input.GetKey(KeyCode.Q))
-            _targetOrtho = Mathf.Clamp(_targetOrtho - ZoomSpeed * Time.deltaTime * 10f, OrthoSizeMin, OrthoSizeMax);
+            AdjustZoom(-ZoomSpeed * Time.deltaTime * 10f);
         if (Input.GetKey(KeyCode.E))
-            _targetOrtho = Mathf.Clamp(_targetOrtho + ZoomSpeed * Time.deltaTime * 10f, OrthoSizeMin, OrthoSizeMax);
+            AdjustZoom(ZoomSpeed * Time.deltaTime * 10f);
     }
-
-    // ── Touch ─────────────────────────────────────────────────────────────────
 
     void TouchInput()
     {
-        int tc = Input.touchCount;
-        if (tc == 1)
-        {
-            Touch t = Input.GetTouch(0);
-            if (t.phase == TouchPhase.Moved) Pan(t.deltaPosition);
-        }
-        else if (tc == 2)
-        {
-            Touch t0 = Input.GetTouch(0), t1 = Input.GetTouch(1);
-            if (t1.phase == TouchPhase.Began)
-            {
-                _pinchStartDist  = Vector2.Distance(t0.position, t1.position);
-                _pinchStartOrtho = _targetOrtho;
-                return;
-            }
-            float delta = _pinchStartDist - Vector2.Distance(t0.position, t1.position);
-            _targetOrtho = Mathf.Clamp(_pinchStartOrtho + delta * PinchSpeed,
-                                       OrthoSizeMin, OrthoSizeMax);
-        }
-    }
+        int touchCount = Input.touchCount;
+        if (touchCount == 0)
+            return;
 
-    // ── Reset key ─────────────────────────────────────────────────────────────
+        if (touchCount == 1)
+        {
+            Touch touch = Input.GetTouch(0);
+            if (IsPointerOverUi(touch.fingerId))
+                return;
+
+            if (touch.phase == TouchPhase.Moved)
+                PanBetweenScreenPoints(touch.position - touch.deltaPosition, touch.position);
+            return;
+        }
+
+        Touch touch0 = Input.GetTouch(0);
+        Touch touch1 = Input.GetTouch(1);
+        if (IsPointerOverUi(touch0.fingerId) || IsPointerOverUi(touch1.fingerId))
+            return;
+
+        Vector2 prev0 = touch0.position - touch0.deltaPosition;
+        Vector2 prev1 = touch1.position - touch1.deltaPosition;
+        float prevDistance = Vector2.Distance(prev0, prev1);
+        float currentDistance = Vector2.Distance(touch0.position, touch1.position);
+        float delta = prevDistance - currentDistance;
+        Vector2 midpoint = (touch0.position + touch1.position) * 0.5f;
+        AdjustZoom(delta * PinchSpeed, midpoint);
+    }
 
     void ResetKey()
     {
@@ -239,115 +231,239 @@ public class CameraController : MonoBehaviour
             ResetView();
     }
 
-    // ── Shared pan ────────────────────────────────────────────────────────────
-
-    void Pan(Vector2 screenDelta)
+    void PanBetweenScreenPoints(Vector2 previousScreen, Vector2 currentScreen)
     {
-        // Convert screen pixel delta to world-space movement.
-        // For a top-down orthographic camera we use camera.right and camera.up
-        // projected onto the world XZ plane (camera.forward may be (0,-1,0) = zero after projection).
-        Vector3 right = Vector3.ProjectOnPlane(MainCam.transform.right, Vector3.up);
-        Vector3 fwd   = Vector3.ProjectOnPlane(MainCam.transform.up,    Vector3.up);
+        if (!TryScreenToGround(previousScreen, out var previousWorld) ||
+            !TryScreenToGround(currentScreen, out var currentWorld))
+        {
+            return;
+        }
 
-        // Fallback if camera is axis-aligned (shouldn't normally happen)
-        if (right.sqrMagnitude < 0.001f) right = Vector3.right;
-        if (fwd.sqrMagnitude   < 0.001f) fwd   = Vector3.forward;
-        right.Normalize();
-        fwd.Normalize();
-
-        // Scale so dragging 1 pixel moves exactly 1 pixel worth of world space
-        float pixToWorld = (2f * MainCam.orthographicSize) / Screen.height;
-
-        Vector3 delta = -(right * screenDelta.x + fwd * screenDelta.y) * pixToWorld;
-        _targetPos += delta;
-        ClampTargetPos();
+        TranslateFocus(previousWorld - currentWorld);
     }
 
-    void ClampTargetPos()
+    void TranslateFocus(Vector3 worldDelta)
     {
-        if (!EnableBoundsClamp) return;
-        _targetPos.x = Mathf.Clamp(_targetPos.x, BoundsMin.x, BoundsMax.x);
-        _targetPos.z = Mathf.Clamp(_targetPos.z, BoundsMin.y, BoundsMax.y);
+        _targetFocus += new Vector3(worldDelta.x, 0f, worldDelta.z);
+        ClampTargetFocus();
+        UpdateTargetPose();
     }
 
-    // ── Smoothing ─────────────────────────────────────────────────────────────
+    void ClampTargetFocus()
+    {
+        if (!EnableBoundsClamp)
+            return;
+
+        _targetFocus.x = Mathf.Clamp(_targetFocus.x, BoundsMin.x, BoundsMax.x);
+        _targetFocus.z = Mathf.Clamp(_targetFocus.z, BoundsMin.y, BoundsMax.y);
+    }
 
     void ApplySmoothing()
     {
         float dt = Time.deltaTime;
-        CameraTarget.position    = Vector3.Lerp(CameraTarget.position, _targetPos,   PanSmoothing  * dt);
+        CameraTarget.position = Vector3.Lerp(CameraTarget.position, _targetPos, PanSmoothing * dt);
+        CameraTarget.rotation = Quaternion.Slerp(CameraTarget.rotation, _targetRotation, TiltSmoothing * dt);
         MainCam.orthographicSize = Mathf.Lerp(MainCam.orthographicSize, _targetOrtho, ZoomSmoothing * dt);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    Vector3 ScreenToWorld(Vector3 screenPos)
+    bool TryScreenToGround(Vector2 screenPos, out Vector3 worldPoint)
     {
-        // For a top-down orthographic camera, map screen point to XZ world plane.
+        var plane = new Plane(Vector3.up, new Vector3(0f, FocusPlaneY, 0f));
         Ray ray = MainCam.ScreenPointToRay(screenPos);
-        float t = ray.origin.y / -ray.direction.y;
-        return ray.origin + ray.direction * t;
+        if (!plane.Raycast(ray, out float distance))
+        {
+            worldPoint = _targetFocus;
+            return false;
+        }
+
+        worldPoint = ray.GetPoint(distance);
+        return true;
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    void UpdateTargetPose()
+    {
+        Vector3 planarUp = Quaternion.Euler(0f, _targetYaw, 0f) * Vector3.forward;
+        float tiltRadians = Mathf.Clamp(_targetTilt, TiltMin, TiltMax) * Mathf.Deg2Rad;
+        Vector3 forward = (Vector3.down * Mathf.Cos(tiltRadians)) + (planarUp * Mathf.Sin(tiltRadians));
+        forward = forward.normalized;
+
+        float downComponent = Mathf.Max(0.05f, -forward.y);
+        float distance = _cameraHeight / downComponent;
+
+        _targetPos = _targetFocus - (forward * distance);
+        _targetPos.y = FocusPlaneY + _cameraHeight;
+        _targetRotation = Quaternion.LookRotation(forward, planarUp);
+    }
+
+    void SyncCameraStateFromTransform(bool captureDefaults)
+    {
+        _targetOrtho = Mathf.Clamp(MainCam.orthographicSize, OrthoSizeMin, OrthoSizeMax);
+
+        if (TryScreenToGround(new Vector2(Screen.width * 0.5f, Screen.height * 0.5f), out var focus))
+            _targetFocus = new Vector3(focus.x, FocusPlaneY, focus.z);
+        else
+            _targetFocus = new Vector3(CameraTarget.position.x, FocusPlaneY, CameraTarget.position.z);
+
+        Vector3 screenUp = Vector3.ProjectOnPlane(MainCam.transform.up, Vector3.up);
+        if (screenUp.sqrMagnitude < 0.001f)
+            screenUp = Vector3.forward;
+        screenUp.Normalize();
+        _targetYaw = Mathf.Atan2(screenUp.x, screenUp.z) * Mathf.Rad2Deg;
+
+        _cameraHeight = Mathf.Max(4f, CameraTarget.position.y - FocusPlaneY);
+
+        Vector3 forward = MainCam.transform.forward;
+        Vector3 planarForward = Vector3.ProjectOnPlane(forward, Vector3.up);
+        if (planarForward.sqrMagnitude < 0.0001f)
+            _targetTilt = 0f;
+        else
+            _targetTilt = Mathf.Clamp(Vector3.Angle(Vector3.down, forward), TiltMin, TiltMax);
+
+        UpdateTargetPose();
+
+        if (captureDefaults)
+        {
+            _defaultFocus = _targetFocus;
+            _defaultOrtho = _targetOrtho;
+            _defaultTilt = _targetTilt;
+            _defaultYaw = _targetYaw;
+        }
+    }
 
     public void FocusTile(int col, int row)
     {
         int lane = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.ViewingLane : 0;
-        Vector3 p = TileGrid.TileToWorld(lane, col, row);
-        _targetPos = new Vector3(p.x, CameraTarget.position.y, p.z);
+        Vector3 point = TileGrid.TileToWorld(lane, col, row);
+        PanTo(point);
     }
 
     public void ResetView()
     {
-        _targetPos   = _defaultPos;
+        _targetFocus = _defaultFocus;
         _targetOrtho = _defaultOrtho;
+        _targetTilt = _defaultTilt;
+        _targetYaw = _defaultYaw;
+        ClampTargetFocus();
+        UpdateTargetPose();
     }
 
     public void PanTo(Vector3 worldPos)
     {
-        _targetPos = worldPos;
-        ClampTargetPos();
+        _targetFocus = new Vector3(worldPos.x, FocusPlaneY, worldPos.z);
+        ClampTargetFocus();
+        UpdateTargetPose();
     }
 
-    /// <summary>Called by GameManager after it positions the camera at game start.</summary>
+    public void SetTilt(float tiltDegrees)
+    {
+        _targetTilt = Mathf.Clamp(tiltDegrees, TiltMin, TiltMax);
+        UpdateTargetPose();
+    }
+
+    public void AdjustTilt(float delta)
+    {
+        SetTilt(_targetTilt + delta);
+    }
+
+    public void SetRotation(float yawDegrees)
+    {
+        _targetYaw = yawDegrees;
+        UpdateTargetPose();
+    }
+
+    public void AdjustRotation(float deltaDegrees)
+    {
+        SetRotation(_targetYaw + deltaDegrees);
+    }
+
+    public void SetZoom(float zoomSize)
+    {
+        _targetOrtho = Mathf.Clamp(zoomSize, OrthoSizeMin, OrthoSizeMax);
+    }
+
+    public void AdjustZoom(float delta)
+    {
+        AdjustZoom(delta, new Vector2(Screen.width * 0.5f, Screen.height * 0.5f));
+    }
+
+    public void AdjustZoom(float delta, Vector2 focusScreenPoint)
+    {
+        if (!TryScreenToGround(focusScreenPoint, out var worldBefore))
+        {
+            SetZoom(_targetOrtho + delta);
+            return;
+        }
+
+        float previousOrtho = MainCam.orthographicSize;
+        _targetOrtho = Mathf.Clamp(_targetOrtho + delta, OrthoSizeMin, OrthoSizeMax);
+        MainCam.orthographicSize = _targetOrtho;
+
+        if (TryScreenToGround(focusScreenPoint, out var worldAfter))
+        {
+            _targetFocus += new Vector3(worldBefore.x - worldAfter.x, 0f, worldBefore.z - worldAfter.z);
+            ClampTargetFocus();
+        }
+
+        MainCam.orthographicSize = previousOrtho;
+        UpdateTargetPose();
+    }
+
+    /// <summary>
+    /// Called after another system positions and rotates the camera so the
+    /// controller can adopt that new pose as its target and reset point.
+    /// </summary>
     public void SnapToCurrentPosition()
     {
-        if (MainCam == null || CameraTarget == null) return;
-        _targetPos    = CameraTarget.position;
-        _targetOrtho  = MainCam.orthographicSize;
-        _defaultPos   = _targetPos;
-        _defaultOrtho = _targetOrtho;
+        if (!EnsureCameraReferences())
+            return;
+
+        SyncCameraStateFromTransform(true);
+        CameraTarget.position = _targetPos;
+        CameraTarget.rotation = _targetRotation;
+        MainCam.orthographicSize = _targetOrtho;
     }
 
     void ConfigureBoundsFromGrid()
     {
-        var tg = FindFirstObjectByType<TileGrid>();
-        if (tg == null) return;
+        var grid = FindFirstObjectByType<TileGrid>();
+        if (grid == null)
+            return;
 
-        float minX = float.MaxValue, maxX = float.MinValue;
-        float minZ = float.MaxValue, maxZ = float.MinValue;
+        float minX = float.MaxValue;
+        float maxX = float.MinValue;
+        float minZ = float.MaxValue;
+        float maxZ = float.MinValue;
+
         for (int lane = 0; lane < 4; lane++)
         {
-            foreach (var p in new[]
+            foreach (var point in new[]
             {
-                TileGrid.TileToWorld(lane, 0,            0),
-                TileGrid.TileToWorld(lane, tg.Cols - 1,  0),
-                TileGrid.TileToWorld(lane, 0,            tg.Rows - 1),
-                TileGrid.TileToWorld(lane, tg.Cols - 1,  tg.Rows - 1),
+                TileGrid.TileToWorld(lane, 0, 0),
+                TileGrid.TileToWorld(lane, grid.Cols - 1, 0),
+                TileGrid.TileToWorld(lane, 0, grid.Rows - 1),
+                TileGrid.TileToWorld(lane, grid.Cols - 1, grid.Rows - 1),
             })
             {
-                if (p.x < minX) minX = p.x;
-                if (p.x > maxX) maxX = p.x;
-                if (p.z < minZ) minZ = p.z;
-                if (p.z > maxZ) maxZ = p.z;
+                if (point.x < minX) minX = point.x;
+                if (point.x > maxX) maxX = point.x;
+                if (point.z < minZ) minZ = point.z;
+                if (point.z > maxZ) maxZ = point.z;
             }
         }
 
-        // Add generous margin and extend to cover the polyline waypoints (up to ±129 on X)
         const float marginX = 30f;
         const float marginZ = 8f;
         BoundsMin = new Vector2(Mathf.Min(minX - marginX, -140f), minZ - marginZ);
-        BoundsMax = new Vector2(Mathf.Max(maxX + marginX,  140f), maxZ + marginZ);
+        BoundsMax = new Vector2(Mathf.Max(maxX + marginX, 140f), maxZ + marginZ);
+    }
+
+    bool IsPointerOverUi()
+    {
+        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+    }
+
+    bool IsPointerOverUi(int pointerId)
+    {
+        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject(pointerId);
     }
 }

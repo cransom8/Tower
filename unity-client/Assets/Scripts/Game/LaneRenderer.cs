@@ -67,8 +67,12 @@ namespace CastleDefender.Game
         readonly Dictionary<string, UnitView> _units    = new();
         readonly HashSet<string>              _seenIds  = new();
         readonly List<string>                 _toRemove = new();
+        const float MineShaftEntrySegmentLength = 3f;
+        static readonly Vector3 MineShaftFallbackWorld = new(0f, 1f, 0f);
         float  _lastSnapTime = -1f;
         bool   _subscribed;
+        bool   _searchedMineShaft;
+        Transform _mineShaftTransform;
         readonly int[] _branchMap = new int[4] { 0, 1, 2, 3 }; // laneIndex → branchCfg
         string _roundState   = "build";   // "build" | "combat" | "transition"
         static readonly Vector3 HpBarScaleBoost = new(1.85f, 1.55f, 1.40f);
@@ -247,7 +251,7 @@ namespace CastleDefender.Game
                     _seenIds.Add(u.id);
 
                     if (!_units.TryGetValue(u.id, out var view) || view.go == null)
-                        view = CreateUnit(u, sa);
+                        view = CreateUnit(u, sa, lane.laneIndex);
 
                     if (view?.go == null) continue;
 
@@ -263,41 +267,7 @@ namespace CastleDefender.Game
                     foreach (var ls in snap.lanes)
                         if (ls != null && ls.laneIndex == dataLane) { ownerLaneSnap = ls; break; }
 
-                    int branchLen = ownerLaneSnap?.path?.Length ?? 0;
-                    bool onBranch = branchLen > 0 && u.pathIdx < branchLen;
-
-                    Vector3 newWorldPos;
-                    if (u.isDefender && !onBranch)
-                    {
-                        // Defender on the suffix (merge bridge): use the suffix polyline so they
-                        // appear at the correct world position (pt3 = Island_Split exit) rather
-                        // than extrapolating off the end of the branch tile grid.
-                        newWorldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
-                    }
-                    else if (u.isDefender || (u.isWaveUnit && onBranch))
-                    {
-                        // Defenders on the branch grid and wave units use direct 2D tile coords
-                        // so the full rectangle spawn spread is rendered correctly.
-                        newWorldPos = TileGrid.TileToWorld(spatialLane, u.gridX, u.gridY);
-                    }
-                    else if (onBranch && ownerLaneSnap.path != null && ownerLaneSnap.path.Length >= 2)
-                    {
-                        // Player-sent units: interpolate along the centre path using pathIdx.
-                        int   p0 = Mathf.Clamp(Mathf.FloorToInt(u.pathIdx), 0, branchLen - 1);
-                        int   p1 = Mathf.Clamp(p0 + 1,                       0, branchLen - 1);
-                        float ft = u.pathIdx - p0;
-                        var  t0  = ownerLaneSnap.path[p0];
-                        var  t1  = ownerLaneSnap.path[p1];
-                        newWorldPos = Vector3.Lerp(
-                            TileGrid.TileToWorld(spatialLane, t0.x, t0.y),
-                            TileGrid.TileToWorld(spatialLane, t1.x, t1.y),
-                            ft);
-                    }
-                    else
-                    {
-                        // Suffix: normProgress is suffix-relative (0=grid end/pt2, 1=castle/pt5).
-                        newWorldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
-                    }
+                    Vector3 newWorldPos = ResolveUnitWorldPosition(u, spatialLane, ownerLaneSnap);
 
                     // Estimate world-space velocity from position delta between snapshots.
                     if (view.hadSnapshot && snapDt > 0f)
@@ -365,7 +335,7 @@ namespace CastleDefender.Game
             }
         }
 
-        UnitView CreateUnit(MLUnit u, SnapshotApplier sa)
+        UnitView CreateUnit(MLUnit u, SnapshotApplier sa, int fallbackLaneIndex)
         {
             int  myLane = sa != null ? sa.MyLaneIndex : 0;
             bool isMine = u.ownerLane == myLane;
@@ -378,17 +348,21 @@ namespace CastleDefender.Game
                 return new UnitView();
             }
 
-            int ownerDataLane = u.ownerLane >= 0 ? u.ownerLane : 0;
+            int ownerDataLane = u.ownerLane >= 0 ? u.ownerLane : fallbackLaneIndex;
             int ownerBranchCfg = ownerDataLane;
+            MLLaneSnap ownerLaneSnap = null;
             if (sa?.LatestML?.lanes != null)
                 foreach (var ls in sa.LatestML.lanes)
                     if (ls != null && ls.laneIndex == ownerDataLane)
-                    { int bc = TileGrid.GetBranchConfigIndex(ls.branchId); if (bc >= 0) ownerBranchCfg = bc; break; }
+                    {
+                        ownerLaneSnap = ls;
+                        int bc = TileGrid.GetBranchConfigIndex(ls.branchId);
+                        if (bc >= 0) ownerBranchCfg = bc;
+                        break;
+                    }
 
             const int branchLen = 28; // GRID_H — matches server constant
-            Vector3 spawnPos = u.pathIdx < branchLen
-                ? TileGrid.TileToWorld(ownerBranchCfg, (int)u.gridX, (int)u.gridY)
-                : TileGrid.SuffixProgressToWorld(ownerBranchCfg, u.normProgress);
+            Vector3 spawnPos = ResolveUnitWorldPosition(u, ownerBranchCfg, ownerLaneSnap);
             Vector3 spawnFwd = TileGrid.GetLaneForwardDir(ownerBranchCfg);
             var go = Instantiate(prefab, spawnPos, Quaternion.LookRotation(spawnFwd, Vector3.up), transform);
             go.name = $"Unit_{u.id}_{u.type}_{u.skinKey ?? "default"}";
@@ -489,6 +463,75 @@ namespace CastleDefender.Game
         // Returns a scale multiplier based on barracks level.
         // Level 1 = 1.65× registry base (registry scales already tuned to small baseline).
         // Each level adds ~10 % so level 4 ≈ 2.0×, giving clear visible growth.
+        Vector3 ResolveUnitWorldPosition(MLUnit u, int spatialLane, MLLaneSnap ownerLaneSnap)
+        {
+            int branchLen = ownerLaneSnap?.path?.Length ?? 0;
+            bool onBranch = branchLen > 0 && u.pathIdx < branchLen;
+
+            Vector3 worldPos;
+            if (u.isDefender && !onBranch)
+            {
+                worldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
+            }
+            else if (u.isDefender)
+            {
+                worldPos = TileGrid.TileToWorld(spatialLane, u.gridX, u.gridY);
+            }
+            else if (onBranch && ownerLaneSnap?.path != null && ownerLaneSnap.path.Length >= 1)
+            {
+                var entryTile = ownerLaneSnap.path[0];
+                Vector3 entryWorld = TileGrid.TileToWorld(spatialLane, entryTile.x, entryTile.y);
+
+                if (u.pathIdx < MineShaftEntrySegmentLength)
+                {
+                    Vector3 shaftPos = GetMineShaftWorldPosition();
+                    shaftPos.y = entryWorld.y;
+                    float introT = Mathf.Clamp01(u.pathIdx / MineShaftEntrySegmentLength);
+                    worldPos = Vector3.Lerp(shaftPos, entryWorld, introT);
+                }
+                else
+                {
+                    float adjustedPathIdx = Mathf.Clamp(u.pathIdx - MineShaftEntrySegmentLength, 0f, Mathf.Max(0f, branchLen - 1f));
+                    int p0 = Mathf.Clamp(Mathf.FloorToInt(adjustedPathIdx), 0, branchLen - 1);
+                    int p1 = Mathf.Clamp(p0 + 1, 0, branchLen - 1);
+                    float ft = adjustedPathIdx - p0;
+                    var t0 = ownerLaneSnap.path[p0];
+                    var t1 = ownerLaneSnap.path[p1];
+                    worldPos = Vector3.Lerp(
+                        TileGrid.TileToWorld(spatialLane, t0.x, t0.y),
+                        TileGrid.TileToWorld(spatialLane, t1.x, t1.y),
+                        ft);
+                }
+            }
+            else
+            {
+                worldPos = TileGrid.SuffixProgressToWorld(spatialLane, u.normProgress);
+            }
+
+            return worldPos;
+        }
+
+        Vector3 GetMineShaftWorldPosition()
+        {
+            if (!_searchedMineShaft)
+            {
+                _searchedMineShaft = true;
+                foreach (var root in gameObject.scene.GetRootGameObjects())
+                {
+                    var found = FindChildRecursive(root.transform, "CenterMineShaft");
+                    if (found != null)
+                    {
+                        _mineShaftTransform = found;
+                        break;
+                    }
+                }
+            }
+
+            return _mineShaftTransform != null
+                ? _mineShaftTransform.position
+                : MineShaftFallbackWorld;
+        }
+
         static float GetLevelScale(int level)
         {
             int lvl = Mathf.Clamp(level, 1, 10);

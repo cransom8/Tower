@@ -18,7 +18,7 @@ const S = {
   players:    { q: '', offset: 0, total: 0, rows: [] },
   matches:    { tab: 'history', status: '', mode: '', offset: 0, total: 0, rows: [], live: [] },
   audit:      { offset: 0, total: 0, rows: [] },
-  units:      { view: 'kanban', displayFields: [] },
+  units:      { view: 'kanban', displayFields: [], unitTypes: [], selectedIds: [] },
   liveHandle: null,
   branding:   null,
 };
@@ -3242,8 +3242,12 @@ async function loadUnits() {
       api('GET', '/admin/unit-types'),
       api('GET', '/admin/unit-display-fields').catch(() => ({ fields: [] })),
     ]);
+    S.units.unitTypes = utRes.unitTypes || [];
+    S.units.selectedIds = (S.units.selectedIds || []).filter((id) =>
+      S.units.unitTypes.some((ut) => ut.id === id)
+    );
     S.units.displayFields = dfRes.fields || [];
-    renderUnitsTab(utRes.unitTypes || [], S.units.displayFields);
+    renderUnitsTab(S.units.unitTypes, S.units.displayFields);
   } catch (err) {
     setContent(`<p class="load text-danger">Error: ${esc(err.message)}</p>`);
   }
@@ -3310,8 +3314,96 @@ function _utIconHtml(ut, size = 60, cssClass = 'ukc-icon') {
   return _utPlaceholderHtml(ut, size);
 }
 
+function getSelectedUnitIds() {
+  return Array.isArray(S.units.selectedIds) ? S.units.selectedIds.slice() : [];
+}
+
+function isUnitSelected(id) {
+  return getSelectedUnitIds().includes(id);
+}
+
+function setUnitSelection(id, selected) {
+  const next = new Set(getSelectedUnitIds());
+  if (selected) next.add(id);
+  else next.delete(id);
+  S.units.selectedIds = Array.from(next);
+}
+
+function toggleUnitSelection(id, selected) {
+  setUnitSelection(id, selected);
+  renderUnitsTab(S.units.unitTypes || [], S.units.displayFields || []);
+}
+window.toggleUnitSelection = toggleUnitSelection;
+
+function selectAllVisibleUnits() {
+  S.units.selectedIds = (S.units.unitTypes || []).map((ut) => ut.id);
+  renderUnitsTab(S.units.unitTypes || [], S.units.displayFields || []);
+}
+window.selectAllVisibleUnits = selectAllVisibleUnits;
+
+function clearUnitSelection() {
+  S.units.selectedIds = [];
+  renderUnitsTab(S.units.unitTypes || [], S.units.displayFields || []);
+}
+window.clearUnitSelection = clearUnitSelection;
+
+const BULK_CANONICAL_FIELD_MAP = Object.freeze({
+  running_speed: 'path_speed',
+  pathing_speed: 'path_speed',
+});
+
+const BULK_INTEGER_FIELDS = new Set([
+  'send_cost',
+  'build_cost',
+  'income',
+  'refund_pct',
+  'bounty',
+  'projectile_travel_ticks',
+  'damage_reduction_pct',
+]);
+
+const BULK_NON_NEGATIVE_FIELDS = new Set([
+  'send_cost',
+  'build_cost',
+  'income',
+  'refund_pct',
+  'bounty',
+  'projectile_travel_ticks',
+  'damage_reduction_pct',
+  'hp',
+  'attack_damage',
+  'attack_speed',
+  'range',
+  'path_speed',
+]);
+
+function getCanonicalBulkField(field) {
+  return BULK_CANONICAL_FIELD_MAP[field] || field;
+}
+
+function computeBulkFieldValue(field, operation, value, currentValue) {
+  const numericCurrent = Number.isFinite(Number(currentValue)) ? Number(currentValue) : 0;
+  let nextValue = value;
+  if (operation === 'add') nextValue = numericCurrent + value;
+  else if (operation === 'multiply') nextValue = numericCurrent * value;
+
+  if (BULK_INTEGER_FIELDS.has(field)) {
+    nextValue = Math.round(nextValue);
+  }
+  if (BULK_NON_NEGATIVE_FIELDS.has(field)) {
+    nextValue = Math.max(0, nextValue);
+  }
+  if (field === 'projectile_travel_ticks') {
+    nextValue = Math.max(1, nextValue);
+  }
+  return nextValue;
+}
+
 function renderUnitsTab(unitTypes, displayFields) {
   const canWrite = can('config.write');
+  const selectedIds = getSelectedUnitIds();
+  const selectedCount = selectedIds.length;
+  const allVisibleSelected = !!unitTypes.length && unitTypes.every((ut) => selectedIds.includes(ut.id));
 
   // ── List view rows
   const listRows = unitTypes.map(ut => {
@@ -3319,6 +3411,10 @@ function renderUnitsTab(unitTypes, displayFields) {
     const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
     const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
     return `<tr>
+      <td>${canWrite ? `<input type="checkbox" ${isUnitSelected(ut.id) ? 'checked' : ''}
+        aria-label="Select ${esc(ut.name)}"
+        onclick="event.stopPropagation()"
+        onchange="toggleUnitSelection(${ut.id}, this.checked)">` : ''}</td>
       <td><code style="font-size:11px">${esc(ut.key)}</code></td>
       <td>${esc(ut.name)}</td>
       <td>${_utBadge(ut.behavior_mode, bColor)}</td>
@@ -3354,6 +3450,10 @@ function renderUnitsTab(unitTypes, displayFields) {
     const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
     const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
     return `<div class="unit-kanban-card${ut.enabled ? '' : ' ukc-disabled'}" onclick="openUnitTypeModal(${ut.id})">
+      ${canWrite ? `<label style="position:absolute;top:10px;left:10px;z-index:2;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:999px;background:rgba(12,18,28,0.88);border:1px solid rgba(255,255,255,0.12)" onclick="event.stopPropagation()">
+        <input type="checkbox" ${isUnitSelected(ut.id) ? 'checked' : ''} aria-label="Select ${esc(ut.name)}"
+          onchange="toggleUnitSelection(${ut.id}, this.checked)">
+      </label>` : ''}
       <span class="ukc-display-dot ${ut.display_to_players ? 'on' : 'off'}"
         title="${ut.display_to_players ? 'Shown to players' : 'Hidden from players'}"></span>
       ${_utIconHtml(ut, 84)}
@@ -3425,8 +3525,13 @@ function renderUnitsTab(unitTypes, displayFields) {
         <div class="section-header"><h3>Bulk Edit Units</h3></div>
         <div class="section-body">
           <p class="text-muted" style="font-size:12px;margin-bottom:12px">
-            Apply one numeric change across many units at once. This updates the database and reloads the live unit cache.
+            Apply one numeric change across many units at once. This updates the database, reloads the live unit cache, and can target only your current selection.
           </p>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
+            <span class="text-muted" style="font-size:12px">Selected units: <strong>${selectedCount}</strong></span>
+            <button class="btn-sm" onclick="selectAllVisibleUnits()" ${unitTypes.length ? '' : 'disabled'}>${allVisibleSelected ? 'All Visible Selected' : 'Select All Visible'}</button>
+            <button class="btn-sm" onclick="clearUnitSelection()" ${selectedCount ? '' : 'disabled'}>Clear Selection</button>
+          </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end">
             <div class="form-group">
               <label>Field</label>
@@ -3434,7 +3539,8 @@ function renderUnitsTab(unitTypes, displayFields) {
                 <option value="hp">HP</option>
                 <option value="attack_damage">Attack Damage</option>
                 <option value="attack_speed">Attack Speed</option>
-                <option value="path_speed">Path Speed</option>
+                <option value="running_speed">Running Speed</option>
+                <option value="pathing_speed">Pathing Speed</option>
                 <option value="range">Range</option>
                 <option value="send_cost">Send Cost</option>
                 <option value="build_cost">Build Cost</option>
@@ -3459,7 +3565,8 @@ function renderUnitsTab(unitTypes, displayFields) {
             <div class="form-group">
               <label>Scope</label>
               <select id="units-bulk-scope" style="width:100%">
-                <option value="all">All Units</option>
+                <option value="selected" ${selectedCount ? 'selected' : 'disabled'}>Selected Units</option>
+                <option value="all" ${selectedCount ? '' : 'selected'}>All Units</option>
                 <option value="enabled">Enabled Only</option>
                 <option value="moving">Moving Only</option>
                 <option value="fixed">Fixed Only</option>
@@ -3477,12 +3584,14 @@ function renderUnitsTab(unitTypes, displayFields) {
     <div id="units-list-wrap" class="section" style="${S.units.view === 'list' ? '' : 'display:none'};overflow-x:auto">
       <table style="width:100%">
         <thead><tr>
+          <th style="width:36px">${canWrite ? `<input type="checkbox" ${allVisibleSelected ? 'checked' : ''}
+            aria-label="Select all visible units" onclick="event.stopPropagation()" onchange="${allVisibleSelected ? 'clearUnitSelection()' : 'selectAllVisibleUnits()'}">` : ''}</th>
           <th>Key</th><th>Name</th><th>Mode</th><th>Dmg Type</th>
           <th>Armor</th><th>HP</th><th>Send$</th><th>Build$</th><th>On</th>
           <th>Actions</th>
         </tr></thead>
         <tbody>
-          ${listRows || '<tr><td colspan="10" class="text-muted" style="padding:20px;text-align:center">No unit types found.</td></tr>'}
+          ${listRows || `<tr><td colspan="${canWrite ? 11 : 10}" class="text-muted" style="padding:20px;text-align:center">No unit types found.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -3649,23 +3758,49 @@ window.reloadUnitTypeCache = reloadUnitTypeCache;
 // ── Unit Type modal (create + edit) ────────────────────────────────────────────
 
 async function bulkUpdateUnits() {
-  const field = document.getElementById('units-bulk-field')?.value;
+  const requestedField = document.getElementById('units-bulk-field')?.value;
   const operation = document.getElementById('units-bulk-operation')?.value;
   const scope = document.getElementById('units-bulk-scope')?.value || 'all';
   const value = parseFloat(document.getElementById('units-bulk-value')?.value);
+  const unitIds = getSelectedUnitIds();
+  const field = getCanonicalBulkField(requestedField);
 
   if (!Number.isFinite(value)) {
     toast('Bulk-edit value must be numeric.', 'err');
     return;
   }
+  if (scope === 'selected' && !unitIds.length) {
+    toast('Select at least one unit before using Selected Units bulk edit.', 'err');
+    return;
+  }
 
   const fieldLabel = document.getElementById('units-bulk-field')?.selectedOptions?.[0]?.textContent || field;
   const scopeLabel = document.getElementById('units-bulk-scope')?.selectedOptions?.[0]?.textContent || scope;
-  if (!confirm(`Apply ${operation} ${fieldLabel} using ${value} for ${scopeLabel}?`)) return;
+  const scopeSummary = scope === 'selected'
+    ? `${scopeLabel} (${unitIds.length})`
+    : scopeLabel;
+  if (!confirm(`Apply ${operation} ${fieldLabel} using ${value} for ${scopeSummary}?`)) return;
 
   try {
-    const r = await api('POST', '/admin/unit-types/bulk-update', { field, operation, value, scope });
-    toast(`Bulk edit applied to ${r.updated} unit${r.updated === 1 ? '' : 's'}.`, 'ok');
+    if (scope === 'selected') {
+      const selectedUnits = (S.units.unitTypes || []).filter((ut) => unitIds.includes(ut.id));
+      if (!selectedUnits.length) {
+        toast('No selected units were found to update.', 'err');
+        return;
+      }
+      await Promise.all(selectedUnits.map((ut) => {
+        const nextValue = computeBulkFieldValue(field, operation, value, ut[field]);
+        return api('PATCH', `/admin/unit-types/${ut.id}`, { [field]: nextValue });
+      }));
+      toast(`Bulk edit applied to ${selectedUnits.length} unit${selectedUnits.length === 1 ? '' : 's'}.`, 'ok');
+    } else {
+      const r = await api('POST', '/admin/unit-types/bulk-update', { field, operation, value, scope, unitIds });
+      if (!r.updated) {
+        toast('Bulk edit completed but no units were updated. Check the selected units and scope.', 'err');
+      } else {
+        toast(`Bulk edit applied to ${r.updated} unit${r.updated === 1 ? '' : 's'}.`, 'ok');
+      }
+    }
     await loadUnits();
   } catch (err) {
     toast(err.message, 'err');
@@ -3742,7 +3877,7 @@ async function openUnitTypeModal(id) {
       <div class="form-group"><label>Attack Damage</label>${inp('attack_damage','number','0.01')}</div>
       <div class="form-group"><label>Attack Speed</label>${inp('attack_speed','number','0.01')}</div>
       <div class="form-group"><label>Range</label>${inp('range','number','0.001')}</div>
-      <div class="form-group"><label>Path Speed</label>${inp('path_speed','number','0.001')}</div>
+      <div class="form-group"><label>Running / Pathing Speed</label>${inp('path_speed','number','0.001')}</div>
     </div>
 
     <h4 style="margin:16px 0 8px">Damage &amp; Armor</h4>

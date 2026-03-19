@@ -208,6 +208,13 @@ namespace CastleDefender.Net
         public IEnumerator PreloadCriticalContentForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
         {
             RemoteContentVerification.RecordOwnerRequest("t1.gameplay", requester, _criticalPreloadRunning);
+            if (HasCompletedCriticalPreload && !forceRefreshManifest)
+            {
+                RemoteContentVerification.RecordReuse("t1.gameplay", "source=already_ready");
+                ReportProgress(1f, "All critical content already ready.", onProgress);
+                yield break;
+            }
+
             if (_criticalPreloadRunning)
             {
                 while (_criticalPreloadRunning)
@@ -219,7 +226,6 @@ namespace CastleDefender.Net
             LastError = null;
             LastFailureStage = CriticalPreloadFailureStage.None;
             LastAddressablesCallError = null;
-            HasCompletedCriticalPreload = false;
             try
             {
                 ReportProgress(0f, "Preparing content...", onProgress);

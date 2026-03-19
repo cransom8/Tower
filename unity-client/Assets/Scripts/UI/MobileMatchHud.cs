@@ -56,6 +56,18 @@ namespace CastleDefender.UI
         [Header("Wave Status Widget")]
         [SerializeField] bool showWaveStatusWidget = true;
 
+        [Header("Settings Panel")]
+        [SerializeField] bool showSettingsPanel = true;
+        [SerializeField] float settingsButtonSize = 46f;
+        [SerializeField] Vector2 settingsPanelSize = new Vector2(164f, 178f);
+        [SerializeField] float settingsTopInset = 14f;
+        [SerializeField] float settingsRightInset = 10f;
+        [SerializeField] float settingsPanelGap = 10f;
+        [SerializeField] float settingsButtonSpacing = 6f;
+        [SerializeField] float settingsZoomStep = 2f;
+        [SerializeField] float settingsTiltStep = 8f;
+        [SerializeField] float settingsRotateStep = 20f;
+
         [Header("Editor Preview")]
         [SerializeField] bool previewInEditMode = true;
         [SerializeField] int previewWave = 7;
@@ -73,6 +85,7 @@ namespace CastleDefender.UI
         RectTransform _ribbonRoot;
         RectTransform _rightRailRoot;
         RectTransform _topRightStatsRoot;
+        RectTransform _settingsPanelRoot;
         Rect _lastSafeArea = new Rect(-1f, -1f, -1f, -1f);
         bool _built;
         bool _editorRebuildQueued;
@@ -103,6 +116,7 @@ namespace CastleDefender.UI
         TMP_Text _waveIntelText;
         MyStatsHudWidget _myStatsWidget;
         WaveStatusHudWidget _waveStatusWidget;
+        FloatingSettingsPanel _settingsPanelWidget;
 
         CollapsibleHudCard _myStatsCard;
         CollapsibleHudCard _teamStatsCard;
@@ -168,6 +182,10 @@ namespace CastleDefender.UI
                 BuildWaveStatusWidget();
             else
                 DestroyCanvasChildren("WaveStatusWidget");
+            if (showSettingsPanel)
+                BuildSettingsPanel();
+            else
+                DestroyCanvasChildren("SettingsPanel");
             if (!myStatsOnlyMode && showLegacyRightRail)
                 BuildRightRail();
             else
@@ -785,6 +803,152 @@ namespace CastleDefender.UI
                 collapsedLabel,
                 false,
                 "hud.wave_status_widget");
+        }
+
+        void BuildSettingsPanel()
+        {
+            if (_canvasRect == null)
+                return;
+
+            DestroyCanvasChildren("SettingsPanel");
+
+            var root = new GameObject("SettingsPanel", typeof(RectTransform), typeof(FloatingSettingsPanel));
+            root.transform.SetParent(_canvasRect, false);
+            var rect = root.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(1f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 1f);
+            rect.sizeDelta = new Vector2(settingsPanelSize.x + settingsButtonSize + settingsPanelGap, Mathf.Max(settingsPanelSize.y, settingsButtonSize));
+            rect.anchoredPosition = new Vector2(-settingsRightInset, -settingsTopInset);
+            _settingsPanelRoot = rect;
+
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(CanvasGroup), typeof(VerticalLayoutGroup));
+            panel.transform.SetParent(root.transform, false);
+            var panelRect = panel.GetComponent<RectTransform>();
+            panelRect.anchorMin = new Vector2(1f, 1f);
+            panelRect.anchorMax = new Vector2(1f, 1f);
+            panelRect.pivot = new Vector2(1f, 1f);
+            panelRect.sizeDelta = settingsPanelSize;
+
+            var panelImage = panel.GetComponent<Image>();
+            panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.96f);
+            ApplyPanelFrame(panel, panelImage.color, new Color(0.82f, 0.64f, 0.30f, 0.96f));
+
+            var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
+            panelLayout.childAlignment = TextAnchor.UpperCenter;
+            panelLayout.childControlWidth = true;
+            panelLayout.childControlHeight = false;
+            panelLayout.childForceExpandWidth = true;
+            panelLayout.childForceExpandHeight = false;
+            panelLayout.spacing = 6f;
+            panelLayout.padding = new RectOffset(10, 10, 10, 10);
+
+            var title = CreateText(panel.transform, "Title", "Camera", 12, TextAlignmentOptions.Center, new Color(0.90f, 0.93f, 0.97f, 0.94f));
+            title.fontStyle = FontStyles.SmallCaps;
+            var titleLayout = title.gameObject.AddComponent<LayoutElement>();
+            titleLayout.preferredHeight = 16f;
+
+            var grid = new GameObject("Grid", typeof(RectTransform), typeof(GridLayoutGroup), typeof(LayoutElement));
+            grid.transform.SetParent(panel.transform, false);
+            var gridLayoutElement = grid.GetComponent<LayoutElement>();
+            gridLayoutElement.preferredHeight = settingsPanelSize.y - 34f;
+            gridLayoutElement.flexibleHeight = 1f;
+
+            var gridLayout = grid.GetComponent<GridLayoutGroup>();
+            float innerWidth = settingsPanelSize.x - 20f;
+            float cellWidth = (innerWidth - settingsButtonSpacing) * 0.5f;
+            gridLayout.cellSize = new Vector2(cellWidth, 42f);
+            gridLayout.spacing = new Vector2(settingsButtonSpacing, settingsButtonSpacing);
+            gridLayout.padding = new RectOffset(0, 0, 0, 0);
+            gridLayout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            gridLayout.constraintCount = 2;
+            gridLayout.childAlignment = TextAnchor.UpperCenter;
+            gridLayout.startAxis = GridLayoutGroup.Axis.Horizontal;
+
+            var tiltUpButton = CreateSettingsActionButton(grid.transform, "TiltUp", "Tilt +", new Color(0.16f, 0.24f, 0.32f, 0.98f));
+            var tiltDownButton = CreateSettingsActionButton(grid.transform, "TiltDown", "Tilt -", new Color(0.16f, 0.24f, 0.32f, 0.98f));
+            var zoomInButton = CreateSettingsActionButton(grid.transform, "ZoomIn", "Zoom +", new Color(0.18f, 0.28f, 0.22f, 0.98f));
+            var zoomOutButton = CreateSettingsActionButton(grid.transform, "ZoomOut", "Zoom -", new Color(0.18f, 0.28f, 0.22f, 0.98f));
+            var rotateLeftButton = CreateSettingsActionButton(grid.transform, "RotateLeft", "Rot L", new Color(0.28f, 0.20f, 0.16f, 0.98f));
+            var rotateRightButton = CreateSettingsActionButton(grid.transform, "RotateRight", "Rot R", new Color(0.28f, 0.20f, 0.16f, 0.98f));
+
+            var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            gear.transform.SetParent(root.transform, false);
+            var gearRect = gear.GetComponent<RectTransform>();
+            gearRect.anchorMin = new Vector2(1f, 1f);
+            gearRect.anchorMax = new Vector2(1f, 1f);
+            gearRect.pivot = new Vector2(1f, 1f);
+            gearRect.sizeDelta = new Vector2(settingsButtonSize, settingsButtonSize);
+            gearRect.anchoredPosition = Vector2.zero;
+
+            var gearImage = gear.GetComponent<Image>();
+            gearImage.color = new Color(0.11f, 0.15f, 0.19f, 0.98f);
+            ApplyPanelFrame(gear, gearImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
+
+            var gearLabel = CreateText(gear.transform, "Label", "\u2699", 22, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            gearLabel.rectTransform.anchorMin = Vector2.zero;
+            gearLabel.rectTransform.anchorMax = Vector2.one;
+            gearLabel.rectTransform.offsetMin = Vector2.zero;
+            gearLabel.rectTransform.offsetMax = Vector2.zero;
+
+            _settingsPanelWidget = root.GetComponent<FloatingSettingsPanel>();
+            Vector2 expandedPosition = new Vector2(-settingsButtonSize - settingsPanelGap, 0f);
+            Vector2 collapsedPosition = expandedPosition + new Vector2(18f, 0f);
+            _settingsPanelWidget.Configure(
+                rect,
+                panelRect,
+                panel.GetComponent<CanvasGroup>(),
+                gear.GetComponent<Button>(),
+                false,
+                "hud.settings_panel",
+                expandedPosition,
+                collapsedPosition);
+
+            tiltUpButton.onClick.AddListener(() => AdjustCameraTilt(settingsTiltStep));
+            tiltDownButton.onClick.AddListener(() => AdjustCameraTilt(-settingsTiltStep));
+            zoomInButton.onClick.AddListener(() => AdjustCameraZoom(-settingsZoomStep));
+            zoomOutButton.onClick.AddListener(() => AdjustCameraZoom(settingsZoomStep));
+            rotateLeftButton.onClick.AddListener(() => AdjustCameraRotation(-settingsRotateStep));
+            rotateRightButton.onClick.AddListener(() => AdjustCameraRotation(settingsRotateStep));
+        }
+
+        Button CreateSettingsActionButton(Transform parent, string name, string label, Color backgroundColor)
+        {
+            var buttonGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            buttonGo.transform.SetParent(parent, false);
+            buttonGo.GetComponent<Image>().color = backgroundColor;
+            var layout = buttonGo.GetComponent<LayoutElement>();
+            layout.flexibleWidth = 1f;
+            layout.flexibleHeight = 1f;
+
+            var labelText = CreateText(buttonGo.transform, "Label", label, 11, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            labelText.rectTransform.anchorMin = Vector2.zero;
+            labelText.rectTransform.anchorMax = Vector2.one;
+            labelText.rectTransform.offsetMin = new Vector2(4f, 2f);
+            labelText.rectTransform.offsetMax = new Vector2(-4f, -2f);
+
+            return buttonGo.GetComponent<Button>();
+        }
+
+        void AdjustCameraTilt(float delta)
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+                controller.AdjustTilt(delta);
+        }
+
+        void AdjustCameraZoom(float delta)
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+                controller.AdjustZoom(delta);
+        }
+
+        void AdjustCameraRotation(float delta)
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+                controller.AdjustRotation(delta);
         }
 
         void CreateWaveStatusChip(Transform parent, string name, string tag, string value, Color accentColor)
@@ -1764,6 +1928,9 @@ namespace CastleDefender.UI
 
             if (_topRightStatsRoot != null)
                 _topRightStatsRoot.anchoredPosition = new Vector2(-statBarRightInset - rightInset, -statBarTopInset - topInset);
+
+            if (_settingsPanelRoot != null)
+                _settingsPanelRoot.anchoredPosition = new Vector2(-settingsRightInset - rightInset, -settingsTopInset - topInset);
         }
 
         void DestroyCanvasChildren(string childName)

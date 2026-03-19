@@ -50,6 +50,7 @@ public class LoadingScreen : MonoBehaviour
     static bool _pendingT1GameplayPreload;
     static bool _pendingEnvironmentPreload;
     static string[] _pendingPortraitKeys = Array.Empty<string>();
+    static bool _transitionInProgress;
 
     float _tipTimer;
     int _tipIndex;
@@ -65,6 +66,13 @@ public class LoadingScreen : MonoBehaviour
 
     public static void LoadScene(string sceneName)
     {
+        if (_transitionInProgress)
+        {
+            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+            return;
+        }
+
+        _transitionInProgress = true;
         _pendingScene = sceneName;
         _pendingLobbyEntryPreparation = false;
         _pendingT1GameplayPreload = false;
@@ -76,6 +84,13 @@ public class LoadingScreen : MonoBehaviour
 
     public static void LoadSceneWithCriticalContentPreload(string sceneName)
     {
+        if (_transitionInProgress)
+        {
+            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+            return;
+        }
+
+        _transitionInProgress = true;
         _pendingScene = sceneName;
         _pendingLobbyEntryPreparation = true;
         _pendingT1GameplayPreload = false;
@@ -87,6 +102,13 @@ public class LoadingScreen : MonoBehaviour
 
     public static void LoadSceneWithRemoteContentGate(string sceneName, bool preloadT1Gameplay = false, IEnumerable<string> portraitKeys = null, bool preloadEnvironment = false)
     {
+        if (_transitionInProgress)
+        {
+            Debug.LogWarning($"[LoadingScreen] Ignoring duplicate transition request to '{sceneName}' while another transition is active.");
+            return;
+        }
+
+        _transitionInProgress = true;
         _pendingScene = sceneName;
         _pendingLobbyEntryPreparation = false;
         _pendingT1GameplayPreload = preloadT1Gameplay;
@@ -102,6 +124,14 @@ public class LoadingScreen : MonoBehaviour
         ConfigureProgressBar();
         SetProgressImmediate(0f);
         if (canvasGroup) canvasGroup.alpha = 0f;
+    }
+
+    void OnDestroy()
+    {
+        if (Instance == this)
+            Instance = null;
+
+        _transitionInProgress = false;
     }
 
     void Start()
@@ -180,6 +210,7 @@ public class LoadingScreen : MonoBehaviour
         SetAudioListenersEnabledForScene(_pendingScene, true);
 
         yield return StartCoroutine(FadeCG(canvasGroup, 0f, fadeOutDuration));
+        _transitionInProgress = false;
         SceneManager.UnloadSceneAsync(LoadingSceneName);
     }
 

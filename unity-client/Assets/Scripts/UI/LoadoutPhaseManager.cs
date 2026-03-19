@@ -72,6 +72,7 @@ namespace CastleDefender.UI
         readonly Dictionary<string, Texture2D> _portraitCache = new();
         readonly Dictionary<string, List<RawImage>> _pendingPortraitTargets = new(StringComparer.OrdinalIgnoreCase);
         float _timerRemaining;
+        float _phaseStartTime;
         Coroutine _portraitWarmupRoutine;
         Coroutine _criticalWarmupRoutine;
         Coroutine _environmentWarmupRoutine;
@@ -80,6 +81,7 @@ namespace CastleDefender.UI
         bool _loadoutReadyEmitted;
         bool _portraitWarmupDone;
         bool _criticalWarmupDone;
+        bool _gameplayTransitionStarted;
 
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()
@@ -123,10 +125,6 @@ namespace CastleDefender.UI
                 // Still emit ml_loadout_ready as safety net (server deduplicates)
                 TryEmitLoadoutReady();
             }
-            else
-            {
-                _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
-            }
 
             // ml_loadout_phase_start may have fired before this scene finished
             // loading (reconnect / race condition).  NetworkManager caches it so
@@ -136,6 +134,10 @@ namespace CastleDefender.UI
             var pending = nm.PendingLoadoutPhase;
             if (pending != null && _state == PhaseState.Idle)
                 HandlePhaseStart(pending);
+
+            // Replay the last preparation state in case it arrived before this scene loaded.
+            if (nm.LastPreparationState != null)
+                HandlePreparationState(nm.LastPreparationState);
         }
 
         void HandlePhaseStart(MLLoadoutPhaseStartPayload payload)
@@ -144,15 +146,18 @@ namespace CastleDefender.UI
             _timerRemaining = Mathf.Max(1f, payload.timeoutSeconds);
 
             // Reset readiness tracking for this phase
+            var rc = RemoteContentManager.EnsureInstance();
             _loadoutReadyEmitted = false;
             _portraitWarmupDone  = false;
-            _criticalWarmupDone  = false;
+            _criticalWarmupDone  = rc != null && rc.HasCompletedCriticalPreload;
+            _gameplayTransitionStarted = false;
+            _phaseStartTime = Time.unscaledTime;
 
             Array.Fill(_selected, -1);
             Array.Fill(_selNames, null);
             _cards.Clear();
             _pendingPortraitTargets.Clear();
-            StopWarmupRoutines();
+            StopWarmupRoutines(stopCritical: false);
 
             // Hide preparation overlay, show loadout panel (player strip built inside BuildPanel)
             HidePrepOverlay();
@@ -181,7 +186,10 @@ namespace CastleDefender.UI
         void HandleMatchConfig(MLMatchConfig cfg)
         {
             if (cfg.loadout == null || cfg.loadout.Length == 0) return;
+            if (_gameplayTransitionStarted) return;
+
             // Loadout resolved — switch to "Preparing battlefield / Waiting for players" state
+            _gameplayTransitionStarted = true;
             _state = PhaseState.WaitingForMatch;
             if (_txtStatus  != null) _txtStatus.text  = "Loadout locked";
             if (_btnConfirm != null) _btnConfirm.interactable = false;
@@ -253,6 +261,7 @@ namespace CastleDefender.UI
             }
 
             RefreshPendingPortraits();
+            RefreshFallbackPlayerPanel();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -655,18 +664,11 @@ namespace CastleDefender.UI
 
         void StartBackgroundWarmup()
         {
-            // Critical content warmup is intentionally started in Start() so it
-            // begins before ml_loadout_phase_start arrives (the server waits for
-            // ml_loadout_ready before sending that event).  Restart here only if it
-            // was stopped by StopWarmupRoutines() before completing (reconnect path).
-            if (!_criticalWarmupDone)
-                _criticalWarmupRoutine = StartCoroutine(WarmCriticalContentInBackground());
-
             _portraitWarmupRoutine    = StartCoroutine(WarmPortraitsInBackground());
             _environmentWarmupRoutine = StartCoroutine(WarmEnvironmentInBackground());
         }
 
-        void StopWarmupRoutines()
+        void StopWarmupRoutines(bool stopCritical = true)
         {
             if (_portraitWarmupRoutine != null)
             {
@@ -674,7 +676,7 @@ namespace CastleDefender.UI
                 _portraitWarmupRoutine = null;
             }
 
-            if (_criticalWarmupRoutine != null)
+            if (stopCritical && _criticalWarmupRoutine != null)
             {
                 StopCoroutine(_criticalWarmupRoutine);
                 _criticalWarmupRoutine = null;
@@ -882,11 +884,12 @@ namespace CastleDefender.UI
             // If called before _panelRoot exists (shouldn't happen), skip.
             if (_panelRoot == null) return;
 
-            _playerPanelRoot = new GameObject("Panel_Players");
+            _playerPanelRoot = new GameObject("Panel_Players", typeof(RectTransform));
             _playerPanelRoot.transform.SetParent(_panelRoot.transform, false);
 
             var le = _playerPanelRoot.AddComponent<LayoutElement>();
-            le.preferredHeight = 46f;
+            le.minHeight       = 36f;
+            le.preferredHeight = 36f;
             le.flexibleWidth   = 1f;
 
             var bg = _playerPanelRoot.AddComponent<Image>();
@@ -895,11 +898,41 @@ namespace CastleDefender.UI
             var hlg = _playerPanelRoot.AddComponent<HorizontalLayoutGroup>();
             hlg.childAlignment         = TextAnchor.MiddleCenter;
             hlg.childForceExpandWidth  = true;
-            hlg.childForceExpandHeight = true;
-            hlg.spacing = 6f;
-            hlg.padding = new RectOffset(4, 4, 2, 2);
+            hlg.childForceExpandHeight = false;
+            hlg.childControlWidth      = true;
+            hlg.childControlHeight     = false;
+            hlg.spacing = 8f;
+            hlg.padding = new RectOffset(8, 8, 4, 4);
 
             _playerRows.Clear();
+
+            var cachedPlayers = NetworkManager.Instance?.LastPreparationState?.players;
+            if (cachedPlayers != null && cachedPlayers.Length > 0)
+            {
+                UpdatePlayerPanel(cachedPlayers);
+                return;
+            }
+
+            var laneAssignments = NetworkManager.Instance?.LastMLMatchReady?.laneAssignments;
+            if (laneAssignments == null || laneAssignments.Length == 0)
+                return;
+
+            var placeholderPlayers = new MLPlayerPreparationState[laneAssignments.Length];
+            for (int i = 0; i < laneAssignments.Length; i++)
+            {
+                var lane = laneAssignments[i];
+                placeholderPlayers[i] = new MLPlayerPreparationState
+                {
+                    laneIndex = lane.laneIndex,
+                    displayName = string.IsNullOrWhiteSpace(lane.displayName) ? $"Lane {lane.laneIndex + 1}" : lane.displayName,
+                    loadoutReady = lane.isAI,
+                    gameplayReady = false,
+                    contentPercent = lane.isAI ? 0.12f : 0.08f,
+                    contentState = lane.isAI ? "Loading..." : "Preparing..."
+                };
+            }
+
+            UpdatePlayerPanel(placeholderPlayers);
         }
 
         void UpdatePlayerPanel(MLPlayerPreparationState[] players)
@@ -912,31 +945,38 @@ namespace CastleDefender.UI
             // Add missing columns (one per player, side by side)
             while (_playerRows.Count < players.Length)
             {
-                var colGO = new GameObject($"Col_{_playerRows.Count}");
+                var colGO = new GameObject($"Col_{_playerRows.Count}", typeof(RectTransform));
                 colGO.transform.SetParent(_playerPanelRoot.transform, false);
+                var colLE = colGO.AddComponent<LayoutElement>();
+                colLE.minWidth = 110f;
+                colLE.preferredWidth = 140f;
+                colLE.flexibleWidth = 1f;
+                colLE.minHeight = 28f;
+                colLE.preferredHeight = 28f;
+                colLE.flexibleHeight = 0f;
                 var colBG = colGO.AddComponent<Image>();
                 colBG.color = new Color(0.1f, 0.1f, 0.16f, 0.85f);
                 var colVLG = colGO.AddComponent<VerticalLayoutGroup>();
                 colVLG.childAlignment        = TextAnchor.MiddleCenter;
                 colVLG.childForceExpandWidth = true;
                 colVLG.childForceExpandHeight = false;
-                colVLG.spacing = 2f;
-                colVLG.padding = new RectOffset(6, 6, 4, 4);
+                colVLG.spacing = 1f;
+                colVLG.padding = new RectOffset(6, 6, 3, 3);
 
-                var nameTxt = MakeLabel(colGO.transform, "Txt_Name", "", 11, Color.white, 15f);
+                var nameTxt = MakeLabel(colGO.transform, "Txt_Name", "", 11, Color.white, 12f);
                 nameTxt.alignment = TextAlignmentOptions.Center;
 
                 // Thin progress bar
-                var barBGGO = new GameObject("BarBG");
+                var barBGGO = new GameObject("BarBG", typeof(RectTransform));
                 barBGGO.transform.SetParent(colGO.transform, false);
                 var barBGLE = barBGGO.AddComponent<LayoutElement>();
-                barBGLE.preferredHeight = 5f;
+                barBGLE.preferredHeight = 4f;
                 barBGLE.flexibleWidth   = 1f;
                 barBGGO.AddComponent<Image>().color = new Color(0.15f, 0.15f, 0.2f);
 
-                var barFillGO = new GameObject("BarFill");
+                var barFillGO = new GameObject("BarFill", typeof(RectTransform));
                 barFillGO.transform.SetParent(barBGGO.transform, false);
-                var barFillRT = barFillGO.AddComponent<RectTransform>();
+                var barFillRT = barFillGO.GetComponent<RectTransform>();
                 barFillRT.anchorMin = Vector2.zero;
                 barFillRT.anchorMax = new Vector2(0f, 1f);  // X updated per-frame
                 barFillRT.offsetMin = Vector2.zero;
@@ -944,7 +984,7 @@ namespace CastleDefender.UI
                 var barFillImg = barFillGO.AddComponent<Image>();
                 barFillImg.color = new Color(0.2f, 0.7f, 0.3f);
 
-                var stateTxt = MakeLabel(colGO.transform, "Txt_State", "", 10, new Color(0.75f, 0.75f, 0.75f), 13f);
+                var stateTxt = MakeLabel(colGO.transform, "Txt_State", "", 10, new Color(0.75f, 0.75f, 0.75f), 11f);
                 stateTxt.alignment = TextAlignmentOptions.Center;
 
                 _playerRows.Add((nameTxt, stateTxt, barFillImg));
@@ -991,15 +1031,76 @@ namespace CastleDefender.UI
             }
         }
 
+        void RefreshFallbackPlayerPanel()
+        {
+            if (_playerPanelRoot == null) return;
+
+            var nm = NetworkManager.Instance;
+            if (nm == null) return;
+
+            var authoritative = nm.LastPreparationState?.players;
+            if (authoritative != null && authoritative.Length > 0) return;
+
+            var laneAssignments = nm.LastMLMatchReady?.laneAssignments;
+            if (laneAssignments == null || laneAssignments.Length == 0) return;
+
+            int myLane = nm.MyLaneIndex;
+            float aiPct = Mathf.Clamp01((Time.unscaledTime - _phaseStartTime) / 3f);
+            var players = new MLPlayerPreparationState[laneAssignments.Length];
+            for (int i = 0; i < laneAssignments.Length; i++)
+            {
+                var lane = laneAssignments[i];
+                bool isMe = lane.laneIndex == myLane;
+                bool loadoutReady = lane.isAI || _loadoutReadyEmitted;
+                bool gameplayReady = lane.isAI && aiPct >= 0.99f;
+                float pct;
+                string state;
+
+                if (lane.isAI)
+                {
+                    pct = gameplayReady ? 1f : Mathf.Max(0.12f, aiPct);
+                    state = gameplayReady ? "Ready" : "Loading...";
+                }
+                else if (isMe)
+                {
+                    pct = _loadoutReadyEmitted ? 0.5f : 0.12f;
+                    state = _loadoutReadyEmitted ? "Selecting units" : "Preparing...";
+                }
+                else if (_state == PhaseState.WaitingForMatch)
+                {
+                    pct = 0.5f;
+                    state = "Waiting...";
+                }
+                else
+                {
+                    pct = 0.12f;
+                    state = "Preparing...";
+                }
+
+                players[i] = new MLPlayerPreparationState
+                {
+                    laneIndex = lane.laneIndex,
+                    displayName = string.IsNullOrWhiteSpace(lane.displayName) ? $"Lane {lane.laneIndex + 1}" : lane.displayName,
+                    loadoutReady = loadoutReady,
+                    gameplayReady = gameplayReady,
+                    contentPercent = pct,
+                    contentState = state
+                };
+            }
+
+            UpdatePlayerPanel(players);
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // UI helpers
 
         static TMP_Text MakeLabel(Transform parent, string goName, string text, int fontSize, Color color, float preferredHeight = 24f)
         {
-            var go = new GameObject(goName);
+            var go = new GameObject(goName, typeof(RectTransform));
             go.transform.SetParent(parent, false);
             var le = go.AddComponent<LayoutElement>();
             le.preferredHeight = preferredHeight;
+            le.flexibleWidth = 1f;
             var txt = go.AddComponent<TextMeshProUGUI>();
             txt.text      = text;
             txt.fontSize  = fontSize;

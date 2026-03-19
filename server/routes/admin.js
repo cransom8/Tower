@@ -1918,6 +1918,8 @@ const UNIT_BULK_NUMERIC_FIELDS = new Set([
   'attack_speed',
   'range',
   'path_speed',
+  'running_speed',
+  'pathing_speed',
   'send_cost',
   'build_cost',
   'income',
@@ -1926,6 +1928,10 @@ const UNIT_BULK_NUMERIC_FIELDS = new Set([
   'projectile_travel_ticks',
   'damage_reduction_pct',
 ]);
+const UNIT_BULK_FIELD_ALIASES = Object.freeze({
+  running_speed: 'path_speed',
+  pathing_speed: 'path_speed',
+});
 const UNIT_BULK_INTEGER_FIELDS = new Set([
   'send_cost',
   'build_cost',
@@ -2110,12 +2116,19 @@ router.get('/skins', requireAdmin, async (req, res) => {
 router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.write'), async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'Database not configured' });
   const db = require('../db');
-  const field = String(req.body?.field || '').trim();
+  const requestedField = String(req.body?.field || '').trim();
+  const field = UNIT_BULK_FIELD_ALIASES[requestedField] || requestedField;
   const operation = String(req.body?.operation || '').trim();
   const scope = String(req.body?.scope || 'all').trim();
   const value = Number(req.body?.value);
+  const rawUnitIds = Array.isArray(req.body?.unitIds) ? req.body.unitIds : [];
+  const unitIds = Array.from(new Set(
+    rawUnitIds
+      .map((id) => Number.parseInt(id, 10))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
 
-  if (!UNIT_BULK_NUMERIC_FIELDS.has(field)) {
+  if (!UNIT_BULK_NUMERIC_FIELDS.has(requestedField) && !UNIT_BULK_NUMERIC_FIELDS.has(field)) {
     return res.status(400).json({ error: 'Unsupported bulk-edit field' });
   }
   if (!['set', 'add', 'multiply'].includes(operation)) {
@@ -2125,18 +2138,26 @@ router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.w
     return res.status(400).json({ error: 'Bulk-edit value must be numeric' });
   }
 
-  let whereClause = 'TRUE';
-  if (scope === 'enabled') {
-    whereClause = 'enabled = TRUE';
+  const whereClauses = [];
+  const params = [value];
+  if (scope === 'selected') {
+    if (!unitIds.length) {
+      return res.status(400).json({ error: 'Select at least one unit for a selected-only bulk edit' });
+    }
+    params.push(unitIds);
+    whereClauses.push(`id = ANY($${params.length}::int[])`);
+  } else if (scope === 'enabled') {
+    whereClauses.push('enabled = TRUE');
   } else if (scope === 'moving') {
-    whereClause = 'COALESCE(send_cost, 0) > 0 AND NOT (COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0)';
+    whereClauses.push('COALESCE(send_cost, 0) > 0 AND NOT (COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0)');
   } else if (scope === 'fixed') {
-    whereClause = 'COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0 AND COALESCE(send_cost, 0) <= 0';
+    whereClauses.push('COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0 AND COALESCE(send_cost, 0) <= 0');
   } else if (scope === 'both') {
-    whereClause = 'COALESCE(send_cost, 0) > 0 AND COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0';
+    whereClauses.push('COALESCE(send_cost, 0) > 0 AND COALESCE(build_cost, 0) > 0 AND COALESCE(range, 0) > 0');
   } else if (scope !== 'all') {
     return res.status(400).json({ error: 'Unsupported bulk-edit scope' });
   }
+  const whereClause = whereClauses.length ? whereClauses.join(' AND ') : 'TRUE';
 
   let expr;
   if (operation === 'set') expr = '$1';
@@ -2160,13 +2181,29 @@ router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.w
        SET ${field} = ${expr}, updated_at = NOW()
        WHERE ${whereClause}
        RETURNING id`,
-      [value]
+      params
     );
     const unitTypesModule = require('../unitTypes');
     await unitTypesModule.reloadUnitTypes();
-    res.json({ ok: true, updated: r.rowCount, field, operation, value, scope });
+    res.json({
+      ok: true,
+      updated: r.rowCount,
+      field,
+      requestedField,
+      operation,
+      value,
+      scope,
+      unitIds,
+    });
   } catch (err) {
-    log.error('[admin] POST /unit-types/bulk-update error', { err: err.message, field, operation, scope });
+    log.error('[admin] POST /unit-types/bulk-update error', {
+      err: err.message,
+      field,
+      requestedField,
+      operation,
+      scope,
+      unitCount: unitIds.length,
+    });
     res.status(500).json({ error: 'Server error' });
   }
 });
