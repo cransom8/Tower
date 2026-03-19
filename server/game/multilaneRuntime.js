@@ -849,6 +849,10 @@ function createMultilaneRuntime({
       cancelMatch(roomId, code, "gameplay_ready_timeout");
       return;
     }
+    if (gameplayReadyResult.reason === "no_players") {
+      cancelMatch(roomId, code, "no_players");
+      return;
+    }
     // ticks begin only after all players are gameplay_ready
 
     const botController = aiList.length > 0
