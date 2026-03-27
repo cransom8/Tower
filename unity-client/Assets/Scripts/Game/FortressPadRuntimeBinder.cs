@@ -46,28 +46,29 @@ namespace CastleDefender.Game
             ("lumber_mill_pad", "lumber_mill", "Lumber Mill", "LumberMill"),
         };
 
-        static readonly (string padId, string displayName, string objectSuffix, string alternateSuffix, int duplicateIndex)[] WallPadBindings =
+        static readonly (string padId, string displayName, string objectSuffix, string alternateSuffix, string redOverrideSuffix, int duplicateIndex)[] WallPadBindings =
         {
-            ("wall_front_left_01_pad", "Front Left Wall 01", "Wall_Front_Left_01_Lvl_1", null, 0),
-            ("wall_front_left_02_pad", "Front Left Wall 02", "Wall_Front_Left_02_Lvl_1", null, 0),
-            ("wall_front_left_03_pad", "Front Left Wall 03", "Wall_Front_Left_03_Lvl_1", null, 0),
-            ("wall_front_left_04_pad", "Front Left Wall 04", "Wall_Front_Left_04_Lvl_1", null, 0),
-            ("wall_front_left_06_pad", "Front Left Wall 06", "Wall_Front_Left_06_Lvl_1", null, 0),
-            ("wall_front_left_07_pad", "Front Left Wall 07", "Wall_Front_Left_07_Lvl_1", null, 0),
-            ("wall_front_right_01_pad", "Front Right Wall 01", "Wall_Front_Right_01_Lvl_1", null, 0),
-            ("wall_front_right_02_pad", "Front Right Wall 02", "Wall_Front_Right_02_Lvl_1", null, 0),
-            ("wall_back_left_01_pad", "Back Left Wall 01", "Wall_Back_Left_01_Lvl_1", null, 0),
-            ("wall_back_left_02_pad", "Back Left Wall 02", "Wall_Back_Left_02_Lvl_1", null, 0),
-            ("wall_back_left_04_pad", "Back Left Wall 04", "Wall_Back_Left_04_Lvl_1", null, 0),
-            ("wall_back_left_05_pad", "Back Left Wall 05", "Wall_Back_Left_05_Lvl_1", null, 0),
-            ("wall_back_right_01_pad", "Back Right Wall 01", "Wall_Back_Right_01_Lvl_1", null, 0),
-            ("wall_back_right_02_pad", "Back Right Wall 02", "Wall_Back_Right_02_Lvl_1", null, 0),
-            ("wall_right_side_03_pad", "Right Side Wall 03", "Wall_Right_Side_03_Lvl_1", null, 0),
-            ("wall_right_side_04_a_pad", "Right Side Wall 04A", "Wall_Right_Side_04_Lvl_1", null, 0),
-            ("wall_right_side_04_b_pad", "Right Side Wall 04B", "Wall_Right_Side_04_Lvl_1", "Wall_Right_Side_04_Lvl_1 (1)", 1),
-            ("wall_right_side_05_pad", "Right Side Wall 05", "Wall_Right_Side_05_Lvl_1", null, 0),
-            ("wall_right_side_06_pad", "Right Side Wall 06", "Wall_Right_Side_06_Lvl_1", null, 0),
-            ("wall_right_side_07_pad", "Right Side Wall 07", "Wall_Right_Side_07_Lvl_1", null, 0),
+            ("wall_front_left_01_pad", "Front Left Wall 01", "Wall_Front_Left_01_Lvl_1", null, null, 0),
+            ("wall_front_left_02_pad", "Front Left Wall 02", "Wall_Front_Left_02_Lvl_1", null, null, 0),
+            ("wall_front_left_03_pad", "Front Left Wall 03", "Wall_Front_Left_03_Lvl_1", null, null, 0),
+            ("wall_front_left_04_pad", "Front Left Wall 04", "Wall_Front_Left_04_Lvl_1", null, null, 0),
+            ("wall_front_left_06_pad", "Front Left Wall 06", "Wall_Front_Left_06_Lvl_1", null, null, 0),
+            ("wall_front_left_07_pad", "Front Left Wall 07", "Wall_Front_Left_07_Lvl_1", null, null, 0),
+            ("wall_front_right_01_pad", "Front Right Wall 01", "Wall_Front_Right_01_Lvl_1", null, null, 0),
+            ("wall_front_right_02_pad", "Front Right Wall 02", "Wall_Front_Right_02_Lvl_1", null, null, 0),
+            ("wall_back_left_01_pad", "Back Left Wall 01", "Wall_Back_Left_01_Lvl_1", null, null, 0),
+            ("wall_back_left_02_pad", "Back Left Wall 02", "Wall_Back_Left_02_Lvl_1", null, null, 0),
+            ("wall_back_left_04_pad", "Back Left Wall 04", "Wall_Back_Left_04_Lvl_1", null, null, 0),
+            ("wall_back_left_05_pad", "Back Left Wall 05", "Wall_Back_Left_05_Lvl_1", null, null, 0),
+            ("wall_back_right_01_pad", "Back Right Wall 01", "Wall_Back_Right_01_Lvl_1", null, null, 0),
+            ("wall_back_right_02_pad", "Back Right Wall 02", "Wall_Back_Right_02_Lvl_1", null, null, 0),
+            // Red lane still uses the older 01-06 names for this wall run in the environment prefab.
+            ("wall_right_side_03_pad", "Right Side Wall 03", "Wall_Right_Side_03_Lvl_1", null, "Wall_Right_Side_01_Lvl_1", 0),
+            ("wall_right_side_04_a_pad", "Right Side Wall 04A", "Wall_Right_Side_04_Lvl_1", null, "Wall_Right_Side_02_Lvl_1", 0),
+            ("wall_right_side_04_b_pad", "Right Side Wall 04B", "Wall_Right_Side_04_Lvl_1", "Wall_Right_Side_04_Lvl_1 (1)", "Wall_Right_Side_03_Lvl_1", 1),
+            ("wall_right_side_05_pad", "Right Side Wall 05", "Wall_Right_Side_05_Lvl_1", null, "Wall_Right_Side_04_Lvl_1", 0),
+            ("wall_right_side_06_pad", "Right Side Wall 06", "Wall_Right_Side_06_Lvl_1", null, "Wall_Right_Side_05_Lvl_1", 0),
+            ("wall_right_side_07_pad", "Right Side Wall 07", "Wall_Right_Side_07_Lvl_1", null, "Wall_Right_Side_06_Lvl_1", 0),
         };
 
         static readonly (string padId, string displayName, string objectSuffix)[] GatePadBindings =
@@ -194,7 +195,7 @@ namespace CastleDefender.Game
                         buildingType = "wall",
                         displayName = spec.displayName,
                         laneColor = lane.laneColor,
-                        candidateNames = BuildCandidateNames(lane.scenePrefix, spec.objectSuffix, spec.alternateSuffix),
+                        candidateNames = BuildWallCandidateNames(lane.scenePrefix, spec.objectSuffix, spec.alternateSuffix, spec.redOverrideSuffix),
                         duplicateIndex = !string.IsNullOrWhiteSpace(spec.alternateSuffix)
                             && !string.Equals(lane.scenePrefix, "Red", StringComparison.Ordinal)
                             ? 0
@@ -250,6 +251,20 @@ namespace CastleDefender.Game
             {
                 $"{lanePrefix}_{objectSuffix}",
             };
+        }
+
+        static string[] BuildWallCandidateNames(string lanePrefix, string objectSuffix, string alternateSuffix, string redOverrideSuffix)
+        {
+            if (string.Equals(lanePrefix, "Red", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(redOverrideSuffix))
+            {
+                return new[]
+                {
+                    $"{lanePrefix}_{redOverrideSuffix}",
+                };
+            }
+
+            return BuildCandidateNames(lanePrefix, objectSuffix, alternateSuffix);
         }
 
         void TryBindRuntimePads()
@@ -323,6 +338,18 @@ namespace CastleDefender.Game
 
             _ = target.GetComponent<FortressPadRuntimeBindingMarker>() ?? target.gameObject.AddComponent<FortressPadRuntimeBindingMarker>();
             var anchor = target.GetComponent<FortressPadAnchor>() ?? target.gameObject.AddComponent<FortressPadAnchor>();
+            if (!string.IsNullOrWhiteSpace(anchor.padId)
+                && !string.Equals(anchor.padId, spec.padId, StringComparison.OrdinalIgnoreCase))
+            {
+                string conflictKey = $"{laneKey}:{spec.padId}:conflict";
+                if (s_missingLogs.Add(conflictKey))
+                {
+                    Debug.LogWarning(
+                        $"[FortressPadRuntimeBinder] Scene object '{target.name}' was already bound to pad '{anchor.padId}' and cannot also bind '{spec.padId}' for lane '{laneKey}'.");
+                }
+                return false;
+            }
+
             anchor.padId = spec.padId;
             anchor.padAliases = Array.Empty<string>();
             anchor.buildingType = spec.buildingType;
