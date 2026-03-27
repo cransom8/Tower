@@ -4,11 +4,10 @@ using UnityEngine.UI;
 
 namespace CastleDefender.Game
 {
-    public class LaneSnapshotCombatant : MonoBehaviour, ILaneCombatant, IWaveHostileLaneCombatant, ITeamOwned
+    // Snapshot units are presentation hosts for the authoritative server state.
+    // They no longer run local target acquisition, movement, or combat loops.
+    public class LaneSnapshotCombatant : MonoBehaviour, ITeamOwned
     {
-        const float TargetRefreshIntervalSeconds = 0.08f;
-
-        ILaneCombatant _combatTarget;
         BarracksSpawnCombatProfile _combatProfile;
         string _combatantId;
         string _defenderTeamKey;
@@ -16,10 +15,7 @@ namespace CastleDefender.Game
         bool _hasExplicitTeam;
         float _displayHp;
         float _maxHp = 1f;
-        float _buildingClearanceRadius = 0.9f;
-        float _attackCooldown;
         float _lastAttackAt = float.MinValue;
-        float _retargetAt;
         Transform _hpBarRoot;
         Transform _hpBarFill;
         Image _hpBarImage;
@@ -30,7 +26,6 @@ namespace CastleDefender.Game
         bool _locallyDefeated;
 
         public string CombatantId => !string.IsNullOrWhiteSpace(_combatantId) ? _combatantId : name;
-        public Vector3 CombatPosition => transform.position;
         public bool IsAlive => _initialized && !_locallyDefeated && _displayHp > 0f;
         public float CurrentHp => Mathf.Max(0f, _displayHp);
         public float MaxHp => Mathf.Max(1f, _maxHp);
@@ -49,14 +44,6 @@ namespace CastleDefender.Game
             RefreshHpBarVisual();
         }
 
-        void OnDisable()
-        {
-            LaneCombatRegistry.Unregister(this);
-            _combatTarget = null;
-        }
-
-        void Update() { }
-
         public void DebugTick(float dt, float now)
         {
 #if UNITY_EDITOR
@@ -67,22 +54,7 @@ namespace CastleDefender.Game
 
         public void Initialize(string combatantId, string unitTypeKey, string skinKey, string defenderTeamKey, float hp, float maxHp, float serverMoveSpeed = 0f)
         {
-            _combatantId = combatantId;
-            _combatProfile = BarracksSpawnCombatProfileResolver.Resolve(unitTypeKey, skinKey, serverMoveSpeed);
-            ApplyAllegiance(defenderTeamKey, null);
-            _displayHp = Mathf.Max(1f, hp > 0f ? hp : _combatProfile.maxHp);
-            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _displayHp);
-            _attackCooldown = 0f;
-            _lastAttackAt = float.MinValue;
-            _retargetAt = 0f;
-            _combatTarget = null;
-            _locallyDefeated = false;
-            _initialized = true;
-            _renderers = null;
-            _buildingClearanceRadius = ResolveFootprintRadius();
-
-            EnsureHpBar();
-            RefreshHpBarVisual();
+            InitializeInternal(combatantId, unitTypeKey, skinKey, defenderTeamKey, null, hp, maxHp, serverMoveSpeed);
         }
 
         public void InitializeSnapshot(
@@ -95,52 +67,12 @@ namespace CastleDefender.Game
             float maxHp,
             float serverMoveSpeed = 0f)
         {
-            _combatantId = combatantId;
-            _combatProfile = BarracksSpawnCombatProfileResolver.Resolve(unitTypeKey, skinKey, serverMoveSpeed);
-            ApplyAllegiance(defenderTeamKey, ownerTeamKey);
-            _displayHp = Mathf.Max(1f, hp > 0f ? hp : _combatProfile.maxHp);
-            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _displayHp);
-            _attackCooldown = 0f;
-            _lastAttackAt = float.MinValue;
-            _retargetAt = 0f;
-            _combatTarget = null;
-            _locallyDefeated = false;
-            _initialized = true;
-            _renderers = null;
-            _buildingClearanceRadius = ResolveFootprintRadius();
-
-            EnsureHpBar();
-            RefreshHpBarVisual();
+            InitializeInternal(combatantId, unitTypeKey, skinKey, defenderTeamKey, ownerTeamKey, hp, maxHp, serverMoveSpeed);
         }
 
         public void ApplySnapshot(string defenderTeamKey, float hp, float maxHp, float serverMoveSpeed = 0f)
         {
-            ApplyAllegiance(defenderTeamKey, null);
-            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _maxHp);
-            if (serverMoveSpeed > 0f)
-                _combatProfile.moveSpeed = BarracksSpawnCombatProfileResolver.ConvertServerPathSpeedToUnityMoveSpeed(serverMoveSpeed);
-
-            float authoritativeHp = Mathf.Clamp(hp, 0f, _maxHp);
-
-            if (!_initialized)
-            {
-                _displayHp = authoritativeHp > 0f ? authoritativeHp : _maxHp;
-            }
-            else if (authoritativeHp > 0f)
-            {
-                // Shared combat can locally overkill wave units; snapshots must be able to
-                // revive and resync them so server-authoritative attackers never stay hidden.
-                if (_locallyDefeated)
-                    RestoreFromSnapshot(authoritativeHp);
-                else
-                    _displayHp = authoritativeHp;
-            }
-            else
-            {
-                MarkLocallyDefeated();
-            }
-
-            RefreshHpBarVisual();
+            ApplySnapshotInternal(defenderTeamKey, null, hp, maxHp, serverMoveSpeed);
         }
 
         public void ApplySnapshot(
@@ -150,60 +82,14 @@ namespace CastleDefender.Game
             float maxHp,
             float serverMoveSpeed = 0f)
         {
-            ApplyAllegiance(defenderTeamKey, ownerTeamKey);
-            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _maxHp);
-            if (serverMoveSpeed > 0f)
-                _combatProfile.moveSpeed = BarracksSpawnCombatProfileResolver.ConvertServerPathSpeedToUnityMoveSpeed(serverMoveSpeed);
-
-            float authoritativeHp = Mathf.Clamp(hp, 0f, _maxHp);
-
-            if (!_initialized)
-            {
-                _displayHp = authoritativeHp > 0f ? authoritativeHp : _maxHp;
-            }
-            else if (authoritativeHp > 0f)
-            {
-                // Shared combat can locally overkill wave units; snapshots must be able to
-                // revive and resync them so server-authoritative attackers never stay hidden.
-                if (_locallyDefeated)
-                    RestoreFromSnapshot(authoritativeHp);
-                else
-                    _displayHp = authoritativeHp;
-            }
-            else
-            {
-                MarkLocallyDefeated();
-            }
-
-            RefreshHpBarVisual();
+            ApplySnapshotInternal(defenderTeamKey, ownerTeamKey, hp, maxHp, serverMoveSpeed);
         }
 
-        public bool IsEnemyToTeam(BattleTeam team)
+        // Kept as a snapshot-reconciliation hook for runtime tests and any future
+        // purely-visual client hit feedback. The server snapshot remains authoritative.
+        public void ReceiveDamage(float damage, object attacker)
         {
-            if (_hasExplicitTeam)
-                return BattleTeamUtility.AreEnemies(_team, team);
-
-            return BattleTeamUtility.MatchesServerTeamKey(team, _defenderTeamKey);
-        }
-
-        public bool IsEnemyTo(ILaneCombatant other)
-        {
-            if (other == null || ReferenceEquals(other, this))
-                return false;
-
-            if (_hasExplicitTeam)
-            {
-                if (other is IWaveHostileLaneCombatant waveHostile)
-                    return waveHostile.IsEnemyToTeam(_team);
-
-                return other is ITeamOwned hostileTeamOwned && BattleTeamUtility.AreEnemies(_team, hostileTeamOwned.Team);
-            }
-
-            return other is ITeamOwned teamOwned && IsEnemyToTeam(teamOwned.Team);
-        }
-
-        public void ReceiveDamage(float damage, ILaneCombatant attacker)
-        {
+            _ = attacker;
             if (!IsAlive)
                 return;
 
@@ -217,10 +103,67 @@ namespace CastleDefender.Game
                 gameObject.SetActive(false);
         }
 
+        void InitializeInternal(
+            string combatantId,
+            string unitTypeKey,
+            string skinKey,
+            string defenderTeamKey,
+            string ownerTeamKey,
+            float hp,
+            float maxHp,
+            float serverMoveSpeed)
+        {
+            _combatantId = combatantId;
+            _combatProfile = BarracksSpawnCombatProfileResolver.Resolve(unitTypeKey, skinKey, serverMoveSpeed);
+            ApplyAllegiance(defenderTeamKey, ownerTeamKey);
+            _displayHp = Mathf.Max(1f, hp > 0f ? hp : _combatProfile.maxHp);
+            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _displayHp);
+            _lastAttackAt = float.MinValue;
+            _locallyDefeated = false;
+            _initialized = true;
+            _renderers = null;
+
+            EnsureHpBar();
+            RefreshHpBarVisual();
+        }
+
+        void ApplySnapshotInternal(
+            string defenderTeamKey,
+            string ownerTeamKey,
+            float hp,
+            float maxHp,
+            float serverMoveSpeed)
+        {
+            ApplyAllegiance(defenderTeamKey, ownerTeamKey);
+            _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _maxHp);
+
+            if (serverMoveSpeed > 0f)
+                _combatProfile.moveSpeed = BarracksSpawnCombatProfileResolver.ConvertServerPathSpeedToUnityMoveSpeed(serverMoveSpeed);
+
+            float authoritativeHp = Mathf.Clamp(hp, 0f, _maxHp);
+            if (!_initialized)
+            {
+                _displayHp = authoritativeHp > 0f ? authoritativeHp : _maxHp;
+                _initialized = true;
+            }
+            else if (authoritativeHp > 0f)
+            {
+                if (_locallyDefeated)
+                    RestoreFromSnapshot(authoritativeHp);
+                else
+                    _displayHp = authoritativeHp;
+            }
+            else
+            {
+                MarkLocallyDefeated();
+            }
+
+            RefreshHpBarVisual();
+        }
+
         void RestoreFromSnapshot(float authoritativeHp)
         {
             _locallyDefeated = false;
-            _combatTarget = null;
             _displayHp = authoritativeHp;
         }
 
@@ -228,14 +171,6 @@ namespace CastleDefender.Game
         {
             _displayHp = 0f;
             _locallyDefeated = true;
-            _combatTarget = null;
-            LaneCombatRegistry.Unregister(this);
-        }
-
-        void Tick(float dt, float now)
-        {
-            _ = dt;
-            _ = now;
         }
 
         void EnsureHpBar()
@@ -324,124 +259,6 @@ namespace CastleDefender.Game
             }
         }
 
-        void MoveTowardCombatTarget(ILaneCombatant target, float dt)
-        {
-            if (!IsTargetValid(target))
-                return;
-
-            Vector3 current = transform.position;
-            Vector3 destination = target.CombatPosition;
-            current.y = 0f;
-            destination.y = 0f;
-
-            float currentDistance = Vector3.Distance(current, destination);
-            float stopDistance = Mathf.Max(0.5f, AttackRange * 0.92f);
-            if (currentDistance <= stopDistance)
-                return;
-
-            float moveSpeed = Mathf.Max(0.5f, _combatProfile.moveSpeed);
-            float step = Mathf.Min(moveSpeed * dt, Mathf.Max(0f, currentDistance - stopDistance));
-            if (step <= 0.001f)
-                return;
-
-            Vector3 next = Vector3.MoveTowards(transform.position, target.CombatPosition, step);
-            next.y = transform.position.y;
-            next = BuildingSpaceResolver.ConstrainGroundPosition(next, _buildingClearanceRadius, target.CombatPosition - transform.position);
-            transform.position = next;
-            FaceDirection(target.CombatPosition - next);
-        }
-
-        void TryAttack(ILaneCombatant target)
-        {
-            if (_attackCooldown > 0f || !IsTargetValid(target))
-                return;
-
-            target.ReceiveDamage(_combatProfile.damagePerHit, this);
-            _attackCooldown = Mathf.Max(0.05f, _combatProfile.attackIntervalSeconds);
-            _lastAttackAt = Time.time;
-        }
-
-        ILaneCombatant AcquireNearestEnemy()
-        {
-            ILaneCombatant best = null;
-            float bestDistanceSqr = float.MaxValue;
-            float maxDistanceSqr = EngagementRange * EngagementRange;
-            var combatants = LaneCombatRegistry.Active;
-
-            for (int i = 0; i < combatants.Count; i++)
-            {
-                var other = combatants[i];
-                if (!IsTargetValid(other))
-                    continue;
-
-                float distanceSqr = FlattenDistanceSqr(transform.position, other.CombatPosition);
-                if (distanceSqr > maxDistanceSqr || distanceSqr >= bestDistanceSqr)
-                    continue;
-
-                best = other;
-                bestDistanceSqr = distanceSqr;
-            }
-
-            return best;
-        }
-
-        bool IsTargetValid(ILaneCombatant candidate)
-        {
-            if (candidate == null || ReferenceEquals(candidate, this))
-                return false;
-
-            return candidate.IsAlive && IsEnemyTo(candidate);
-        }
-
-        bool HasTargetLeftEngagementRange(ILaneCombatant candidate)
-        {
-            if (!IsTargetValid(candidate))
-                return true;
-
-            float allowedDistance = Mathf.Max(AttackRange, EngagementRange);
-            return FlattenDistanceSqr(transform.position, candidate.CombatPosition) > allowedDistance * allowedDistance;
-        }
-
-        void FaceDirection(Vector3 delta)
-        {
-            delta.y = 0f;
-            if (delta.sqrMagnitude <= 0.0001f)
-                return;
-
-            transform.rotation = Quaternion.LookRotation(delta.normalized, Vector3.up);
-        }
-
-        float ResolveFootprintRadius()
-        {
-            _renderers ??= GetComponentsInChildren<Renderer>(true);
-            if (_renderers == null || _renderers.Length == 0)
-                return 0.9f;
-
-            bool hasBounds = false;
-            Bounds combined = default;
-            for (int i = 0; i < _renderers.Length; i++)
-            {
-                var renderer = _renderers[i];
-                if (renderer == null)
-                    continue;
-
-                if (!hasBounds)
-                {
-                    combined = renderer.bounds;
-                    hasBounds = true;
-                }
-                else
-                {
-                    combined.Encapsulate(renderer.bounds);
-                }
-            }
-
-            if (!hasBounds)
-                return 0.9f;
-
-            return Mathf.Clamp(Mathf.Max(combined.extents.x, combined.extents.z) * 0.45f, 0.75f, 2.25f);
-        }
-
         static string NormalizeTeamKey(string teamKey)
         {
             return BattleTeamUtility.NormalizeServerTeamKey(teamKey);
@@ -482,19 +299,12 @@ namespace CastleDefender.Game
 
             for (int i = 0; i < root.childCount; i++)
             {
-                var found = FindChildRecursive(root.GetChild(i), childName);
+                Transform found = FindChildRecursive(root.GetChild(i), childName);
                 if (found != null)
                     return found;
             }
 
             return null;
-        }
-
-        static float FlattenDistanceSqr(Vector3 a, Vector3 b)
-        {
-            a.y = 0f;
-            b.y = 0f;
-            return (a - b).sqrMagnitude;
         }
     }
 }

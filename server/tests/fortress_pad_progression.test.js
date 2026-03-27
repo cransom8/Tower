@@ -105,3 +105,16 @@ test("live fortress pad actions honor new civic and lumber mill prerequisites", 
   act(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" });
   act(game, 0, "upgrade_building", { padId: "gate_front_pad" });
 });
+
+test("legacy classic actions stay disabled in fortress mode", () => {
+  const game = createGame();
+
+  fail(game, 0, "spawn_unit", { unitType: "goblin" }, /Barracks/i);
+  fail(game, 0, "place_unit", { gridX: 5, gridY: 10, unitTypeKey: "goblin" }, /disabled in fortress mode/i);
+  fail(game, 0, "upgrade_tower", { gridX: 5, gridY: 10 }, /disabled in fortress mode/i);
+  fail(game, 0, "bulk_upgrade_towers", { tiles: [{ gridX: 5, gridY: 10 }] }, /disabled in fortress mode/i);
+  fail(game, 0, "set_tower_target", { gridX: 5, gridY: 10, targetMode: "first" }, /disabled in fortress mode/i);
+  fail(game, 0, "sell_tower", { gridX: 5, gridY: 10 }, /disabled in fortress mode/i);
+  fail(game, 0, "set_autosend", { enabled: true }, /Barracks/i);
+  fail(game, 0, "upgrade_barracks", {}, /Select Barracks Left, Center, or Right/i);
+});

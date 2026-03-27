@@ -2,10 +2,12 @@
 "use strict";
 
 /**
- * Multi-lane PvP simulation — 10×28 tile grid per player lane.
- * Units follow a straight path from spawn tile (5,0) to castle tile (5,27).
- * Forge Wars wave defense: defenders placed on tile grid fight incoming wave enemies.
- * Barracks provides global unit-tech upgrades.
+ * Fortress-survival PvP simulation.
+ * Center-spawned waves route into each lane's Town Core while barracks units
+ * sabotage opponents over shared battlefield routes.
+ * Authored fortress pads, walls, gates, and turrets remain part of the active
+ * game, but retired classic tile-grid actions stay blocked here on purpose so
+ * older clients, AI code, and room flows cannot quietly reactivate them.
  *
  * Wired to sim-core (computeDamage, fireProjectile, resolveProjectile, mulberry32 RNG)
  * and the unitTypes DB cache. UNIT_DEFS / TOWER_DEFS serve as last-resort fallbacks
@@ -52,6 +54,7 @@ const INCOME_INTERVAL_TICKS = 240; // 12 s
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 200;
 const GATE_KILL_BOUNTY = 10;
+const ENABLE_WAVE_UNIT_TRACE = process.env.ENABLE_WAVE_UNIT_TRACE === "1";
 const WAVE_UNIT_STATES = Object.freeze({
   IDLE: "IDLE",
   MOVING: "MOVING",
@@ -163,6 +166,7 @@ const ROUTE_TYPES = Object.freeze({
   WAVE_LANE: "WAVE_LANE",
 });
 
+// Keep SCHEDULED_WAVE as a compatibility alias while older callers are archived.
 const SPAWN_SOURCE_TYPES = Object.freeze({
   DUNGEON_WAVE: "dungeon_wave",
   SCHEDULED_WAVE: "dungeon_wave",
@@ -229,10 +233,21 @@ const RouteMineNode = "M";
 const OPPOSING_LANE_INDEX = Object.freeze([1, 0, 3, 2]);
 const ROUTE_TRACE_MIN_DISTANCE_TO_CORE = 6.5;
 const ROUTE_BLOCKING_CORRIDOR_RADIUS = 4.5;
+const DEFENDER_ENGAGEMENT_RANGE = ROUTE_BLOCKING_CORRIDOR_RADIUS;
 const ROUTE_BLOCKING_FORWARD_DOT = 0.1;
 const DEFENDER_HOLD_LEASH = 7.5;
 const ROUTE_FORMATION_ROW_SPACING = 1.15;
 const ROUTE_FORMATION_COLUMN_SPACING = 1.15;
+const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
+  spawn_unit: "Manual CMD sends were removed. Units must come from Barracks.",
+  place_unit: "Tile-grid defender placement is disabled in fortress mode",
+  upgrade_tower: "Tile-grid defender upgrades are disabled in fortress mode",
+  bulk_upgrade_towers: "Tile-grid defender upgrades are disabled in fortress mode",
+  set_tower_target: "Tile-grid defender targeting is disabled in fortress mode",
+  upgrade_barracks: "Select Barracks Left, Center, or Right to upgrade that building.",
+  sell_tower: "Tile-grid defender selling is disabled in fortress mode",
+  set_autosend: "CMD autosend was removed. Units must come from Barracks.",
+});
 
 const ROUTE_GRAPH_CORE_NODE_POSITIONS = Object.freeze({
   M: Object.freeze({ x: 0, y: 0 }),
@@ -4438,6 +4453,27 @@ function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
   return { ok: true };
 }
 
+function warnLegacyActionOnce(game, laneIndex, type) {
+  if (!game || !type) return;
+  if (!(game.__legacyActionWarnings instanceof Set))
+    game.__legacyActionWarnings = new Set();
+  const warningKey = `${laneIndex}:${type}`;
+  if (game.__legacyActionWarnings.has(warningKey)) return;
+  game.__legacyActionWarnings.add(warningKey);
+  log.warn("[ActionBoundary] rejected legacy fortress action", {
+    actionType: type,
+    laneIndex,
+    tick: Number(game.tick) || 0,
+  });
+}
+
+function rejectLegacyFortressAction(game, laneIndex, type) {
+  const reason = LEGACY_ACTION_REJECTION_REASONS[type];
+  if (!reason) return null;
+  warnLegacyActionOnce(game, laneIndex, type);
+  return { ok: false, reason };
+}
+
 function applyMLAction(game, laneIndex, action) {
   if (!game || game.phase !== "playing") return { ok: false, reason: "Game not active" };
   if (laneIndex < 0 || laneIndex >= game.lanes.length) return { ok: false, reason: "Bad laneIndex" };
@@ -4452,9 +4488,6 @@ function applyMLAction(game, laneIndex, action) {
   action.actionSeq = game.actionSeq;
 
   const { type, data } = action;
-
-  if (type === "spawn_unit")
-    return { ok: false, reason: "Manual CMD sends were removed. Units must come from Barracks." };
 
   if (type === "build_on_pad") {
     const padId = String((data && data.padId) || "").trim();
@@ -4552,32 +4585,10 @@ function applyMLAction(game, laneIndex, action) {
     return deployBarracksHero(game, laneIndex, lane, heroKey, requestedBarracksId);
   }
 
-  if (type === "place_unit") {
-    return { ok: false, reason: "Tile-grid defender placement is disabled in fortress mode" };
-  }
-
-  if (type === "upgrade_tower") {
-    return { ok: false, reason: "Tile-grid defender upgrades are disabled in fortress mode" };
-  }
-
-  if (type === "bulk_upgrade_towers") {
-    return { ok: false, reason: "Tile-grid defender upgrades are disabled in fortress mode" };
-  }
-
-  if (type === "set_tower_target") {
-    return { ok: false, reason: "Tile-grid defender targeting is disabled in fortress mode" };
-  }
-
-  if (type === "upgrade_barracks") {
-    return { ok: false, reason: "Select Barracks Left, Center, or Right to upgrade that building." };
-  }
-
-  if (type === "sell_tower") {
-    return { ok: false, reason: "Tile-grid defender selling is disabled in fortress mode" };
-  }
-
-  if (type === "set_autosend")
-    return { ok: false, reason: "CMD autosend was removed. Units must come from Barracks." };
+  // Keep retired classic actions fenced here so old clients and AI paths fail
+  // loudly without re-enabling removed game modes inside the active runtime.
+  const legacyRejection = rejectLegacyFortressAction(game, laneIndex, type);
+  if (legacyRejection) return legacyRejection;
 
   return { ok: false, reason: "Unknown action type" };
 }
@@ -5004,9 +5015,11 @@ function getUnitAttackRange(typeKey) {
 
 function getUnitEngagementRange(typeKey) {
   // Engagement and attack are intentionally separate:
-  // units should commit to nearby defenders well before they are in attack range,
-  // and the leash is large enough to cover the full active combat zone.
-  return Math.max(getUnitAttackRange(typeKey) + ENGAGEMENT_RANGE_PADDING, GRID_H);
+  // route units should commit to nearby defenders before they are in attack range,
+  // but the leash must stay inside the local fortress combat pocket. Using the
+  // full lane height here caused mid-route units to aggro early, which in turn
+  // made the client yank them into combat-space near the Town Core.
+  return Math.max(getUnitAttackRange(typeKey) + ENGAGEMENT_RANGE_PADDING, DEFENDER_ENGAGEMENT_RANGE);
 }
 
 function isSplitZoneUnit(unit) {
@@ -5233,6 +5246,7 @@ function findBlockingStructureTarget(game, lane, unit) {
 }
 
 function traceWaveUnitTick(game, lane, unit, target, details = {}) {
+  if (!ENABLE_WAVE_UNIT_TRACE) return;
   if (!game || !lane || !unit) return;
   const targetId = target ? (target.unitId || target.id || null) : null;
   const targetType = target
@@ -6188,21 +6202,23 @@ function mlTick(game) {
           advanceRouteState(u, u.baseSpeed || 0.18);
           setUnitRouteSnapshotState(u);
           u._missingRouteLogged = false;
-          log.info("[WaveUnitTrace] movement_progress", {
-            tick: game.tick,
-            laneIndex: lane.laneIndex,
-            unitId: u.id,
-            unitType: u.type,
-            spawnSourceType: resolveSpawnSourceTypeFromUnit(u),
-            pathId: buildRoutePathId(u.routeSegments),
-            currentWaypointIndex: Math.max(0, Math.floor(Number(u.routeSegmentIndex) || 0)),
-            nextWaypoint: resolveUnitNextWaypoint(u),
-            movementState: u.routeState,
-            segmentProgress: Number.isFinite(u.segmentProgress) ? Number(u.segmentProgress.toFixed(3)) : null,
-            pathIdx: Number.isFinite(u.pathIdx) ? Number(u.pathIdx.toFixed(3)) : null,
-            routeWorldX: Number.isFinite(u.routeWorldX) ? Number(u.routeWorldX.toFixed(3)) : null,
-            routeWorldY: Number.isFinite(u.routeWorldY) ? Number(u.routeWorldY.toFixed(3)) : null,
-          });
+          if (ENABLE_WAVE_UNIT_TRACE) {
+            log.info("[WaveUnitTrace] movement_progress", {
+              tick: game.tick,
+              laneIndex: lane.laneIndex,
+              unitId: u.id,
+              unitType: u.type,
+              spawnSourceType: resolveSpawnSourceTypeFromUnit(u),
+              pathId: buildRoutePathId(u.routeSegments),
+              currentWaypointIndex: Math.max(0, Math.floor(Number(u.routeSegmentIndex) || 0)),
+              nextWaypoint: resolveUnitNextWaypoint(u),
+              movementState: u.routeState,
+              segmentProgress: Number.isFinite(u.segmentProgress) ? Number(u.segmentProgress.toFixed(3)) : null,
+              pathIdx: Number.isFinite(u.pathIdx) ? Number(u.pathIdx.toFixed(3)) : null,
+              routeWorldX: Number.isFinite(u.routeWorldX) ? Number(u.routeWorldX.toFixed(3)) : null,
+              routeWorldY: Number.isFinite(u.routeWorldY) ? Number(u.routeWorldY.toFixed(3)) : null,
+            });
+          }
         }
         movementAdvanced = true;
       }
@@ -6223,8 +6239,8 @@ function mlTick(game) {
 
     if (lane.eliminated)
       continue;
-    // DEBUG: log max pathIdx once per second (every 20 ticks) so we can see if units enter suffix
-    if (game.tick % 20 === 0 && lane.units.length > 0) {
+    // Keep hot-path movement debug opt-in so local terminals do not stall under log spam.
+    if (ENABLE_WAVE_UNIT_TRACE && game.tick % 20 === 0 && lane.units.length > 0) {
       const waveUnits = lane.units.filter(u => !u.isDefender && u.hp > 0);
       if (waveUnits.length > 0) {
         const maxIdx = Math.max(...waveUnits.map(u => u.pathIdx));
