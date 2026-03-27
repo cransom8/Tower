@@ -14,7 +14,87 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
   m_GroupName: Remote Skins 03
   m_GUID: dedd3e1fa0b461d46b198c9206c62347
-  m_SerializeEntries: []
+  m_SerializeEntries:
+  - m_GUID: 04c79b5f6e9ebab48af48fdcf7b6d570
+    m_Address: skins/tt_archer
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_archer
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 0755a95e2e1b5f44e8226989fb76f2cf
+    m_Address: skins/tt_spearman
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_spearman
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 1854a3b64b66724429ff0b04e0891fc1
+    m_Address: skins/tt_mage
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mage
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3444512bc6a211a4fbc66458b13748ed
+    m_Address: skins/tt_mounted_scout
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_scout
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3b5b8018d62c7fb43b2805cf19ffaff7
+    m_Address: skins/tt_mounted_paladin
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_paladin
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3c54df43aea316143beec51be2902cac
+    m_Address: skins/tt_king
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_king
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5f6ee5df488746f4ca1b939fbaac29e2
+    m_Address: skins/tt_high_priest
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_high_priest
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 675bfa49ad0f04c47b900d8546860383
+    m_Address: skins/tt_paladin
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_paladin
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a9733678a87478b4689672067b7718fb
+    m_Address: skins/tt_commander
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_commander
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b4a1d0e6439682a4e958fb7c874ccb8c
+    m_Address: skins/tt_heavy_infantry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_heavy_infantry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
   m_SchemaSet:

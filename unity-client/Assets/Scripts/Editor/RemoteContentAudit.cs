@@ -16,6 +16,7 @@ namespace CastleDefender.Editor
         const string LegacyRegistryPath = "Assets/UnitPrefabRegistry.asset";
         const string ReportDirectory = "Assets/Reports";
         const string ReportAssetPath = "Assets/Reports/remote_content_audit.json";
+        const string PortraitsDirectory = "Assets/AddressableContent/UnitPortraits";
 
         [Serializable]
         sealed class AuditReport
@@ -42,6 +43,11 @@ namespace CastleDefender.Editor
             public string recommendedContentKey;
             public string recommendedAddressablesLabel;
             public string recommendedPrefabAddress;
+            public string resolvedPortraitKey;
+            public string recommendedPortraitAddress;
+            public string portraitAssetPath;
+            public bool hasPortraitAsset;
+            public bool portraitIsAddressable;
             public List<string> warnings = new();
         }
 
@@ -176,7 +182,45 @@ namespace CastleDefender.Editor
             if (string.IsNullOrWhiteSpace(assetGuid))
                 audit.warnings.Add("Asset GUID could not be resolved.");
 
+            if (string.Equals(kind, "skin", StringComparison.OrdinalIgnoreCase))
+                ApplyPortraitAudit(audit);
+
             return audit;
+        }
+
+        static void ApplyPortraitAudit(AuditEntry audit)
+        {
+            if (audit == null || string.IsNullOrWhiteSpace(audit.unitType))
+                return;
+
+            string portraitKey = audit.unitType.Trim();
+            string portraitPath = $"{PortraitsDirectory}/{portraitKey}.png";
+            string portraitGuid = AssetDatabase.AssetPathToGUID(portraitPath);
+            audit.resolvedPortraitKey = portraitKey;
+            audit.recommendedPortraitAddress = $"portraits/{portraitKey}";
+            audit.portraitAssetPath = portraitPath;
+            audit.hasPortraitAsset = !string.IsNullOrWhiteSpace(portraitGuid);
+
+            if (!audit.hasPortraitAsset)
+            {
+                audit.warnings.Add($"Missing canonical portrait asset for skin '{audit.key}'. Expected '{portraitPath}'.");
+                return;
+            }
+
+            var portraitAddressable = TryGetAddressableInfo(portraitGuid);
+            audit.portraitIsAddressable = portraitAddressable.found
+                && string.Equals(portraitAddressable.address, audit.recommendedPortraitAddress, StringComparison.OrdinalIgnoreCase);
+
+            if (!portraitAddressable.found)
+            {
+                audit.warnings.Add($"Canonical portrait asset '{portraitPath}' is not in Addressables.");
+            }
+            else if (!audit.portraitIsAddressable)
+            {
+                audit.warnings.Add(
+                    $"Canonical portrait asset '{portraitPath}' should use address '{audit.recommendedPortraitAddress}' " +
+                    $"but is registered as '{portraitAddressable.address ?? "<empty>"}'.");
+            }
         }
 
         static (bool found, string address, List<string> labels) TryGetAddressableInfo(string guid)

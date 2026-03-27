@@ -1,15 +1,12 @@
 // CatalogLoader.cs - Fetches unit and barracks catalogs from the server on startup.
 // Singleton - persists across scenes (same lifetime as NetworkManager).
 //
-// SETUP:
-//   Add to the same scene as NetworkManager (Lobby scene).
-//   Both use DontDestroyOnLoad so they survive scene transitions.
-//
 // Usage:
-//   CatalogLoader.IsReady         - true once all fetches complete
-//   CatalogLoader.OnCatalogReady  - fires once when ready
-//   CatalogLoader.Units           - ordered list of unit definitions
-//   CatalogLoader.BarracksLevels  - indexed by target level (level 2, 3, 4)
+//   CatalogLoader.IsReady            - true once all fetches complete successfully
+//   CatalogLoader.HasCriticalFailure - true after any required catalog fetch fails
+//   CatalogLoader.LastFailure        - most recent blocking failure detail
+//   CatalogLoader.OnCatalogReady     - fires once when all required catalogs are valid
+//   CatalogLoader.OnCatalogFailed    - fires once when a required catalog fails
 
 using System;
 using System.Collections;
@@ -25,7 +22,11 @@ namespace CastleDefender.Net
         public static CatalogLoader Instance { get; private set; }
 
         public static bool IsReady { get; private set; }
+        public static bool HasCriticalFailure { get; private set; }
+        public static string LastFailure { get; private set; }
+
         public static event Action OnCatalogReady;
+        public static event Action<string> OnCatalogFailed;
 
         public static List<UnitCatalogEntry> Units { get; } = new();
         public static List<BarracksLevelEntry> BarracksLevels { get; } = new();
@@ -74,29 +75,29 @@ namespace CastleDefender.Net
 
         IEnumerator FetchAll()
         {
-            yield return FetchWrapped<UnitTypesResponse, UnitCatalogEntry>(
-                "/api/unit-types",
-                r => r.unitTypes,
-                Units,
-                UnitByKey,
-                e => e.key,
-                FallbackUnits);
+            IsReady = false;
+            HasCriticalFailure = false;
+            LastFailure = null;
+            Units.Clear();
+            UnitByKey.Clear();
+            BarracksLevels.Clear();
+
+            yield return FetchUnits();
+            if (HasCriticalFailure)
+                yield break;
 
             yield return FetchBarracksLevels();
+            if (HasCriticalFailure)
+                yield break;
 
             IsReady = true;
             Debug.Log($"[Catalog] Ready - {Units.Count} units, {BarracksLevels.Count} barracks levels");
             OnCatalogReady?.Invoke();
         }
 
-        IEnumerator FetchWrapped<TResp, TItem>(
-            string path,
-            Func<TResp, List<TItem>> extractor,
-            List<TItem> list,
-            Dictionary<string, TItem> dict,
-            Func<TItem, string> keySelector,
-            Action fallback)
+        IEnumerator FetchUnits()
         {
+            string path = "/api/unit-types";
             string url = BaseUrl + path;
             Debug.Log($"[Catalog] GET {url}");
             using var req = UnityWebRequest.Get(url);
@@ -105,46 +106,49 @@ namespace CastleDefender.Net
 
             if (req.result != UnityWebRequest.Result.Success)
             {
-                Debug.LogWarning($"[Catalog] {path} failed ({req.error}) - using defaults");
-                fallback();
+                FailCatalog(path, $"Request failed: {req.error}");
                 yield break;
             }
 
             try
             {
-                var resp = JsonConvert.DeserializeObject<TResp>(req.downloadHandler.text);
-                var entries = resp != null ? extractor(resp) : null;
-                list.Clear();
-                dict.Clear();
-                if (entries != null && entries.Count > 0)
+                var resp = JsonConvert.DeserializeObject<UnitTypesResponse>(req.downloadHandler.text);
+                var entries = resp?.unitTypes;
+                if (entries == null || entries.Count == 0)
                 {
-                    foreach (var entry in entries)
-                    {
-                        list.Add(entry);
-                        string key = keySelector(entry);
-                        if (!string.IsNullOrEmpty(key))
-                        {
-                            dict[key] = entry;
-                        }
-                    }
+                    FailCatalog(path, "The server returned an empty unit catalog.");
+                    yield break;
+                }
 
-                    Debug.Log($"[Catalog] {path} -> {list.Count} entries");
-                }
-                else
+                Units.Clear();
+                UnitByKey.Clear();
+                foreach (var entry in entries)
                 {
-                    fallback();
+                    if (entry == null || string.IsNullOrWhiteSpace(entry.key))
+                        continue;
+
+                    Units.Add(entry);
+                    UnitByKey[entry.key] = entry;
                 }
+
+                if (Units.Count == 0)
+                {
+                    FailCatalog(path, "No valid unit entries remained after parsing the server response.");
+                    yield break;
+                }
+
+                Debug.Log($"[Catalog] {path} -> {Units.Count} entries");
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[Catalog] Parse error for {path}: {ex.Message} - using defaults");
-                fallback();
+                FailCatalog(path, $"Parse error: {ex.Message}");
             }
         }
 
         IEnumerator FetchBarracksLevels()
         {
-            string url = BaseUrl + "/api/barracks-levels";
+            string path = "/api/barracks-levels";
+            string url = BaseUrl + path;
             Debug.Log($"[Catalog] GET {url}");
             using var req = UnityWebRequest.Get(url);
             req.timeout = 10;
@@ -152,81 +156,39 @@ namespace CastleDefender.Net
 
             if (req.result != UnityWebRequest.Result.Success)
             {
-                Debug.LogWarning("[Catalog] /api/barracks-levels not available - using defaults");
-                FallbackBarracks();
+                FailCatalog(path, $"Request failed: {req.error}");
                 yield break;
             }
 
             try
             {
                 var entries = JsonConvert.DeserializeObject<List<BarracksLevelEntry>>(req.downloadHandler.text);
+                if (entries == null || entries.Count == 0)
+                {
+                    FailCatalog(path, "The server returned an empty barracks level catalog.");
+                    yield break;
+                }
+
                 BarracksLevels.Clear();
-                if (entries != null && entries.Count > 0)
-                {
-                    BarracksLevels.AddRange(entries);
-                }
-                else
-                {
-                    FallbackBarracks();
-                }
-
-                Debug.Log($"[Catalog] /api/barracks-levels -> {BarracksLevels.Count} levels");
+                BarracksLevels.AddRange(entries);
+                Debug.Log($"[Catalog] {path} -> {BarracksLevels.Count} levels");
             }
-            catch
+            catch (Exception ex)
             {
-                FallbackBarracks();
+                FailCatalog(path, $"Parse error: {ex.Message}");
             }
         }
 
-        static void FallbackUnits()
+        static void FailCatalog(string path, string detail)
         {
-            Units.Clear();
-            UnitByKey.Clear();
-            var defaults = new[]
-            {
-                new UnitCatalogEntry { key="goblin",          name="Goblin",          send_cost=1,  build_cost=8,  hp=55,  path_speed=0.058f, enabled=true },
-                new UnitCatalogEntry { key="kobold",          name="Kobold",          send_cost=1,  build_cost=6,  hp=40,  path_speed=0.065f, enabled=true },
-                new UnitCatalogEntry { key="hobgoblin",       name="Hobgoblin",       send_cost=2,  build_cost=10, hp=85,  path_speed=0.042f, enabled=true },
-                new UnitCatalogEntry { key="orc",             name="Orc",             send_cost=3,  build_cost=14, hp=100, path_speed=0.038f, enabled=true },
-                new UnitCatalogEntry { key="ogre",            name="Ogre",            send_cost=5,  build_cost=18, hp=180, path_speed=0.022f, enabled=true },
-                new UnitCatalogEntry { key="troll",           name="Troll",           send_cost=4,  build_cost=16, hp=160, path_speed=0.025f, enabled=true },
-                new UnitCatalogEntry { key="cyclops",         name="Cyclops",         send_cost=6,  build_cost=26, hp=200, path_speed=0.018f, enabled=true },
-                new UnitCatalogEntry { key="ghoul",           name="Ghoul",           send_cost=2,  build_cost=10, hp=80,  path_speed=0.042f, enabled=true },
-                new UnitCatalogEntry { key="skeleton_knight", name="Skeleton Knight", send_cost=3,  build_cost=14, hp=120, path_speed=0.030f, enabled=true },
-                new UnitCatalogEntry { key="undead_warrior",  name="Undead Warrior",  send_cost=3,  build_cost=12, hp=110, path_speed=0.028f, enabled=true },
-                new UnitCatalogEntry { key="mummy",           name="Mummy",           send_cost=4,  build_cost=16, hp=150, path_speed=0.020f, enabled=true },
-                new UnitCatalogEntry { key="vampire",         name="Vampire",         send_cost=5,  build_cost=20, hp=100, path_speed=0.038f, enabled=true },
-                new UnitCatalogEntry { key="giant_viper",     name="Giant Viper",     send_cost=4,  build_cost=14, hp=70,  path_speed=0.050f, enabled=true },
-                new UnitCatalogEntry { key="darkness_spider", name="Darkness Spider", send_cost=3,  build_cost=12, hp=75,  path_speed=0.048f, enabled=true },
-                new UnitCatalogEntry { key="lizard_warrior",  name="Lizard Warrior",  send_cost=3,  build_cost=14, hp=90,  path_speed=0.045f, enabled=true },
-                new UnitCatalogEntry { key="dragonide",       name="Dragonide",       send_cost=5,  build_cost=18, hp=120, path_speed=0.030f, enabled=true },
-                new UnitCatalogEntry { key="wyvern",          name="Wyvern",          send_cost=6,  build_cost=22, hp=130, path_speed=0.042f, enabled=true },
-                new UnitCatalogEntry { key="hydra",           name="Hydra",           send_cost=13, build_cost=32, hp=320, path_speed=0.018f, enabled=true },
-                new UnitCatalogEntry { key="mountain_dragon", name="Mountain Dragon", send_cost=12, build_cost=35, hp=280, path_speed=0.025f, enabled=true },
-                new UnitCatalogEntry { key="werewolf",        name="Werewolf",        send_cost=5,  build_cost=18, hp=140, path_speed=0.040f, enabled=true },
-                new UnitCatalogEntry { key="harpy",           name="Harpy",           send_cost=4,  build_cost=12, hp=80,  path_speed=0.052f, enabled=true },
-                new UnitCatalogEntry { key="griffin",         name="Griffin",         send_cost=8,  build_cost=30, hp=180, path_speed=0.035f, enabled=true },
-                new UnitCatalogEntry { key="manticora",       name="Manticora",       send_cost=10, build_cost=22, hp=240, path_speed=0.028f, enabled=true },
-                new UnitCatalogEntry { key="chimera",         name="Chimera",         send_cost=11, build_cost=38, hp=260, path_speed=0.030f, enabled=true },
-                new UnitCatalogEntry { key="evil_watcher",    name="Evil Watcher",    send_cost=6,  build_cost=24, hp=70,  path_speed=0.025f, enabled=true },
-                new UnitCatalogEntry { key="oak_tree_ent",    name="Oak Tree Ent",    send_cost=8,  build_cost=28, hp=300, path_speed=0.012f, enabled=true },
-                new UnitCatalogEntry { key="ice_golem",       name="Ice Golem",       send_cost=9,  build_cost=30, hp=220, path_speed=0.020f, enabled=true },
-                new UnitCatalogEntry { key="demon_lord",      name="Demon Lord",      send_cost=15, build_cost=50, hp=350, path_speed=0.020f, enabled=true },
-            };
+            if (HasCriticalFailure)
+                return;
 
-            foreach (var entry in defaults)
-            {
-                Units.Add(entry);
-                UnitByKey[entry.key] = entry;
-            }
-        }
-
-        static void FallbackBarracks()
-        {
-            BarracksLevels.Clear();
-            BarracksLevels.Add(new BarracksLevelEntry { level = 2, upgrade_cost = 100, multiplier = 1.15f, notes = "Fallback level 2" });
-            BarracksLevels.Add(new BarracksLevelEntry { level = 3, upgrade_cost = 220, multiplier = 1.30f, notes = "Fallback level 3" });
-            BarracksLevels.Add(new BarracksLevelEntry { level = 4, upgrade_cost = 400, multiplier = 1.45f, notes = "Fallback level 4" });
+            IsReady = false;
+            HasCriticalFailure = true;
+            LastFailure = $"[Catalog] Required catalog '{path}' failed. {detail}";
+            Debug.LogError(LastFailure);
+            OnCatalogFailed?.Invoke(LastFailure);
         }
     }
 }

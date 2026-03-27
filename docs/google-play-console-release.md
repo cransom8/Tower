@@ -15,6 +15,7 @@ As of this repo snapshot:
 - Target SDK: automatic/highest installed
 - Architectures: `ARM64` only
 - Custom Android keystore: not configured
+- Google Play API upload script: `scripts/publish-google-play.js`
 
 Source of truth:
 
@@ -48,6 +49,11 @@ Source of truth:
 8. Upload the `.aab` to an internal or closed testing track first.
 9. Fix all pre-launch report and review issues.
 10. Promote the tested release to production.
+
+Important:
+
+- The API automation in this repo helps upload a signed `.aab` to an existing Play app.
+- It does not remove the need to create the Play app, configure app content, or finish first-release console setup.
 
 ## Unity settings to change in this repo
 
@@ -133,6 +139,147 @@ See also:
 - Target API is on automatic rather than pinned explicitly
 - Store listing assets for Play are not tracked in this repo yet
 - App content declarations still need to be completed in Play Console
+
+## Google Play API automation in this repo
+
+This repo now includes a Play upload script:
+
+- Command: `npm run play:upload -- --dry-run`
+- Script: `scripts/publish-google-play.js`
+
+The script can:
+
+- authenticate with a Google service account
+- create a Play edit
+- upload a signed Android App Bundle (`.aab`)
+- assign it to a track such as `internal`, `beta`, or `production`
+- commit the edit
+
+### Required inputs
+
+Supply these with CLI flags or environment variables:
+
+- `GOOGLE_PLAY_PACKAGE_NAME`
+- `GOOGLE_PLAY_AAB_PATH`
+- authentication, using one of these modes:
+  - `adc` / workload identity / application default credentials
+  - `oauth` refresh token
+  - `service-account` legacy JSON key fallback
+
+Optional:
+
+- `GOOGLE_PLAY_AUTH_MODE` default auto-detects, preferred `adc`
+- `GOOGLE_PLAY_TRACK` default `internal`
+- `GOOGLE_PLAY_RELEASE_NAME`
+- `GOOGLE_PLAY_RELEASE_STATUS` default `completed`
+- `GOOGLE_PLAY_RELEASE_NOTES_FILE`
+- `GOOGLE_PLAY_RELEASE_NOTES_LANGUAGE` default `en-US`
+- `GOOGLE_PLAY_RELEASE_NOTES_TEXT`
+- `GOOGLE_PLAY_USER_FRACTION` for staged rollout
+- `GOOGLE_PLAY_IN_APP_UPDATE_PRIORITY` from `0` to `5`
+- `GOOGLE_PLAY_CHANGES_NOT_SENT_FOR_REVIEW`
+
+### Example
+
+PowerShell:
+
+```powershell
+$env:GOOGLE_PLAY_PACKAGE_NAME = "com.ransomforge.castledefender"
+$env:GOOGLE_PLAY_AAB_PATH = "C:\builds\castle-defender.aab"
+$env:GOOGLE_PLAY_AUTH_MODE = "adc"
+$env:GOOGLE_PLAY_TRACK = "internal"
+$env:GOOGLE_PLAY_RELEASE_NAME = "Internal test build 1"
+npm run play:upload
+```
+
+Dry-run validation:
+
+```powershell
+npm run play:upload -- --dry-run
+```
+
+Release notes:
+
+- Plain text file: `GOOGLE_PLAY_RELEASE_NOTES_FILE=release-notes.txt`
+- JSON file: `GOOGLE_PLAY_RELEASE_NOTES_FILE=release-notes.json`
+- JSON object format example:
+
+```json
+{
+  "en-US": "Initial internal test build.",
+  "es-ES": "Compilacion inicial para pruebas internas."
+}
+```
+
+### Service account setup
+
+Before the script can publish, make sure:
+
+1. The app already exists in Play Console with the exact final package name.
+2. The identity you use has Play Console access for the app with release/upload permissions.
+4. The uploaded `.aab` is signed with the upload keystore tied to the Play app.
+
+### Preferred auth modes
+
+`adc` / workload identity / federated credentials:
+
+- Best for automation because it avoids long-lived private keys.
+- The script now supports Application Default Credentials through `google-auth-library`.
+- That means it can use:
+  - `GOOGLE_APPLICATION_CREDENTIALS` pointing to a workload identity federation credential config
+  - or a local ADC login from `gcloud auth application-default login`
+
+`oauth` refresh token:
+
+- Good for manual operator-driven uploads from a specific Google account.
+- Provide:
+  - `GOOGLE_PLAY_OAUTH_CLIENT_ID`
+  - `GOOGLE_PLAY_OAUTH_CLIENT_SECRET`
+  - `GOOGLE_PLAY_OAUTH_REFRESH_TOKEN`
+- This repo includes a helper to mint the refresh token:
+  - `npm run play:oauth-token -- --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --login-hint you@example.com`
+
+`service-account`:
+
+- Still supported as a fallback for existing setups.
+- Prefer not to use it for new automation unless you specifically want key-based auth.
+
+### OAuth refresh token setup
+
+1. In Google Cloud Console, create OAuth credentials for a `Desktop app`.
+2. Add your Google account to the Play Console app with the release permissions you need.
+3. Run the helper from this repo:
+
+```powershell
+npm run play:oauth-token -- --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --login-hint you@example.com
+```
+
+4. Open the printed URL in a browser while signed into the Google account you want to use.
+5. Approve access and let Google redirect back to the local callback.
+6. Copy the printed values into your shell:
+
+```powershell
+$env:GOOGLE_PLAY_AUTH_MODE = "oauth"
+$env:GOOGLE_PLAY_OAUTH_CLIENT_ID = "..."
+$env:GOOGLE_PLAY_OAUTH_CLIENT_SECRET = "..."
+$env:GOOGLE_PLAY_OAUTH_REFRESH_TOKEN = "..."
+```
+
+7. Run the uploader:
+
+```powershell
+npm run play:upload
+```
+
+### Suggested first automated path
+
+1. Finish Unity Android settings and keystore setup.
+2. Build a signed `.aab`.
+3. Create the Play app in the console.
+4. Grant the service account Play access.
+5. Run `npm run play:upload -- --dry-run`.
+6. Run `npm run play:upload` to push to `internal`.
+7. Verify install, login, and remote content.
 
 ## Good first release path
 

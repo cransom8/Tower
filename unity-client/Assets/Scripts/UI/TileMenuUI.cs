@@ -11,6 +11,7 @@
 //       ├── Btn_Remove             (shown on tower tiles — sells defender back)
 //       └── Btn_Close
 
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -46,9 +47,7 @@ namespace CastleDefender.UI
         [Header("Tower Icons (assign in Inspector)")]
         [SerializeField] Sprite[] TowerIcons;
 
-        // Fallback tower data (used until match config / catalog loads)
-        static readonly string[] FallbackTowerKeys  = { "goblin", "orc", "troll", "vampire", "wyvern" };
-        static readonly int[]    FallbackTowerCosts  = {       8,    14,      16,        20,       22 };
+        const float MissingLoadoutErrorDelaySeconds = 1.5f;
 
         // Catalog-driven (populated in ApplyCatalog)
         string[] _towerKeys;
@@ -61,10 +60,12 @@ namespace CastleDefender.UI
         string _statusText;
         bool   _initialized;
         bool   _networkHooksRegistered;
+        bool   _loadoutMissingLogged;
         Coroutine _scaleCoroutine;
         int _shownFrame = -1;
         readonly List<RawImage> _placementPortraits = new();
         PendingAction _pendingAction = PendingAction.None;
+        string _lastLegacyBlockSignature;
 
         enum PendingAction
         {
@@ -82,7 +83,6 @@ namespace CastleDefender.UI
 
         void OnDestroy()
         {
-            CatalogLoader.OnCatalogReady -= ApplyCatalog;
             UnregisterNetworkCallbacks();
         }
 
@@ -91,6 +91,7 @@ namespace CastleDefender.UI
         {
             if (config?.loadout == null || config.loadout.Length == 0) return;
 
+            _loadoutMissingLogged = false;
             int count = Mathf.Min(config.loadout.Length, 5);
             _towerKeys  = new string[count];
             _towerCosts = new int[count];
@@ -98,9 +99,13 @@ namespace CastleDefender.UI
             {
                 var entry = config.loadout[i];
                 _towerKeys[i]  = entry.key;
-                _towerCosts[i] = entry.build_cost > 0
-                    ? entry.build_cost
-                    : GetKnownTowerCost(entry.key);
+                _towerCosts[i] = entry.build_cost;
+                if (_towerCosts[i] <= 0)
+                {
+                    Debug.LogError(
+                        $"[TileMenuUI] Match loadout entry '{entry.key}' has invalid build_cost={entry.build_cost}. " +
+                        "Runtime will not guess a replacement cost.");
+                }
             }
 
             RefreshPlacementButtons(config.loadout);
@@ -110,31 +115,10 @@ namespace CastleDefender.UI
 
         void ApplyCatalog()
         {
-            CatalogLoader.OnCatalogReady -= ApplyCatalog;
-            var cachedLoadout = NetworkManager.Instance?.LastMatchLoadout;
-            if (cachedLoadout != null && cachedLoadout.Length > 0)
-            {
-                BackfillTowerCostsFromCatalog(cachedLoadout);
-                RefreshPlacementButtons(cachedLoadout);
-                return;
-            }
-
-            // Use unit-types catalog (behavior_mode='both' HF units) as the pre-match
-            // fallback — NOT the old towers catalog which has retired classic keys.
-            var units = CatalogLoader.Units.FindAll(u => u.build_cost > 0);
-            int count = Mathf.Min(units.Count > 0 ? units.Count : FallbackTowerKeys.Length, 5);
-
-            _towerKeys  = new string[count];
-            _towerCosts = new int[count];
-            for (int i = 0; i < count; i++)
-            {
-                _towerKeys[i]  = units.Count > 0 ? units[i].key        : FallbackTowerKeys[i];
-                _towerCosts[i] = units.Count > 0 ? units[i].build_cost : FallbackTowerCosts[i];
-            }
-
-            RefreshPlacementButtons(units.Count > 0 ? units.ToArray() : null);
-            ApplyTowerButtonIcons();
-            Debug.Log($"[TileMenuUI] Catalog applied — {count} unit types (pre-match fallback)");
+            SetPlacementButtonsUnavailable("LOADOUT\nERROR");
+            Debug.LogError(
+                "[TileMenuUI] Refusing to derive placement buttons from the global catalog. " +
+                "Game_ML requires the authoritative per-match loadout from ml_match_config.");
         }
 
         void EnsureInitialized()
@@ -146,14 +130,8 @@ namespace CastleDefender.UI
             EnsureCanvasRaycaster();
             EnsurePanelRaycastState();
 
-            // Seed with fallback data immediately; catalog will override when ready
-            _towerKeys  = (string[])FallbackTowerKeys.Clone();
-            _towerCosts = (int[])FallbackTowerCosts.Clone();
-
-            if (CatalogLoader.IsReady)
-                ApplyCatalog();
-            else
-                CatalogLoader.OnCatalogReady += ApplyCatalog;
+            _towerKeys = Array.Empty<string>();
+            _towerCosts = Array.Empty<int>();
 
             // Also listen to match config so we can re-populate buttons with the
             // actual player loadout (which the server enforces for upgrade_wall).
@@ -163,15 +141,15 @@ namespace CastleDefender.UI
                 PanelTileMenu.SetActive(false);
 
             EnsurePlacementPortraitSlots();
+            SetPlacementButtonsUnavailable("WAITING\nLOADOUT");
             ApplyTowerButtonIcons();
 
-            // Initial wiring — uses whatever _towerKeys is set to (catalog or fallback).
-            // HandleMatchConfig (below) will RemoveAllListeners + re-add with loadout keys.
-            BtnArcher?.onClick.AddListener(()   => OnConvert(_towerKeys.Length > 0 ? _towerKeys[0] : "archer"));
-            BtnFighter?.onClick.AddListener(()  => OnConvert(_towerKeys.Length > 1 ? _towerKeys[1] : "fighter"));
-            BtnMage?.onClick.AddListener(()     => OnConvert(_towerKeys.Length > 2 ? _towerKeys[2] : "mage"));
-            BtnBallista?.onClick.AddListener(() => OnConvert(_towerKeys.Length > 3 ? _towerKeys[3] : "ballista"));
-            BtnCannon?.onClick.AddListener(()   => OnConvert(_towerKeys.Length > 4 ? _towerKeys[4] : "cannon"));
+            // Initial wiring targets the eventual authoritative loadout entries.
+            BtnArcher?.onClick.AddListener(()   => TryOnConvertIndex(0));
+            BtnFighter?.onClick.AddListener(()  => TryOnConvertIndex(1));
+            BtnMage?.onClick.AddListener(()     => TryOnConvertIndex(2));
+            BtnBallista?.onClick.AddListener(() => TryOnConvertIndex(3));
+            BtnCannon?.onClick.AddListener(()   => TryOnConvertIndex(4));
 
             BtnUpgrade?.onClick.AddListener(OnUpgrade);
             BtnRemove?.onClick.AddListener(OnRemove);
@@ -186,6 +164,55 @@ namespace CastleDefender.UI
             var cachedLoadout = NetworkManager.Instance?.LastMatchLoadout;
             if (cachedLoadout != null && cachedLoadout.Length > 0)
                 HandleMatchConfig(new MLMatchConfig { loadout = cachedLoadout });
+            else
+                StartCoroutine(RequireAuthoritativeLoadout());
+        }
+
+        IEnumerator RequireAuthoritativeLoadout()
+        {
+            yield return new WaitForSeconds(MissingLoadoutErrorDelaySeconds);
+            if (_towerKeys != null && _towerKeys.Length > 0)
+                yield break;
+
+            if (_loadoutMissingLogged)
+                yield break;
+
+            _loadoutMissingLogged = true;
+            SetPlacementButtonsUnavailable("LOADOUT\nMISSING");
+            Debug.LogError(
+                $"[TileMenuUI] No authoritative match loadout arrived for '{name}' in scene '{gameObject.scene.name}'. " +
+                "Placement buttons are disabled until ml_match_config provides the per-match roster.");
+        }
+
+        void SetPlacementButtonsUnavailable(string label)
+        {
+            _towerKeys = Array.Empty<string>();
+            _towerCosts = Array.Empty<int>();
+
+            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                var button = buttons[i];
+                if (button == null)
+                    continue;
+
+                button.interactable = false;
+                var labelText = button.GetComponentInChildren<TMP_Text>(true);
+                if (labelText != null)
+                    labelText.text = label;
+            }
+        }
+
+        void TryOnConvertIndex(int index)
+        {
+            if (_towerKeys == null || index < 0 || index >= _towerKeys.Length)
+            {
+                Debug.LogError(
+                    $"[TileMenuUI] Placement button index={index} was pressed before an authoritative loadout was available on '{name}'.");
+                return;
+            }
+
+            OnConvert(_towerKeys[index]);
         }
 
         static void EnsureEventSystem()
@@ -202,20 +229,20 @@ namespace CastleDefender.UI
                 existing = go.AddComponent<EventSystem>();
                 go.AddComponent<StandaloneInputModule>();
                 go.AddComponent<SingleEventSystem>();
-                Debug.Log("[TileMenuUI] Created fallback EventSystem for gameplay UI.");
+                Debug.LogError("[TileMenuUI] Runtime created a missing EventSystem for gameplay UI. Scene wiring should provide one explicitly.");
                 return;
             }
 
             if (!existing.gameObject.activeSelf)
             {
                 existing.gameObject.SetActive(true);
-                Debug.Log("[TileMenuUI] Reactivated inactive EventSystem for gameplay UI.");
+                Debug.LogError("[TileMenuUI] Reactivated an inactive EventSystem for gameplay UI. Scene wiring is broken.");
             }
 
             if (existing.GetComponent<BaseInputModule>() == null)
             {
                 existing.gameObject.AddComponent<StandaloneInputModule>();
-                Debug.Log("[TileMenuUI] Added missing StandaloneInputModule to existing EventSystem.");
+                Debug.LogError("[TileMenuUI] Added a missing StandaloneInputModule to the EventSystem at runtime. Scene wiring is broken.");
             }
 
             if (existing.GetComponent<SingleEventSystem>() == null)
@@ -366,46 +393,6 @@ namespace CastleDefender.UI
             return TowerIcons != null && index < TowerIcons.Length ? TowerIcons[index] : null;
         }
 
-        void RefreshPlacementButtons(UnitCatalogEntry[] catalogEntries)
-        {
-            var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
-            for (int i = 0; i < buttons.Length; i++)
-            {
-                if (buttons[i] == null) continue;
-                buttons[i].onClick.RemoveAllListeners();
-                if (_towerKeys == null || i >= _towerKeys.Length)
-                {
-                    buttons[i].gameObject.SetActive(false);
-                    continue;
-                }
-
-                string key = _towerKeys[i];
-                string name = key;
-                int cost = i < _towerCosts.Length ? _towerCosts[i] : 0;
-
-                if (catalogEntries != null && i < catalogEntries.Length && catalogEntries[i] != null)
-                {
-                    name = catalogEntries[i].name;
-                    if (cost <= 0) cost = catalogEntries[i].build_cost;
-                }
-                else if (CatalogLoader.UnitByKey.TryGetValue(key, out var catalogUnit))
-                {
-                    name = catalogUnit.name;
-                    if (cost <= 0) cost = catalogUnit.build_cost;
-                }
-
-                _towerCosts[i] = cost;
-
-                var lbl = buttons[i].GetComponentInChildren<TMP_Text>(true);
-                if (lbl != null)
-                    lbl.text = $"{name}\n{cost}g";
-
-                int captured = i;
-                buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
-                buttons[i].gameObject.SetActive(true);
-            }
-        }
-
         void RefreshPlacementButtons(LoadoutEntry[] loadoutEntries)
         {
             var buttons = new[] { BtnArcher, BtnFighter, BtnMage, BtnBallista, BtnCannon };
@@ -420,14 +407,20 @@ namespace CastleDefender.UI
                 }
 
                 int cost = i < _towerCosts.Length ? _towerCosts[i] : 0;
-                if (cost <= 0 && CatalogLoader.UnitByKey.TryGetValue(loadoutEntries[i].key, out var catalogUnit))
-                    cost = catalogUnit.build_cost;
+                if (cost <= 0)
+                {
+                    Debug.LogError(
+                        $"[TileMenuUI] Loadout entry '{loadoutEntries[i].key}' is missing a valid build_cost. " +
+                        "Placement button will remain disabled instead of guessing from catalog data.");
+                }
 
                 _towerCosts[i] = cost;
 
                 var lbl = buttons[i].GetComponentInChildren<TMP_Text>(true);
                 if (lbl != null)
-                    lbl.text = $"{loadoutEntries[i].name}\n{cost}g";
+                    lbl.text = cost > 0
+                        ? $"{loadoutEntries[i].name}\n{cost}g"
+                        : $"{loadoutEntries[i].name}\nCOST ERR";
 
                 int captured = i;
                 buttons[i].onClick.AddListener(() => OnConvert(_towerKeys[captured]));
@@ -435,25 +428,15 @@ namespace CastleDefender.UI
             }
         }
 
-        void BackfillTowerCostsFromCatalog(LoadoutEntry[] loadoutEntries)
-        {
-            if (loadoutEntries == null || _towerKeys == null || _towerCosts == null) return;
-            for (int i = 0; i < loadoutEntries.Length && i < _towerKeys.Length && i < _towerCosts.Length; i++)
-            {
-                if (_towerCosts[i] > 0) continue;
-                if (loadoutEntries[i].build_cost > 0)
-                {
-                    _towerCosts[i] = loadoutEntries[i].build_cost;
-                    continue;
-                }
-                if (CatalogLoader.UnitByKey.TryGetValue(loadoutEntries[i].key, out var unit))
-                    _towerCosts[i] = unit.build_cost;
-            }
-        }
-
         void Update()
         {
             if (!PanelTileMenu.activeSelf) return;
+            if (TryGetLegacyTileGridDisableReason(out string reason))
+            {
+                PanelTileMenu.SetActive(false);
+                LogLegacyTileMenuBlocked("UpdateHide", reason);
+                return;
+            }
 
             ApplyTowerButtonIcons();
             float gold = GetMyGold();
@@ -490,6 +473,14 @@ namespace CastleDefender.UI
         // ─────────────────────────────────────────────────────────────────────
         public void Show(int col, int row, string tileType, string towerType)
         {
+            if (TryGetLegacyTileGridDisableReason(out string reason))
+            {
+                if (PanelTileMenu != null)
+                    PanelTileMenu.SetActive(false);
+                LogLegacyTileMenuBlocked("Show", reason);
+                return;
+            }
+
             // Some scenes keep this GO inactive in hierarchy.
             // Ensure it is active and wired before displaying.
             if (!gameObject.activeSelf)
@@ -723,20 +714,9 @@ namespace CastleDefender.UI
         int GetTowerBaseCost(string towerType)
         {
             if (string.IsNullOrEmpty(towerType)) return 0;
-            if (CatalogLoader.UnitByKey.TryGetValue(towerType, out var u)) return u.build_cost;
             if (_towerKeys != null)
                 for (int i = 0; i < _towerKeys.Length && i < _towerCosts.Length; i++)
                     if (_towerKeys[i] == towerType) return _towerCosts[i];
-            return 0;
-        }
-
-        int GetKnownTowerCost(string towerType)
-        {
-            if (string.IsNullOrEmpty(towerType)) return 0;
-            if (CatalogLoader.UnitByKey.TryGetValue(towerType, out var u) && u.build_cost > 0) return u.build_cost;
-            if (_towerKeys != null)
-                for (int i = 0; i < _towerKeys.Length && i < _towerCosts.Length; i++)
-                    if (_towerKeys[i] == towerType && _towerCosts[i] > 0) return _towerCosts[i];
             return 0;
         }
 
@@ -824,6 +804,31 @@ namespace CastleDefender.UI
         bool IsBuildPhase()
         {
             return SnapshotApplier.Instance?.LatestML?.roundState == "build";
+        }
+
+        bool TryGetLegacyTileGridDisableReason(out string reason)
+        {
+            return FortressSelectionController.ShouldBlockLegacyTileMenu(ResolveBlockingLaneIndex(), out reason);
+        }
+
+        int ResolveBlockingLaneIndex()
+        {
+            var parentGrid = GetComponentInParent<TileGrid>(true);
+            if (parentGrid != null)
+                return parentGrid.LaneIndex;
+
+            var snapshotApplier = SnapshotApplier.Instance;
+            return snapshotApplier != null ? snapshotApplier.MyLaneIndex : -1;
+        }
+
+        void LogLegacyTileMenuBlocked(string source, string reason)
+        {
+            string signature = $"{source}|{reason}";
+            if (_lastLegacyBlockSignature == signature)
+                return;
+
+            _lastLegacyBlockSignature = signature;
+            Debug.LogError($"[FortressSelection] Blocked TileMenuUI source='{source}' on '{name}'. {reason}");
         }
 
         string NextLevelDmgPreview(int currentLevel)

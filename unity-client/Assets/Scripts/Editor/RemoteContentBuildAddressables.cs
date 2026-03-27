@@ -35,6 +35,8 @@ namespace CastleDefender.Editor
 
             try
             {
+                SyncRegistryToAddressables();
+
                 var cleanPlayerContent = settingsType.GetMethod("CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);
                 if (cleanPlayerContent != null)
                     cleanPlayerContent.Invoke(null, new object[] { null });
@@ -83,6 +85,12 @@ namespace CastleDefender.Editor
                 return getSettingsMethod.Invoke(null, new object[] { true });
 
             return settingsDefaultType.GetProperty("Settings", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+        }
+
+        static void SyncRegistryToAddressables()
+        {
+            if (!EditorApplication.ExecuteMenuItem("Castle Defender/Remote Content/Sync Registry To Addressables"))
+                Debug.LogWarning("[RemoteContentBuildAddressables] Failed to execute registry-to-addressables sync before build.");
         }
 
         static string DescribeResult(object result)

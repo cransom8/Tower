@@ -9,9 +9,18 @@
 -- UNIQUE(config_id, wave_number) constraint from migration 039; any attempt
 -- to insert a wave_number that already exists will be silently skipped.
 
+WITH standard_config AS (
+  SELECT id
+  FROM ml_wave_configs
+  WHERE name = 'Standard'
+  ORDER BY id
+  LIMIT 1
+)
 INSERT INTO ml_waves (config_id, wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult)
-SELECT 1, w.wave_number, w.unit_type, w.spawn_qty, w.hp_mult, w.dmg_mult, w.speed_mult
-FROM (VALUES
+SELECT sc.id, w.wave_number, w.unit_type, w.spawn_qty, w.hp_mult, w.dmg_mult, w.speed_mult
+FROM standard_config sc
+CROSS JOIN (
+VALUES
   (11, 'cyclops',         5, 1.00::numeric, 1.00::numeric, 1.00::numeric),
   (12, 'cyclops',         6, 1.30::numeric, 1.20::numeric, 1.00::numeric),
   (13, 'werewolf',        6, 1.00::numeric, 1.00::numeric, 1.00::numeric),

@@ -10,6 +10,8 @@
  * Wired to sim-core (computeDamage, fireProjectile, resolveProjectile, mulberry32 RNG)
  * and the unitTypes DB cache. UNIT_DEFS / TOWER_DEFS serve as last-resort fallbacks
  * for units not present in the DB (e.g. during local dev without migrations).
+ * Match-start economy and wave settings are expected to come from the active
+ * multilane config and should fail loudly when missing or invalid.
  */
 
 const {
@@ -25,21 +27,37 @@ const {
 const gameConfig = require("./gameConfig");
 const { getUnitType, getAllUnitTypes } = require("./unitTypes");
 const combatLog = require("./combatLog");
+const log = require("./logger");
+const {
+  DEFAULT_FORT_PRESENTATION_KEY,
+  resolveFortCatalogUnitKey,
+  resolveFortDisplayName,
+  resolveFortPortraitKey,
+  resolveFortSkinKey,
+  isFortArchetypeKey,
+} = require("./game/fortUnitCatalog");
 const {
   getCurrentBarracksMult,
   getBarracksUpgradeDef,
   getMaxBarracksLevel,
 } = require("./barracksLevels");
+const {
+  createMLSnapshot: buildMLSnapshot,
+  createMLPublicConfig: buildMLPublicConfig,
+} = require("./sim-multilane-serialization");
 
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240; // 12 s
-const START_GOLD = 70;
-const START_INCOME = 10;
-const LIVES_START = 20;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 200;
 const GATE_KILL_BOUNTY = 10;
+const WAVE_UNIT_STATES = Object.freeze({
+  IDLE: "IDLE",
+  MOVING: "MOVING",
+  COMBAT: "COMBAT",
+  DEAD: "DEAD",
+});
 
 // Grid constants
 const GRID_W = 11;
@@ -50,34 +68,42 @@ const CASTLE_X = 5;
 const CASTLE_YG = 27;
 const MAX_PATH_LEN = GRID_W * GRID_H; // kept for reference; path is always GRID_H steps
 const SPLASH_RADIUS_TILES = 1.5;
-const SEND_INTERVAL_TICKS = 5;     // ticks between send-queue drains (0.25s at 20Hz)
-const QUEUE_CAP = 200;             // max units in send queue per lane
 const MIN_UNIT_SPACING = 0.8;      // minimum pathIdx gap enforced by applySeparation
 const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 
+// Combat movement tuning
+// All combat movers share a fixed server-side base path speed so the battlefield
+// reads consistently. Barracks progression then scales that baseline up in
+// 0.25x steps, starting at half-speed until the player invests in upgrades.
+const BASE_COMBAT_PATH_SPEED = 0.25;
+const BARRACKS_LEVEL_ONE_SPEED_MULT = 0.50;
+const SPEED_UPGRADE_STEP = 0.25;
+
 // Mobile defender constants
-const DEFENDER_BASE_SPEED   = 0.15;
+const DEFENDER_BASE_SPEED   = BASE_COMBAT_PATH_SPEED * BARRACKS_LEVEL_ONE_SPEED_MULT;
 const ENGAGEMENT_RANGE_PADDING = 2.0; // extra leash beyond attack range before a unit opens fire
-const MERGE_STAGING_COLS    = [2, 4, 5, 6, 8];
 const SEP_DAMP              = 0.35;
-const SEP_MAX_PUSH          = 0.10;
+const SEP_MAX_PUSH          = 0.16;
+const CONTACT_SLOT_TOLERANCE = 0.22;
 
 // Wave defense constants (Forge Wars Wave Rework Phase 1)
 const TEAM_HP_START = 20;
+const BARRACKS_SEND_TIMER_TICKS = 30 * TICK_HZ;
+const WAVE_TIMER_TICKS = 120 * TICK_HZ;
 const BUILD_PHASE_TICKS = 600;       // 30 s at 20 Hz
 const TRANSITION_PHASE_TICKS = 200;  // 10 s at 20 Hz
 const ESCALATION_PER_EXTRA_ROUND = 0.10; // +10% HP/DMG per round beyond last wave
 
 function getMlRuntimeSettings() {
-  const cfg = gameConfig.getActiveConfig("multilane") || {};
-  const gp = cfg.globalParams || {};
+  const cfg = gameConfig.getRequiredActiveConfig("multilane");
+  const gp = cfg.globalParams;
   return {
-    startGold: Math.floor(clampNum(gp.startGold, 0, 10000, START_GOLD)),
-    startIncome: clampNum(gp.startIncome, 0, 1000, START_INCOME),
-    livesStart: Math.floor(clampNum(gp.livesStart, 1, 1000, LIVES_START)),
-    teamHpStart: Math.floor(clampNum(gp.teamHpStart, 1, 1000, TEAM_HP_START)),
-    buildPhaseTicks: Math.floor(clampNum(gp.buildPhaseTicks, 20, 7200, BUILD_PHASE_TICKS)),
-    transitionPhaseTicks: Math.floor(clampNum(gp.transitionPhaseTicks, 20, 7200, TRANSITION_PHASE_TICKS)),
+    startGold: gp.startGold,
+    startIncome: gp.startIncome,
+    livesStart: gp.livesStart,
+    teamHpStart: gp.teamHpStart,
+    buildPhaseTicks: gp.buildPhaseTicks,
+    transitionPhaseTicks: gp.transitionPhaseTicks,
   };
 }
 
@@ -88,14 +114,6 @@ function getMlRuntimeSettings() {
 // Both lanes on the same side share this bridge. Towers cannot target units here
 // (virtual coordinates are outside the private build grid).
 const SHARED_SUFFIX_LENGTH = 28; // matches private branch grid length (GRID_H)
-
-// Suffix pathIdx that maps to pt3 (Island_Split exit / merge bridge entry) in the Unity
-// lane waypoint polyline.  Computed from Unity TileGrid._lanePathWaypoints arc lengths:
-//   d(pt2→pt3) = √(28²+12.5²) ≈ 30.664;  d(pt3→pt4)=20;  d(pt4→pt5)=27  → total ≈ 77.664
-//   normProgress_pt3 = 30.664/77.664 ≈ 0.3948
-//   MERGE_BRIDGE_ENTRY_IDX = GRID_H + normProgress_pt3 × (SHARED_SUFFIX_LENGTH−1) ≈ 38.66
-const _D23 = Math.sqrt(28 * 28 + 12.5 * 12.5); // pt2→pt3 arc length (same for all 4 lanes)
-const MERGE_BRIDGE_ENTRY_IDX = GRID_H + (_D23 / (_D23 + 20 + 27)) * (SHARED_SUFFIX_LENGTH - 1);
 
 function buildFullPath(branchPath) {
   if (!branchPath || branchPath.length === 0) return [];
@@ -109,7 +127,7 @@ function buildFullPath(branchPath) {
 
 const FIXED_SLOT_LAYOUT = [
   { laneIndex: 0, slotKey: "left_a", side: "left",  slotColor: "red",   branchId: "left_branch_a",  branchLabel: "Red Branch",   castleSide: "right" },
-  { laneIndex: 1, slotKey: "left_b", side: "left",  slotColor: "gold",  branchId: "left_branch_b",  branchLabel: "Gold Branch",  castleSide: "right" },
+  { laneIndex: 1, slotKey: "left_b", side: "left",  slotColor: "yellow", branchId: "left_branch_b",  branchLabel: "Yellow Branch", castleSide: "right" },
   { laneIndex: 2, slotKey: "right_a", side: "right", slotColor: "blue",  branchId: "right_branch_a", branchLabel: "Blue Branch",  castleSide: "left" },
   { laneIndex: 3, slotKey: "right_b", side: "right", slotColor: "green", branchId: "right_branch_b", branchLabel: "Green Branch", castleSide: "left" },
 ];
@@ -135,6 +153,997 @@ const BATTLEFIELD_TOPOLOGY = Object.freeze({
   sharedZonesBuildable: false,
 });
 
+// Battlefield Routes are authoritative movement state for all live mobile units.
+// OUTER_LOOP   -> perimeter route chaining town cores
+// CENTER_CROSS -> center bridge route between opposing cores
+// WAVE_LANE    -> lane-specific wave spawn routes from battlefield edge to town core
+const ROUTE_TYPES = Object.freeze({
+  OUTER_LOOP: "OUTER_LOOP",
+  CENTER_CROSS: "CENTER_CROSS",
+  WAVE_LANE: "WAVE_LANE",
+});
+
+const SPAWN_SOURCE_TYPES = Object.freeze({
+  DUNGEON_WAVE: "dungeon_wave",
+  SCHEDULED_WAVE: "dungeon_wave",
+  BARRACKS_ROSTER: "barracks_roster",
+  BARRACKS_HERO: "barracks_hero",
+});
+
+const ALLEGIANCE_KEYS = Object.freeze({
+  RED: "red",
+  YELLOW: "yellow",
+  BLUE: "blue",
+  GREEN: "green",
+  DUNGEON: "dungeon",
+});
+
+const PLAYER_ALLEGIANCE_KEYS = new Set([
+  ALLEGIANCE_KEYS.RED,
+  ALLEGIANCE_KEYS.YELLOW,
+  ALLEGIANCE_KEYS.BLUE,
+  ALLEGIANCE_KEYS.GREEN,
+]);
+
+const PATH_CONTRACT_TYPES = Object.freeze({
+  WAVE_LANE: "wave_lane",
+  BARRACKS_CROSS: "barracks_cross",
+  BARRACKS_LOOP: "barracks_loop",
+  GUARD_ANCHOR: "guard_anchor",
+  INTERCEPT: "intercept",
+});
+
+const BARRACKS_ROUTE_ASSIGNMENTS = Object.freeze({
+  center: Object.freeze({
+    barracksKey: "center",
+    routeType: ROUTE_TYPES.CENTER_CROSS,
+    targetResolver: "opposing_cross",
+    routeLabel: "center_cross",
+  }),
+  left: Object.freeze({
+    barracksKey: "left",
+    routeType: ROUTE_TYPES.OUTER_LOOP,
+    targetResolver: "outer_loop",
+    routeLabel: "outer_loop_left",
+  }),
+  right: Object.freeze({
+    barracksKey: "right",
+    routeType: ROUTE_TYPES.OUTER_LOOP,
+    targetResolver: "outer_loop",
+    routeLabel: "outer_loop_right",
+  }),
+});
+
+const UNIT_STANCES = Object.freeze({
+  DEFEND: "DEFEND",
+  ATTACK: "ATTACK",
+  HOLD: "HOLD",
+  ADVANCE: "ATTACK",
+  RETREAT: "DEFEND",
+});
+
+const ROUTE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
+const WAVE_SPAWN_NODE_IDS = Object.freeze(["WA", "WB", "WC", "WD"]);
+const LANE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
+const RouteMineNode = "M";
+const OPPOSING_LANE_INDEX = Object.freeze([1, 0, 3, 2]);
+const ROUTE_TRACE_MIN_DISTANCE_TO_CORE = 6.5;
+const ROUTE_BLOCKING_CORRIDOR_RADIUS = 4.5;
+const ROUTE_BLOCKING_FORWARD_DOT = 0.1;
+const DEFENDER_HOLD_LEASH = 7.5;
+const ROUTE_FORMATION_ROW_SPACING = 1.15;
+const ROUTE_FORMATION_COLUMN_SPACING = 1.15;
+
+const ROUTE_GRAPH_CORE_NODE_POSITIONS = Object.freeze({
+  M: Object.freeze({ x: 0, y: 0 }),
+  A: Object.freeze({ x: -24, y: 24 }),
+  B: Object.freeze({ x: 24, y: 24 }),
+  C: Object.freeze({ x: 24, y: -24 }),
+  D: Object.freeze({ x: -24, y: -24 }),
+});
+
+const LANE_COMBAT_AXES = Object.freeze([
+  Object.freeze({
+    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.A,
+    lateral: Object.freeze({ x: 1, y: 0 }),
+    forward: Object.freeze({ x: 0, y: -1 }),
+  }),
+  Object.freeze({
+    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.B,
+    lateral: Object.freeze({ x: -1, y: 0 }),
+    forward: Object.freeze({ x: 0, y: -1 }),
+  }),
+  Object.freeze({
+    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.C,
+    lateral: Object.freeze({ x: -1, y: 0 }),
+    forward: Object.freeze({ x: 0, y: 1 }),
+  }),
+  Object.freeze({
+    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.D,
+    lateral: Object.freeze({ x: 1, y: 0 }),
+    forward: Object.freeze({ x: 0, y: 1 }),
+  }),
+]);
+
+const BARRACKS_SITE_COMBAT_OFFSETS = Object.freeze({
+  center: Object.freeze({ x: 0, y: 2 }),
+  left: Object.freeze({ x: -4, y: 2 }),
+  right: Object.freeze({ x: 4, y: 2 }),
+});
+
+const BARRACKS_ROUTE_NODE_SUFFIXES = Object.freeze({
+  center: "CTR",
+  left: "LFT",
+  right: "RGT",
+});
+
+const ROUTE_GRAPH_NODE_POSITIONS = Object.freeze(buildBarracksRouteGraphNodePositions());
+
+// Route graph polylines are simulation-space Battlefield Route segments.
+// Client runtime projects these segment ids into rendered board-space anchors.
+const ROUTE_SEGMENT_POLYLINES = Object.freeze({
+  A_B: Object.freeze([
+    Object.freeze({ x: -24, y: 24 }),
+    Object.freeze({ x: 0, y: 28 }),
+    Object.freeze({ x: 24, y: 24 }),
+  ]),
+  B_C: Object.freeze([
+    Object.freeze({ x: 24, y: 24 }),
+    Object.freeze({ x: 28, y: 0 }),
+    Object.freeze({ x: 24, y: -24 }),
+  ]),
+  C_D: Object.freeze([
+    Object.freeze({ x: 24, y: -24 }),
+    Object.freeze({ x: 0, y: -28 }),
+    Object.freeze({ x: -24, y: -24 }),
+  ]),
+  D_A: Object.freeze([
+    Object.freeze({ x: -24, y: -24 }),
+    Object.freeze({ x: -28, y: 0 }),
+    Object.freeze({ x: -24, y: 24 }),
+  ]),
+  A_C: Object.freeze([
+    Object.freeze({ x: -24, y: 24 }),
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: -24 }),
+  ]),
+  C_A: Object.freeze([
+    Object.freeze({ x: 24, y: -24 }),
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: 24 }),
+  ]),
+  B_D: Object.freeze([
+    Object.freeze({ x: 24, y: 24 }),
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: -24 }),
+  ]),
+  D_B: Object.freeze([
+    Object.freeze({ x: -24, y: -24 }),
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: 24 }),
+  ]),
+  A_M: Object.freeze([
+    Object.freeze({ x: -24, y: 24 }),
+    Object.freeze({ x: 0, y: 0 }),
+  ]),
+  M_A: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: 24 }),
+  ]),
+  B_M: Object.freeze([
+    Object.freeze({ x: 24, y: 24 }),
+    Object.freeze({ x: 0, y: 0 }),
+  ]),
+  M_B: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: 24 }),
+  ]),
+  C_M: Object.freeze([
+    Object.freeze({ x: 24, y: -24 }),
+    Object.freeze({ x: 0, y: 0 }),
+  ]),
+  M_C: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: -24 }),
+  ]),
+  D_M: Object.freeze([
+    Object.freeze({ x: -24, y: -24 }),
+    Object.freeze({ x: 0, y: 0 }),
+  ]),
+  M_D: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: -24 }),
+  ]),
+  WA_A: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: 24 }),
+  ]),
+  WB_B: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: 24 }),
+  ]),
+  WC_C: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: 24, y: -24 }),
+  ]),
+  WD_D: Object.freeze([
+    Object.freeze({ x: 0, y: 0 }),
+    Object.freeze({ x: -24, y: -24 }),
+  ]),
+  ...buildBarracksRouteLinkPolylines(),
+});
+
+const ROUTE_SEGMENT_LENGTHS = Object.freeze(Object.fromEntries(
+  Object.entries(ROUTE_SEGMENT_POLYLINES).map(([segmentId, points]) => [segmentId, getPolylineLength(points)])
+));
+
+function getPolylineLength(points) {
+  if (!Array.isArray(points) || points.length < 2) return 0;
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    total += pointDistance(points[i], points[i + 1]);
+  }
+  return total;
+}
+
+function pointDistance(a, b) {
+  const dx = Number(b.x) - Number(a.x);
+  const dy = Number(b.y) - Number(a.y);
+  return Math.sqrt((dx * dx) + (dy * dy));
+}
+
+function samplePolyline(points, progress) {
+  const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
+  const total = getPolylineLength(points);
+  if (!Array.isArray(points) || points.length === 0)
+    return { point: { x: 0, y: 0 }, tangent: { x: 0, y: 1 } };
+  if (points.length === 1 || total <= 0)
+    return { point: { x: Number(points[0].x) || 0, y: Number(points[0].y) || 0 }, tangent: { x: 0, y: 1 } };
+
+  const target = total * clamped;
+  let walked = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    const segLen = pointDistance(from, to);
+    if (segLen <= 0)
+      continue;
+    if (walked + segLen >= target) {
+      const localT = (target - walked) / segLen;
+      const tangent = normalize2D({
+        x: Number(to.x) - Number(from.x),
+        y: Number(to.y) - Number(from.y),
+      });
+      return {
+        point: {
+          x: lerp(Number(from.x), Number(to.x), localT),
+          y: lerp(Number(from.y), Number(to.y), localT),
+        },
+        tangent,
+      };
+    }
+    walked += segLen;
+  }
+
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  return {
+    point: { x: Number(last.x) || 0, y: Number(last.y) || 0 },
+    tangent: normalize2D({
+      x: Number(last.x) - Number(prev.x),
+      y: Number(last.y) - Number(prev.y),
+    }),
+  };
+}
+
+function lerp(a, b, t) {
+  return a + ((b - a) * t);
+}
+
+function normalize2D(vec) {
+  const x = Number(vec && vec.x) || 0;
+  const y = Number(vec && vec.y) || 0;
+  const len = Math.sqrt((x * x) + (y * y));
+  if (len <= 0.00001)
+    return { x: 0, y: 0 };
+  return { x: x / len, y: y / len };
+}
+
+function perpendicular2D(vec) {
+  const safe = normalize2D(vec);
+  return { x: -safe.y, y: safe.x };
+}
+
+function getLaneNodeId(laneIndex) {
+  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < LANE_NODE_IDS.length
+    ? LANE_NODE_IDS[laneIndex]
+    : null;
+}
+
+function getWaveSpawnNodeId(laneIndex) {
+  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < WAVE_SPAWN_NODE_IDS.length
+    ? WAVE_SPAWN_NODE_IDS[laneIndex]
+    : null;
+}
+
+function getNodeIndex(nodeId) {
+  return ROUTE_NODE_IDS.indexOf(nodeId);
+}
+
+function getLaneCombatAxes(laneIndex) {
+  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < LANE_COMBAT_AXES.length
+    ? LANE_COMBAT_AXES[laneIndex]
+    : null;
+}
+
+function getBarracksRouteStartNodeId(laneIndex, barracksId) {
+  const coreNodeId = getLaneNodeId(laneIndex);
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  const suffix = normalizedBarracksId ? BARRACKS_ROUTE_NODE_SUFFIXES[normalizedBarracksId] : null;
+  if (!coreNodeId || !suffix)
+    return null;
+  return `${coreNodeId}${suffix}`;
+}
+
+function getLaneCoreNodeIdForRouteNode(nodeId) {
+  const normalizedNodeId = String(nodeId || "").trim().toUpperCase();
+  if (ROUTE_NODE_IDS.includes(normalizedNodeId))
+    return normalizedNodeId;
+
+  for (const coreNodeId of ROUTE_NODE_IDS) {
+    if (normalizedNodeId.startsWith(coreNodeId)) {
+      const suffix = normalizedNodeId.slice(coreNodeId.length);
+      if (suffix === BARRACKS_ROUTE_NODE_SUFFIXES.center
+          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.left
+          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.right) {
+        return coreNodeId;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isBarracksRouteStartNode(nodeId) {
+  const normalizedNodeId = String(nodeId || "").trim().toUpperCase();
+  return normalizedNodeId.length > 1
+    && getLaneCoreNodeIdForRouteNode(normalizedNodeId) !== normalizedNodeId
+    && getLaneCoreNodeIdForRouteNode(normalizedNodeId) !== null;
+}
+
+function buildBarracksRouteGraphNodePositions() {
+  const positions = {
+    ...ROUTE_GRAPH_CORE_NODE_POSITIONS,
+  };
+
+  for (let laneIndex = 0; laneIndex < LANE_COMBAT_AXES.length; laneIndex += 1) {
+    const axes = LANE_COMBAT_AXES[laneIndex];
+    const coreNodeId = LANE_NODE_IDS[laneIndex];
+    if (!axes || !coreNodeId)
+      continue;
+
+    for (const barracksId of Object.keys(BARRACKS_SITE_COMBAT_OFFSETS)) {
+      const routeNodeId = getBarracksRouteStartNodeId(laneIndex, barracksId);
+      const offset = BARRACKS_SITE_COMBAT_OFFSETS[barracksId];
+      if (!routeNodeId || !offset)
+        continue;
+
+      positions[routeNodeId] = Object.freeze({
+        x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
+        y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
+      });
+    }
+  }
+
+  return positions;
+}
+
+function buildBarracksRouteLinkPolylines() {
+  const segments = {};
+  for (let laneIndex = 0; laneIndex < LANE_NODE_IDS.length; laneIndex += 1) {
+    const coreNodeId = LANE_NODE_IDS[laneIndex];
+    const corePos = ROUTE_GRAPH_CORE_NODE_POSITIONS[coreNodeId];
+    if (!coreNodeId || !corePos)
+      continue;
+
+    for (const barracksId of Object.keys(BARRACKS_SITE_COMBAT_OFFSETS)) {
+      const routeNodeId = getBarracksRouteStartNodeId(laneIndex, barracksId);
+      const routeNodePos = routeNodeId ? ROUTE_GRAPH_NODE_POSITIONS[routeNodeId] : null;
+      if (!routeNodeId || !routeNodePos)
+        continue;
+
+      segments[`${routeNodeId}_${coreNodeId}`] = Object.freeze([
+        Object.freeze({ x: routeNodePos.x, y: routeNodePos.y }),
+        Object.freeze({ x: corePos.x, y: corePos.y }),
+      ]);
+    }
+  }
+
+  return segments;
+}
+
+function getWaveSpawnWorldPosition(laneIndex) {
+  if (!Number.isInteger(laneIndex) || laneIndex < 0 || laneIndex >= LANE_NODE_IDS.length)
+    return null;
+
+  return {
+    x: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.x,
+    y: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.y,
+  };
+}
+
+function getPadWorldPosition(laneIndex, gridX, gridY) {
+  const axes = getLaneCombatAxes(laneIndex);
+  if (!axes)
+    return { x: 0, y: 0 };
+
+  const lateralOffset = (Number(gridX) || 0) - 3;
+  const forwardOffset = 25 - (Number(gridY) || 0);
+  return {
+    x: axes.core.x + (axes.lateral.x * lateralOffset) + (axes.forward.x * forwardOffset),
+    y: axes.core.y + (axes.lateral.y * lateralOffset) + (axes.forward.y * forwardOffset),
+  };
+}
+
+function getBarracksSiteWorldPosition(laneIndex, barracksId) {
+  const axes = getLaneCombatAxes(laneIndex);
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  const offset = normalizedBarracksId ? BARRACKS_SITE_COMBAT_OFFSETS[normalizedBarracksId] : null;
+  if (!axes || !offset)
+    return null;
+
+  return {
+    x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
+    y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
+  };
+}
+
+function getNextClockwiseLaneIndex(laneIndex) {
+  if (!Number.isInteger(laneIndex))
+    return null;
+  return (laneIndex + 1 + LANE_NODE_IDS.length) % LANE_NODE_IDS.length;
+}
+
+function resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex) {
+  if (!game || !Array.isArray(game.lanes))
+    return null;
+
+  for (let step = 1; step <= game.lanes.length; step++) {
+    const idx = (sourceLaneIndex + step) % game.lanes.length;
+    if (isOpponentLane(game, sourceLaneIndex, idx))
+      return idx;
+  }
+  return null;
+}
+
+function resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex) {
+  const opposingIdx = Number.isInteger(sourceLaneIndex) && sourceLaneIndex >= 0 && sourceLaneIndex < OPPOSING_LANE_INDEX.length
+    ? OPPOSING_LANE_INDEX[sourceLaneIndex]
+    : null;
+  if (Number.isInteger(opposingIdx) && isOpponentLane(game, sourceLaneIndex, opposingIdx))
+    return opposingIdx;
+  return resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex);
+}
+
+function resolveBarracksHoldLaneIndex(game, sourceLaneIndex) {
+  if (!game || !Array.isArray(game.lanes))
+    return null;
+  if (!Number.isInteger(sourceLaneIndex) || sourceLaneIndex < 0 || sourceLaneIndex >= game.lanes.length)
+    return null;
+
+  const sourceLane = game.lanes[sourceLaneIndex];
+  return sourceLane && !sourceLane.eliminated
+    ? sourceLaneIndex
+    : null;
+}
+
+function resolveRouteTypeForSpawn(sourceBarracksId) {
+  const assignment = getBarracksRouteAssignment(sourceBarracksId);
+  return assignment ? assignment.routeType : null;
+}
+
+function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId) {
+  const assignment = getBarracksRouteAssignment(barracksId);
+  if (!assignment)
+    return null;
+
+  if (assignment.targetResolver === "opposing_cross")
+    return resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex)
+      ?? resolveBarracksHoldLaneIndex(game, sourceLaneIndex);
+
+  if (assignment.targetResolver === "outer_loop")
+    return resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex)
+      ?? resolveBarracksHoldLaneIndex(game, sourceLaneIndex);
+
+  return null;
+}
+
+function getBarracksRouteAssignment(sourceBarracksId) {
+  const normalizedBarracksKey = normalizeBarracksSiteId(sourceBarracksId);
+  if (!normalizedBarracksKey)
+    return null;
+
+  return BARRACKS_ROUTE_ASSIGNMENTS[normalizedBarracksKey] || null;
+}
+
+function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
+  if (!routeType)
+    return null;
+
+  const routeSourceNodeId = String(sourceNodeId || "").trim().toUpperCase();
+  const routeTargetNodeId = String(targetNodeId || "").trim().toUpperCase();
+  const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeSourceNodeId);
+  const prependBarracksLink = isBarracksRouteStartNode(routeSourceNodeId) && sourceCoreNodeId
+    ? `${routeSourceNodeId}_${sourceCoreNodeId}`
+    : null;
+
+  if (prependBarracksLink && routeTargetNodeId && sourceCoreNodeId && routeTargetNodeId === sourceCoreNodeId)
+    return [prependBarracksLink];
+
+  if (routeType === ROUTE_TYPES.WAVE_LANE) {
+    if (!routeSourceNodeId || !routeTargetNodeId)
+      return null;
+    return [`${routeSourceNodeId}_${routeTargetNodeId}`];
+  }
+
+  if (routeType === ROUTE_TYPES.CENTER_CROSS) {
+    if (!routeSourceNodeId || !routeTargetNodeId || !sourceCoreNodeId)
+      return null;
+    const segments = [];
+    if (prependBarracksLink)
+      segments.push(prependBarracksLink);
+    segments.push(`${sourceCoreNodeId}_${RouteMineNode}`);
+    segments.push(`${RouteMineNode}_${routeTargetNodeId}`);
+    return segments;
+  }
+
+  if (routeType !== ROUTE_TYPES.OUTER_LOOP)
+    return null;
+
+  if (!sourceCoreNodeId)
+    return null;
+
+  const sourceIndex = getNodeIndex(sourceCoreNodeId);
+  if (sourceIndex < 0)
+    return null;
+
+  const segments = prependBarracksLink ? [prependBarracksLink] : [];
+  for (let step = 0; step < ROUTE_NODE_IDS.length; step++) {
+    const from = ROUTE_NODE_IDS[(sourceIndex + step) % ROUTE_NODE_IDS.length];
+    const to = ROUTE_NODE_IDS[(sourceIndex + step + 1) % ROUTE_NODE_IDS.length];
+    segments.push(`${from}_${to}`);
+  }
+  return segments;
+}
+
+function getRouteLength(routeSegments) {
+  if (!Array.isArray(routeSegments))
+    return 0;
+  return routeSegments.reduce((sum, segmentId) => sum + (ROUTE_SEGMENT_LENGTHS[segmentId] || 0), 0);
+}
+
+function sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset = 0) {
+  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
+    return null;
+
+  const safeIndex = Math.max(0, Math.min(routeSegments.length - 1, Math.floor(Number(segmentIndex) || 0)));
+  const segmentId = routeSegments[safeIndex];
+  const points = ROUTE_SEGMENT_POLYLINES[segmentId];
+  if (!Array.isArray(points) || points.length < 2)
+    return null;
+  const sample = samplePolyline(ROUTE_SEGMENT_POLYLINES[segmentId], segmentProgress);
+  const lateral = perpendicular2D(sample.tangent);
+  return {
+    segmentId,
+    point: {
+      x: sample.point.x + (lateral.x * (Number(lateralOffset) || 0)),
+      y: sample.point.y + (lateral.y * (Number(lateralOffset) || 0)),
+    },
+    tangent: sample.tangent,
+  };
+}
+
+function advanceRouteState(unit, deltaDistance) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
+    return false;
+
+  let remaining = Math.max(0, Number(deltaDistance) || 0);
+  const isLooping = unit.routeType === ROUTE_TYPES.OUTER_LOOP;
+  let advanced = false;
+
+  while (remaining > 0) {
+    const currentSegmentId = unit.routeSegments[unit.routeSegmentIndex];
+    const segmentLength = Math.max(0.0001, ROUTE_SEGMENT_LENGTHS[currentSegmentId] || 0.0001);
+    const distanceOnSegment = Math.max(0, Math.min(1, Number(unit.segmentProgress) || 0)) * segmentLength;
+    const distanceToEnd = segmentLength - distanceOnSegment;
+    if (remaining < distanceToEnd) {
+      unit.segmentProgress = (distanceOnSegment + remaining) / segmentLength;
+      remaining = 0;
+      advanced = true;
+      break;
+    }
+
+    remaining -= distanceToEnd;
+    unit.segmentProgress = 1;
+    advanced = true;
+
+    if (unit.routeSegmentIndex >= unit.routeSegments.length - 1) {
+      if (!isLooping) {
+        remaining = 0;
+        break;
+      }
+      unit.routeSegmentIndex = 0;
+      unit.segmentProgress = 0;
+      continue;
+    }
+
+    unit.routeSegmentIndex += 1;
+    unit.segmentProgress = 0;
+  }
+
+  return advanced;
+}
+
+function setUnitRouteSnapshotState(unit) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
+    return false;
+
+  const sample = sampleRoutePosition(
+    unit.routeSegments,
+    unit.routeSegmentIndex,
+    unit.segmentProgress,
+    0
+  );
+  if (!sample)
+    return false;
+
+  const tangent = normalize2D(sample.tangent);
+  const lateral = perpendicular2D(tangent);
+  const longitudinalOffset = Number(unit.routeLongitudinalOffset) || 0;
+  const lateralOffset = Number(unit.routeLateralOffset) || 0;
+  unit.currentSegment = sample.segmentId;
+  unit.posX = sample.point.x + (tangent.x * longitudinalOffset) + (lateral.x * lateralOffset);
+  unit.posY = sample.point.y + (tangent.y * longitudinalOffset) + (lateral.y * lateralOffset);
+  unit.pathIdx = computeUnitRoutePathIndex(unit);
+  unit.routeWorldX = unit.posX;
+  unit.routeWorldY = unit.posY;
+  return true;
+}
+
+function computeUnitRoutePathIndex(unit) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
+    return 0;
+
+  const totalLength = Math.max(0.0001, getRouteLength(unit.routeSegments));
+  let distance = 0;
+  for (let i = 0; i < unit.routeSegmentIndex; i++) {
+    distance += ROUTE_SEGMENT_LENGTHS[unit.routeSegments[i]] || 0;
+  }
+  const currentSegmentId = unit.routeSegments[unit.routeSegmentIndex];
+  const currentSegmentLength = ROUTE_SEGMENT_LENGTHS[currentSegmentId] || 0;
+  distance += Math.max(0, Math.min(1, Number(unit.segmentProgress) || 0)) * currentSegmentLength;
+  return distance / totalLength;
+}
+
+function resolveSpawnOriginForUnit(unit, targetLane) {
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE)
+    return getWaveSpawnWorldPosition(targetLane && targetLane.laneIndex);
+
+  const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const sourceBarracksKey = normalizeBarracksSiteId(unit && (unit.sourceBarracksKey || unit.sourceBarracksId));
+  if (sourceLaneIndex < 0 || !sourceBarracksKey)
+    return null;
+
+  return getBarracksSiteWorldPosition(sourceLaneIndex, sourceBarracksKey);
+}
+
+function resolveRouteContractForUnit(game, targetLane, unit) {
+  if (!game || !targetLane || !unit)
+    return { ok: false, reason: "Missing game, target lane, or unit" };
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  const targetLaneIndex = targetLane.laneIndex;
+  const targetNodeId = getLaneNodeId(targetLaneIndex);
+  if (!targetNodeId)
+    return { ok: false, reason: `Target lane ${targetLaneIndex} is missing a route node` };
+
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE) {
+    const sourceNodeId = getWaveSpawnNodeId(targetLaneIndex);
+    const routeSegments = buildRouteSegments(ROUTE_TYPES.WAVE_LANE, sourceNodeId, targetNodeId);
+    if (!sourceNodeId || !routeSegments)
+      return { ok: false, reason: `Wave route is missing for lane ${targetLaneIndex}` };
+
+    const spawnOrigin = resolveSpawnOriginForUnit(unit, targetLane);
+    if (!spawnOrigin)
+      return { ok: false, reason: `Wave spawn origin is missing for lane ${targetLaneIndex}` };
+
+    return {
+      ok: true,
+      spawnSourceType,
+      routeType: ROUTE_TYPES.WAVE_LANE,
+      sourceNodeId,
+      targetNodeId,
+      routeSegments,
+      spawnOrigin,
+      pathId: buildRoutePathId(routeSegments),
+    };
+  }
+
+  const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const barracksRouteAssignment = getBarracksRouteAssignment(unit.sourceBarracksKey || unit.sourceBarracksId);
+  if (sourceLaneIndex < 0)
+    return { ok: false, reason: "Barracks unit is missing sourceLaneIndex" };
+  if (!barracksRouteAssignment)
+    return { ok: false, reason: "Barracks unit is missing a valid sourceBarracksId" };
+
+  const sourceNodeId = getBarracksRouteStartNodeId(sourceLaneIndex, barracksRouteAssignment.barracksKey);
+  if (!sourceNodeId)
+    return {
+      ok: false,
+      reason: `Barracks route start node is missing for lane=${sourceLaneIndex} barracks='${barracksRouteAssignment.barracksKey}'`,
+    };
+
+  const routeSegments = buildRouteSegments(barracksRouteAssignment.routeType, sourceNodeId, targetNodeId);
+  if (!routeSegments)
+    return { ok: false, reason: `Route graph could not be built for barracks '${barracksRouteAssignment.barracksKey}'` };
+
+  const spawnOrigin = resolveSpawnOriginForUnit(unit, targetLane);
+  if (!spawnOrigin)
+    return { ok: false, reason: `Barracks spawn origin is missing for lane=${sourceLaneIndex} barracks='${barracksRouteAssignment.barracksKey}'` };
+
+  return {
+    ok: true,
+    spawnSourceType,
+    routeType: barracksRouteAssignment.routeType,
+    sourceNodeId,
+    targetNodeId,
+    routeSegments,
+    spawnOrigin,
+    pathId: buildRoutePathId(routeSegments),
+    barracksKey: barracksRouteAssignment.barracksKey,
+    routeLabel: barracksRouteAssignment.routeLabel,
+  };
+}
+
+function isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneIndex) {
+  if (!routeContract)
+    return false;
+  if (!Number.isInteger(sourceLaneIndex) || !Number.isInteger(targetLaneIndex))
+    return false;
+  if (sourceLaneIndex !== targetLaneIndex)
+    return false;
+
+  const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeContract.sourceNodeId);
+  return !!sourceCoreNodeId && routeContract.targetNodeId === sourceCoreNodeId;
+}
+
+function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos) {
+  if (!game || !targetLane || !unit)
+    return { ok: false, reason: "Missing game, target lane, or unit" };
+
+  const routeContract = resolveRouteContractForUnit(game, targetLane, unit);
+  if (!routeContract.ok) {
+    log.error("[SpawnAudit][ServerRoute] rejected", {
+      unitId: unit && unit.id,
+      unitType: unit && unit.type,
+      targetLaneIndex: targetLane && targetLane.laneIndex,
+      sourceLaneIndex: unit && unit.sourceLaneIndex,
+      sourceBarracksKey: unit && (unit.sourceBarracksKey || unit.sourceBarracksId) || null,
+      spawnSourceType: resolveSpawnSourceTypeFromUnit(unit),
+      reason: routeContract.reason,
+    });
+    return routeContract;
+  }
+
+  const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const targetLaneIndex = targetLane.laneIndex;
+  const logicalX = spawnLogicalPos && Number.isFinite(spawnLogicalPos.x) ? Number(spawnLogicalPos.x) : SPAWN_X;
+  const logicalY = spawnLogicalPos && Number.isFinite(spawnLogicalPos.y) ? Number(spawnLogicalPos.y) : SPAWN_YG;
+
+  unit.spawnSourceType = routeContract.spawnSourceType;
+  unit.routeType = routeContract.routeType;
+  unit.routeStartNode = routeContract.sourceNodeId;
+  unit.routeTargetNode = routeContract.targetNodeId;
+  unit.routeSegments = routeContract.routeSegments;
+  unit.routeSegmentIndex = 0;
+  unit.segmentProgress = 0;
+  const startSample = sampleRoutePosition(unit.routeSegments, 0, 0, 0);
+  if (!startSample) {
+    const failure = {
+      ok: false,
+      reason: `Route sample is missing for path '${routeContract.pathId}'`,
+    };
+    log.error("[SpawnAudit][ServerRoute] rejected", {
+      unitId: unit.id,
+      unitType: unit.type,
+      targetLaneIndex,
+      sourceLaneIndex,
+      sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
+      spawnSourceType: unit.spawnSourceType,
+      reason: failure.reason,
+    });
+    return failure;
+  }
+  const routeTangent = normalize2D(startSample.tangent);
+  const routeLateral = perpendicular2D(routeTangent);
+  const originDelta = {
+    x: Number(routeContract.spawnOrigin.x) - Number(startSample.point.x),
+    y: Number(routeContract.spawnOrigin.y) - Number(startSample.point.y),
+  };
+  const formationLateralOffset = (logicalX - SPAWN_X) * ROUTE_FORMATION_COLUMN_SPACING;
+  const isHoldContract = isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneIndex);
+  const formationLongitudinalSign = isHoldContract ? 1 : -1;
+  const formationLongitudinalOffset = formationLongitudinalSign * logicalY * ROUTE_FORMATION_ROW_SPACING;
+  unit.routeLateralOffset = dot2D(originDelta, routeLateral) + formationLateralOffset;
+  unit.routeLongitudinalOffset = dot2D(originDelta, routeTangent) + formationLongitudinalOffset;
+  unit.stance = routeContract.spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+    ? UNIT_STANCES.ATTACK
+    : (isHoldContract ? UNIT_STANCES.HOLD : UNIT_STANCES.ATTACK);
+  unit.routeState = WAVE_UNIT_STATES.MOVING;
+  unit.combatState = WAVE_UNIT_STATES.MOVING;
+  unit.blockedByStructure = false;
+  unit.blockedByStructureId = null;
+  unit.blockedByStructureType = null;
+  if (!setUnitRouteSnapshotState(unit)) {
+    const failure = {
+      ok: false,
+      reason: `Failed to materialize path snapshot state for path '${routeContract.pathId}'`,
+    };
+    log.error("[SpawnAudit][ServerRoute] rejected", {
+      unitId: unit.id,
+      unitType: unit.type,
+      targetLaneIndex,
+      sourceLaneIndex,
+      sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
+      spawnSourceType: unit.spawnSourceType,
+      reason: failure.reason,
+    });
+    return failure;
+  }
+  applyCanonicalUnitMirrors(game, targetLane, unit);
+
+  log.info("[SpawnAudit][ServerRoute] assigned", {
+    unitId: unit.id,
+    unitType: unit.type,
+    spawnSourceType: unit.spawnSourceType,
+    sourceLaneIndex,
+    targetLaneIndex,
+    sourceBarracksKey: routeContract.barracksKey || null,
+    spawnOriginX: Number.isFinite(routeContract.spawnOrigin.x) ? Number(routeContract.spawnOrigin.x.toFixed(3)) : null,
+    spawnOriginY: Number.isFinite(routeContract.spawnOrigin.y) ? Number(routeContract.spawnOrigin.y.toFixed(3)) : null,
+    routeType: routeContract.routeType,
+    routeLabel: routeContract.routeLabel || routeContract.pathId,
+    routeStartNode: routeContract.sourceNodeId,
+    routeTargetNode: routeContract.targetNodeId,
+    pathId: routeContract.pathId,
+    currentWaypointIndex: unit.routeSegmentIndex,
+    nextWaypoint: resolveUnitNextWaypoint(unit),
+    movementState: unit.routeState,
+    currentSegment: unit.currentSegment || null,
+    segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
+    routeWorldX: Number.isFinite(unit.routeWorldX) ? Number(unit.routeWorldX.toFixed(3)) : null,
+    routeWorldY: Number.isFinite(unit.routeWorldY) ? Number(unit.routeWorldY.toFixed(3)) : null,
+    routeLateralOffset: Number.isFinite(unit.routeLateralOffset) ? Number(unit.routeLateralOffset.toFixed(3)) : null,
+    routeLongitudinalOffset: Number.isFinite(unit.routeLongitudinalOffset) ? Number(unit.routeLongitudinalOffset.toFixed(3)) : null,
+  });
+
+  return {
+    ok: true,
+    pathId: routeContract.pathId,
+  };
+}
+
+function applyRouteContractToExistingUnit(unit, routeContract, currentPosition = null) {
+  if (!unit || !routeContract || routeContract.ok === false)
+    return { ok: false, reason: "Missing unit or route contract" };
+  if (!Array.isArray(routeContract.routeSegments) || routeContract.routeSegments.length <= 0)
+    return { ok: false, reason: "Route contract is missing route segments" };
+
+  const startSample = sampleRoutePosition(routeContract.routeSegments, 0, 0, 0);
+  if (!startSample) {
+    return {
+      ok: false,
+      reason: `Route sample is missing for path '${routeContract.pathId || "<unknown>"}'`,
+    };
+  }
+
+  const routeTangent = normalize2D(startSample.tangent);
+  const routeLateral = perpendicular2D(routeTangent);
+  const safeCurrentPosition = currentPosition
+    && Number.isFinite(Number(currentPosition.x))
+    && Number.isFinite(Number(currentPosition.y))
+    ? { x: Number(currentPosition.x), y: Number(currentPosition.y) }
+    : { x: Number(unit.posX) || Number(startSample.point.x), y: Number(unit.posY) || Number(startSample.point.y) };
+  const originDelta = {
+    x: safeCurrentPosition.x - Number(startSample.point.x),
+    y: safeCurrentPosition.y - Number(startSample.point.y),
+  };
+
+  unit.routeType = routeContract.routeType;
+  unit.routeStartNode = routeContract.sourceNodeId;
+  unit.routeTargetNode = routeContract.targetNodeId;
+  unit.routeSegments = routeContract.routeSegments;
+  unit.routeSegmentIndex = 0;
+  unit.segmentProgress = 0;
+  unit.routeLateralOffset = dot2D(originDelta, routeLateral);
+  unit.routeLongitudinalOffset = dot2D(originDelta, routeTangent);
+  unit.stance = Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0
+      && Number.isInteger(unit.targetLaneIndex) && unit.sourceLaneIndex === unit.targetLaneIndex
+    ? UNIT_STANCES.HOLD
+    : UNIT_STANCES.ATTACK;
+  unit.routeState = WAVE_UNIT_STATES.MOVING;
+  unit.combatState = WAVE_UNIT_STATES.MOVING;
+  unit.combatTarget = null;
+  unit.blockedByStructure = false;
+  unit.blockedByStructureId = null;
+  unit.blockedByStructureType = null;
+  unit._missingRouteLogged = false;
+
+  if (!setUnitRouteSnapshotState(unit)) {
+    return {
+      ok: false,
+      reason: `Failed to materialize path snapshot state for path '${routeContract.pathId || "<unknown>"}'`,
+    };
+  }
+  applyCanonicalUnitMirrors(null, null, unit);
+
+  return {
+    ok: true,
+    pathId: routeContract.pathId || buildRoutePathId(routeContract.routeSegments),
+  };
+}
+
+function getUnitForwardDirection(unit) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
+    return { x: 0, y: 1 };
+  const sample = sampleRoutePosition(
+    unit.routeSegments,
+    unit.routeSegmentIndex,
+    unit.segmentProgress,
+    0
+  );
+  return sample ? sample.tangent : { x: 0, y: 1 };
+}
+
+function buildSampledPathFromSegments(routeSegments, sampleCount = 28) {
+  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
+    return [];
+
+  const safeCount = Math.max(2, Math.floor(Number(sampleCount) || 28));
+  const samples = [];
+  for (let i = 0; i < safeCount; i++) {
+    const distanceNorm = safeCount === 1 ? 0 : (i / (safeCount - 1));
+    const sample = sampleRouteByDistanceNorm(routeSegments, distanceNorm, 0);
+    if (!sample)
+      return [];
+    samples.push({
+      x: Number(sample.point.x.toFixed(3)),
+      y: Number(sample.point.y.toFixed(3)),
+    });
+  }
+  return samples;
+}
+
+function sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset = 0) {
+  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
+    return null;
+
+  const totalLength = Math.max(0.0001, getRouteLength(routeSegments));
+  let remainingDistance = Math.max(0, Math.min(1, Number(routeProgress) || 0)) * totalLength;
+
+  for (let i = 0; i < routeSegments.length; i++) {
+    const segmentId = routeSegments[i];
+    const segmentLength = Math.max(0.0001, ROUTE_SEGMENT_LENGTHS[segmentId] || 0.0001);
+    if (remainingDistance <= segmentLength || i === routeSegments.length - 1) {
+      return sampleRoutePosition(routeSegments, i, remainingDistance / segmentLength, lateralOffset);
+    }
+    remainingDistance -= segmentLength;
+  }
+
+  return sampleRoutePosition(routeSegments, routeSegments.length - 1, 1, lateralOffset);
+}
+
 // Warlock debuff constants (3-second window at 20 hz)
 const WARLOCK_DEBUFF_CD    = 60;  // ticks between debuff attempts
 const WARLOCK_DEBUFF_TICKS = 60;  // debuff duration in ticks
@@ -148,8 +1157,552 @@ const TOWER_DEFS = {};
 
 const BARRACKS_COST_BASE = 100;
 const BARRACKS_REQ_INCOME_BASE = 8;
+const BARRACKS_ROSTER_REFUND_PCT = 70;
+
+const FORTRESS_BUILD_STATES = Object.freeze({
+  locked: "locked",
+  availableToBuild: "available_to_build",
+  built: "built",
+  upgradeAvailable: "upgrade_available",
+  maxTier: "max_tier",
+});
+
+function createFortressPadDef(
+  padId,
+  buildingType,
+  displayName,
+  gridX,
+  gridY,
+  options = {}
+) {
+  return Object.freeze({
+    padId,
+    buildingType,
+    displayName,
+    gridX,
+    gridY,
+    combatOffsetX: Number.isFinite(Number(options.combatOffsetX))
+      ? Number(options.combatOffsetX)
+      : null,
+    combatOffsetY: Number.isFinite(Number(options.combatOffsetY))
+      ? Number(options.combatOffsetY)
+      : null,
+  });
+}
+
+const FORTRESS_WALL_PAD_LAYOUT = Object.freeze([
+  Object.freeze({ key: "front_left_01", displayName: "Front Left Wall 01", gridX: -2, gridY: 15, combatOffsetX: -4.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_left_02", displayName: "Front Left Wall 02", gridX: -1, gridY: 15, combatOffsetX: -3.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_left_03", displayName: "Front Left Wall 03", gridX: 0, gridY: 15, combatOffsetX: -2.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_left_04", displayName: "Front Left Wall 04", gridX: 1, gridY: 15, combatOffsetX: -1.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_left_06", displayName: "Front Left Wall 06", gridX: 2, gridY: 15, combatOffsetX: 0.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_left_07", displayName: "Front Left Wall 07", gridX: 3, gridY: 15, combatOffsetX: 1.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_right_01", displayName: "Front Right Wall 01", gridX: 4, gridY: 15, combatOffsetX: 2.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "front_right_02", displayName: "Front Right Wall 02", gridX: 5, gridY: 15, combatOffsetX: 3.0, combatOffsetY: 11.2 }),
+  Object.freeze({ key: "back_left_01", displayName: "Back Left Wall 01", gridX: -2, gridY: 29, combatOffsetX: -4.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_left_02", displayName: "Back Left Wall 02", gridX: -1, gridY: 29, combatOffsetX: -3.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_left_04", displayName: "Back Left Wall 04", gridX: 0, gridY: 29, combatOffsetX: -2.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_left_05", displayName: "Back Left Wall 05", gridX: 1, gridY: 29, combatOffsetX: -1.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_right_01", displayName: "Back Right Wall 01", gridX: 4, gridY: 29, combatOffsetX: 1.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_right_02", displayName: "Back Right Wall 02", gridX: 5, gridY: 29, combatOffsetX: 2.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "right_side_03", displayName: "Right Side Wall 03", gridX: 7, gridY: 17, combatOffsetX: 6.0, combatOffsetY: 9.0 }),
+  Object.freeze({ key: "right_side_04_a", displayName: "Right Side Wall 04A", gridX: 7, gridY: 19, combatOffsetX: 6.0, combatOffsetY: 7.0 }),
+  Object.freeze({ key: "right_side_04_b", displayName: "Right Side Wall 04B", gridX: 7, gridY: 21, combatOffsetX: 6.0, combatOffsetY: 5.0 }),
+  Object.freeze({ key: "right_side_05", displayName: "Right Side Wall 05", gridX: 7, gridY: 23, combatOffsetX: 6.0, combatOffsetY: 3.0 }),
+  Object.freeze({ key: "right_side_06", displayName: "Right Side Wall 06", gridX: 7, gridY: 25, combatOffsetX: 6.0, combatOffsetY: 1.0 }),
+  Object.freeze({ key: "right_side_07", displayName: "Right Side Wall 07", gridX: 7, gridY: 27, combatOffsetX: 6.0, combatOffsetY: -1.0 }),
+]);
+
+const FORTRESS_GATE_PAD_LAYOUT = Object.freeze([
+  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 16, combatOffsetX: 0.0, combatOffsetY: 10.2 }),
+  Object.freeze({ key: "left", displayName: "Left Gate", gridX: -3, gridY: 24, combatOffsetX: -6.0, combatOffsetY: 1.0 }),
+  Object.freeze({ key: "right", displayName: "Right Gate", gridX: 8, gridY: 24, combatOffsetX: 6.5, combatOffsetY: 1.0 }),
+  Object.freeze({ key: "rear", displayName: "Rear Gate", gridX: 3, gridY: 30, combatOffsetX: 0.0, combatOffsetY: -6.0 }),
+]);
+
+const FORTRESS_TURRET_PAD_LAYOUT = Object.freeze([
+  Object.freeze({ key: "front_left", displayName: "Front Left Tower", gridX: -2, gridY: 13, combatOffsetX: -5.0, combatOffsetY: 13.5 }),
+  Object.freeze({ key: "front_left_05", displayName: "Front Left Tower 05", gridX: 0, gridY: 12, combatOffsetX: -2.5, combatOffsetY: 14.5 }),
+  Object.freeze({ key: "front_right", displayName: "Front Right Tower", gridX: 6, gridY: 13, combatOffsetX: 5.0, combatOffsetY: 13.5 }),
+  Object.freeze({ key: "core_03", displayName: "Inner Tower 03", gridX: 1, gridY: 21, combatOffsetX: -2.5, combatOffsetY: 4.0 }),
+  Object.freeze({ key: "core_04", displayName: "Inner Tower 04", gridX: 3, gridY: 21, combatOffsetX: 0.0, combatOffsetY: 4.0 }),
+  Object.freeze({ key: "core_05", displayName: "Inner Tower 05", gridX: 5, gridY: 21, combatOffsetX: 2.5, combatOffsetY: 4.0 }),
+  Object.freeze({ key: "front_gate_left", displayName: "Front Gate Tower Left", gridX: 1, gridY: 14, combatOffsetX: -2.5, combatOffsetY: 12.0 }),
+  Object.freeze({ key: "front_gate_right", displayName: "Front Gate Tower Right", gridX: 5, gridY: 14, combatOffsetX: 2.5, combatOffsetY: 12.0 }),
+  Object.freeze({ key: "back_left_03", displayName: "Back Left Tower 03", gridX: -2, gridY: 27, combatOffsetX: -5.0, combatOffsetY: -3.0 }),
+  Object.freeze({ key: "back_left_06", displayName: "Back Left Tower 06", gridX: 0, gridY: 28, combatOffsetX: -2.5, combatOffsetY: -4.0 }),
+  Object.freeze({ key: "back_left_07", displayName: "Back Left Tower 07", gridX: 2, gridY: 29, combatOffsetX: -0.5, combatOffsetY: -5.0 }),
+  Object.freeze({ key: "back_right_03", displayName: "Back Right Tower 03", gridX: 6, gridY: 27, combatOffsetX: 5.0, combatOffsetY: -3.0 }),
+  Object.freeze({ key: "rear_gate_left", displayName: "Rear Gate Tower Left", gridX: 1, gridY: 30, combatOffsetX: -2.5, combatOffsetY: -6.5 }),
+  Object.freeze({ key: "rear_gate_right", displayName: "Rear Gate Tower Right", gridX: 5, gridY: 30, combatOffsetX: 2.5, combatOffsetY: -6.5 }),
+  Object.freeze({ key: "right_side_05", displayName: "Right Side Tower 05", gridX: 8, gridY: 17, combatOffsetX: 7.4, combatOffsetY: 9.0 }),
+  Object.freeze({ key: "right_side_06", displayName: "Right Side Tower 06", gridX: 8, gridY: 22, combatOffsetX: 7.4, combatOffsetY: 4.0 }),
+  Object.freeze({ key: "right_side_07", displayName: "Right Side Tower 07", gridX: 8, gridY: 27, combatOffsetX: 7.4, combatOffsetY: -1.0 }),
+]);
+
+const FORTRESS_BUILDING_DEFS = Object.freeze({
+  town_core: {
+    displayName: "Civic",
+    branchKey: "civic",
+    branchLabel: "Civic Progression",
+    tierDisplayNames: Object.freeze([null, "House", "Town Hall", "Keep", "Castle"]),
+    maxTier: 4,
+    startsBuilt: true,
+    requiredTownCoreTier: 1,
+    baseMaxHp: TEAM_HP_START,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 2, 4: 3 },
+    upgradeCosts: {
+      2: 70,
+      3: 110,
+      4: 165,
+    },
+  },
+  barracks: {
+    displayName: "Barracks",
+    branchKey: "barracks",
+    branchLabel: "Barracks",
+    tierDisplayNames: Object.freeze([null, "Barracks"]),
+    maxTier: 1,
+    startsBuilt: true,
+    requiredTownCoreTier: 1,
+    baseMaxHp: 260,
+  },
+  blacksmith: {
+    displayName: "Blacksmith",
+    branchKey: "blacksmith",
+    branchLabel: "Blacksmith",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    baseMaxHp: 225,
+    buildCost: 60,
+    upgradeCosts: {
+      2: 95,
+      3: 145,
+    },
+  },
+  archery_tower: {
+    displayName: "Archery Tower",
+    branchKey: "archery",
+    branchLabel: "Archery Tower",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    baseMaxHp: 190,
+    buildCost: 50,
+    upgradeCosts: {
+      2: 85,
+      3: 130,
+    },
+  },
+  temple: {
+    displayName: "Temple",
+    branchKey: "temple",
+    branchLabel: "Temple",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    baseMaxHp: 205,
+    buildCost: 70,
+    upgradeCosts: {
+      2: 105,
+      3: 160,
+    },
+  },
+  wizard_tower: {
+    displayName: "Wizard Tower",
+    branchKey: "wizard",
+    branchLabel: "Wizard Tower",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    baseMaxHp: 195,
+    buildCost: 75,
+    upgradeCosts: {
+      2: 115,
+      3: 170,
+    },
+  },
+  market: {
+    displayName: "Market",
+    branchKey: "market",
+    branchLabel: "Market",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    baseMaxHp: 200,
+    buildCost: 60,
+    upgradeCosts: {
+      2: 100,
+      3: 150,
+    },
+  },
+  stable: {
+    displayName: "Stable",
+    branchKey: "stable",
+    branchLabel: "Stable",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
+    baseMaxHp: 205,
+    buildCost: 60,
+    upgradeCosts: {
+      2: 100,
+      3: 150,
+    },
+  },
+  workshop: {
+    displayName: "Workshop",
+    branchKey: "workshop",
+    branchLabel: "Workshop",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
+    baseMaxHp: 205,
+    buildCost: 60,
+    upgradeCosts: {
+      2: 100,
+      3: 150,
+    },
+  },
+  library: {
+    displayName: "Library",
+    branchKey: "library",
+    branchLabel: "Library",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
+    baseMaxHp: 200,
+    buildCost: 60,
+    upgradeCosts: {
+      2: 100,
+      3: 150,
+    },
+  },
+  lumber_mill: {
+    displayName: "Lumber Mill",
+    branchKey: "lumber_mill",
+    branchLabel: "Lumber Mill",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiresLumberMill: false,
+    requiresTurretTier3: false,
+    baseMaxHp: 210,
+    buildCost: 50,
+    upgradeCosts: {
+      2: 80,
+      3: 125,
+    },
+  },
+  wall: {
+    displayName: "Wall",
+    branchKey: "wall",
+    branchLabel: "Walls",
+    progressionCategory: "Wall",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    dependencyRequirementsByTier: {
+      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
+      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
+    },
+    baseMaxHp: 180,
+    buildCost: 20,
+    upgradeCosts: {
+      2: 40,
+      3: 80,
+    },
+  },
+  gate: {
+    displayName: "Gate",
+    branchKey: "gate",
+    branchLabel: "Gates",
+    progressionCategory: "Gate",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    dependencyRequirementsByTier: {
+      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
+      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
+    },
+    baseMaxHp: 260,
+    buildCost: 20,
+    upgradeCosts: {
+      2: 40,
+      3: 80,
+    },
+  },
+  turret: {
+    displayName: "Turret",
+    branchKey: "base_tower",
+    branchLabel: "Base Towers",
+    progressionCategory: "BaseTower",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiresLumberMill: true,
+    requiresTurretTier3: false,
+    dependencyRequirementsByTier: {
+      1: Object.freeze([{ buildingType: "lumber_mill", minTier: 1 }]),
+    },
+    baseMaxHp: 210,
+    buildCost: 40,
+    upgradeCosts: {
+      2: 80,
+      3: 140,
+    },
+  },
+  tower_archer: {
+    displayName: "Archer Tower",
+    branchKey: "archer_tower",
+    branchLabel: "Archer Towers",
+    progressionCategory: "ArcherTower",
+    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
+    maxTier: 3,
+    startsBuilt: false,
+    requiredTownCoreTier: 1,
+    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiresLumberMill: false,
+    requiresTurretTier3: true,
+    dependencyRequirementsByTier: {
+      1: Object.freeze([{ buildingType: "turret", minTier: 3 }]),
+    },
+    baseMaxHp: 220,
+    buildCost: 180,
+    upgradeCosts: {
+      2: 260,
+      3: 380,
+    },
+  },
+});
+
+const FORTRESS_PAD_DEFS = Object.freeze([
+  createFortressPadDef("town_core_pad", "town_core", "Civic", 3, 25),
+  createFortressPadDef("barracks_pad", "barracks", "Barracks", 7, 25),
+  createFortressPadDef("blacksmith_pad", "blacksmith", "Blacksmith", 1, 20),
+  createFortressPadDef("temple_pad", "temple", "Temple", 5, 20),
+  createFortressPadDef("wizard_tower_pad", "wizard_tower", "Wizard Tower", 7, 20),
+  createFortressPadDef("archery_tower_pad", "archery_tower", "Archery Tower", 9, 20),
+  createFortressPadDef("market_pad", "market", "Market", 3, 20),
+  createFortressPadDef("stable_pad", "stable", "Stable", 1, 15),
+  createFortressPadDef("workshop_pad", "workshop", "Workshop", 3, 15),
+  createFortressPadDef("library_pad", "library", "Library", 5, 15),
+  createFortressPadDef("lumber_mill_pad", "lumber_mill", "Lumber Mill", 7, 15),
+  ...FORTRESS_WALL_PAD_LAYOUT.map((slot) => createFortressPadDef(
+    `wall_${slot.key}_pad`,
+    "wall",
+    slot.displayName,
+    slot.gridX,
+    slot.gridY,
+    {
+      combatOffsetX: slot.combatOffsetX,
+      combatOffsetY: slot.combatOffsetY,
+    }
+  )),
+  ...FORTRESS_GATE_PAD_LAYOUT.map((slot) => createFortressPadDef(
+    `gate_${slot.key}_pad`,
+    "gate",
+    slot.displayName,
+    slot.gridX,
+    slot.gridY,
+    {
+      combatOffsetX: slot.combatOffsetX,
+      combatOffsetY: slot.combatOffsetY,
+    }
+  )),
+  ...FORTRESS_TURRET_PAD_LAYOUT.map((slot) => createFortressPadDef(
+    `turret_${slot.key}_pad`,
+    "turret",
+    slot.displayName,
+    slot.gridX,
+    slot.gridY,
+    {
+      combatOffsetX: slot.combatOffsetX,
+      combatOffsetY: slot.combatOffsetY,
+    }
+  )),
+]);
+
+const BARRACKS_ROLE_SORT_ORDER = Object.freeze({
+  melee: 0,
+  ranged: 1,
+  support: 2,
+  siege: 3,
+});
+
+// Spawn queue rows advance toward the castle as spawnIndex grows, so queue support first
+// and melee last to produce the intended formation: melee front, ranged middle, support back.
+const BARRACKS_SPAWN_ROLE_ORDER = Object.freeze(["support", "ranged", "melee", "siege"]);
+
+const BARRACKS_SITE_DEFS = Object.freeze([
+  {
+    barracksId: "center",
+    displayName: "Barracks Center",
+    slot: "center",
+    sortIndex: 0,
+    startsBuilt: false,
+    buildCost: BARRACKS_COST_BASE,
+    legacyTierUnlock: 1,
+  },
+  {
+    barracksId: "left",
+    displayName: "Barracks Left",
+    slot: "left",
+    sortIndex: 1,
+    startsBuilt: false,
+    buildCost: BARRACKS_COST_BASE,
+    legacyTierUnlock: 2,
+  },
+  {
+    barracksId: "right",
+    displayName: "Barracks Right",
+    slot: "right",
+    sortIndex: 2,
+    startsBuilt: false,
+    buildCost: BARRACKS_COST_BASE,
+    legacyTierUnlock: 3,
+  },
+]);
+
+const BARRACKS_ROSTER_DEFS = Object.freeze([
+  { rosterKey: "militia", displayName: "Militia", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "barracks", requiredBuildingTier: 1, tier: 1, sortIndex: 10 },
+  { rosterKey: "spearman", displayName: "Spearman", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 1, tier: 1, sortIndex: 20 },
+  { rosterKey: "shieldman", displayName: "Shieldman", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 1, tier: 1, sortIndex: 30 },
+  { rosterKey: "swordsman", displayName: "Swordsman", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 40 },
+  { rosterKey: "halberdier", displayName: "Halberdier", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 50 },
+  { rosterKey: "shield_guard", displayName: "Shield Guard", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 60 },
+  { rosterKey: "knight", displayName: "Knight", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 70 },
+  { rosterKey: "lancer", displayName: "Lancer", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 80 },
+  { rosterKey: "guardian", displayName: "Guardian", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 90 },
+  { rosterKey: "cleric", displayName: "Cleric", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 1, tier: 1, sortIndex: 110 },
+  { rosterKey: "priest", displayName: "Priest", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 2, tier: 2, sortIndex: 120 },
+  { rosterKey: "high_priest", displayName: "High Priest", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 3, tier: 3, sortIndex: 130 },
+  { rosterKey: "mage", displayName: "Mage", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 1, tier: 1, sortIndex: 140 },
+  { rosterKey: "wizard", displayName: "Wizard", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 2, tier: 2, sortIndex: 150 },
+  { rosterKey: "thaumaturge", displayName: "Thaumaturge", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 3, tier: 3, sortIndex: 160 },
+  { rosterKey: "archer", displayName: "Archer", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 1, tier: 1, sortIndex: 170 },
+  { rosterKey: "crossbowman", displayName: "Crossbowman", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 2, tier: 2, sortIndex: 180 },
+  { rosterKey: "ranger", displayName: "Ranger", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 3, tier: 3, sortIndex: 190 },
+]);
+
+const HERO_ROSTER_DEFS = Object.freeze([
+  { heroKey: "king", displayName: "King", role: "hero", roleLabel: "Hero", spawnRole: "melee", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_king", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 70, cooldownTicks: 90 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "regal_gold", sortIndex: 10 },
+  { heroKey: "paladin", displayName: "Paladin", role: "hero", roleLabel: "Hero", spawnRole: "melee", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_paladin", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 60, cooldownTicks: 75 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "holy_silver", sortIndex: 20 },
+  { heroKey: "bishop", displayName: "Bishop", role: "hero", roleLabel: "Hero", spawnRole: "support", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_bishop", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 55, cooldownTicks: 65 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "radiant_bishop", sortIndex: 30 },
+]);
+
+const MARKET_ROSTER_DEFS = Object.freeze([
+  {
+    unitKey: "peasant",
+    displayName: "Peasant",
+    role: "economy",
+    roleLabel: "Economy",
+    branchKey: "market",
+    branchLabel: "Market",
+    productionBuildingType: "market",
+    archetypeKey: "economy_t1",
+    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
+    unlockBuildingType: "market",
+    requiredBuildingTier: 1,
+    tier: 1,
+    economyLapGold: 4,
+    routeStartBuildingType: "town_core",
+    routeEndBuildingType: "market",
+    nextUnitKey: "settler",
+    description: "Carries starter trade goods between the Town Core and Market.",
+    sortIndex: 10,
+  },
+  {
+    unitKey: "settler",
+    displayName: "Settler",
+    role: "economy",
+    roleLabel: "Economy",
+    branchKey: "market",
+    branchLabel: "Market",
+    productionBuildingType: "market",
+    archetypeKey: "economy_t2",
+    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
+    unlockBuildingType: "market",
+    requiredBuildingTier: 2,
+    tier: 2,
+    economyLapGold: 7,
+    routeStartBuildingType: "town_core",
+    routeEndBuildingType: "market",
+    nextUnitKey: "trader",
+    description: "Carries more goods and trade value than Peasants between the Town Core and Market.",
+    sortIndex: 20,
+  },
+  {
+    unitKey: "trader",
+    displayName: "Trader",
+    role: "economy",
+    roleLabel: "Economy",
+    branchKey: "market",
+    branchLabel: "Market",
+    productionBuildingType: "market",
+    archetypeKey: "economy_t3",
+    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
+    unlockBuildingType: "market",
+    requiredBuildingTier: 3,
+    tier: 3,
+    economyLapGold: 10,
+    routeStartBuildingType: "town_core",
+    routeEndBuildingType: "market",
+    nextUnitKey: null,
+    description: "Top-tier trade runner carrying the highest-value cargo between the Town Core and Market.",
+    sortIndex: 30,
+  },
+]);
 
 // ── Phase G: Ability system helpers ───────────────────────────────────────────
+
+function resolveFortPresentationConfig(archetypeKey, presentationKey = DEFAULT_FORT_PRESENTATION_KEY, fallbackDisplayName = null) {
+  const resolvedPresentationKey = presentationKey || DEFAULT_FORT_PRESENTATION_KEY;
+  const catalogUnitKey = resolveFortCatalogUnitKey(archetypeKey, resolvedPresentationKey);
+  const skinKey = resolveFortSkinKey(archetypeKey, resolvedPresentationKey);
+  const portraitKey = resolveFortPortraitKey(archetypeKey, resolvedPresentationKey);
+  const displayName = resolveFortDisplayName(archetypeKey, resolvedPresentationKey, fallbackDisplayName);
+  return {
+    archetypeKey,
+    presentationKey: resolvedPresentationKey,
+    catalogUnitKey,
+    skinKey,
+    portraitKey,
+    displayName,
+  };
+}
+
+function resolveGameplayCatalogUnitKey(unitKey, presentationKey = DEFAULT_FORT_PRESENTATION_KEY) {
+  if (!isFortArchetypeKey(unitKey))
+    return unitKey;
+
+  return resolveFortCatalogUnitKey(unitKey, presentationKey) || unitKey;
+}
 
 // Maps ability_key → hook category
 const ABILITY_HOOKS = {
@@ -246,7 +1799,8 @@ function translateAbilityParams(abilityKey, rawParams) {
  * @returns {object[]} abilities in sim-core format
  */
 function buildAbilitiesForUnitType(unitTypeKey) {
-  const ut = getUnitType(unitTypeKey);
+  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(unitTypeKey);
+  const ut = getUnitType(resolvedUnitTypeKey);
   if (!ut || !Array.isArray(ut.abilities) || ut.abilities.length === 0) return [];
   return ut.abilities.map((a, idx) => {
     const abilityKey = a.ability_key;
@@ -275,7 +1829,8 @@ function buildAbilitiesForUnitType(unitTypeKey) {
  * Returns null if the unit type is unknown or fixed-only.
  */
 function resolveUnitDef(key) {
-  const ut = getUnitType(key);
+  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(key);
+  const ut = getUnitType(resolvedUnitTypeKey);
   if (!ut) return null;
   if (Number(ut.send_cost) <= 0) return null;
   const sp = (ut.special_props && typeof ut.special_props === "object") ? ut.special_props : {};
@@ -305,7 +1860,8 @@ function resolveUnitDef(key) {
  * DB range is stored normalised to [0,1] × GRID_W.
  */
 function resolveTowerDef(key) {
-  const ut = getUnitType(key);
+  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(key);
+  const ut = getUnitType(resolvedUnitTypeKey);
   if (!ut) return null;
   const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
   const dbBehavior = ut.proj_behavior || null;
@@ -335,7 +1891,7 @@ function getBarracksLevelDef(level) {
     return {
       hpMult: 1,
       dmgMult: 1,
-      speedMult: 1,
+      speedMult: getBarracksSpeedMultForLevel(1),
       structMult: 1,
       unitCostMult: 1,
       unitIncomeMult: 1,
@@ -349,7 +1905,7 @@ function getBarracksLevelDef(level) {
   return {
     hpMult: statMult,
     dmgMult: statMult,
-    speedMult: 1,
+    speedMult: getBarracksSpeedMultForLevel(lvl),
     structMult: statMult,
     unitCostMult: statMult,
     unitIncomeMult: statMult,
@@ -359,8 +1915,417 @@ function getBarracksLevelDef(level) {
   };
 }
 
+function getBarracksSpeedMultForLevel(level) {
+  const lvl = Math.max(1, Math.floor(Number(level) || 1));
+  return BARRACKS_LEVEL_ONE_SPEED_MULT + ((lvl - 1) * SPEED_UPGRADE_STEP);
+}
+
 function getBarracksSpeedMult(_br) {
+  const br = _br && typeof _br === "object" ? _br : null;
+  if (br && Number.isFinite(br.speedMult))
+    return Math.max(0.01, Number(br.speedMult));
+  if (br && Number.isFinite(br.level))
+    return Math.max(0.01, getBarracksSpeedMultForLevel(br.level));
   return 1;
+}
+
+function getLaneWaveSpeedMult(lane) {
+  if (!lane || !Number.isFinite(Number(lane.waveSpeedMult)))
+    return 1;
+  return Math.max(0.01, Number(lane.waveSpeedMult));
+}
+
+function getBaseCombatPathSpeed(_unitTypeKey) {
+  return BASE_COMBAT_PATH_SPEED;
+}
+
+function normalizeAllegianceKey(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  switch (normalized) {
+    case "red":
+      return ALLEGIANCE_KEYS.RED;
+    case "gold":
+    case "yellow":
+      return ALLEGIANCE_KEYS.YELLOW;
+    case "blue":
+      return ALLEGIANCE_KEYS.BLUE;
+    case "green":
+      return ALLEGIANCE_KEYS.GREEN;
+    case "dungeon":
+      return ALLEGIANCE_KEYS.DUNGEON;
+    default:
+      return null;
+  }
+}
+
+function normalizeSpawnSourceType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  switch (normalized) {
+    case "scheduled_wave":
+    case "dungeon_wave":
+      return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+    case SPAWN_SOURCE_TYPES.BARRACKS_ROSTER:
+      return SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
+    case SPAWN_SOURCE_TYPES.BARRACKS_HERO:
+      return SPAWN_SOURCE_TYPES.BARRACKS_HERO;
+    default:
+      return null;
+  }
+}
+
+function normalizeUnitStance(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  switch (normalized) {
+    case UNIT_STANCES.DEFEND:
+      return UNIT_STANCES.DEFEND;
+    case UNIT_STANCES.ATTACK:
+    case "ADVANCE":
+      return UNIT_STANCES.ATTACK;
+    case UNIT_STANCES.HOLD:
+      return UNIT_STANCES.HOLD;
+    case "RETREAT":
+      return UNIT_STANCES.DEFEND;
+    default:
+      return null;
+  }
+}
+
+function isPlayerAllegianceKey(allegianceKey) {
+  return PLAYER_ALLEGIANCE_KEYS.has(normalizeAllegianceKey(allegianceKey));
+}
+
+function areAllegiancesHostile(a, b) {
+  const left = normalizeAllegianceKey(a);
+  const right = normalizeAllegianceKey(b);
+  if (!left || !right)
+    return false;
+  if (left === right)
+    return false;
+  if (left === ALLEGIANCE_KEYS.DUNGEON || right === ALLEGIANCE_KEYS.DUNGEON)
+    return true;
+  return isPlayerAllegianceKey(left) && isPlayerAllegianceKey(right);
+}
+
+function resolveLaneAllegianceKey(lane) {
+  if (!lane)
+    return null;
+  return normalizeAllegianceKey(lane.allegianceKey || lane.team || lane.slotColor);
+}
+
+function getSourceLane(game, sourceLaneIndex) {
+  if (!game || !Array.isArray(game.lanes) || !Number.isInteger(sourceLaneIndex))
+    return null;
+  if (sourceLaneIndex < 0 || sourceLaneIndex >= game.lanes.length)
+    return null;
+  return game.lanes[sourceLaneIndex] || null;
+}
+
+function resolveSpawnSourceTypeFromWaveDef(waveDef) {
+  const explicitSourceType = normalizeSpawnSourceType(waveDef && waveDef.spawnSourceType);
+  if (explicitSourceType)
+    return explicitSourceType;
+
+  if (waveDef && waveDef.isHero)
+    return SPAWN_SOURCE_TYPES.BARRACKS_HERO;
+
+  const sourceBarracksId = resolveUnitSourceBarracksId(waveDef);
+  if (waveDef && (sourceBarracksId
+      || Number.isInteger(waveDef.sourceLaneIndex) && waveDef.sourceLaneIndex >= 0))
+    return SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
+
+  if (waveDef && waveDef.isWaveUnit)
+    return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+
+  return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+}
+
+function resolveSpawnSourceTypeFromUnit(unit) {
+  const explicitSourceType = normalizeSpawnSourceType(unit && unit.spawnSourceType);
+  if (explicitSourceType)
+    return explicitSourceType;
+
+  if (unit && unit.isDefender)
+    return unit.isHero ? SPAWN_SOURCE_TYPES.BARRACKS_HERO : SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
+
+  return resolveSpawnSourceTypeFromWaveDef(unit);
+}
+
+function isScheduledWaveUnit(unit) {
+  return resolveSpawnSourceTypeFromUnit(unit) === SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+}
+
+function resolveUnitSourceBarracksId(unit) {
+  return normalizeBarracksSiteId(unit && (unit.sourceBarracksId || unit.sourceBarracksKey || unit.barracksId));
+}
+
+function resolveUnitTargetLaneIndex(game, fallbackLane, unit) {
+  if (Number.isInteger(unit && unit.targetLaneIndex))
+    return unit.targetLaneIndex;
+  if (Number.isInteger(unit && unit.laneId))
+    return unit.laneId;
+  if (fallbackLane && Number.isInteger(fallbackLane.laneIndex))
+    return fallbackLane.laneIndex;
+  if (Number.isInteger(unit && unit.ownerLaneIndex))
+    return unit.ownerLaneIndex;
+  return -1;
+}
+
+function resolveUnitOwnerLaneIndex(game, fallbackLane, unit) {
+  if (Number.isInteger(unit && unit.ownerLaneIndex))
+    return unit.ownerLaneIndex;
+  if (Number.isInteger(unit && unit.ownerLane))
+    return unit.ownerLane;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
+    return -1;
+
+  if (Number.isInteger(unit && unit.sourceLaneIndex))
+    return unit.sourceLaneIndex;
+
+  if (unit && unit.isDefender && fallbackLane && Number.isInteger(fallbackLane.laneIndex))
+    return fallbackLane.laneIndex;
+
+  return -1;
+}
+
+function resolveUnitStance(game, fallbackLane, unit) {
+  const explicitStance = normalizeUnitStance(unit && unit.stance);
+  if (explicitStance)
+    return explicitStance;
+
+  const explicitPathContractType = String(unit && unit.pathContractType || "").trim().toLowerCase();
+  if (explicitPathContractType === PATH_CONTRACT_TYPES.GUARD_ANCHOR
+      || explicitPathContractType === PATH_CONTRACT_TYPES.INTERCEPT)
+    return UNIT_STANCES.DEFEND;
+
+  if (unit && unit.isDefender)
+    return UNIT_STANCES.DEFEND;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
+    return UNIT_STANCES.ATTACK;
+
+  const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const targetLaneIndex = resolveUnitTargetLaneIndex(game, fallbackLane, unit);
+  if (sourceLaneIndex >= 0 && sourceLaneIndex === targetLaneIndex)
+    return UNIT_STANCES.HOLD;
+
+  return UNIT_STANCES.ATTACK;
+}
+
+function mapRouteTypeToPathContractType(routeType, barracksId) {
+  if (routeType === ROUTE_TYPES.WAVE_LANE)
+    return PATH_CONTRACT_TYPES.WAVE_LANE;
+  if (routeType === ROUTE_TYPES.CENTER_CROSS)
+    return PATH_CONTRACT_TYPES.BARRACKS_CROSS;
+  if (routeType === ROUTE_TYPES.OUTER_LOOP)
+    return PATH_CONTRACT_TYPES.BARRACKS_LOOP;
+
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  if (normalizedBarracksId === "center")
+    return PATH_CONTRACT_TYPES.BARRACKS_CROSS;
+  if (normalizedBarracksId === "left" || normalizedBarracksId === "right")
+    return PATH_CONTRACT_TYPES.BARRACKS_LOOP;
+  return null;
+}
+
+function resolveUnitPathContractType(game, fallbackLane, unit) {
+  const stance = resolveUnitStance(game, fallbackLane, unit);
+  if (stance === UNIT_STANCES.DEFEND)
+    return unit && (unit.combatTargetId || unit.combatTarget && unit.combatTarget.unitId)
+      ? PATH_CONTRACT_TYPES.INTERCEPT
+      : PATH_CONTRACT_TYPES.GUARD_ANCHOR;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
+    return PATH_CONTRACT_TYPES.WAVE_LANE;
+
+  return mapRouteTypeToPathContractType(unit && unit.routeType, resolveUnitSourceBarracksId(unit));
+}
+
+function resolveUnitAllegianceKey(game, fallbackLane, unit) {
+  const explicitAllegiance = normalizeAllegianceKey(unit && unit.allegianceKey);
+  if (explicitAllegiance)
+    return explicitAllegiance;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
+    return ALLEGIANCE_KEYS.DUNGEON;
+
+  const sourceTeam = normalizeAllegianceKey(unit && unit.sourceTeam);
+  if (sourceTeam)
+    return sourceTeam;
+
+  const sourceLane = getSourceLane(game, Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1);
+  const sourceLaneAllegiance = resolveLaneAllegianceKey(sourceLane);
+  if (sourceLaneAllegiance)
+    return sourceLaneAllegiance;
+
+  const ownerLane = getSourceLane(game, resolveUnitOwnerLaneIndex(game, fallbackLane, unit));
+  const ownerLaneAllegiance = resolveLaneAllegianceKey(ownerLane);
+  if (ownerLaneAllegiance)
+    return ownerLaneAllegiance;
+
+  return resolveLaneAllegianceKey(fallbackLane);
+}
+
+function resolveLegacySourceTeamFromAllegianceKey(allegianceKey) {
+  const canonical = normalizeAllegianceKey(allegianceKey);
+  return canonical === ALLEGIANCE_KEYS.DUNGEON
+    ? null
+    : canonical;
+}
+
+function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
+  if (!unit)
+    return unit;
+
+  const unitId = unit.id || unit.unitId || null;
+  const unitTypeKey = unit.type || unit.unitTypeKey || null;
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  const ownerLaneIndex = resolveUnitOwnerLaneIndex(game, fallbackLane, unit);
+  const targetLaneIndex = resolveUnitTargetLaneIndex(game, fallbackLane, unit);
+  const allegianceKey = resolveUnitAllegianceKey(game, fallbackLane, unit);
+  const pathContractType = resolveUnitPathContractType(game, fallbackLane, unit);
+  const sourceBarracksId = resolveUnitSourceBarracksId(unit);
+  const stance = resolveUnitStance(game, fallbackLane, unit);
+  const combatTargetId = unit.combatTargetId || (unit.combatTarget && unit.combatTarget.unitId) || null;
+  const isDefenderUnit = !!unit.isDefender || stance === UNIT_STANCES.DEFEND;
+
+  unit.unitId = unitId;
+  unit.id = unitId;
+  unit.unitTypeKey = unitTypeKey;
+  unit.type = unitTypeKey;
+  unit.spawnSourceType = spawnSourceType;
+  unit.allegianceKey = allegianceKey;
+  unit.ownerLaneIndex = ownerLaneIndex;
+  unit.ownerLane = ownerLaneIndex;
+  unit.targetLaneIndex = targetLaneIndex;
+  unit.laneId = targetLaneIndex;
+  unit.sourceBarracksId = sourceBarracksId;
+  unit.sourceBarracksKey = sourceBarracksId;
+  unit.barracksId = sourceBarracksId;
+  unit.heroKey = unit.heroKey || null;
+  unit.stance = stance;
+  unit.pathContractType = pathContractType;
+  unit.combatTargetId = combatTargetId;
+  unit.sourceTeam = resolveLegacySourceTeamFromAllegianceKey(allegianceKey);
+  unit.isWaveUnit = spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+  unit.isDefender = isDefenderUnit;
+  return unit;
+}
+
+function buildRoutePathId(routeSegments) {
+  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
+    return null;
+  return routeSegments.join(">");
+}
+
+function resolveUnitNextWaypoint(unit) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length <= 0)
+    return null;
+
+  const currentIndex = Math.max(0, Math.min(unit.routeSegments.length - 1, Math.floor(Number(unit.routeSegmentIndex) || 0)));
+  const segmentId = unit.routeSegments[currentIndex];
+  const parts = String(segmentId || "").split("_");
+  return parts.length === 2 ? parts[1] : null;
+}
+
+function dot2D(a, b) {
+  const ax = Number(a && a.x) || 0;
+  const ay = Number(a && a.y) || 0;
+  const bx = Number(b && b.x) || 0;
+  const by = Number(b && b.y) || 0;
+  return (ax * bx) + (ay * by);
+}
+
+function resolveCenteredFormationColumn(slotIndex) {
+  const centerColumn = Math.max(0, Math.min(GRID_W - 1, Math.floor(Number(SPAWN_X) || 0)));
+  const safeSlotIndex = Math.max(0, Math.floor(Number(slotIndex) || 0));
+  if (safeSlotIndex <= 0)
+    return centerColumn;
+
+  const step = Math.ceil(safeSlotIndex / 2);
+  const offset = safeSlotIndex % 2 === 1 ? -step : step;
+  return Math.max(0, Math.min(GRID_W - 1, centerColumn + offset));
+}
+
+function resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex) {
+  const safeSpawnIndex = Math.max(0, Math.floor(Number(resolvedSpawnIndex) || 0));
+  const row = Math.floor(safeSpawnIndex / GRID_W);
+  const slotInRow = safeSpawnIndex % GRID_W;
+  if (spawnType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE) {
+    return {
+      x: resolveCenteredFormationColumn(slotInRow),
+      y: row,
+    };
+  }
+
+  return {
+    x: slotInRow,
+    y: row,
+  };
+}
+
+function validateSpawnDefinition(game, targetLane, waveDef) {
+  const spawnType = resolveSpawnSourceTypeFromWaveDef(waveDef);
+  const requestedSpawnIndex = Number.isInteger(waveDef && waveDef.spawnIndex)
+    ? waveDef.spawnIndex
+    : Math.max(0, targetLane && Array.isArray(targetLane.spawnQueue) ? targetLane.spawnQueue.length : 0);
+  const resolvedSpawnIndex = Math.max(0, requestedSpawnIndex);
+  const logicalPos = resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex);
+  const sourceLaneIndex = Number.isInteger(waveDef && waveDef.sourceLaneIndex) ? waveDef.sourceLaneIndex : -1;
+  const sourceLane = getSourceLane(game, sourceLaneIndex);
+  const sourceBarracksKey = normalizeBarracksSiteId(
+    waveDef && (waveDef.sourceBarracksKey || waveDef.sourceBarracksId)
+  );
+  const sourceTeam = normalizeAllegianceKey(waveDef && waveDef.sourceTeam);
+
+  if (!targetLane)
+    return { ok: false, reason: "Missing target lane", spawnType };
+
+  if (logicalPos.x < 0 || logicalPos.x >= GRID_W || logicalPos.y < 0)
+    return { ok: false, reason: "Resolved spawn index is out of legal queue bounds", spawnType };
+
+  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && !sourceLane)
+    return { ok: false, reason: "Spawn source lane is missing", spawnType };
+
+  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && !sourceBarracksKey)
+    return { ok: false, reason: "Spawn source barracks id is missing", spawnType };
+
+  if ((spawnType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER || spawnType === SPAWN_SOURCE_TYPES.BARRACKS_HERO)
+      && sourceLane && sourceTeam && resolveLaneAllegianceKey(sourceLane) !== sourceTeam)
+    return { ok: false, reason: "Spawn source team does not match source lane ownership", spawnType };
+
+  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && sourceLane) {
+    const descriptor = describeBarracksSite(game, sourceLane, sourceBarracksKey);
+    if (!descriptor || !descriptor.isBuilt)
+      return { ok: false, reason: "Spawn source barracks does not exist or is not built on the source lane", spawnType };
+  }
+
+  if (spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE && !getWaveSpawnWorldPosition(targetLane.laneIndex))
+    return { ok: false, reason: "Wave spawn origin is missing for the target lane", spawnType };
+
+  return {
+    ok: true,
+    spawnType,
+    sourceLaneIndex,
+    sourceTeam,
+    sourceBarracksKey,
+    requestedSpawnIndex,
+    resolvedSpawnIndex,
+    logicalPos,
+  };
+}
+
+function getEffectiveWaveEntrySpeedMult(game, lane, waveDef) {
+  const safeWaveDef = waveDef && typeof waveDef === "object" ? waveDef : {};
+  const authoredSpeedMult = Math.max(0.01, Number(safeWaveDef.speed_mult || 1));
+  const sourceLane = getSourceLane(game, safeWaveDef.sourceLaneIndex);
+  if (sourceLane)
+    return authoredSpeedMult * getBarracksSpeedMult(sourceLane.barracks);
+  return authoredSpeedMult * getLaneWaveSpeedMult(lane);
 }
 
 function getBarracksUnitCostMult(br) {
@@ -375,6 +2340,1527 @@ function getBarracksUnitIncomeMult(br) {
   if (Number.isFinite(br.unitIncomeMult)) return Math.max(0, Number(br.unitIncomeMult));
   if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
   return 1;
+}
+
+function getFortressMaxTier(buildingType) {
+  if (buildingType === "barracks")
+    return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
+
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  return buildingDef ? Math.max(1, Math.floor(Number(buildingDef.maxTier) || 1)) : 1;
+}
+
+function createFortressPadStates(teamHpStart) {
+  return FORTRESS_PAD_DEFS.map((padDef) => {
+    const buildingDef = FORTRESS_BUILDING_DEFS[padDef.buildingType];
+    const tier = buildingDef && buildingDef.startsBuilt ? 1 : 0;
+    const maxHp = tier > 0
+      ? resolveFortressBuildingMaxHp(padDef.buildingType, tier, teamHpStart)
+      : 0;
+    return {
+      padId: padDef.padId,
+      buildingType: padDef.buildingType,
+      displayName: padDef.displayName,
+      gridX: padDef.gridX,
+      gridY: padDef.gridY,
+      combatOffsetX: Number.isFinite(Number(padDef.combatOffsetX))
+        ? Number(padDef.combatOffsetX)
+        : null,
+      combatOffsetY: Number.isFinite(Number(padDef.combatOffsetY))
+        ? Number(padDef.combatOffsetY)
+        : null,
+      tier,
+      maxHp,
+      hp: maxHp,
+      costHistory: tier > 0 ? [] : null,
+    };
+  });
+}
+
+function createBarracksRosterCounts() {
+  const counts = {};
+  for (const def of BARRACKS_ROSTER_DEFS) counts[def.rosterKey] = 0;
+  return counts;
+}
+
+function createBarracksSiteRosterCounts() {
+  const siteCounts = {};
+  for (const siteDef of BARRACKS_SITE_DEFS)
+    siteCounts[siteDef.barracksId] = createBarracksRosterCounts();
+  return siteCounts;
+}
+
+function getBarracksSiteDef(barracksId) {
+  return BARRACKS_SITE_DEFS.find((entry) => entry && entry.barracksId === barracksId) || null;
+}
+
+function normalizeBarracksSiteId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  switch (raw) {
+    case "left":
+    case "left_barracks":
+    case "barracks_left":
+      return "left";
+    case "right":
+    case "right_barracks":
+    case "barracks_right":
+      return "right";
+    case "center":
+    case "centre":
+    case "center_barracks":
+    case "barracks_center":
+    case "barracks_centre":
+      return "center";
+    default:
+      return "";
+  }
+}
+
+function summarizeBarracksSiteCounts(siteCounts) {
+  if (!siteCounts || typeof siteCounts !== "object") return "<missing>";
+  const entries = Object.entries(siteCounts)
+    .map(([rosterKey, count]) => ({
+      rosterKey,
+      ownedCount: Math.max(0, Math.floor(Number(count) || 0)),
+    }))
+    .filter((entry) => entry.ownedCount > 0)
+    .sort((a, b) => String(a.rosterKey).localeCompare(String(b.rosterKey)));
+  if (entries.length === 0) return "<empty>";
+  return entries.map((entry) => `${entry.rosterKey}:${entry.ownedCount}`).join(",");
+}
+
+function summarizeBarracksSiteRosterEntries(rosterEntries) {
+  if (!Array.isArray(rosterEntries)) return "<missing>";
+  const entries = rosterEntries
+    .filter((entry) => entry && Math.max(0, Math.floor(Number(entry.ownedCount) || 0)) > 0)
+    .map((entry) => `${entry.rosterKey}:${Math.max(0, Math.floor(Number(entry.ownedCount) || 0))}`);
+  return entries.length > 0 ? entries.join(",") : "<empty>";
+}
+
+function logBarracksRosterState(lane, reason) {
+  if (!lane) return;
+  const summary = BARRACKS_SITE_DEFS
+    .map((siteDef) => {
+      const siteCounts = lane.barracksSiteRosterCounts && lane.barracksSiteRosterCounts[siteDef.barracksId];
+      return `${siteDef.barracksId}=${summarizeBarracksSiteCounts(siteCounts)}`;
+    })
+    .join(" ");
+  console.log(
+    `[BarracksTrace][ServerRoster] lane=${lane.laneIndex} reason='${reason}' ${summary}`);
+}
+
+function getBarracksSiteCounts(lane, barracksId) {
+  if (!lane) return null;
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedId)
+    return null;
+  if (!lane.barracksSiteRosterCounts || typeof lane.barracksSiteRosterCounts !== "object")
+    lane.barracksSiteRosterCounts = createBarracksSiteRosterCounts();
+
+  if (!lane.barracksSiteRosterCounts[normalizedId])
+    lane.barracksSiteRosterCounts[normalizedId] = createBarracksRosterCounts();
+
+  return lane.barracksSiteRosterCounts[normalizedId];
+}
+
+function hasOwnedBarracksUnits(lane, barracksId) {
+  const siteCounts = getBarracksSiteCounts(lane, barracksId);
+  if (!siteCounts) return false;
+  for (const value of Object.values(siteCounts)) {
+    if (Math.max(0, Math.floor(Number(value) || 0)) > 0)
+      return true;
+  }
+  return false;
+}
+
+function getBarracksSiteTierRequirement(siteDef) {
+  return siteDef ? Math.max(1, Math.floor(Number(siteDef.legacyTierUnlock) || 1)) : 1;
+}
+
+function getBarracksSiteBuildCost(siteDef) {
+  return siteDef ? Math.max(0, Math.floor(Number(siteDef.buildCost) || 0)) : 0;
+}
+
+function getBarracksSiteMaxLevel() {
+  return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
+}
+
+function normalizeBarracksSiteLevel(level) {
+  return Math.min(
+    getBarracksSiteMaxLevel(),
+    Math.max(1, Math.floor(Number(level) || 1))
+  );
+}
+
+function getBarracksSiteBaseMaxHp() {
+  const buildingDef = FORTRESS_BUILDING_DEFS.barracks;
+  return Math.max(1, Math.floor(Number(buildingDef && buildingDef.baseMaxHp) || 260));
+}
+
+function getBarracksSiteSendIntervalTicks(level) {
+  const safeLevel = normalizeBarracksSiteLevel(level);
+  const seconds = Math.max(5, 30 - ((safeLevel - 1) * 10));
+  return seconds * TICK_HZ;
+}
+
+function createBarracksSiteState(siteDef, options = {}) {
+  const built = !!options.isBuilt;
+  const level = built ? normalizeBarracksSiteLevel(options.level) : 0;
+  const baseMaxHp = getBarracksSiteBaseMaxHp();
+  const interval = level > 0 ? getBarracksSiteSendIntervalTicks(level) : 0;
+  const maxHp = built ? baseMaxHp : 0;
+  const hp = built
+    ? Math.max(0, Math.min(maxHp, Math.floor(Number(options.hp) || maxHp)))
+    : 0;
+
+  return {
+    barracksId: siteDef.barracksId,
+    isBuilt: built,
+    level,
+    hp,
+    maxHp,
+    nextSendTick: built
+      ? Math.max(1, Math.floor(Number(options.nextSendTick) || interval))
+      : 0,
+    costHistory: Array.isArray(options.costHistory) ? options.costHistory.slice() : [],
+  };
+}
+
+function createBarracksSiteStates(_teamHpStart, legacyBarracksLevel = 1) {
+  const states = {};
+  const safeLegacyLevel = normalizeBarracksSiteLevel(legacyBarracksLevel);
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const built = !!siteDef.startsBuilt;
+    states[siteDef.barracksId] = createBarracksSiteState(siteDef, {
+      isBuilt: built,
+      level: built ? safeLegacyLevel : 0,
+      hp: built ? getBarracksSiteBaseMaxHp() : 0,
+      nextSendTick: built ? getBarracksSiteSendIntervalTicks(safeLegacyLevel) : 0,
+    });
+  }
+  return states;
+}
+
+function syncLegacyBarracksAggregate(lane) {
+  if (!lane) return;
+
+  const states = lane.barracksSiteStates && typeof lane.barracksSiteStates === "object"
+    ? Object.values(lane.barracksSiteStates)
+    : [];
+  let aggregateLevel = 1;
+  for (const state of states) {
+    if (!state || !state.isBuilt) continue;
+    aggregateLevel = Math.max(aggregateLevel, normalizeBarracksSiteLevel(state.level));
+  }
+
+  lane.barracks = Object.assign({ level: aggregateLevel }, getBarracksLevelDef(aggregateLevel));
+}
+
+function ensureBarracksSiteStates(lane, game) {
+  if (!lane) return {};
+
+  const legacyBarracksLevel = normalizeBarracksSiteLevel(
+    lane.barracks && lane.barracks.level
+  );
+  const legacyNextSendTick = game && Number.isInteger(game.nextBarracksSendTick)
+    ? game.nextBarracksSendTick
+    : null;
+  const existing = lane.barracksSiteStates && typeof lane.barracksSiteStates === "object"
+    ? lane.barracksSiteStates
+    : {};
+  const next = {};
+
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const siteId = siteDef.barracksId;
+    const current = existing[siteId];
+    const shouldStartBuilt = !!siteDef.startsBuilt
+      || hasOwnedBarracksUnits(lane, siteId)
+      || legacyBarracksLevel >= getBarracksSiteTierRequirement(siteDef);
+
+    if (current && typeof current === "object") {
+      const built = !!current.isBuilt || hasOwnedBarracksUnits(lane, siteId);
+      next[siteId] = createBarracksSiteState(siteDef, {
+        isBuilt: built,
+        level: built ? (current.level || legacyBarracksLevel) : 0,
+        hp: current.hp,
+        nextSendTick: current.nextSendTick,
+        costHistory: current.costHistory,
+      });
+      continue;
+    }
+
+    next[siteId] = createBarracksSiteState(siteDef, {
+      isBuilt: shouldStartBuilt,
+      level: shouldStartBuilt ? legacyBarracksLevel : 0,
+      hp: shouldStartBuilt ? getBarracksSiteBaseMaxHp() : 0,
+      nextSendTick: shouldStartBuilt ? legacyNextSendTick : 0,
+    });
+  }
+
+  lane.barracksSiteStates = next;
+  syncLegacyBarracksAggregate(lane);
+  return next;
+}
+
+function getBarracksSiteState(lane, barracksId, game) {
+  if (!lane) return null;
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedId) return null;
+
+  const states = ensureBarracksSiteStates(lane, game);
+  return states[normalizedId] || null;
+}
+
+function describeBarracksSite(game, lane, barracksId) {
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedId) return null;
+
+  const siteDef = getBarracksSiteDef(normalizedId);
+  const siteState = getBarracksSiteState(lane, normalizedId, game);
+  if (!siteDef || !siteState) return null;
+
+  const built = !!siteState.isBuilt;
+  const level = built ? normalizeBarracksSiteLevel(siteState.level) : 0;
+  const maxLevel = getBarracksSiteMaxLevel();
+  const nextLevel = built ? Math.min(maxLevel, level + 1) : 1;
+  const townCoreTier = getTownCoreTier(lane);
+  const requiredTownCoreTier = getFortressRequiredTownCoreTier("barracks", nextLevel);
+  const canBuild = !built && townCoreTier >= requiredTownCoreTier;
+  const canUpgrade = built && level < maxLevel && townCoreTier >= requiredTownCoreTier;
+
+  let buildState = FORTRESS_BUILD_STATES.locked;
+  if (!built) {
+    buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
+  } else if (level >= maxLevel) {
+    buildState = FORTRESS_BUILD_STATES.maxTier;
+  } else if (canUpgrade) {
+    buildState = FORTRESS_BUILD_STATES.upgradeAvailable;
+  } else {
+    buildState = FORTRESS_BUILD_STATES.built;
+  }
+
+  let lockedReason = null;
+  if (!built && !canBuild) {
+    lockedReason = `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+  } else if (built && level < maxLevel && !canUpgrade) {
+    lockedReason = `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+  }
+
+  const sendIntervalTicks = built ? getBarracksSiteSendIntervalTicks(level) : getBarracksSiteSendIntervalTicks(1);
+  if (built && (!Number.isInteger(siteState.nextSendTick) || siteState.nextSendTick <= 0)) {
+    const baseTick = game ? Math.floor(Number(game.tick) || 0) : 0;
+    siteState.nextSendTick = baseTick + sendIntervalTicks;
+  }
+
+  const sendTimerTicksRemaining = built && game
+    ? Math.max(0, Math.floor(Number(siteState.nextSendTick) || 0) - Math.floor(Number(game.tick) || 0))
+    : 0;
+  const nextDef = built && level < maxLevel ? getBarracksUpgradeDef(nextLevel) : null;
+  const upgradeCost = built && level < maxLevel
+    ? Math.max(
+        0,
+        Math.floor(
+          Number(nextDef && nextDef.upgradeCost) || getFortressUpgradeCost("barracks", nextLevel) || 0
+        )
+      )
+    : 0;
+
+  return {
+    siteDef,
+    siteState,
+    isBuilt: built,
+    level,
+    maxLevel,
+    buildState,
+    canBuild,
+    canUpgrade,
+    buildCost: getBarracksSiteBuildCost(siteDef),
+    upgradeCost,
+    requiredTownCoreTier,
+    lockedReason,
+    sendIntervalTicks,
+    sendTimerTicksRemaining,
+    sendTimerTotalTicks: built ? sendIntervalTicks : 0,
+  };
+}
+
+function getBarracksSiteLockedReason(siteDef) {
+  return siteDef ? `${siteDef.displayName} is not available yet.` : "Barracks unavailable";
+}
+
+function isBarracksSiteAvailable(lane, barracksId) {
+  const descriptor = describeBarracksSite(null, lane, barracksId);
+  return !!(descriptor && descriptor.isBuilt);
+}
+
+function getBarracksRosterLockedReason(rosterDef) {
+  if (!rosterDef) return "Locked";
+  const buildingDef = FORTRESS_BUILDING_DEFS[rosterDef.unlockBuildingType];
+  const buildingName = buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType;
+  const tierName = getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier);
+  if (String(buildingName || "").trim().toLowerCase() === String(tierName || "").trim().toLowerCase())
+    return `${buildingName} required`;
+  return `${buildingName}: ${tierName}`;
+}
+
+function getBuiltBarracksSiteTier(lane, barracksId) {
+  const descriptor = describeBarracksSite(null, lane, barracksId);
+  if (!descriptor || !descriptor.isBuilt)
+    return 0;
+
+  return Math.max(1, Math.floor(Number(descriptor.level) || 1));
+}
+
+function getHighestBuiltBarracksSiteTier(lane) {
+  let highestTier = 0;
+  for (const siteDef of BARRACKS_SITE_DEFS)
+    highestTier = Math.max(highestTier, getBuiltBarracksSiteTier(lane, siteDef.barracksId));
+
+  return highestTier;
+}
+
+function resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId = null) {
+  const requiredBuildingTier = Math.max(1, Math.floor(Number(rosterDef && rosterDef.requiredBuildingTier) || 1));
+  const unlockBuildingType = String((rosterDef && rosterDef.unlockBuildingType) || "").trim().toLowerCase();
+
+  if (unlockBuildingType === "barracks") {
+    const unlockTier = barracksId
+      ? getBuiltBarracksSiteTier(lane, barracksId)
+      : getHighestBuiltBarracksSiteTier(lane);
+    return {
+      unlockPad: null,
+      unlockPadId: null,
+      unlockTier,
+      unlocked: unlockTier >= requiredBuildingTier,
+      buildingDef: FORTRESS_BUILDING_DEFS.barracks || null,
+    };
+  }
+
+  const unlockPad = getFortressPadByBuildingType(lane, rosterDef && rosterDef.unlockBuildingType);
+  const unlockTier = getHighestBuiltFortressPadTier(lane, rosterDef && rosterDef.unlockBuildingType);
+  return {
+    unlockPad,
+    unlockPadId: unlockPad ? unlockPad.padId : null,
+    unlockTier,
+    unlocked: unlockTier >= requiredBuildingTier,
+    buildingDef: FORTRESS_BUILDING_DEFS[rosterDef && rosterDef.unlockBuildingType] || null,
+  };
+}
+
+function getHeroRosterDefinition(heroKey) {
+  return HERO_ROSTER_DEFS.find((entry) => entry.heroKey === heroKey) || null;
+}
+
+function getHeroRosterLockedReason(heroDef) {
+  if (!heroDef) return "Hero locked";
+  const buildingDef = FORTRESS_BUILDING_DEFS[heroDef.unlockBuildingType];
+  const tierName = getBuildingTierDisplayName(heroDef.unlockBuildingType, heroDef.requiredBuildingTier);
+  if (buildingDef && heroDef.requiredBuildingTier > 0)
+    return `${buildingDef.displayName}: ${tierName}`;
+  return "Castle required";
+}
+
+function getFortressPadState(lane, padId) {
+  if (!lane || !Array.isArray(lane.fortressPads)) return null;
+  return lane.fortressPads.find((pad) => pad && pad.padId === padId) || null;
+}
+
+function getFortressPadByBuildingType(lane, buildingType) {
+  if (!lane || !Array.isArray(lane.fortressPads)) return null;
+  return lane.fortressPads.find((pad) => pad && pad.buildingType === buildingType) || null;
+}
+
+function getHighestBuiltFortressPadTier(lane, buildingType) {
+  if (!lane || !Array.isArray(lane.fortressPads) || !buildingType)
+    return 0;
+
+  let bestTier = 0;
+  for (const pad of lane.fortressPads) {
+    if (!pad || pad.buildingType !== buildingType)
+      continue;
+    bestTier = Math.max(bestTier, Math.max(0, Math.floor(Number(pad.tier) || 0)));
+  }
+  return bestTier;
+}
+
+function getTownCoreTier(lane) {
+  return Math.max(1, getHighestBuiltFortressPadTier(lane, "town_core") || 1);
+}
+
+function getLaneTownCorePad(lane) {
+  return getFortressPadByBuildingType(lane, "town_core");
+}
+
+function getLaneTownCoreHp(lane) {
+  const corePad = getLaneTownCorePad(lane);
+  return corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0;
+}
+
+function getLaneTownCoreMaxHp(lane) {
+  const corePad = getLaneTownCorePad(lane);
+  return corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1;
+}
+
+function buildTownCoreStateSummary(game) {
+  if (!game || !Array.isArray(game.lanes)) return [];
+  return game.lanes.map((lane) => {
+    const corePad = getLaneTownCorePad(lane);
+    return {
+      laneIndex: lane ? lane.laneIndex : null,
+      side: lane ? lane.side : null,
+      eliminated: !!(lane && lane.eliminated),
+      corePadId: corePad ? corePad.padId : null,
+      coreHp: corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0,
+      coreMaxHp: corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1,
+      waveUnits: lane && Array.isArray(lane.units)
+        ? lane.units.filter((unit) => unit && unit.hp > 0 && isScheduledWaveUnit(unit)).length
+        : 0,
+      defenders: lane && Array.isArray(lane.units)
+        ? lane.units.filter((unit) => unit && unit.hp > 0 && unit.isDefender).length
+        : 0,
+    };
+  });
+}
+
+function getFortressPadCombatTarget(lane, padState, positionOverride = null) {
+  if (!lane || !padState) return null;
+  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+  if (currentTier <= 0)
+    return null;
+  const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
+  if (currentHp <= 0) return null;
+  const fallbackPos = Number.isFinite(Number(padState.combatOffsetX))
+    && Number.isFinite(Number(padState.combatOffsetY))
+    ? (() => {
+        const axes = getLaneCombatAxes(lane.laneIndex);
+        if (!axes)
+          return getPadWorldPosition(lane.laneIndex, padState.gridX, padState.gridY);
+        return {
+          x: axes.core.x + (axes.lateral.x * Number(padState.combatOffsetX)) + (axes.forward.x * Number(padState.combatOffsetY)),
+          y: axes.core.y + (axes.lateral.y * Number(padState.combatOffsetX)) + (axes.forward.y * Number(padState.combatOffsetY)),
+        };
+      })()
+    : getPadWorldPosition(lane.laneIndex, padState.gridX, padState.gridY);
+  const pos = positionOverride && Number.isFinite(positionOverride.x) && Number.isFinite(positionOverride.y)
+    ? { x: Number(positionOverride.x), y: Number(positionOverride.y) }
+    : fallbackPos;
+  return {
+    id: padState.padId,
+    unitId: padState.padId,
+    kind: "fortress_pad",
+    padId: padState.padId,
+    buildingType: padState.buildingType,
+    type: padState.buildingType,
+    posX: pos.x,
+    posY: pos.y,
+    hp: currentHp,
+    maxHp: Math.max(1, Math.floor(Number(padState.maxHp) || 1)),
+  };
+}
+
+function getBarracksSiteCombatTarget(lane, barracksId) {
+  const descriptor = describeBarracksSite(null, lane, barracksId);
+  if (!descriptor || !descriptor.isBuilt || !descriptor.siteState)
+    return null;
+
+  const hp = Math.max(0, Math.floor(Number(descriptor.siteState.hp) || 0));
+  if (hp <= 0)
+    return null;
+
+  const pos = getBarracksSiteWorldPosition(lane.laneIndex, barracksId);
+  if (!pos)
+    return null;
+  return {
+    id: `barracks_site:${descriptor.siteState.barracksId}`,
+    unitId: `barracks_site:${descriptor.siteState.barracksId}`,
+    kind: "fortress_pad",
+    padId: `barracks_site:${descriptor.siteState.barracksId}`,
+    barracksId: descriptor.siteState.barracksId,
+    buildingType: "barracks_site",
+    type: "barracks",
+    posX: pos.x,
+    posY: pos.y,
+    hp,
+    maxHp: Math.max(1, Math.floor(Number(descriptor.siteState.maxHp) || 1)),
+  };
+}
+
+function getLaneTownCoreCombatTarget(lane) {
+  const corePad = getLaneTownCorePad(lane);
+  const objectivePoint = corePad ? getPadWorldPosition(lane.laneIndex, corePad.gridX, corePad.gridY) : null;
+  return getFortressPadCombatTarget(lane, corePad, objectivePoint);
+}
+
+function getBuildingTierDisplayName(buildingType, tier) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  const safeTier = Math.max(0, Math.floor(Number(tier) || 0));
+  const tierNames = buildingDef && buildingDef.tierDisplayNames;
+  if (Array.isArray(tierNames) && tierNames[safeTier])
+    return String(tierNames[safeTier]);
+  return safeTier > 0 ? `Tier ${safeTier}` : "Unbuilt";
+}
+
+function getBuildingBranchLabel(buildingType) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  return buildingDef && String(buildingDef.branchLabel || "").trim() !== ""
+    ? buildingDef.branchLabel
+    : buildingDef && buildingDef.displayName
+      ? buildingDef.displayName
+      : buildingType;
+}
+
+function getBuildingDisplayName(buildingType) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  return buildingDef && String(buildingDef.displayName || "").trim() !== ""
+    ? buildingDef.displayName
+    : buildingType;
+}
+
+function isHeroUnlockedForLane(lane, heroDef) {
+  if (!lane || !heroDef)
+    return false;
+
+  const unlockTier = getHighestBuiltFortressPadTier(lane, heroDef.unlockBuildingType);
+  return unlockTier >= Math.max(1, Math.floor(Number(heroDef.requiredBuildingTier) || 1));
+}
+
+function getHeroDisabledReason(game, lane, heroDef) {
+  if (!lane || !heroDef)
+    return "Hero unavailable";
+
+  if (!isHeroUnlockedForLane(lane, heroDef))
+    return getHeroRosterLockedReason(heroDef);
+
+  if (countBuiltBarracksSites(lane) <= 0)
+    return "Buy a Barracks to summon heroes";
+
+  const cooldownReadyTick = getHeroCooldownReadyTick(lane, heroDef.heroKey);
+  const currentTick = Math.floor(Number(game && game.tick) || 0);
+  if (cooldownReadyTick > currentTick) {
+    const secondsRemaining = Math.max(0, Math.ceil((cooldownReadyTick - currentTick) / Math.max(1, TICK_HZ)));
+    return `Cooldown ${secondsRemaining}s`;
+  }
+
+  const activeLimit = Math.max(0, Math.floor(Number(heroDef.activeLimit) || 0));
+  const activeCount = countActiveHeroDeployments(game, lane.laneIndex, heroDef.heroKey);
+  if (activeLimit > 0 && activeCount >= activeLimit)
+    return `${heroDef.displayName} is already deployed`;
+
+  if (findNextActiveOpponentLaneIndex(game, lane.laneIndex) === null)
+    return "No active enemy lane";
+
+  return null;
+}
+
+function createHeroRosterSnapshot(game, lane) {
+  const currentTick = Math.floor(Number(game && game.tick) || 0);
+  const builtBarracksCount = countBuiltBarracksSites(lane);
+
+  return HERO_ROSTER_DEFS
+    .slice()
+    .sort((a, b) => (a.sortIndex || 0) - (b.sortIndex || 0))
+    .map((heroDef) => {
+      const presentation = resolveFortPresentationConfig(
+        heroDef.archetypeKey,
+        heroDef.presentationKey,
+        heroDef.displayName,
+      );
+      const unlocked = isHeroUnlockedForLane(lane, heroDef);
+      const cooldownReadyTick = getHeroCooldownReadyTick(lane, heroDef.heroKey);
+      const cooldownTicksRemaining = Math.max(0, cooldownReadyTick - currentTick);
+      const activeLimit = Math.max(0, Math.floor(Number(heroDef.activeLimit) || 0));
+      const activeCount = countActiveHeroDeployments(game, lane && lane.laneIndex, heroDef.heroKey);
+      const summonSourceBuildingName = getBuildingDisplayName(heroDef.summonSourceBuildingType);
+      const disabledReason = getHeroDisabledReason(game, lane, heroDef);
+
+      let state = "disabled";
+      if (!unlocked) {
+        state = "locked";
+      } else if (activeLimit > 0 && activeCount >= activeLimit) {
+        state = "active";
+      } else if (cooldownTicksRemaining > 0) {
+        state = "cooldown";
+      } else if (!disabledReason) {
+        state = "ready";
+      }
+
+      return {
+        heroKey: heroDef.heroKey,
+        displayName: heroDef.displayName,
+        role: heroDef.role,
+        roleLabel: heroDef.roleLabel || "Hero",
+        sortIndex: heroDef.sortIndex || 0,
+        archetypeKey: heroDef.archetypeKey,
+        presentationKey: presentation.presentationKey,
+        unitTypeKey: presentation.catalogUnitKey,
+        catalogUnitKey: presentation.catalogUnitKey,
+        skinKey: presentation.skinKey || null,
+        portraitKey: presentation.portraitKey || null,
+        branchKey: heroDef.branchKey || "heroes",
+        branchLabel: heroDef.branchLabel || "Heroes",
+        isHero: true,
+        unlocked,
+        unlockBuildingType: heroDef.unlockBuildingType,
+        unlockBuildingName: getBuildingDisplayName(heroDef.unlockBuildingType),
+        unlockBuildingTierName: getBuildingTierDisplayName(heroDef.unlockBuildingType, heroDef.requiredBuildingTier),
+        requiredBuildingTier: heroDef.requiredBuildingTier,
+        summonSourceBuildingType: heroDef.summonSourceBuildingType,
+        summonSourceBuildingName,
+        summonCost: Math.max(0, Math.floor(Number(heroDef.summonCost) || 0)),
+        cooldownTicks: Math.max(0, Math.floor(Number(heroDef.cooldownTicks) || 0)),
+        cooldownReadyTick,
+        cooldownTicksRemaining,
+        activeLimit,
+        activeCount,
+        builtBarracksCount,
+        state,
+        canSummon: !disabledReason,
+        heroVisualStyleKey: heroDef.heroVisualStyleKey || null,
+        lockedReason: unlocked ? null : getHeroRosterLockedReason(heroDef),
+        disabledReason,
+      };
+    });
+}
+
+function getHeroCooldownReadyTick(lane, heroKey) {
+  if (!lane || !lane.heroCooldownReadyTicks || typeof lane.heroCooldownReadyTicks !== "object")
+    return 0;
+  return Math.max(0, Math.floor(Number(lane.heroCooldownReadyTicks[heroKey]) || 0));
+}
+
+function countActiveHeroDeployments(game, sourceLaneIndex, heroKey) {
+  if (!game || !Array.isArray(game.lanes) || !heroKey)
+    return 0;
+
+  let total = 0;
+  for (const lane of game.lanes) {
+    if (!lane)
+      continue;
+
+    const collections = [lane.units, lane.spawnQueue];
+    for (const collection of collections) {
+      if (!Array.isArray(collection))
+        continue;
+
+      for (const unit of collection) {
+        if (!unit || unit.hp <= 0 || !unit.isHero)
+          continue;
+        if (unit.sourceLaneIndex !== sourceLaneIndex)
+          continue;
+        if (unit.heroKey !== heroKey)
+          continue;
+        total += 1;
+      }
+    }
+  }
+
+  return total;
+}
+
+function countBuiltBarracksSites(lane) {
+  if (!lane || !lane.barracksSiteStates || typeof lane.barracksSiteStates !== "object")
+    return 0;
+
+  let built = 0;
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const state = lane.barracksSiteStates[siteDef.barracksId];
+    if (state && state.isBuilt)
+      built += 1;
+  }
+  return built;
+}
+
+function resolveLaneDefeatRescueDestination(game, defeatedLane, unit) {
+  if (!game || !defeatedLane || !unit)
+    return null;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  if (spawnSourceType !== SPAWN_SOURCE_TYPES.BARRACKS_ROSTER
+      && spawnSourceType !== SPAWN_SOURCE_TYPES.BARRACKS_HERO) {
+    return null;
+  }
+
+  const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const sourceLane = getSourceLane(game, sourceLaneIndex);
+  if (!sourceLane || sourceLane.eliminated)
+    return null;
+
+  const barracksId = normalizeBarracksSiteId(unit.sourceBarracksKey || unit.sourceBarracksId);
+  if (!barracksId)
+    return null;
+
+  const destinationLaneIndex = resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId);
+  if (!Number.isInteger(destinationLaneIndex) || destinationLaneIndex === defeatedLane.laneIndex)
+    return null;
+
+  const destinationLane = getLaneByIndex(game, destinationLaneIndex);
+  if (!destinationLane || destinationLane.eliminated)
+    return null;
+
+  return {
+    destinationLane,
+    barracksId,
+  };
+}
+
+function rerouteActiveUnitFromDefeatedLane(game, defeatedLane, destinationLane, unit) {
+  if (!game || !defeatedLane || !destinationLane || !unit)
+    return { ok: false, reason: "Missing defeated lane, destination lane, or unit" };
+
+  if (destinationLane.units.length + destinationLane.spawnQueue.length >= MAX_UNITS_PER_LANE) {
+    return { ok: false, reason: "Destination lane is at max unit capacity" };
+  }
+
+  const sourceNodeId = getLaneNodeId(defeatedLane.laneIndex);
+  const targetNodeId = getLaneNodeId(destinationLane.laneIndex);
+  const routeSegments = buildRouteSegments(ROUTE_TYPES.CENTER_CROSS, sourceNodeId, targetNodeId);
+  if (!sourceNodeId || !targetNodeId || !Array.isArray(routeSegments) || routeSegments.length <= 0) {
+    return {
+      ok: false,
+      reason: `Could not build a rescue route from lane ${defeatedLane.laneIndex} to lane ${destinationLane.laneIndex}`,
+    };
+  }
+
+  unit.targetLaneIndex = destinationLane.laneIndex;
+  unit.laneId = destinationLane.laneIndex;
+  unit.ownerLane = Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0
+    ? unit.sourceLaneIndex
+    : -1;
+  const rerouteResult = applyRouteContractToExistingUnit(unit, {
+    ok: true,
+    routeType: ROUTE_TYPES.CENTER_CROSS,
+    sourceNodeId,
+    targetNodeId,
+    routeSegments,
+    pathId: buildRoutePathId(routeSegments),
+  }, {
+    x: Number(unit.posX),
+    y: Number(unit.posY),
+  });
+  if (!rerouteResult.ok)
+    return rerouteResult;
+
+  destinationLane.units.push(unit);
+  return {
+    ok: true,
+    pathId: rerouteResult.pathId,
+  };
+}
+
+function rerouteQueuedUnitFromDefeatedLane(destinationLane, unit) {
+  if (!destinationLane || !unit)
+    return false;
+  if (destinationLane.units.length + destinationLane.spawnQueue.length >= MAX_UNITS_PER_LANE)
+    return false;
+
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  const spawnIndex = Math.max(0, destinationLane.spawnQueue.length);
+  unit.targetLaneIndex = destinationLane.laneIndex;
+  unit.laneId = destinationLane.laneIndex;
+  unit.ownerLane = Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0
+    ? unit.sourceLaneIndex
+    : -1;
+  unit.combatTarget = null;
+  unit.routeType = null;
+  unit.routeStartNode = null;
+  unit.routeTargetNode = null;
+  unit.routeSegments = null;
+  unit.routeSegmentIndex = 0;
+  unit.segmentProgress = 0;
+  unit.currentSegment = null;
+  unit.routeWorldX = null;
+  unit.routeWorldY = null;
+  unit.routeLateralOffset = 0;
+  unit.routeLongitudinalOffset = 0;
+  unit.spawnIndex = spawnIndex;
+  unit.spawnLogicalPos = resolveSpawnLogicalPosition(spawnSourceType, spawnIndex);
+  destinationLane.spawnQueue.push(unit);
+  return true;
+}
+
+function rescueUnitsFromDefeatedLane(game, defeatedLane) {
+  if (!game || !defeatedLane)
+    return { activeUnits: 0, queuedUnits: 0 };
+
+  let rescuedActiveUnits = 0;
+  let rescuedQueuedUnits = 0;
+  const liveUnits = Array.isArray(defeatedLane.units) ? defeatedLane.units.slice() : [];
+  const queuedUnits = Array.isArray(defeatedLane.spawnQueue) ? defeatedLane.spawnQueue.slice() : [];
+
+  for (const unit of liveUnits) {
+    if (!unit || unit.hp <= 0 || unit.isDefender)
+      continue;
+
+    const rescueTarget = resolveLaneDefeatRescueDestination(game, defeatedLane, unit);
+    if (!rescueTarget)
+      continue;
+
+    const rerouteResult = rerouteActiveUnitFromDefeatedLane(
+      game,
+      defeatedLane,
+      rescueTarget.destinationLane,
+      unit,
+    );
+    if (rerouteResult.ok)
+      rescuedActiveUnits += 1;
+  }
+
+  for (const unit of queuedUnits) {
+    if (!unit)
+      continue;
+
+    const rescueTarget = resolveLaneDefeatRescueDestination(game, defeatedLane, unit);
+    if (!rescueTarget)
+      continue;
+
+    if (rerouteQueuedUnitFromDefeatedLane(rescueTarget.destinationLane, unit))
+      rescuedQueuedUnits += 1;
+  }
+
+  return {
+    activeUnits: rescuedActiveUnits,
+    queuedUnits: rescuedQueuedUnits,
+  };
+}
+
+function markLaneDefeated(game, lane, defeatContext = null) {
+  if (!lane || lane.eliminated) return;
+  lane.eliminated = true;
+  const corePad = getLaneTownCorePad(lane);
+  const rescueSummary = rescueUnitsFromDefeatedLane(game, lane);
+  log.warn("[TownCoreTrace] lane eliminated", {
+    tick: game && Number.isInteger(game.tick) ? game.tick : null,
+    laneIndex: lane.laneIndex,
+    side: lane.side,
+    reason: defeatContext && defeatContext.reason ? defeatContext.reason : "town_core_destroyed",
+    corePadId: corePad ? corePad.padId : null,
+    coreHp: corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0,
+    coreMaxHp: corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1,
+    remainingActiveLanes: game && Array.isArray(game.lanes)
+      ? game.lanes.filter((candidate) => candidate && candidate !== lane && !candidate.eliminated).map((candidate) => ({
+          laneIndex: candidate.laneIndex,
+          coreHp: getLaneTownCoreHp(candidate),
+          coreMaxHp: getLaneTownCoreMaxHp(candidate),
+        }))
+      : [],
+    rescuedActiveUnits: rescueSummary.activeUnits,
+    rescuedQueuedUnits: rescueSummary.queuedUnits,
+  });
+  lane.units = [];
+  lane.spawnQueue = [];
+  lane.projectiles = [];
+  if (lane.mobileDefenders && typeof lane.mobileDefenders.clear === "function")
+    lane.mobileDefenders.clear();
+}
+
+function recomputeTeamHpState(game) {
+  if (!game || !Array.isArray(game.lanes)) return;
+
+  const totals = { left: 0, right: 0 };
+  const maxTotals = { left: 0, right: 0 };
+
+  for (const lane of game.lanes) {
+    if (!lane) continue;
+    const hp = getLaneTownCoreHp(lane);
+    const maxHp = getLaneTownCoreMaxHp(lane);
+    lane.lives = hp;
+
+    if (hp <= 0) markLaneDefeated(game, lane, { reason: "town_core_destroyed" });
+
+    if (lane.side === "left" || lane.side === "right") {
+      totals[lane.side] += hp;
+      maxTotals[lane.side] += maxHp;
+    }
+  }
+
+  game.teamHp = totals;
+  game.teamHpMax = Math.max(maxTotals.left, maxTotals.right, 0);
+}
+
+function applyFortressPadDamage(game, lane, padId, damage) {
+  if (!game || !lane || lane.eliminated || !padId) {
+    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
+  }
+
+  const padState = getFortressPadState(lane, padId);
+  if (!padState) {
+    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
+  }
+
+  const prevHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
+  if (prevHp <= 0) {
+    return { damageApplied: 0, destroyed: true, remainingHp: 0 };
+  }
+
+  const appliedDamage = Math.max(0, Math.floor(Number(damage) || 0));
+  if (appliedDamage <= 0) {
+    return { damageApplied: 0, destroyed: false, remainingHp: prevHp };
+  }
+
+  padState.hp = Math.max(0, prevHp - appliedDamage);
+  const damageApplied = prevHp - padState.hp;
+  if (padState.buildingType === "town_core" && damageApplied > 0)
+    lane.lifeLossThisRound += damageApplied;
+
+  recomputeTeamHpState(game);
+  if (padState.buildingType === "town_core" && damageApplied > 0) {
+    log.info("[TownCoreTrace] core damaged", {
+      tick: game.tick,
+      laneIndex: lane.laneIndex,
+      padId,
+      damageApplied,
+      previousHp: prevHp,
+      remainingHp: Math.max(0, Math.floor(Number(padState.hp) || 0)),
+      maxHp: Math.max(1, Math.floor(Number(padState.maxHp) || 1)),
+      laneEliminated: !!lane.eliminated,
+      teamHp: game.teamHp,
+      coreStates: buildTownCoreStateSummary(game),
+    });
+  }
+  return {
+    damageApplied,
+    destroyed: padState.hp <= 0,
+    remainingHp: Math.max(0, Math.floor(Number(padState.hp) || 0)),
+  };
+}
+
+function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  if (!buildingDef) return 0;
+  if (buildingType === "town_core")
+    return Math.max(1, Math.floor(Number(teamHpStart) || TEAM_HP_START));
+
+  const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
+  const baseHp = Math.max(1, Number(buildingDef.baseMaxHp) || 100);
+  return Math.floor(baseHp * (1 + 0.25 * (safeTier - 1)));
+}
+
+function getFortressRequiredTownCoreTier(buildingType, targetTier) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  const safeTier = Math.max(1, Math.floor(Number(targetTier) || 1));
+  if (!buildingDef) return safeTier;
+
+  const perTier = buildingDef.requiredTownCoreTierByTier;
+  if (perTier && Number.isFinite(Number(perTier[safeTier])))
+    return Math.max(1, Math.floor(Number(perTier[safeTier]) || 1));
+
+  const explicitTier = Math.floor(Number(buildingDef.requiredTownCoreTier) || 0);
+  if (explicitTier > 0) return explicitTier;
+
+  return safeTier;
+}
+
+function getFortressDependencyRequirements(buildingType, targetTier) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  const safeTier = Math.max(1, Math.floor(Number(targetTier) || 1));
+  if (!buildingDef || !buildingDef.dependencyRequirementsByTier)
+    return [];
+
+  const requirements = buildingDef.dependencyRequirementsByTier[safeTier];
+  return Array.isArray(requirements) ? requirements : [];
+}
+
+function getFortressDependencyLockedReason(lane, buildingType, targetTier) {
+  const requirements = getFortressDependencyRequirements(buildingType, targetTier);
+  for (const requirement of requirements) {
+    if (!requirement || !requirement.buildingType)
+      continue;
+
+    const requiredTier = Math.max(1, Math.floor(Number(requirement.minTier) || 1));
+    const builtTier = getHighestBuiltFortressPadTier(lane, requirement.buildingType);
+    if (builtTier >= requiredTier)
+      continue;
+
+    return `${getBuildingDisplayName(requirement.buildingType)}: ${getBuildingTierDisplayName(requirement.buildingType, requiredTier)}`;
+  }
+
+  return null;
+}
+
+function getFortressBuildCost(buildingType) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  return buildingDef ? Math.max(0, Math.floor(Number(buildingDef.buildCost) || 0)) : 0;
+}
+
+function getFortressUpgradeCost(buildingType, nextTier) {
+  if (buildingType === "barracks") {
+    const nextDef = getBarracksUpgradeDef(nextTier);
+    if (nextDef && Number.isFinite(nextDef.upgradeCost))
+      return Math.max(0, Math.floor(Number(nextDef.upgradeCost)));
+
+    const fallback = getBarracksLevelDef(nextTier);
+    return Math.max(0, Math.floor(Number(fallback.cost) || 0));
+  }
+
+  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
+  if (!buildingDef || !buildingDef.upgradeCosts) return Infinity;
+  const cost = buildingDef.upgradeCosts[nextTier];
+  return Number.isFinite(cost) ? Math.max(0, Math.floor(cost)) : Infinity;
+}
+
+function describeFortressPad(game, lane, padState) {
+  if (!padState) return null;
+  const buildingDef = FORTRESS_BUILDING_DEFS[padState.buildingType];
+  if (!buildingDef) return null;
+
+  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+  const maxTier = getFortressMaxTier(padState.buildingType);
+  const built = currentTier > 0;
+  const nextTier = Math.min(maxTier, currentTier + 1);
+  const targetTier = built ? nextTier : 1;
+  const townCoreTier = getTownCoreTier(lane);
+  const requiredTownCoreTier = getFortressRequiredTownCoreTier(
+    padState.buildingType,
+    targetTier
+  );
+  const dependencyLockedReason = getFortressDependencyLockedReason(
+    lane,
+    padState.buildingType,
+    targetTier
+  );
+  const canBuild = !built
+    && townCoreTier >= requiredTownCoreTier
+    && !dependencyLockedReason;
+  const canUpgrade = built
+    && currentTier < maxTier
+    && townCoreTier >= requiredTownCoreTier
+    && !dependencyLockedReason;
+
+  let buildState = FORTRESS_BUILD_STATES.locked;
+  if (!built) {
+    buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
+  } else if (currentTier >= maxTier) {
+    buildState = FORTRESS_BUILD_STATES.maxTier;
+  } else if (canUpgrade) {
+    buildState = FORTRESS_BUILD_STATES.upgradeAvailable;
+  } else {
+    buildState = FORTRESS_BUILD_STATES.built;
+  }
+
+  let lockedReason = null;
+  if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
+    lockedReason = dependencyLockedReason
+      ? `Requires ${dependencyLockedReason}`
+      : `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+  } else if (built && currentTier < maxTier && !canUpgrade) {
+    lockedReason = dependencyLockedReason
+      ? `Upgrade requires ${dependencyLockedReason}`
+      : `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+  }
+
+  return {
+    buildingDef,
+    buildState,
+    canBuild,
+    canUpgrade,
+    lockedReason,
+    currentTier,
+    maxTier,
+    buildCost: getFortressBuildCost(padState.buildingType),
+    nextUpgradeCost: built && currentTier < maxTier
+      ? getFortressUpgradeCost(padState.buildingType, nextTier)
+      : 0,
+    requiredTownCoreTier,
+  };
+}
+
+function getBarracksRosterDefinition(rosterKey) {
+  return BARRACKS_ROSTER_DEFS.find((entry) => entry.rosterKey === rosterKey) || null;
+}
+
+function getBarracksRosterBuyCost(rosterDef) {
+  if (!rosterDef) return 0;
+  const presentation = resolveFortPresentationConfig(
+    rosterDef.archetypeKey,
+    rosterDef.presentationKey,
+    rosterDef.displayName,
+  );
+  const unitType = getUnitType(presentation.catalogUnitKey);
+  const buildCost = Math.floor(Number(unitType && unitType.build_cost) || 0);
+  if (buildCost > 0) return buildCost;
+  const towerDef = resolveTowerDef(rosterDef.archetypeKey);
+  if (towerDef && Number.isFinite(towerDef.cost) && towerDef.cost > 0)
+    return Math.floor(towerDef.cost);
+  const unitDef = resolveUnitDef(rosterDef.archetypeKey);
+  const sendCost = Math.max(1, Math.floor(Number(unitDef && unitDef.cost) || 1));
+  return Math.max(5, sendCost * 5);
+}
+
+function getBarracksRosterSellRefund(rosterDef) {
+  const buyCost = getBarracksRosterBuyCost(rosterDef);
+  if (buyCost <= 0) return 0;
+  return Math.max(1, Math.floor(buyCost * BARRACKS_ROSTER_REFUND_PCT / 100));
+}
+
+function getBarracksRoleSortIndex(role) {
+  return BARRACKS_ROLE_SORT_ORDER[role] ?? 99;
+}
+
+function getBarracksSpawnQueueRoleSortIndex(role) {
+  const index = BARRACKS_SPAWN_ROLE_ORDER.indexOf(role);
+  return index >= 0 ? index : 99;
+}
+
+function createBarracksSiteRosterSnapshot(game, lane, barracksId) {
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedId) return [];
+  const descriptor = describeBarracksSite(game, lane, normalizedId);
+  if (!descriptor) return [];
+
+  const siteCounts = getBarracksSiteCounts(lane, normalizedId) || {};
+  const siteBuilt = !!descriptor.isBuilt;
+
+  return BARRACKS_ROSTER_DEFS
+    .slice()
+    .sort((a, b) => {
+      const roleA = getBarracksRoleSortIndex(a.role);
+      const roleB = getBarracksRoleSortIndex(b.role);
+      if (roleA !== roleB) return roleA - roleB;
+      return (a.sortIndex || 0) - (b.sortIndex || 0);
+    })
+    .map((rosterDef) => {
+      const presentation = resolveFortPresentationConfig(
+        rosterDef.archetypeKey,
+        rosterDef.presentationKey,
+        rosterDef.displayName,
+      );
+      const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef, normalizedId);
+      const unlocked = siteBuilt && unlockContext.unlocked;
+      const buildingDef = unlockContext.buildingDef;
+      const buyCost = getBarracksRosterBuyCost(rosterDef);
+      const sellRefund = getBarracksRosterSellRefund(rosterDef);
+      const ownedCount = Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
+      return {
+        rosterKey: rosterDef.rosterKey,
+        displayName: rosterDef.displayName,
+        role: rosterDef.role,
+        roleLabel: rosterDef.role.charAt(0).toUpperCase() + rosterDef.role.slice(1),
+        sortIndex: rosterDef.sortIndex || 0,
+        archetypeKey: rosterDef.archetypeKey,
+        presentationKey: presentation.presentationKey,
+        unitTypeKey: presentation.catalogUnitKey,
+        catalogUnitKey: presentation.catalogUnitKey,
+        skinKey: presentation.skinKey || null,
+        portraitKey: presentation.portraitKey || null,
+        branchKey: rosterDef.branchKey || "",
+        branchLabel: rosterDef.branchLabel || getBuildingBranchLabel(rosterDef.productionBuildingType),
+        productionBuildingType: rosterDef.productionBuildingType,
+        productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
+        tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
+        ownedCount,
+        buyCost,
+        sellRefund,
+        unlocked,
+        unlockBuildingType: rosterDef.unlockBuildingType,
+        unlockBuildingName: buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType,
+        unlockBuildingTierName: getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier),
+        requiredBuildingTier: rosterDef.requiredBuildingTier,
+        unlockPadId: unlockContext.unlockPadId,
+        barracksId: normalizedId,
+        lockedReason: unlocked
+          ? null
+          : !siteBuilt
+            ? descriptor.lockedReason || "Buy Building first"
+            : getBarracksRosterLockedReason(rosterDef),
+      };
+    });
+}
+
+function createBarracksSiteSnapshot(game, lane, barracksId) {
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedId) return null;
+  const descriptor = describeBarracksSite(game, lane, normalizedId);
+  if (!descriptor) return null;
+  const siteState = descriptor.siteState;
+  const hp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.hp) || 0)) : 0;
+  const maxHp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.maxHp) || 0)) : 0;
+
+  return {
+    barracksId: normalizedId,
+    allegianceKey: resolveLaneAllegianceKey(lane),
+    ownerLaneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
+    displayName: descriptor.siteDef.displayName,
+    slot: descriptor.siteDef.slot,
+    sortIndex: descriptor.siteDef.sortIndex,
+    requiredBarracksTier: getBarracksSiteTierRequirement(descriptor.siteDef),
+    available: descriptor.isBuilt,
+    isBuilt: descriptor.isBuilt,
+    level: descriptor.level,
+    maxLevel: descriptor.maxLevel,
+    buildState: descriptor.buildState,
+    canBuild: descriptor.canBuild,
+    canUpgrade: descriptor.canUpgrade,
+    buildCost: descriptor.buildCost,
+    upgradeCost: descriptor.upgradeCost,
+    requiredTownCoreTier: descriptor.requiredTownCoreTier,
+    requiredTownCoreTierName: getBuildingTierDisplayName("town_core", descriptor.requiredTownCoreTier),
+    sendIntervalTicks: descriptor.sendIntervalTicks,
+    sendTimerTicksRemaining: descriptor.sendTimerTicksRemaining,
+    sendTimerTotalTicks: descriptor.sendTimerTotalTicks,
+    lockedReason: descriptor.lockedReason,
+    hp,
+    maxHp,
+    roster: createBarracksSiteRosterSnapshot(game, lane, normalizedId),
+  };
+}
+
+function createBarracksRosterSnapshot(game, lane) {
+  return BARRACKS_ROSTER_DEFS
+    .slice()
+    .sort((a, b) => {
+      const roleA = getBarracksRoleSortIndex(a.role);
+      const roleB = getBarracksRoleSortIndex(b.role);
+      if (roleA !== roleB) return roleA - roleB;
+      return (a.sortIndex || 0) - (b.sortIndex || 0);
+    })
+    .map((rosterDef) => {
+      const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef);
+      const unlocked = unlockContext.unlocked;
+      const buildingDef = unlockContext.buildingDef;
+      const buyCost = getBarracksRosterBuyCost(rosterDef);
+      const sellRefund = getBarracksRosterSellRefund(rosterDef);
+      let ownedCount = 0;
+      for (const siteDef of BARRACKS_SITE_DEFS) {
+        const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId) || {};
+        ownedCount += Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
+      }
+      const presentation = resolveFortPresentationConfig(
+        rosterDef.archetypeKey,
+        rosterDef.presentationKey,
+        rosterDef.displayName,
+      );
+
+      return {
+        rosterKey: rosterDef.rosterKey,
+        displayName: rosterDef.displayName,
+        role: rosterDef.role,
+        roleLabel: rosterDef.role.charAt(0).toUpperCase() + rosterDef.role.slice(1),
+        sortIndex: rosterDef.sortIndex || 0,
+        archetypeKey: rosterDef.archetypeKey,
+        presentationKey: presentation.presentationKey,
+        unitTypeKey: presentation.catalogUnitKey,
+        catalogUnitKey: presentation.catalogUnitKey,
+        skinKey: presentation.skinKey || null,
+        portraitKey: presentation.portraitKey || null,
+        branchKey: rosterDef.branchKey || "",
+        branchLabel: rosterDef.branchLabel || getBuildingBranchLabel(rosterDef.productionBuildingType),
+        productionBuildingType: rosterDef.productionBuildingType,
+        productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
+        tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
+        ownedCount,
+        buyCost,
+        sellRefund,
+        unlocked,
+        unlockBuildingType: rosterDef.unlockBuildingType,
+        unlockBuildingName: buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType,
+        unlockBuildingTierName: getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier),
+        requiredBuildingTier: rosterDef.requiredBuildingTier,
+        unlockPadId: unlockContext.unlockPadId,
+        lockedReason: unlocked
+          ? null
+          : getBarracksRosterLockedReason(rosterDef),
+      };
+    });
+}
+
+function createFortressPadSnapshot(game, lane, padState) {
+  const descriptor = describeFortressPad(game, lane, padState);
+  if (!descriptor) return null;
+  const buildingDef = descriptor.buildingDef;
+  const currentTier = descriptor.currentTier;
+  const built = currentTier > 0;
+  const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
+  const maxHp = Math.max(0, Math.floor(Number(padState.maxHp) || 0));
+
+  return {
+    padId: padState.padId,
+    allegianceKey: resolveLaneAllegianceKey(lane),
+    ownerLaneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
+    gridX: padState.gridX,
+    gridY: padState.gridY,
+    buildingType: padState.buildingType,
+    buildingName: buildingDef.displayName,
+    displayName: padState.displayName,
+    branchKey: buildingDef.branchKey || padState.buildingType,
+    branchLabel: getBuildingBranchLabel(padState.buildingType),
+    buildState: descriptor.buildState,
+    tier: currentTier,
+    maxTier: descriptor.maxTier,
+    currentTierName: getBuildingTierDisplayName(padState.buildingType, currentTier),
+    nextTier: currentTier < descriptor.maxTier ? currentTier + 1 : currentTier,
+    nextTierName: currentTier < descriptor.maxTier
+      ? getBuildingTierDisplayName(padState.buildingType, currentTier + 1)
+      : getBuildingTierDisplayName(padState.buildingType, currentTier),
+    isBuilt: built,
+    canBuild: descriptor.canBuild,
+    canUpgrade: descriptor.canUpgrade,
+    buildCost: descriptor.buildCost,
+    upgradeCost: Number.isFinite(descriptor.nextUpgradeCost) ? descriptor.nextUpgradeCost : 0,
+    requiredTownCoreTier: descriptor.requiredTownCoreTier,
+    requiredTownCoreTierName: getBuildingTierDisplayName("town_core", descriptor.requiredTownCoreTier),
+    hp: currentHp,
+    maxHp,
+    lockedReason: descriptor.lockedReason,
+  };
+}
+
+function buildBarracksRosterSpawnEntries(game, lane, barracksId = null) {
+  if (!game || !lane) return [];
+
+  const spawnEntries = [];
+  const siteDefs = barracksId
+    ? [getBarracksSiteDef(barracksId)].filter(Boolean)
+    : BARRACKS_SITE_DEFS;
+  for (const siteDef of siteDefs) {
+    const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
+    if (!descriptor || !descriptor.isBuilt)
+      continue;
+
+    const rosterEntries = createBarracksSiteRosterSnapshot(game, lane, siteDef.barracksId)
+      .filter((entry) => entry.unlocked && entry.ownedCount > 0)
+      .sort((a, b) => {
+        const roleA = getBarracksSpawnQueueRoleSortIndex(a.role);
+        const roleB = getBarracksSpawnQueueRoleSortIndex(b.role);
+        if (roleA !== roleB) return roleA - roleB;
+        return (a.sortIndex || 0) - (b.sortIndex || 0);
+      });
+
+    for (const entry of rosterEntries) {
+      const rosterDef = getBarracksRosterDefinition(entry.rosterKey);
+      const presentation = resolveFortPresentationConfig(
+        rosterDef && rosterDef.archetypeKey,
+        rosterDef && rosterDef.presentationKey,
+        entry.displayName,
+      );
+      for (let ownedIndex = 0; ownedIndex < entry.ownedCount; ownedIndex++) {
+        spawnEntries.push({
+          unitType: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : entry.unitTypeKey,
+          count: 1,
+          source: "barracks_roster",
+          barracksId: siteDef.barracksId,
+          rosterKey: entry.rosterKey,
+          archetypeKey: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : null,
+          presentationKey: presentation.presentationKey,
+          role: entry.role,
+          sortIndex: entry.sortIndex || 0,
+          sourceLaneIndex: lane.laneIndex,
+          sourceTeam: lane.team || null,
+          skinKey: presentation.skinKey || null,
+        });
+      }
+    }
+  }
+
+  return spawnEntries;
+}
+
+function spawnScheduledBarracksRoster(game, lane, barracksId = null) {
+  if (!game || !lane || lane.eliminated) return 0;
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedBarracksId) {
+    log.error("[BarracksTrace][ServerSpawn] rejected", {
+      reason: "Missing or invalid barracksId",
+      sourceLaneIndex: lane.laneIndex,
+      requestedBarracksId: barracksId || null,
+    });
+    return 0;
+  }
+
+  const targetLaneIdx = resolveTargetLaneForBarracksSend(game, lane.laneIndex, normalizedBarracksId);
+  if (targetLaneIdx === null) {
+    log.error("[BarracksTrace][ServerSpawn] rejected", {
+      reason: "Unable to resolve target lane for barracks send",
+      sourceLaneIndex: lane.laneIndex,
+      barracksId: normalizedBarracksId,
+    });
+    return 0;
+  }
+
+  const targetLane = game.lanes[targetLaneIdx];
+  if (!targetLane || targetLane.eliminated) {
+    log.error("[BarracksTrace][ServerSpawn] rejected", {
+      reason: "Resolved target lane is missing or eliminated",
+      sourceLaneIndex: lane.laneIndex,
+      targetLaneIndex: targetLaneIdx,
+      barracksId: normalizedBarracksId,
+    });
+    return 0;
+  }
+
+  const spawnEntries = buildBarracksRosterSpawnEntries(game, lane, normalizedBarracksId);
+  if (spawnEntries.length === 0) return 0;
+
+  spawnBarracksRosterFormation(game, targetLane, spawnEntries);
+  lane.totalSendCount += spawnEntries.length;
+  lane.sendCountThisRound += spawnEntries.length;
+  return spawnEntries.length;
+}
+
+function getBarracksFormationColumns(role, unitCount) {
+  const safeCount = Math.max(0, Math.floor(Number(unitCount) || 0));
+  if (safeCount <= 1) return 1;
+  if (safeCount === 2) return 2;
+  if (safeCount === 3) return 3;
+
+  switch (role) {
+    case "melee":
+      return Math.min(4, safeCount);
+    case "support":
+    case "ranged":
+      return Math.min(3, safeCount);
+    default:
+      return Math.min(2, safeCount);
+  }
+}
+
+function spawnBarracksRosterFormation(game, lane, pendingEntries) {
+  if (!game || !lane || !Array.isArray(pendingEntries) || pendingEntries.length === 0) return;
+
+  const entriesByRole = new Map();
+  for (const role of BARRACKS_SPAWN_ROLE_ORDER) entriesByRole.set(role, []);
+  for (const entry of pendingEntries) {
+    if (!entry) continue;
+    const roleEntries = entriesByRole.get(entry.role) || [];
+    roleEntries.push(entry);
+    entriesByRole.set(entry.role, roleEntries);
+  }
+
+  let nextRoleRow = Math.ceil(lane.spawnQueue.length / GRID_W);
+  for (const role of BARRACKS_SPAWN_ROLE_ORDER) {
+    const roleEntries = (entriesByRole.get(role) || [])
+      .slice()
+      .sort((a, b) => {
+        const sortA = Math.floor(Number(a.sortIndex) || 0);
+        const sortB = Math.floor(Number(b.sortIndex) || 0);
+        if (sortA !== sortB) return sortA - sortB;
+        return String(a.rosterKey || "").localeCompare(String(b.rosterKey || ""));
+      });
+    if (roleEntries.length === 0) continue;
+
+    const columns = getBarracksFormationColumns(role, roleEntries.length);
+    const startCol = Math.max(0, Math.floor((GRID_W - columns) / 2));
+
+    for (let i = 0; i < roleEntries.length; i++) {
+      const rowOffset = Math.floor(i / columns);
+      const columnOffset = i % columns;
+      const spawnIndex = ((nextRoleRow + rowOffset) * GRID_W) + startCol + columnOffset;
+      const entry = roleEntries[i];
+      _spawnWaveUnit(game, lane, {
+        unit_type: entry.unitType,
+        spawn_qty: 1,
+        hp_mult: 1,
+        dmg_mult: 1,
+        speed_mult: 1,
+        sourceLaneIndex: entry.sourceLaneIndex,
+        sourceTeam: entry.sourceTeam,
+        sourceBarracksId: entry.barracksId,
+        skinKey: entry.skinKey || null,
+        spawnIndex,
+      });
+    }
+
+    nextRoleRow += Math.ceil(roleEntries.length / columns);
+  }
 }
 
 // ── Tower stat helpers ─────────────────────────────────────────────────────────
@@ -446,31 +3932,55 @@ function tileDist(ax, ay, bx, by) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-function clampNum(v, min, max, fallback) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
+function hasExplicitMlOption(src, key) {
+  return Object.prototype.hasOwnProperty.call(src, key)
+    && src[key] !== undefined
+    && src[key] !== null
+    && src[key] !== "";
+}
+
+function normalizeMlOptionNumber(src, key, defaultValue, min, max, integer = false) {
+  if (!hasExplicitMlOption(src, key))
+    return defaultValue;
+
+  const n = Number(src[key]);
+  if (!Number.isFinite(n)) {
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected a finite number.`);
+  }
+  if (n < min || n > max) {
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected ${min}-${max}.`);
+  }
+  if (integer && !Number.isInteger(n)) {
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected a whole number.`);
+  }
   return Math.max(min, Math.min(max, n));
 }
 
 function cloneSlotDef(slot, laneTeam) {
+  const canonicalLaneTeam = normalizeAllegianceKey(laneTeam || slot.team || slot.slotColor || (slot.side === "left" ? "red" : "blue"));
+  const canonicalSlotColor = normalizeAllegianceKey(slot.slotColor) || canonicalLaneTeam;
   return {
     laneIndex: slot.laneIndex,
     slotKey: slot.slotKey,
     side: slot.side,
-    slotColor: slot.slotColor,
+    slotColor: canonicalSlotColor || slot.slotColor,
     branchId: slot.branchId,
     branchLabel: slot.branchLabel,
     castleSide: slot.castleSide,
-    team: laneTeam || (slot.side === "left" ? "red" : "blue"),
+    team: canonicalLaneTeam || ALLEGIANCE_KEYS.RED,
+    allegianceKey: canonicalLaneTeam || ALLEGIANCE_KEYS.RED,
   };
 }
 
-// For 2-player, pick one branch from each side so both castles are contested:
-//   lane 0 → Red Branch (left side, attacks right castle)
-//   lane 1 → Blue Branch (right side, attacks left castle) — remapped from FIXED_SLOT_LAYOUT[2]
+// For 2-player, seat players on the authored Red vs Yellow branches.
+// Blue and Green stay unoccupied and function as the outer-loop travel space between them.
 const TWO_PLAYER_SLOT_BASES = [
   FIXED_SLOT_LAYOUT[0],
-  Object.assign({}, FIXED_SLOT_LAYOUT[2], { laneIndex: 1 }),
+  Object.assign({}, FIXED_SLOT_LAYOUT[1], {
+    laneIndex: 1,
+    side: "right",
+    castleSide: "left",
+  }),
 ];
 
 function getDefaultSlotDefinitions(playerCount, laneTeams) {
@@ -513,17 +4023,17 @@ function normalizeGameOptions(options) {
   const runtime = getMlRuntimeSettings();
   const laneTeamsRaw = Array.isArray(src.laneTeams) ? src.laneTeams : [];
   const laneTeams = laneTeamsRaw.map((team, idx) => {
-    const normalized = String(team || "").trim();
-    if (normalized.length > 0) return normalized.slice(0, 24);
-    return idx % 2 === 0 ? "red" : "blue";
+    const normalized = normalizeAllegianceKey(team);
+    if (normalized) return normalized;
+    return [ALLEGIANCE_KEYS.RED, ALLEGIANCE_KEYS.YELLOW, ALLEGIANCE_KEYS.BLUE, ALLEGIANCE_KEYS.GREEN][idx] || `p${idx}`;
   });
   return {
-    startGold: Math.floor(clampNum(src.startGold, 0, 10000, runtime.startGold)),
-    startIncome: clampNum(src.startIncome, 0, 1000, runtime.startIncome),
-    livesStart: Math.floor(clampNum(src.livesStart, 1, 1000, runtime.livesStart)),
-    teamHpStart: Math.floor(clampNum(src.teamHpStart, 1, 1000, runtime.teamHpStart)),
-    buildPhaseTicks: Math.floor(clampNum(src.buildPhaseTicks, 20, 7200, runtime.buildPhaseTicks)),
-    transitionPhaseTicks: Math.floor(clampNum(src.transitionPhaseTicks, 20, 7200, runtime.transitionPhaseTicks)),
+    startGold: normalizeMlOptionNumber(src, "startGold", runtime.startGold, 0, 10000, true),
+    startIncome: normalizeMlOptionNumber(src, "startIncome", runtime.startIncome, 0, 1000),
+    livesStart: normalizeMlOptionNumber(src, "livesStart", runtime.livesStart, 1, 1000, true),
+    teamHpStart: normalizeMlOptionNumber(src, "teamHpStart", runtime.teamHpStart, 1, 1000, true),
+    buildPhaseTicks: normalizeMlOptionNumber(src, "buildPhaseTicks", runtime.buildPhaseTicks, 20, 7200, true),
+    transitionPhaseTicks: normalizeMlOptionNumber(src, "transitionPhaseTicks", runtime.transitionPhaseTicks, 20, 7200, true),
     laneTeams,
     matchSeed: typeof src.matchSeed === "number" ? (src.matchSeed >>> 0) : undefined,
     battlefieldTopology: getBattlefieldTopology(Number(src.playerCount) || laneTeams.length || 4, laneTeams),
@@ -532,6 +4042,12 @@ function normalizeGameOptions(options) {
 
 // Get current tile position of a unit from its pathIdx
 function getUnitTilePos(unit, path) {
+  if (unit && Number.isFinite(Number(unit.posX)) && Number.isFinite(Number(unit.posY))) {
+    return {
+      x: Number(unit.posX),
+      y: Number(unit.posY),
+    };
+  }
   if (!path || path.length === 0) return null;
   const idx = Math.min(Math.floor(unit.pathIdx), path.length - 1);
   return path[idx];
@@ -546,7 +4062,10 @@ function createMLGame(playerCount, options) {
   const lanes = [];
   for (let i = 0; i < playerCount; i++) {
     const grid = makeGrid();
-    const path = straightLinePath(); // fixed centre column (5,0)→(5,27)
+    const routeToCore = buildRouteSegments(ROUTE_TYPES.WAVE_LANE, getWaveSpawnNodeId(i), getLaneNodeId(i));
+    // Legacy compatibility path samples for systems that still read lane.path/pathIdx.
+    // Live movement authority remains routeSegments/currentSegment/segmentProgress.
+    const path = buildSampledPathFromSegments(routeToCore, 28);
     const slot = slotDefinitions[i] || cloneSlotDef({
       laneIndex: i,
       slotKey: `slot_${i}`,
@@ -559,6 +4078,7 @@ function createMLGame(playerCount, options) {
     lanes.push({
       laneIndex: i,
       team: slot.team,
+      allegianceKey: normalizeAllegianceKey(slot.team),
       side: slot.side,
       slotKey: slot.slotKey,
       slotColor: slot.slotColor,
@@ -586,36 +4106,37 @@ function createMLGame(playerCount, options) {
       buildSpendThisRound: 0,
       grid,
       path,
-      fullPath: buildFullPath(path),
+      fullPath: buildSampledPathFromSegments(routeToCore, 56),
       barracks: Object.assign({ level: 1 }, getBarracksLevelDef(1)),
+      waveSpeedMult: 1,
+      fortressPads: createFortressPadStates(opt.teamHpStart),
+      barracksSiteStates: createBarracksSiteStates(opt.teamHpStart, 1),
+      barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
+      heroCooldownReadyTicks: {},
       units: [],
       mobileDefenders: new Map(),
       spawnQueue: [],
       projectiles: [],
-      autosend: {
-        enabled: false,
-        enabledUnits: {},  // populated from loadout keys when match starts
-        rate: "normal",
-        tickCounter: 0,
-        loadoutKeys: null,  // ordered unit-type keys for auto-send; set from index.js
-      },
+      loadoutKeys: null,
     });
   }
-  return {
+  const game = {
     tick: 0,
     phase: "playing",
     winner: null,
-    matchState: "active_pvp",
+    matchState: "active_survival",
     officialWinnerLane: null,
     officialWinningTeam: null,
     officialWinningSide: null,
     losingTeam: null,
     losingSide: null,
     awaitingPostWinDecision: false,
-    continuedIntoSurvival: false,
+    continuedIntoSurvival: true,
     pvpResolvedAtTick: null,
-    survivalStartedAtTick: null,
-    survivalStartRound: null,
+    survivalStartedAtTick: 0,
+    survivalStartRound: 1,
+    finalGameOverReason: null,
+    finalGameOverDebug: null,
     playerCount,
     lanes,
     battlefieldTopology,
@@ -624,10 +4145,17 @@ function createMLGame(playerCount, options) {
     teamHpMax: opt.teamHpStart,
     buildPhaseTicks: opt.buildPhaseTicks,
     transitionPhaseTicks: opt.transitionPhaseTicks,
-    roundState: "build",
+    incomeIntervalTicks: INCOME_INTERVAL_TICKS,
+    barracksSendIntervalTicks: BARRACKS_SEND_TIMER_TICKS,
+    waveIntervalTicks: WAVE_TIMER_TICKS,
+    roundState: "combat",
     roundNumber: 1,
     roundStateTicks: 0,
-    pendingSends: {},    // targetLaneIdx → [{unitType, count}]
+    nextIncomeTick: INCOME_INTERVAL_TICKS,
+    nextBarracksSendTick: BARRACKS_SEND_TIMER_TICKS,
+    nextWaveTick: WAVE_TIMER_TICKS,
+    lastWaveSpawnTick: null,
+    hasSpawnedWave: false,
     waveConfig: [],      // loaded at match start by multilaneRuntime
     roundSnapshots: [],        // one entry per completed wave + one terminal entry
     startedAt: null,           // set on first live tick (not at object creation)
@@ -641,6 +4169,8 @@ function createMLGame(playerCount, options) {
     configVersionId: null,
     actionSeq: 0,
   };
+  recomputeTeamHpState(game);
+  return game;
 }
 
 function parseBulkTiles(rawTiles) {
@@ -672,6 +4202,29 @@ function getLaneBuildValue(lane) {
       }
     }
   }
+  if (Array.isArray(lane.fortressPads)) {
+    for (const pad of lane.fortressPads) {
+      if (!pad || !Array.isArray(pad.costHistory)) continue;
+      for (const entry of pad.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+  if (lane.barracksSiteStates && typeof lane.barracksSiteStates === "object") {
+    for (const siteState of Object.values(lane.barracksSiteStates)) {
+      if (!siteState || !Array.isArray(siteState.costHistory)) continue;
+      for (const entry of siteState.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+  if (lane.barracksSiteRosterCounts) {
+    for (const siteDef of BARRACKS_SITE_DEFS) {
+      const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId) || {};
+      for (const rosterDef of BARRACKS_ROSTER_DEFS) {
+        const ownedCount = Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
+        total += ownedCount * getBarracksRosterBuyCost(rosterDef);
+      }
+    }
+  }
   return total;
 }
 
@@ -695,7 +4248,7 @@ function createRoundSnapshotLane(game, lane) {
     sendCount: lane.sendCountThisRound,
     buildSpend: lane.buildSpendThisRound,
     lives: lane.lives,
-    teamHp: game.teamHp[lane.side],
+    teamHp: lane.lives,
     eliminated: lane.eliminated,
     holdResult: getLaneWaveResult(lane),
   };
@@ -707,7 +4260,7 @@ function isOpponentLane(game, sourceLaneIndex, targetLaneIndex) {
   if (!sourceLane || !targetLane) return false;
   if (targetLane.eliminated) return false;
   if (sourceLaneIndex === targetLaneIndex) return false;
-  return sourceLane.team !== targetLane.team;
+  return areAllegiancesHostile(resolveLaneAllegianceKey(sourceLane), resolveLaneAllegianceKey(targetLane));
 }
 
 function findNextActiveOpponentLaneIndex(game, fromLaneIndex) {
@@ -720,9 +4273,173 @@ function findNextActiveOpponentLaneIndex(game, fromLaneIndex) {
   return null;
 }
 
+function applyFortressBuildOnPad(game, lane, padId) {
+  const padState = getFortressPadState(lane, padId);
+  if (!padState) return { ok: false, reason: "Unknown building pad" };
+  if (padState.buildingType === "barracks")
+    return { ok: false, reason: "Select Barracks Left, Center, or Right to buy that building." };
+  const descriptor = describeFortressPad(game, lane, padState);
+  if (!descriptor) return { ok: false, reason: "Unknown building pad" };
+  if (!descriptor.canBuild) return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
+  if (lane.gold < descriptor.buildCost) return { ok: false, reason: "Not enough gold" };
+
+  lane.gold -= descriptor.buildCost;
+  lane.totalBuildSpend += descriptor.buildCost;
+  lane.buildSpendThisRound += descriptor.buildCost;
+  padState.tier = 1;
+  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, 1, game.teamHpMax);
+  padState.hp = padState.maxHp;
+  if (!Array.isArray(padState.costHistory)) padState.costHistory = [];
+  padState.costHistory.push({ cost: descriptor.buildCost });
+  return { ok: true };
+}
+
+function applyBarracksSiteBuildAction(game, lane, barracksId) {
+  const descriptor = describeBarracksSite(game, lane, barracksId);
+  if (!descriptor) return { ok: false, reason: "Unknown barracks" };
+  if (!descriptor.canBuild)
+    return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
+  if (lane.gold < descriptor.buildCost)
+    return { ok: false, reason: "Not enough gold" };
+
+  const siteState = descriptor.siteState;
+  const nextLevel = 1;
+  const interval = getBarracksSiteSendIntervalTicks(nextLevel);
+  const maxHp = getBarracksSiteBaseMaxHp();
+
+  lane.gold -= descriptor.buildCost;
+  lane.totalBuildSpend += descriptor.buildCost;
+  lane.buildSpendThisRound += descriptor.buildCost;
+  siteState.isBuilt = true;
+  siteState.level = nextLevel;
+  siteState.maxHp = maxHp;
+  siteState.hp = maxHp;
+  siteState.nextSendTick = Math.floor(Number(game && game.tick) || 0) + interval;
+  if (!Array.isArray(siteState.costHistory)) siteState.costHistory = [];
+  siteState.costHistory.push({ cost: descriptor.buildCost });
+  syncLegacyBarracksAggregate(lane);
+  return { ok: true };
+}
+
+function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
+  const descriptor = describeBarracksSite(game, lane, barracksId);
+  if (!descriptor) return { ok: false, reason: "Unknown barracks" };
+  if (!descriptor.isBuilt) return { ok: false, reason: "Buy Building first" };
+  if (!descriptor.canUpgrade)
+    return { ok: false, reason: descriptor.lockedReason || "Barracks upgrade unavailable" };
+  if (lane.gold < descriptor.upgradeCost)
+    return { ok: false, reason: "Not enough gold" };
+
+  const siteState = descriptor.siteState;
+  const currentTick = Math.floor(Number(game && game.tick) || 0);
+  const currentRemaining = Math.max(0, Math.floor(Number(siteState.nextSendTick) || 0) - currentTick);
+  const nextLevel = normalizeBarracksSiteLevel(descriptor.level + 1);
+  const nextInterval = getBarracksSiteSendIntervalTicks(nextLevel);
+
+  lane.gold -= descriptor.upgradeCost;
+  lane.totalBuildSpend += descriptor.upgradeCost;
+  lane.buildSpendThisRound += descriptor.upgradeCost;
+  siteState.level = nextLevel;
+  siteState.maxHp = Math.max(getBarracksSiteBaseMaxHp(), Math.floor(Number(siteState.maxHp) || 0));
+  siteState.hp = siteState.maxHp;
+  siteState.nextSendTick = currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval));
+  if (!Array.isArray(siteState.costHistory)) siteState.costHistory = [];
+  siteState.costHistory.push({ cost: descriptor.upgradeCost });
+  syncLegacyBarracksAggregate(lane);
+  return { ok: true };
+}
+
+function applyFortressUpgrade(game, lane, padId) {
+  const padState = getFortressPadState(lane, padId);
+  if (!padState) return { ok: false, reason: "Unknown building pad" };
+  if (padState.buildingType === "barracks")
+    return { ok: false, reason: "Select Barracks Left, Center, or Right to upgrade that building." };
+
+  const descriptor = describeFortressPad(game, lane, padState);
+  if (!descriptor) return { ok: false, reason: "Unknown building pad" };
+  if (!descriptor.canUpgrade) return { ok: false, reason: descriptor.lockedReason || "Upgrade unavailable" };
+  if (lane.gold < descriptor.nextUpgradeCost) return { ok: false, reason: "Not enough gold" };
+
+  const nextTier = padState.tier + 1;
+  lane.gold -= descriptor.nextUpgradeCost;
+  lane.totalBuildSpend += descriptor.nextUpgradeCost;
+  lane.buildSpendThisRound += descriptor.nextUpgradeCost;
+  padState.tier = nextTier;
+  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, nextTier, game.teamHpMax);
+  padState.hp = padState.maxHp;
+  if (!Array.isArray(padState.costHistory)) padState.costHistory = [];
+  padState.costHistory.push({ cost: descriptor.nextUpgradeCost });
+  return { ok: true };
+}
+
+function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
+  const heroDef = getHeroRosterDefinition(heroKey);
+  if (!heroDef)
+    return { ok: false, reason: "Unknown hero" };
+
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  if (!normalizedBarracksId)
+    return { ok: false, reason: "Missing or invalid barracksId" };
+
+  const siteDescriptor = describeBarracksSite(game, lane, normalizedBarracksId);
+  if (!siteDescriptor)
+    return { ok: false, reason: "Unknown barracks" };
+  if (!siteDescriptor.isBuilt)
+    return { ok: false, reason: siteDescriptor.lockedReason || "Buy Building first" };
+
+  if (!isHeroUnlockedForLane(lane, heroDef))
+    return { ok: false, reason: getHeroRosterLockedReason(heroDef) };
+
+  const disabledReason = getHeroDisabledReason(game, lane, heroDef);
+  if (disabledReason)
+    return { ok: false, reason: disabledReason };
+
+  const summonCost = Math.max(0, Math.floor(Number(heroDef.summonCost) || 0));
+  if (lane.gold < summonCost)
+    return { ok: false, reason: "Not enough gold" };
+
+  const targetLaneIdx = resolveTargetLaneForBarracksSend(game, laneIndex, normalizedBarracksId);
+  if (targetLaneIdx === null)
+    return { ok: false, reason: "No active enemy lane" };
+
+  const targetLane = game.lanes[targetLaneIdx];
+  if (!targetLane || targetLane.eliminated)
+    return { ok: false, reason: "No active enemy lane" };
+
+  lane.gold -= summonCost;
+  lane.totalSendSpend += summonCost;
+  lane.sendSpendThisRound += summonCost;
+  lane.totalSendCount += 1;
+  lane.sendCountThisRound += 1;
+  lane.heroCooldownReadyTicks[heroDef.heroKey] = Math.floor(Number(game && game.tick) || 0)
+    + Math.max(0, Math.floor(Number(heroDef.cooldownTicks) || 0));
+  const presentation = resolveFortPresentationConfig(
+    heroDef.archetypeKey,
+    heroDef.presentationKey,
+    heroDef.displayName,
+  );
+
+  _spawnWaveUnit(game, targetLane, {
+    unit_type: heroDef.archetypeKey,
+    hp_mult: 1,
+    dmg_mult: 1,
+    speed_mult: 1,
+    sourceLaneIndex: laneIndex,
+    sourceTeam: lane.team || null,
+    sourceBarracksId: normalizedBarracksId,
+    archetypeKey: heroDef.archetypeKey,
+    presentationKey: presentation.presentationKey,
+    skinKey: presentation.skinKey || null,
+    isHero: true,
+    heroKey: heroDef.heroKey,
+    heroVisualStyleKey: heroDef.heroVisualStyleKey || null,
+  });
+
+  return { ok: true };
+}
+
 function applyMLAction(game, laneIndex, action) {
   if (!game || game.phase !== "playing") return { ok: false, reason: "Game not active" };
-  if (game.awaitingPostWinDecision) return { ok: false, reason: "Waiting for winner decision" };
   if (laneIndex < 0 || laneIndex >= game.lanes.length) return { ok: false, reason: "Bad laneIndex" };
   const lane = game.lanes[laneIndex];
   if (lane.eliminated) return { ok: false, reason: "You have been eliminated" };
@@ -736,222 +4453,131 @@ function applyMLAction(game, laneIndex, action) {
 
   const { type, data } = action;
 
-  if (type === "spawn_unit") {
-    if (game.roundState !== "build" && game.roundState !== "combat")
-      return { ok: false, reason: "Can only send units during build or combat phase" };
-    const unitType = String((data && data.unitType) || "").toLowerCase();
-    const def = resolveUnitDef(unitType);
-    if (!def) return { ok: false, reason: "Unknown unitType" };
-    const _loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
-    if (_loadoutKeys && _loadoutKeys.length > 0 && !_loadoutKeys.includes(unitType)) {
-      return { ok: false, reason: "Unit not in loadout" };
-    }
-    if (lane.gold < def.cost) return { ok: false, reason: "Not enough gold" };
+  if (type === "spawn_unit")
+    return { ok: false, reason: "Manual CMD sends were removed. Units must come from Barracks." };
 
-    // Resolve target lane (opponent)
-    let targetLaneIdx = Number.isInteger(data && data.targetLaneIndex) ? data.targetLaneIndex : null;
-    if (targetLaneIdx === null || !isOpponentLane(game, laneIndex, targetLaneIdx)) {
-      targetLaneIdx = findNextActiveOpponentLaneIndex(game, laneIndex);
-    }
-    if (targetLaneIdx === null) return { ok: false, reason: "No valid target lane" };
+  if (type === "build_on_pad") {
+    const padId = String((data && data.padId) || "").trim();
+    if (!padId) return { ok: false, reason: "Missing padId" };
+    return applyFortressBuildOnPad(game, lane, padId);
+  }
 
-    lane.gold -= def.cost;
-    lane.income += def.income;
-    lane.totalSendSpend += def.cost;
-    lane.totalSendCount += 1;
-    lane.sendSpendThisRound += def.cost;
-    lane.sendCountThisRound += 1;
-    // Sends always feed the target lane's next combat wave.
-    // Buying during combat is allowed, but it should never spawn mid-wave.
-    if (!game.pendingSends[targetLaneIdx]) game.pendingSends[targetLaneIdx] = [];
-    game.pendingSends[targetLaneIdx].push({ unitType, count: 1 });
+  if (type === "upgrade_building") {
+    const rawPadId = String((data && data.padId) || "").trim();
+    const rawBuildingType = String((data && data.buildingType) || "").trim();
+    const padId = rawPadId || (getFortressPadByBuildingType(lane, rawBuildingType) || {}).padId;
+    if (!padId) return { ok: false, reason: "Missing padId" };
+    return applyFortressUpgrade(game, lane, padId);
+  }
+
+  if (type === "build_barracks_site") {
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
+    return applyBarracksSiteBuildAction(game, lane, barracksId);
+  }
+
+  if (type === "upgrade_barracks_site") {
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
+    return applyBarracksSiteUpgradeAction(game, lane, barracksId);
+  }
+
+  if (type === "buy_barracks_unit") {
+    const rosterKey = String((data && data.rosterKey) || "").trim();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const requestedCount = Math.max(1, Math.floor(Number((data && data.count) || 1) || 1));
+    const count = Math.min(25, requestedCount);
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    console.log(
+      `[BarracksTrace][ServerBuy] action='buy_barracks_unit' lane=${laneIndex} ` +
+      `requestedBarracksId='${requestedBarracksId}' resolvedBarracksId='${barracksId}' rosterKey='${rosterKey}' count=${count}`);
+    const rosterDef = getBarracksRosterDefinition(rosterKey);
+    if (!rosterDef) return { ok: false, reason: "Unknown barracks unit" };
+    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
+
+    const siteSnapshot = createBarracksSiteSnapshot(game, lane, barracksId);
+    if (!siteSnapshot) return { ok: false, reason: "Unknown barracks" };
+    if (!siteSnapshot.isBuilt) return { ok: false, reason: siteSnapshot.lockedReason || "Buy Building first" };
+
+    const rosterEntry = Array.isArray(siteSnapshot.roster)
+      ? siteSnapshot.roster.find((entry) => entry.rosterKey === rosterKey)
+      : null;
+    if (!rosterEntry) return { ok: false, reason: "Unknown barracks unit" };
+    if (!rosterEntry.unlocked) return { ok: false, reason: rosterEntry.lockedReason || "Unit is locked" };
+    const totalCost = Math.max(0, rosterEntry.buyCost * count);
+    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold" };
+
+    lane.gold -= totalCost;
+    lane.totalBuildSpend += totalCost;
+    lane.buildSpendThisRound += totalCost;
+    const siteCounts = getBarracksSiteCounts(lane, barracksId);
+    if (!siteCounts) return { ok: false, reason: "Missing or invalid barracksId" };
+    siteCounts[rosterKey] = Math.max(0, Math.floor(Number(siteCounts[rosterKey]) || 0) + count);
+    console.log(
+      `[BarracksTrace][ServerBuy] lane=${laneIndex} barracksId='${barracksId}' rosterKey='${rosterKey}' ` +
+      `ownedCount=${siteCounts[rosterKey]} totalCost=${totalCost}`);
+    logBarracksRosterState(lane, `after_buy:${barracksId}:${rosterKey}`);
     return { ok: true };
+  }
+
+  if (type === "sell_barracks_unit") {
+    const rosterKey = String((data && data.rosterKey) || "").trim();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    console.log(
+      `[BarracksTrace][ServerBuy] action='sell_barracks_unit' lane=${laneIndex} ` +
+      `requestedBarracksId='${requestedBarracksId}' resolvedBarracksId='${barracksId}' rosterKey='${rosterKey}'`);
+    const rosterDef = getBarracksRosterDefinition(rosterKey);
+    if (!rosterDef) return { ok: false, reason: "Unknown barracks unit" };
+    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
+    const siteCounts = getBarracksSiteCounts(lane, barracksId);
+    if (!siteCounts) return { ok: false, reason: "Missing or invalid barracksId" };
+    const currentOwned = Math.max(0, Math.floor(Number(siteCounts[rosterKey]) || 0));
+    if (currentOwned <= 0) return { ok: false, reason: "No owned units to sell" };
+
+    siteCounts[rosterKey] = currentOwned - 1;
+    lane.gold += getBarracksRosterSellRefund(rosterDef);
+    console.log(
+      `[BarracksTrace][ServerBuy] lane=${laneIndex} barracksId='${barracksId}' rosterKey='${rosterKey}' ` +
+      `ownedCount=${siteCounts[rosterKey]}`);
+    logBarracksRosterState(lane, `after_sell:${barracksId}:${rosterKey}`);
+    return { ok: true };
+  }
+
+  if (type === "deploy_barracks_hero") {
+    const heroKey = String((data && data.heroKey) || "").trim().toLowerCase();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    return deployBarracksHero(game, laneIndex, lane, heroKey, requestedBarracksId);
   }
 
   if (type === "place_unit") {
-    if (game.roundState !== "build") return { ok: false, reason: "Can only place units during build phase" };
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    const unitTypeKey = String((data && data.unitTypeKey) || "").toLowerCase();
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    if (gx === SPAWN_X && gy === SPAWN_YG) return { ok: false, reason: "Cannot place on spawn tile" };
-    if (gx === CASTLE_X && gy === CASTLE_YG) return { ok: false, reason: "Cannot place on castle tile" };
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "empty") return { ok: false, reason: "Tile not empty" };
-    const ut = getUnitType(unitTypeKey);
-    if (!ut || ut.enabled === false) return { ok: false, reason: "Unknown unit type" };
-    if (Number(ut.range) <= 0 || Number(ut.build_cost) <= 0) {
-      return { ok: false, reason: "Unit cannot be placed as a defender" };
-    }
-    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
-    if (loadoutKeys && loadoutKeys.length > 0 && !loadoutKeys.includes(unitTypeKey)) {
-      return { ok: false, reason: "Unit not in loadout" };
-    }
-    const towerDef = resolveTowerDef(unitTypeKey);
-    if (!towerDef) return { ok: false, reason: "Cannot resolve unit as defender" };
-    if (lane.gold < towerDef.cost) return { ok: false, reason: "Not enough gold" };
-
-    const hp = Number(ut.hp) || 100;
-    tile.type = "tower";
-    tile.towerType = unitTypeKey;
-    tile.towerLevel = 1;
-    tile.atkCd = 0;
-    tile.targetMode = "first";
-    tile.debuffEndTick = 0;
-    tile.debuffMult = 1.0;
-    tile.abilities = buildAbilitiesForUnitType(unitTypeKey);
-    tile.hp = hp;
-    tile.maxHp = hp;
-    tile.costHistory = [{ cost: towerDef.cost, refundPct: 100 }];
-    lane.gold -= towerDef.cost;
-    lane.totalBuildSpend += towerDef.cost;
-    lane.buildSpendThisRound += towerDef.cost;
-    return { ok: true };
+    return { ok: false, reason: "Tile-grid defender placement is disabled in fortress mode" };
   }
 
   if (type === "upgrade_tower") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "tower") return { ok: false, reason: "No tower at that position" };
-    if (tile.towerLevel >= TOWER_MAX_LEVEL) return { ok: false, reason: "Tower already maxed" };
-    const nextLevel = tile.towerLevel + 1;
-    const cost = getTowerUpgradeCost(tile.towerType, nextLevel);
-    if (lane.gold < cost) return { ok: false, reason: "Not enough gold" };
-
-    lane.gold -= cost;
-    lane.totalBuildSpend += cost;
-    lane.buildSpendThisRound += cost;
-    tile.towerLevel = nextLevel;
-    if (!tile.costHistory) tile.costHistory = [];
-    tile.costHistory.push({ cost, refundPct: 100 });
-    const stats = getTowerStats(tile.towerType, nextLevel);
-    if (stats && tile.atkCd > stats.atkCdTicks) tile.atkCd = stats.atkCdTicks;
-    return { ok: true };
+    return { ok: false, reason: "Tile-grid defender upgrades are disabled in fortress mode" };
   }
 
   if (type === "bulk_upgrade_towers") {
-    const parsed = parseBulkTiles(data && data.tiles);
-    if (!parsed.ok) return { ok: false, reason: parsed.reason };
-
-    let selectedType = null;
-    const upgradable = [];
-    for (const pos of parsed.tiles) {
-      const tile = lane.grid[pos.gx][pos.gy];
-      if (tile.type !== "tower" || !tile.towerType) {
-        return { ok: false, reason: "One or more selected tiles are not towers" };
-      }
-      if (!selectedType) selectedType = tile.towerType;
-      if (tile.towerType !== selectedType) return { ok: false, reason: "Selected towers must be the same type" };
-      upgradable.push(tile);
-    }
-    if (upgradable.length === 0) return { ok: false, reason: "No towers selected" };
-
-    let upgradedCount = 0;
-    for (const tile of upgradable) {
-      if (tile.towerLevel >= TOWER_MAX_LEVEL) continue;
-      const nextLevel = tile.towerLevel + 1;
-      const cost = getTowerUpgradeCost(tile.towerType, nextLevel);
-      if (lane.gold < cost) continue;
-      lane.gold -= cost;
-      lane.totalBuildSpend += cost;
-      lane.buildSpendThisRound += cost;
-      tile.towerLevel = nextLevel;
-      if (!tile.costHistory) tile.costHistory = [];
-      tile.costHistory.push({ cost, refundPct: 100 });
-      const stats = getTowerStats(tile.towerType, nextLevel);
-      if (stats && tile.atkCd > stats.atkCdTicks) tile.atkCd = stats.atkCdTicks;
-      upgradedCount += 1;
-    }
-    if (upgradedCount === 0) return { ok: false, reason: "Not enough gold" };
-    return { ok: true };
+    return { ok: false, reason: "Tile-grid defender upgrades are disabled in fortress mode" };
   }
 
   if (type === "set_tower_target") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    const targetMode = String((data && data.targetMode) || "").toLowerCase();
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    if (!TOWER_TARGET_MODES.has(targetMode)) return { ok: false, reason: "Bad target mode" };
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "tower") return { ok: false, reason: "No tower at that position" };
-    tile.targetMode = targetMode;
-    return { ok: true };
+    return { ok: false, reason: "Tile-grid defender targeting is disabled in fortress mode" };
   }
 
   if (type === "upgrade_barracks") {
-    const currentLevel = lane.barracks ? lane.barracks.level : 1;
-    const nextLevel = currentLevel + 1;
-    const maxLevel = getMaxBarracksLevel();
-    if (nextLevel > maxLevel) return { ok: false, reason: "Barracks already at max level" };
-    const nextDef = getBarracksUpgradeDef(nextLevel);
-    if (!nextDef) {
-      // DB not loaded; fall back to hardcoded formula
-      const fallback = getBarracksLevelDef(nextLevel);
-      if (lane.gold < fallback.cost) return { ok: false, reason: "Not enough gold" };
-      lane.gold -= fallback.cost;
-      lane.totalBuildSpend += fallback.cost;
-      lane.buildSpendThisRound += fallback.cost;
-      lane.barracks = { level: nextLevel, multiplier: fallback.hpMult };
-      return { ok: true };
-    }
-    if (lane.gold < nextDef.upgradeCost) return { ok: false, reason: "Not enough gold" };
-
-    // Phase F: barracks stores level + DB multiplier only
-    lane.gold -= nextDef.upgradeCost;
-    lane.totalBuildSpend += nextDef.upgradeCost;
-    lane.buildSpendThisRound += nextDef.upgradeCost;
-    lane.barracks = { level: nextLevel, multiplier: nextDef.multiplier };
-    return { ok: true };
+    return { ok: false, reason: "Select Barracks Left, Center, or Right to upgrade that building." };
   }
 
   if (type === "sell_tower") {
-    const gx = Number((data && data.gridX !== undefined) ? data.gridX : -1);
-    const gy = Number((data && data.gridY !== undefined) ? data.gridY : -1);
-    if (!Number.isInteger(gx) || !Number.isInteger(gy) || gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) {
-      return { ok: false, reason: "Invalid grid position" };
-    }
-    const tile = lane.grid[gx][gy];
-    if (tile.type !== "tower") return { ok: false, reason: "No tower at that position" };
-
-    const sellValue = (tile.costHistory && tile.costHistory.length > 0)
-      ? Math.floor(tile.costHistory.reduce((sum, item) => sum + item.cost * item.refundPct / 100, 0))
-      : getTowerSellValue(tile.towerType, tile.towerLevel);
-    tile.type = "empty";
-    tile.towerType = null;
-    tile.towerLevel = 0;
-    tile.atkCd = 0;
-    tile.costHistory = null;
-    tile.abilities = null;
-
-    lane.gold += sellValue;
-    return { ok: true };
+    return { ok: false, reason: "Tile-grid defender selling is disabled in fortress mode" };
   }
 
-  if (type === "set_autosend") {
-    const as = lane.autosend;
-    const { enabled, enabledUnits, rate, loadoutKeys } = data || {};
-    if (typeof enabled === "boolean") {
-      as.enabled = enabled;
-    }
-    if (enabledUnits && typeof enabledUnits === "object") {
-      for (const ut of getAllUnitTypes().filter(u => u.enabled).map(u => u.key)) {
-        as.enabledUnits[ut] = !!enabledUnits[ut];
-      }
-    }
-    const VALID_RATES = new Set(["slow", "normal", "fast"]);
-    if (VALID_RATES.has(rate)) as.rate = rate;
-    if (Array.isArray(loadoutKeys)) as.loadoutKeys = loadoutKeys.slice(0, 5);
-    as.tickCounter = 0;
-    return { ok: true };
-  }
+  if (type === "set_autosend")
+    return { ok: false, reason: "CMD autosend was removed. Units must come from Barracks." };
 
   return { ok: false, reason: "Unknown action type" };
 }
@@ -966,27 +4592,404 @@ function dist2D(a, b) {
 function moveToward2D(unit, tx, ty, speed, minX, maxX, minY, maxY) {
   const dx = tx - unit.posX, dy = ty - unit.posY;
   const d  = Math.sqrt(dx * dx + dy * dy);
-  if (d < 0.01) return;
+  if (d < 0.01) {
+    unit.posX = Math.max(minX, Math.min(maxX, tx));
+    unit.posY = Math.max(minY, Math.min(maxY, ty));
+    unit.pathIdx = unit.posY;
+    return;
+  }
   const step = Math.min(speed, d);
   unit.posX  = Math.max(minX, Math.min(maxX, unit.posX + (dx / d) * step));
   unit.posY  = Math.max(minY, Math.min(maxY, unit.posY + (dy / d) * step));
   unit.pathIdx = unit.posY;
 }
 
+function moveTowardContact2D(unit, target, speed, stopDistance, minX, maxX, minY, maxY) {
+  if (!target) return;
+  const dx = target.posX - unit.posX;
+  const dy = target.posY - unit.posY;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d <= stopDistance || d < 0.01) return;
+  const step = Math.min(speed, Math.max(0, d - stopDistance));
+  if (step <= 0) return;
+  unit.posX = Math.max(minX, Math.min(maxX, unit.posX + (dx / d) * step));
+  unit.posY = Math.max(minY, Math.min(maxY, unit.posY + (dy / d) * step));
+  unit.pathIdx = unit.posY;
+}
+
+function moveTowardPoint2D(unit, tx, ty, speed, minX, maxX, minY, maxY) {
+  const dx = tx - unit.posX;
+  const dy = ty - unit.posY;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d < 0.01) {
+    unit.posX = Math.max(minX, Math.min(maxX, tx));
+    unit.posY = Math.max(minY, Math.min(maxY, ty));
+    unit.pathIdx = unit.posY;
+    return;
+  }
+  const step = Math.min(speed, d);
+  unit.posX = Math.max(minX, Math.min(maxX, unit.posX + (dx / d) * step));
+  unit.posY = Math.max(minY, Math.min(maxY, unit.posY + (dy / d) * step));
+  unit.pathIdx = unit.posY;
+}
+
+function getUnitContactRadius(typeKey) {
+  if (typeKey && FORTRESS_BUILDING_DEFS[typeKey]) {
+    if (typeKey === "town_core") return 1.15;
+    return 0.95;
+  }
+
+  const def = resolveUnitDef(typeKey);
+  const hp = Number(def && def.hp) || 80;
+  const atkRange = getUnitAttackRange(typeKey);
+
+  let radius;
+  if (hp >= 140) radius = 0.85;
+  else if (hp >= 100) radius = 0.75;
+  else if (hp >= 70) radius = 0.65;
+  else if (hp >= 50) radius = 0.55;
+  else radius = 0.45;
+
+  if (atkRange > 2.5)
+    radius = Math.max(0.45, radius - 0.10);
+
+  if (typeof typeKey === "string" && (typeKey.startsWith("tt_") || isFortArchetypeKey(typeKey)))
+    radius += 0.55;
+
+  return radius;
+}
+
+function getUnitStopDistance(attackerType, targetType) {
+  const attackRange = getUnitAttackRange(attackerType);
+  const base = attackRange + 0.15;
+  if (attackRange > 2.0) return base;
+  return base + getUnitContactRadius(attackerType) + getUnitContactRadius(targetType);
+}
+
+function getLaneByIndex(game, laneIndex) {
+  if (!game || !Array.isArray(game.lanes) || !Number.isInteger(laneIndex))
+    return null;
+  return game.lanes.find((candidate) => candidate && candidate.laneIndex === laneIndex) || null;
+}
+
+function resolveRouteUnitLane(game, unit, fallbackLane = null) {
+  if (!game || !unit)
+    return fallbackLane;
+
+  if (Number.isInteger(unit.targetLaneIndex)) {
+    const explicitTargetLane = getLaneByIndex(game, unit.targetLaneIndex);
+    if (explicitTargetLane)
+      return explicitTargetLane;
+  }
+
+  if (Number.isInteger(unit.laneId)) {
+    const explicitLane = getLaneByIndex(game, unit.laneId);
+    if (explicitLane)
+      return explicitLane;
+  }
+
+  return fallbackLane;
+}
+
+function findRouteUnitById(game, unitId, preferredLaneIndex = -1) {
+  if (!game || !Array.isArray(game.lanes) || !unitId)
+    return null;
+
+  if (Number.isInteger(preferredLaneIndex)) {
+    const preferredLane = getLaneByIndex(game, preferredLaneIndex);
+    if (preferredLane) {
+      const match = preferredLane.units.find((candidate) => candidate && candidate.id === unitId && candidate.hp > 0);
+      if (match)
+        return { lane: preferredLane, unit: match };
+    }
+  }
+
+  for (const lane of game.lanes) {
+    if (!lane)
+      continue;
+    const match = lane.units.find((candidate) => candidate && candidate.id === unitId && candidate.hp > 0);
+    if (match)
+      return { lane, unit: match };
+  }
+
+  return null;
+}
+
+function resolveRouteUnitFactionKey(game, unit) {
+  if (!unit)
+    return null;
+  return resolveUnitAllegianceKey(game, resolveRouteUnitLane(game, unit, null), unit);
+}
+
+function areRouteUnitsHostile(game, attacker, target) {
+  if (!attacker || !target || attacker === target)
+    return false;
+  if (attacker.hp <= 0 || target.hp <= 0)
+    return false;
+  if (attacker.isDefender || target.isDefender)
+    return false;
+
+  const attackerFaction = resolveRouteUnitFactionKey(game, attacker);
+  const targetFaction = resolveRouteUnitFactionKey(game, target);
+  if (attackerFaction && targetFaction)
+    return areAllegiancesHostile(attackerFaction, targetFaction);
+
+  return attacker.id !== target.id;
+}
+
+function canEngageRouteUnitTarget(game, attacker, target) {
+  return areRouteUnitsHostile(game, attacker, target);
+}
+
+function isRouteUnitHostileToLane(game, lane, unit) {
+  if (!lane || !unit || unit.hp <= 0 || unit.isDefender)
+    return false;
+
+  const laneTeam = resolveLaneAllegianceKey(lane);
+  const unitFaction = resolveRouteUnitFactionKey(game, unit);
+  if (laneTeam && unitFaction)
+    return areAllegiancesHostile(laneTeam, unitFaction);
+
+  if (Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0)
+    return unit.sourceLaneIndex !== lane.laneIndex;
+
+  return true;
+}
+
+function canRouteUnitEngageTarget(game, lane, attacker, target) {
+  if (!attacker || !target)
+    return false;
+  if (target.isDefender)
+    return canEngageDefenderInZone(game, lane, attacker, target);
+  return canEngageRouteUnitTarget(game, attacker, target);
+}
+
+function resolveWaveCombatTarget(game, lane, combatTarget) {
+  if (!lane || !combatTarget || !combatTarget.unitId) return null;
+
+  if (combatTarget.kind === "fortress_pad") {
+    const barracksSiteMatch = String(combatTarget.padId || combatTarget.unitId || "").match(/^barracks_site:(.+)$/);
+    if (barracksSiteMatch)
+      return getBarracksSiteCombatTarget(lane, barracksSiteMatch[1]);
+
+    const padState = combatTarget.padId
+      ? getFortressPadState(lane, combatTarget.padId)
+      : getLaneTownCorePad(lane);
+    if (padState && padState.buildingType === "town_core")
+      return getLaneTownCoreCombatTarget(lane);
+    return getFortressPadCombatTarget(lane, padState);
+  }
+
+  const unit = lane.units.find((candidate) => candidate && candidate.id === combatTarget.unitId && candidate.hp > 0);
+  if (!unit) {
+    const resolved = findRouteUnitById(game, combatTarget.unitId, Number.isInteger(combatTarget.laneIndex) ? combatTarget.laneIndex : lane.laneIndex);
+    if (!resolved || !resolved.unit)
+      return null;
+    return {
+      id: resolved.unit.id,
+      unitId: resolved.unit.id,
+      kind: "unit",
+      type: resolved.unit.type,
+      posX: resolved.unit.posX,
+      posY: resolved.unit.posY,
+      laneIndex: resolved.lane ? resolved.lane.laneIndex : null,
+      entity: resolved.unit,
+    };
+  }
+
+  return {
+    id: unit.id,
+    unitId: unit.id,
+    kind: "unit",
+    type: unit.type,
+    posX: unit.posX,
+    posY: unit.posY,
+    laneIndex: lane.laneIndex,
+    entity: unit,
+  };
+}
+
+function markTownCoreBreach(game, lane, unit, townCoreTarget) {
+  if (!game || !lane || !unit || unit.hasBreachedTownCore) return;
+  unit.hasBreachedTownCore = true;
+  lane.totalLeaksTaken += 1;
+  lane.leakCountThisRound += 1;
+  log.info("[TownCoreTrace] core target acquired", {
+    tick: game.tick,
+    laneIndex: lane.laneIndex,
+    attackerId: unit.id,
+    attackerType: unit.type,
+    attackerHp: Math.max(0, Math.floor(Number(unit.hp) || 0)),
+    pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
+    corePadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
+    coreHp: getLaneTownCoreHp(lane),
+    coreMaxHp: getLaneTownCoreMaxHp(lane),
+  });
+  combatLog.logEvent(game, "leak", {
+    unitId: unit.id,
+    unitType: unit.type,
+    lane: lane.laneIndex,
+    targetPadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
+    breachOnly: true,
+  });
+}
+
+function attackFortressPad(game, lane, attacker, target) {
+  if (!game || !lane || !attacker || !target || target.kind !== "fortress_pad") {
+    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
+  }
+
+  const def = resolveUnitDef(attacker.type);
+  const rawDamage = Math.max(1, Math.floor(Number(attacker.baseDmg) || Number(def && def.dmg) || 1));
+  const cooldownTicks = Math.max(1, Math.floor(Number(attacker.atkCdTicks) || Number(def && def.atkCdTicks) || 20));
+  const targetPad = getFortressPadState(lane, target.padId || target.id);
+  const prevHp = targetPad ? Math.max(0, Math.floor(Number(targetPad.hp) || 0)) : 0;
+  const result = applyFortressPadDamage(game, lane, target.padId || target.id, rawDamage);
+
+  attacker.attackPulse = (attacker.attackPulse || 0) + 1;
+  attacker.atkCd = cooldownTicks;
+  if (targetPad && targetPad.buildingType === "town_core") {
+    log.info("[TownCoreTrace] core attacked", {
+      tick: game.tick,
+      laneIndex: lane.laneIndex,
+      attackerId: attacker.id,
+      attackerType: attacker.type,
+      corePadId: targetPad.padId,
+      attemptedDamage: rawDamage,
+      appliedDamage: result.damageApplied,
+      previousHp: prevHp,
+      remainingHp: result.remainingHp,
+      destroyed: !!result.destroyed,
+    });
+  }
+  return result;
+}
+
+function clampUnitToAnchor(unit, anchorX, anchorY, maxRadius, minX, maxX, minY, maxY) {
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || maxRadius <= 0) return;
+  const dx = unit.posX - anchorX;
+  const dy = unit.posY - anchorY;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  if (d <= maxRadius || d < 0.001) return;
+  const scale = maxRadius / d;
+  unit.posX = Math.max(minX, Math.min(maxX, anchorX + dx * scale));
+  unit.posY = Math.max(minY, Math.min(maxY, anchorY + dy * scale));
+  unit.pathIdx = unit.posY;
+}
+
+function resolveContactFrame(attacker, target) {
+  const dx = Number(attacker && attacker.posX) - Number(target && target.posX);
+  const dy = Number(attacker && attacker.posY) - Number(target && target.posY);
+  const dist = Math.sqrt((dx * dx) + (dy * dy));
+  if (dist > 0.0001) {
+    const forward = { x: dx / dist, y: dy / dist };
+    return {
+      forward,
+      right: { x: -forward.y, y: forward.x },
+    };
+  }
+
+  const attackerForward = getUnitForwardDirection(attacker);
+  const fallbackForward = {
+    x: -(Number(attackerForward && attackerForward.x) || 0),
+    y: -(Number(attackerForward && attackerForward.y) || 1),
+  };
+  const fallbackMag = Math.sqrt((fallbackForward.x * fallbackForward.x) + (fallbackForward.y * fallbackForward.y));
+  if (fallbackMag > 0.0001) {
+    const forward = {
+      x: fallbackForward.x / fallbackMag,
+      y: fallbackForward.y / fallbackMag,
+    };
+    return {
+      forward,
+      right: { x: -forward.y, y: forward.x },
+    };
+  }
+
+  return {
+    forward: { x: 0, y: -1 },
+    right: { x: 1, y: 0 },
+  };
+}
+
+function getContactSlotPoint(lane, attacker, target, stopDistance) {
+  const attackers = lane.units
+    .filter(u =>
+      u &&
+      u.hp > 0 &&
+      !u.isDefender &&
+      u.combatTarget &&
+      u.combatTarget.unitId === target.id)
+    .sort((a, b) => {
+      const ax = Number(a.spawnIndex);
+      const bx = Number(b.spawnIndex);
+      if (Number.isFinite(ax) && Number.isFinite(bx) && ax !== bx) return ax - bx;
+      if (a.posY !== b.posY) return a.posY - b.posY;
+      if (a.posX !== b.posX) return a.posX - b.posX;
+      return String(a.id).localeCompare(String(b.id));
+    });
+
+  const slotIndex = Math.max(0, attackers.findIndex(u => u.id === attacker.id));
+  const radius = Math.max(0.75, getUnitContactRadius(attacker.type) + getUnitContactRadius(target.type));
+  const slotOffsets = [
+    { x: 0.00, y: -1.00 },
+    { x: -0.95, y: -0.74 },
+    { x: 0.95, y: -0.74 },
+    { x: -1.55, y: -0.34 },
+    { x: 1.55, y: -0.34 },
+  ];
+  const ring = Math.floor(slotIndex / slotOffsets.length);
+  const slot = slotOffsets[slotIndex % slotOffsets.length];
+  const ringScale = 1 + ring * 0.32;
+  const ringBackstep = ring * Math.max(0.70, radius * 0.75);
+  const frame = resolveContactFrame(attacker, target);
+  const lateralOffset = slot.x * radius * ringScale;
+  const forwardOffset = (Math.abs(slot.y) * stopDistance) + ringBackstep;
+
+  return {
+    x: target.posX + (frame.right.x * lateralOffset) + (frame.forward.x * forwardOffset),
+    y: target.posY + (frame.right.y * lateralOffset) + (frame.forward.y * forwardOffset),
+  };
+}
+
+function getPairSpacing(a, b, fallback) {
+  return Math.max(
+    fallback,
+    getUnitContactRadius(a && a.type) + getUnitContactRadius(b && b.type)
+  );
+}
+
+function shouldPreferLateralSpacing(a, b, dx, dy) {
+  return !!(a && b && !a.isDefender && !b.isDefender && Math.abs(dy) >= Math.abs(dx));
+}
+
 function applySeparation2D(units, minSpacing, minX, maxX, minY, maxY) {
-  for (let i = 0; i < units.length; i++) {
-    for (let j = i + 1; j < units.length; j++) {
-      const a = units[i], b = units[j];
-      const dx = b.posX - a.posX, dy = b.posY - a.posY;
-      const d  = Math.sqrt(dx * dx + dy * dy);
-      if (d >= minSpacing || d < 0.001) continue;
-      const push = Math.min((minSpacing - d) * SEP_DAMP, SEP_MAX_PUSH);
-      a.posX = Math.max(minX, Math.min(maxX, a.posX - (dx / d) * push));
-      a.posY = Math.max(minY, Math.min(maxY, a.posY - (dy / d) * push));
-      a.pathIdx = a.posY;
-      b.posX = Math.max(minX, Math.min(maxX, b.posX + (dx / d) * push));
-      b.posY = Math.max(minY, Math.min(maxY, b.posY + (dy / d) * push));
-      b.pathIdx = b.posY;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < units.length; i++) {
+      for (let j = i + 1; j < units.length; j++) {
+        const a = units[i], b = units[j];
+        const dx = b.posX - a.posX, dy = b.posY - a.posY;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        const pairSpacing = getPairSpacing(a, b, minSpacing);
+        if (d >= pairSpacing || d < 0.001) continue;
+        const push = Math.min((pairSpacing - d) * SEP_DAMP, SEP_MAX_PUSH);
+        if (shouldPreferLateralSpacing(a, b, dx, dy)) {
+          const chooseLeftA = a.posX < b.posX || (Math.abs(a.posX - b.posX) < 0.001 && String(a.id) <= String(b.id));
+          const left = chooseLeftA ? a : b;
+          const right = chooseLeftA ? b : a;
+          left.posX = Math.max(minX, Math.min(maxX, left.posX - push));
+          right.posX = Math.max(minX, Math.min(maxX, right.posX + push));
+          left.pathIdx = left.posY;
+          right.pathIdx = right.posY;
+          continue;
+        }
+        a.posX = Math.max(minX, Math.min(maxX, a.posX - (dx / d) * push));
+        a.posY = Math.max(minY, Math.min(maxY, a.posY - (dy / d) * push));
+        a.pathIdx = a.posY;
+        b.posX = Math.max(minX, Math.min(maxX, b.posX + (dx / d) * push));
+        b.posY = Math.max(minY, Math.min(maxY, b.posY + (dy / d) * push));
+        b.pathIdx = b.posY;
+      }
     }
   }
 }
@@ -1014,10 +5017,261 @@ function isMergeZoneUnit(unit) {
   return !isSplitZoneUnit(unit);
 }
 
-function canEngageDefenderInZone(attacker, defender) {
-  if (!defender || !defender.isDefender || defender.hp <= 0) return false;
-  if (isSplitZoneUnit(attacker)) return defender.defState === "split_guard";
-  return defender.defState === "merge_guard";
+function canEngageDefenderInZone(game, lane, attacker, defender) {
+  return !!(
+    attacker
+    && defender
+    && defender.isDefender
+    && defender.hp > 0
+    && isRouteUnitHostileToLane(game, lane, attacker)
+  );
+}
+
+function getWaveUnitTargetDistance(unit, target) {
+  if (!unit || !target) return null;
+  const dx = Number(target.posX) - Number(unit.posX);
+  const dy = Number(target.posY) - Number(unit.posY);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function findWaveUnitDefenderTarget(game, lane, unit, requireAttackRange = false) {
+  if (!lane || !unit) return null;
+  if (!isRouteUnitHostileToLane(game, lane, unit)) return null;
+
+  const maxRange = requireAttackRange
+    ? getUnitStopDistance(unit.type, "guardian")
+    : getUnitEngagementRange(unit.type);
+
+  let best = null;
+  let bestPriority = Infinity;
+  let bestDist = Infinity;
+
+  for (const defender of lane.units) {
+    if (!canEngageDefenderInZone(game, lane, unit, defender)) continue;
+    const dist = dist2D(unit, defender);
+    const rangeLimit = requireAttackRange
+      ? getUnitStopDistance(unit.type, defender.type) + CONTACT_SLOT_TOLERANCE
+      : maxRange;
+    if (dist > rangeLimit) continue;
+
+    const priority = requireAttackRange ? 0 : 1;
+    if (priority < bestPriority || (priority === bestPriority && dist < bestDist)) {
+      best = defender;
+      bestPriority = priority;
+      bestDist = dist;
+    }
+  }
+
+  return best;
+}
+
+function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false) {
+  if (!game || !lane || !unit)
+    return null;
+
+  const preferredLane = resolveRouteUnitLane(game, unit, lane);
+  const forward = getUnitForwardDirection(unit);
+  const hasRouteState = Array.isArray(unit.routeSegments) && unit.routeSegments.length > 0;
+  let best = null;
+  let bestLaneIndex = -1;
+  let bestLanePriority = Infinity;
+  let bestForwardDistance = Infinity;
+  let bestDist = Infinity;
+
+  for (const candidateLane of game.lanes || []) {
+    if (!candidateLane || !Array.isArray(candidateLane.units))
+      continue;
+
+    const lanePriority = preferredLane && candidateLane.laneIndex === preferredLane.laneIndex
+      ? 0
+      : 1;
+
+    for (const candidate of candidateLane.units) {
+      if (!candidate || !canEngageRouteUnitTarget(game, unit, candidate))
+        continue;
+
+      const dx = Number(candidate.posX) - Number(unit.posX);
+      const dy = Number(candidate.posY) - Number(unit.posY);
+      const dist = Math.sqrt((dx * dx) + (dy * dy));
+      const rangeLimit = requireAttackRange
+        ? getUnitStopDistance(unit.type, candidate.type) + CONTACT_SLOT_TOLERANCE
+        : ROUTE_BLOCKING_CORRIDOR_RADIUS;
+      if (dist > rangeLimit)
+        continue;
+
+      let forwardDistance = dist;
+      if (!requireAttackRange && hasRouteState) {
+        const direction = dist > 0.0001
+          ? { x: dx / dist, y: dy / dist }
+          : forward;
+        const dot = (direction.x * forward.x) + (direction.y * forward.y);
+        if (dot < ROUTE_BLOCKING_FORWARD_DOT)
+          continue;
+        forwardDistance = (dx * forward.x) + (dy * forward.y);
+        if (forwardDistance < 0)
+          continue;
+      }
+
+      if (
+        lanePriority < bestLanePriority
+        || (lanePriority === bestLanePriority && forwardDistance < bestForwardDistance)
+        || (lanePriority === bestLanePriority && Math.abs(forwardDistance - bestForwardDistance) <= 0.0001 && dist < bestDist)
+      ) {
+        best = candidate;
+        bestLaneIndex = candidateLane.laneIndex;
+        bestLanePriority = lanePriority;
+        bestForwardDistance = forwardDistance;
+        bestDist = dist;
+      }
+    }
+  }
+
+  return best
+    ? { entity: best, laneIndex: bestLaneIndex }
+    : null;
+}
+
+function getWaveUnitPreferredTarget(game, lane, unit) {
+  const routeUnitInAttackRange = findHostileRouteUnitTarget(game, lane, unit, true);
+  if (routeUnitInAttackRange) return { kind: "unit", entity: routeUnitInAttackRange.entity, laneIndex: routeUnitInAttackRange.laneIndex, reason: "route_unit_attack_range" };
+
+  const defenderInAttackRange = findWaveUnitDefenderTarget(game, lane, unit, true);
+  if (defenderInAttackRange) return { kind: "unit", entity: defenderInAttackRange, laneIndex: lane.laneIndex, reason: "defender_attack_range" };
+
+  const routeUnitInEngageRange = findHostileRouteUnitTarget(game, lane, unit, false);
+  if (routeUnitInEngageRange) return { kind: "unit", entity: routeUnitInEngageRange.entity, laneIndex: routeUnitInEngageRange.laneIndex, reason: "route_unit_engage_range" };
+
+  const defenderInEngageRange = findWaveUnitDefenderTarget(game, lane, unit, false);
+  if (defenderInEngageRange) return { kind: "unit", entity: defenderInEngageRange, laneIndex: lane.laneIndex, reason: "defender_engage_range" };
+
+  return null;
+}
+
+function shouldBarracksAttackerClearEnemyStructures(unit) {
+  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
+  return spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER
+    || spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_HERO;
+}
+
+function getLaneBlockingStructureTargets(lane, unit = null) {
+  const targets = [];
+  let townCoreTarget = null;
+  if (!lane)
+    return targets;
+
+  if (Array.isArray(lane.fortressPads)) {
+    for (const pad of lane.fortressPads) {
+      const target = getFortressPadCombatTarget(lane, pad);
+      if (!target)
+        continue;
+      if (target.buildingType === "town_core")
+        townCoreTarget = target;
+      else
+        targets.push(target);
+    }
+  }
+
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const target = getBarracksSiteCombatTarget(lane, siteDef.barracksId);
+    if (target)
+      targets.push(target);
+  }
+
+  if (shouldBarracksAttackerClearEnemyStructures(unit))
+    return targets.length > 0
+      ? targets
+      : (townCoreTarget ? [townCoreTarget] : []);
+
+  return townCoreTarget
+    ? [townCoreTarget, ...targets]
+    : targets;
+}
+
+function findBlockingStructureTarget(game, lane, unit) {
+  if (!lane || !unit)
+    return null;
+  if (!isRouteUnitHostileToLane(game, lane, unit))
+    return null;
+
+  const forward = getUnitForwardDirection(unit);
+  const hasRouteState = Array.isArray(unit.routeSegments) && unit.routeSegments.length > 0;
+  const candidates = getLaneBlockingStructureTargets(lane, unit);
+  let best = null;
+  let bestForwardDistance = Infinity;
+  let bestDistance = Infinity;
+
+  for (const candidate of candidates) {
+    const dx = Number(candidate.posX) - Number(unit.posX);
+    const dy = Number(candidate.posY) - Number(unit.posY);
+    const straightDistance = Math.sqrt((dx * dx) + (dy * dy));
+    if (straightDistance > ROUTE_BLOCKING_CORRIDOR_RADIUS)
+      continue;
+
+    if (!hasRouteState) {
+      if (straightDistance < bestDistance) {
+        best = candidate;
+        bestDistance = straightDistance;
+      }
+      continue;
+    }
+
+    const direction = straightDistance > 0.0001
+      ? { x: dx / straightDistance, y: dy / straightDistance }
+      : { x: 0, y: 0 };
+    const dot = (direction.x * forward.x) + (direction.y * forward.y);
+    if (dot < ROUTE_BLOCKING_FORWARD_DOT)
+      continue;
+
+    const forwardDistance = (dx * forward.x) + (dy * forward.y);
+    if (forwardDistance < bestForwardDistance) {
+      best = candidate;
+      bestForwardDistance = forwardDistance;
+    }
+  }
+
+  return best;
+}
+
+function traceWaveUnitTick(game, lane, unit, target, details = {}) {
+  if (!game || !lane || !unit) return;
+  const targetId = target ? (target.unitId || target.id || null) : null;
+  const targetType = target
+    ? (target.kind === "unit"
+      ? "defender"
+      : target.kind === "fortress_pad"
+        ? (target.buildingType || target.type || "fortress_pad")
+        : target.kind || null)
+    : null;
+  const distanceToTarget = target ? getWaveUnitTargetDistance(unit, target) : null;
+  const shouldLog = !!(
+    details.coreDamageApplied ||
+    details.movementAdvanced ||
+    targetId ||
+    unit.combatState === WAVE_UNIT_STATES.COMBAT ||
+    unit.posY >= GRID_H - 2
+  );
+  if (!shouldLog) return;
+
+  log.info("[WaveUnitTrace] tick", {
+    tick: game.tick,
+    laneIndex: lane.laneIndex,
+    unitId: unit.id,
+    unitType: unit.type,
+    routeType: unit.routeType || null,
+    currentSegment: unit.currentSegment || null,
+    segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
+    state: unit.combatState || WAVE_UNIT_STATES.IDLE,
+    inCombat: unit.combatState === WAVE_UNIT_STATES.COMBAT,
+    targetId,
+    targetType,
+    blockedByStructure: !!unit.blockedByStructure,
+    blockedByStructureId: unit.blockedByStructureId || null,
+    distanceToTarget: Number.isFinite(distanceToTarget) ? Number(distanceToTarget.toFixed(3)) : null,
+    movementAdvanced: !!details.movementAdvanced,
+    coreDamageApplied: !!details.coreDamageApplied,
+    pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
+    preferredTargetReason: details.preferredTargetReason || null,
+  });
 }
 
 function _doAttack(game, lane, attacker, target) {
@@ -1048,21 +5302,48 @@ function _doAttack(game, lane, attacker, target) {
     // Melee — instant damage
     target.hp = Math.max(0, target.hp - dmg);
   }
+  attacker.attackPulse = (attacker.attackPulse || 0) + 1;
   attacker.atkCd = cdTk;
 }
 
-function assignMergeSlot(lane, defUnit) {
-  const usedX = new Set(
-    lane.units
-      .filter(u => u.isDefender && u.defState === 'merge_guard' && u !== defUnit && u.hp > 0)
-      .map(u => Math.round(u.posX))
-  );
-  let best = MERGE_STAGING_COLS[0], bestDist = Infinity;
-  for (const col of MERGE_STAGING_COLS) {
-    if (usedX.has(col)) continue;
-    const d = Math.abs(col - defUnit.homeTx);
-    if (d < bestDist) { bestDist = d; best = col; }
+function countDefenderAssignments(lane, defenderState) {
+  const counts = new Map();
+  for (const unit of lane.units) {
+    if (!unit || !unit.isDefender || unit.hp <= 0) continue;
+    if (defenderState && unit.defState !== defenderState) continue;
+    const targetId = unit.combatTarget && unit.combatTarget.unitId;
+    if (!targetId) continue;
+    counts.set(targetId, (counts.get(targetId) || 0) + 1);
   }
+  return counts;
+}
+
+function pickDefenderCombatTarget(lane, defender, attackers, defenderState) {
+  if (!Array.isArray(attackers) || attackers.length === 0) return null;
+
+  const assignmentCounts = countDefenderAssignments(lane, defenderState);
+  if (defender?.combatTarget?.unitId) {
+    assignmentCounts.set(
+      defender.combatTarget.unitId,
+      Math.max(0, (assignmentCounts.get(defender.combatTarget.unitId) || 1) - 1)
+    );
+  }
+
+  let best = null;
+  let bestAssigned = Infinity;
+  let bestDist = Infinity;
+
+  for (const attacker of attackers) {
+    if (!attacker || attacker.hp <= 0) continue;
+    const assigned = assignmentCounts.get(attacker.id) || 0;
+    const dist = dist2D(defender, attacker);
+    if (assigned < bestAssigned || (assigned === bestAssigned && dist < bestDist)) {
+      best = attacker;
+      bestAssigned = assigned;
+      bestDist = dist;
+    }
+  }
+
   return best;
 }
 
@@ -1087,17 +5368,20 @@ function _pickTowerTarget(tile, unitsInRange) {
   return target;
 }
 
-function _resolveWave(game) {
+function resolveWaveForRound(game, roundNumber) {
   const cfg = Array.isArray(game.waveConfig) ? game.waveConfig : [];
-  const round = game.roundNumber;
-  if (cfg.length === 0) {
-    // No config — use a minimal fallback so the game still runs
-    return { unit_type: "goblin", spawn_qty: 8, hp_mult: 1, dmg_mult: 1, speed_mult: 1 };
-  }
-  // Find exact wave row; if past the last, use last row with escalation
+  const round = Math.max(1, Math.floor(Number(roundNumber) || 1));
+  if (cfg.length === 0)
+    return null;
+
+  // Find exact wave row; if past the last, use last row with escalation.
   const exact = cfg.find(w => Number(w.wave_number) === round);
   if (exact) return exact;
+
   const last = cfg.reduce((a, b) => Number(a.wave_number) >= Number(b.wave_number) ? a : b);
+  if (!last)
+    return null;
+
   const extra = round - Number(last.wave_number);
   const esc = 1 + extra * ESCALATION_PER_EXTRA_ROUND;
   return {
@@ -1109,19 +5393,227 @@ function _resolveWave(game) {
   };
 }
 
+function getUpcomingWaveNumber(game) {
+  if (!game)
+    return 1;
+
+  const currentRound = Math.max(1, Math.floor(Number(game.roundNumber) || 1));
+  return game.hasSpawnedWave
+    ? currentRound + 1
+    : currentRound;
+}
+
+function countRemainingWaveMobs(game) {
+  if (!game)
+    return 0;
+
+  let remaining = 0;
+  for (const lane of game.lanes || []) {
+    if (!lane || lane.eliminated)
+      continue;
+
+    for (const unit of lane.spawnQueue || []) {
+      if (unit && isScheduledWaveUnit(unit) && Number(unit.hp) > 0)
+        remaining += 1;
+    }
+
+    for (const unit of lane.units || []) {
+      if (unit && isScheduledWaveUnit(unit) && Number(unit.hp) > 0)
+        remaining += 1;
+    }
+  }
+
+  return remaining;
+}
+
+function isCurrentWaveComplete(game) {
+  return countRemainingWaveMobs(game) <= 0;
+}
+
+function createLaneUpcomingWavePreview(game, lane, waveNumber = null) {
+  const upcomingWaveNumber = Number.isInteger(waveNumber) && waveNumber > 0
+    ? waveNumber
+    : getUpcomingWaveNumber(game);
+  const entriesByKey = new Map();
+
+  const addEntry = ({
+    source,
+    unitType,
+    archetypeKey = null,
+    presentationKey = null,
+    skinKey = null,
+    count = 1,
+    hpMult = 1,
+    dmgMult = 1,
+    speedMult = 1,
+    sourceLaneIndex = -1,
+    sourceBarracksId = null,
+    isHero = false,
+    heroKey = null,
+    heroVisualStyleKey = null,
+  }) => {
+    if (!unitType)
+      return;
+
+    const normalizedCount = Math.max(0, Math.floor(Number(count) || 0));
+    if (normalizedCount <= 0)
+      return;
+
+    const key = [
+      source || "scheduled",
+      String(unitType).trim().toLowerCase(),
+      String(archetypeKey || "").trim().toLowerCase(),
+      String(presentationKey || "").trim().toLowerCase(),
+      String(skinKey || "").trim().toLowerCase(),
+      Number(hpMult || 1).toFixed(3),
+      Number(dmgMult || 1).toFixed(3),
+      Number(speedMult || 1).toFixed(3),
+      Number.isInteger(sourceLaneIndex) ? sourceLaneIndex : -1,
+      String(sourceBarracksId || "").trim().toLowerCase(),
+      isHero ? "hero" : "unit",
+      String(heroKey || "").trim().toLowerCase(),
+    ].join("|");
+
+    if (entriesByKey.has(key)) {
+      entriesByKey.get(key).count += normalizedCount;
+      return;
+    }
+
+    entriesByKey.set(key, {
+      source: source || "scheduled",
+      unitType: String(unitType).trim().toLowerCase(),
+      archetypeKey: archetypeKey || null,
+      presentationKey: presentationKey || null,
+      skinKey: skinKey || null,
+      count: normalizedCount,
+      hpMult: Number(hpMult || 1),
+      dmgMult: Number(dmgMult || 1),
+      speedMult: Number(speedMult || 1),
+      sourceLaneIndex: Number.isInteger(sourceLaneIndex) ? sourceLaneIndex : -1,
+      sourceBarracksId: sourceBarracksId || null,
+      isHero: !!isHero,
+      heroKey: heroKey || null,
+      heroVisualStyleKey: heroVisualStyleKey || null,
+    });
+  };
+
+  const scheduledWave = resolveWaveForRound(game, upcomingWaveNumber);
+  if (scheduledWave) {
+    addEntry({
+      source: "scheduled",
+      unitType: scheduledWave.unit_type,
+      archetypeKey: null,
+      presentationKey: null,
+      count: scheduledWave.spawn_qty,
+      hpMult: scheduledWave.hp_mult,
+      dmgMult: scheduledWave.dmg_mult,
+      speedMult: getEffectiveWaveEntrySpeedMult(game, lane, scheduledWave),
+    });
+  }
+
+  const entries = Array.from(entriesByKey.values()).sort((a, b) => {
+    if (a.source !== b.source)
+      return a.source === "scheduled" ? -1 : 1;
+    if (a.count !== b.count)
+      return b.count - a.count;
+    return String(a.unitType).localeCompare(String(b.unitType));
+  });
+
+  return {
+    waveNumber: upcomingWaveNumber,
+    totalUnits: entries.reduce((sum, entry) => sum + (entry.count || 0), 0),
+    entries,
+  };
+}
+
+function createLaneUpcomingWaveQueue(game, lane, maxCount = 4) {
+  const safeCount = Math.max(1, Math.floor(Number(maxCount) || 1));
+  const firstWaveNumber = getUpcomingWaveNumber(game);
+  const queue = [];
+
+  for (let i = 0; i < safeCount; i++) {
+    const waveNumber = firstWaveNumber + i;
+    queue.push(createLaneUpcomingWavePreview(game, lane, waveNumber));
+  }
+
+  return queue;
+}
+
 function _spawnWaveUnit(game, lane, waveDef) {
   const unitType = waveDef.unit_type;
   const def = resolveUnitDef(unitType);
   if (!def) return;
   if (lane.units.length + lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return;
+  const spawnValidation = validateSpawnDefinition(game, lane, waveDef);
+  if (!spawnValidation.ok) {
+    log.error("[SpawnAudit][ServerQueue] rejected", {
+      spawnType: spawnValidation.spawnType,
+      reason: spawnValidation.reason,
+      unitType,
+      laneIndex: lane ? lane.laneIndex : null,
+      sourceLaneIndex: waveDef && Number.isInteger(waveDef.sourceLaneIndex) ? waveDef.sourceLaneIndex : -1,
+      sourceBarracksKey: normalizeBarracksSiteId(
+        waveDef && (waveDef.sourceBarracksKey || waveDef.sourceBarracksId)
+      ),
+      sourceTeam: waveDef && waveDef.sourceTeam ? waveDef.sourceTeam : null,
+      requestedSpawnIndex: waveDef && waveDef.spawnIndex,
+    });
+    return;
+  }
+  const effectiveSpeedMult = getEffectiveWaveEntrySpeedMult(game, lane, waveDef);
   const hp  = Math.ceil(def.hp    * Number(waveDef.hp_mult    || 1));
   const dmg =           def.dmg   * Number(waveDef.dmg_mult   || 1);
-  const spd =           def.pathSpeed * Number(waveDef.speed_mult || 1);
-  lane.spawnQueue.push({
+  const spd =           getBaseCombatPathSpeed(unitType) * effectiveSpeedMult;
+  log.info("[SpawnAudit][ServerQueue] queued", {
+    spawnType: spawnValidation.spawnType,
+    unitType,
+    laneIndex: lane.laneIndex,
+    team: lane.team || null,
+    sourceLaneIndex: spawnValidation.sourceLaneIndex,
+    sourceTeam: spawnValidation.sourceTeam,
+    sourceBarracksKey: spawnValidation.sourceBarracksKey,
+    requestedSpawnKey: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+      ? `lane:${lane.laneIndex}:wave_origin`
+      : `lane:${spawnValidation.sourceLaneIndex}:barracks:${spawnValidation.sourceBarracksKey}`,
+    resolvedMarkerName: `server_queue_${spawnValidation.spawnType}`,
+    resolvedLogicalPosition: spawnValidation.logicalPos,
+    requestedSpawnIndex: spawnValidation.requestedSpawnIndex,
+    resolvedSpawnIndex: spawnValidation.resolvedSpawnIndex,
+    fallbackUsed: false,
+    authoring: "server",
+  });
+  const ownerLaneIndex = spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+    ? -1
+    : spawnValidation.sourceLaneIndex;
+  const initialStance = spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+    ? UNIT_STANCES.ATTACK
+    : (spawnValidation.sourceLaneIndex >= 0 && spawnValidation.sourceLaneIndex === lane.laneIndex
+        ? UNIT_STANCES.HOLD
+        : UNIT_STANCES.ATTACK);
+  const queuedUnit = {
     id: `wu${game.nextUnitId++}`,
-    ownerLane: -1,  // wave unit — no player owner
+    unitId: null,
+    targetLaneIndex: lane.laneIndex,
+    ownerLaneIndex,
+    ownerLane: ownerLaneIndex,
+    sourceLaneIndex: spawnValidation.sourceLaneIndex,
+    sourceTeam: spawnValidation.sourceTeam,
+    sourceBarracksKey: spawnValidation.sourceBarracksKey,
+    sourceBarracksId: spawnValidation.sourceBarracksKey,
+    barracksId: spawnValidation.sourceBarracksKey,
+    spawnSourceType: spawnValidation.spawnType,
+    allegianceKey: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+      ? ALLEGIANCE_KEYS.DUNGEON
+      : resolveLaneAllegianceKey(getSourceLane(game, spawnValidation.sourceLaneIndex)),
     type: unitType,
-    skinKey: null,
+    unitTypeKey: unitType,
+    archetypeKey: waveDef.archetypeKey || (isFortArchetypeKey(unitType) ? unitType : null),
+    presentationKey: waveDef.presentationKey || null,
+    catalogUnitKey: resolveGameplayCatalogUnitKey(unitType, waveDef.presentationKey || DEFAULT_FORT_PRESENTATION_KEY),
+    skinKey: waveDef.skinKey || null,
+    isHero: !!waveDef.isHero,
+    heroKey: waveDef.heroKey || null,
+    heroVisualStyleKey: waveDef.heroVisualStyleKey || null,
     pathIdx: 0,
     hp,
     maxHp: hp,
@@ -1133,80 +5625,26 @@ function _spawnWaveUnit(game, lane, waveDef) {
     damageReductionPct: def.damageReductionPct || 0,
     abilities: buildAbilitiesForUnitType(unitType),
     bounty: def.bounty || 1,
-    isWaveUnit: true,
+    stance: initialStance,
+    pathContractType: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
+      ? PATH_CONTRACT_TYPES.WAVE_LANE
+      : null,
+    isWaveUnit: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE,
+    isDefender: false,
     combatTarget: null,
-    spawnIndex: lane.spawnQueue.length,  // position in wave formation rectangle
-  });
+    combatTargetId: null,
+    combatState: WAVE_UNIT_STATES.IDLE,
+    hasBreachedTownCore: false,
+    spawnIndex: spawnValidation.resolvedSpawnIndex,  // position in wave formation rectangle
+    spawnLogicalPos: spawnValidation.logicalPos,
+  };
+  applyCanonicalUnitMirrors(game, lane, queuedUnit);
+  lane.spawnQueue.push(queuedUnit);
 }
 
-function _startCombat(game) {
-  const waveDef = _resolveWave(game);
-  const waveSizes = {};
-  for (const lane of game.lanes) {
-    if (lane.eliminated) continue;
-    waveSizes[lane.laneIndex] = waveDef.spawn_qty;
-    // Base wave
-    for (let i = 0; i < waveDef.spawn_qty; i++) _spawnWaveUnit(game, lane, waveDef);
-    // Flush pendingSends (units sent by opponent during build phase)
-    for (const entry of (game.pendingSends[lane.laneIndex] || [])) {
-      const sendDef = resolveUnitDef(entry.unitType);
-      if (sendDef) {
-        for (let i = 0; i < entry.count; i++) {
-          _spawnWaveUnit(game, lane, {
-            unit_type: entry.unitType, spawn_qty: 1,
-            hp_mult: 1, dmg_mult: 1, speed_mult: 1,
-          });
-        }
-      }
-    }
-    game.pendingSends[lane.laneIndex] = [];
+function finalizeCompletedWave(game) {
+  if (!game || !game.hasSpawnedWave) return;
 
-    // Mobilize defenders from their home tiles
-    lane.mobileDefenders.clear();
-    for (let tx = 0; tx < GRID_W; tx++) {
-      for (let ty = 0; ty < GRID_H; ty++) {
-        const tile = lane.grid[tx][ty];
-        if (tile.type !== 'tower' || !tile.towerType) continue;
-        const stats = getTowerStats(tile.towerType, tile.towerLevel || 1);
-        const uDef  = resolveUnitDef(tile.towerType);
-        const mob   = {
-          id:           `def_${lane.laneIndex}_${tx}_${ty}_${game.roundNumber}`,
-          ownerLane:    lane.laneIndex,
-          type:         tile.towerType,
-          skinKey:      null,
-          posX:         tx,  posY: ty,
-          pathIdx:      ty,
-          homeTx: tx,   homeTy: ty,
-          hp:           tile.hp || tile.maxHp || 100,
-          maxHp:        tile.maxHp || 100,
-          baseDmg:      stats ? stats.dmg : (uDef ? uDef.dmg : 5),
-          moveSpeed:    DEFENDER_BASE_SPEED,
-          atkCd:        0,
-          atkCdTicks:   stats ? stats.atkCdTicks : 30,
-          armorType:    'HEAVY',
-          damageReductionPct: 10,
-          isDefender:   true,
-          isWaveUnit:   false,
-          defState:     'split_guard',
-          combatTarget: null,
-          abilities:    [],
-        };
-        tile.mobilized = true;
-        lane.mobileDefenders.set(`${tx}_${ty}`, mob);
-        lane.units.push(mob);
-        // Lock refund to 70% now that combat is starting
-        if (tile.costHistory) {
-          for (const entry of tile.costHistory) entry.refundPct = 70;
-        }
-      }
-    }
-  }
-  game.roundState = "combat";
-  game.roundStateTicks = 0;
-  game._pendingEvents.push({ type: "ml_wave_start", roundNumber: game.roundNumber, waveSizes });
-}
-
-function _startTransition(game) {
   for (const lane of game.lanes) {
     if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0) {
       lane.wavesLeaked += 1;
@@ -1228,99 +5666,141 @@ function _startTransition(game) {
     roundNumber: game.roundNumber,
     teamHp: Object.assign({}, game.teamHp),
   });
-  game.roundState = "transition";
-  game.roundStateTicks = 0;
 }
 
-function _startBuild(game) {
-  game.roundNumber += 1;
-  game.roundState = "build";
-  game.roundStateTicks = 0;
-  // Respawn dead defenders; restore HP on surviving defenders; grant build-phase income
+function resetWaveIntervalState(game) {
+  if (!game) return;
   for (const lane of game.lanes) {
-    if (lane.eliminated) continue;
-    lane.gold += lane.income;
     lane.leakCountThisRound = 0;
     lane.lifeLossThisRound = 0;
     lane.sendCountThisRound = 0;
     lane.sendSpendThisRound = 0;
     lane.buildSpendThisRound = 0;
-    lane.units = [];
-    lane.mobileDefenders.clear();
-    lane.spawnQueue = [];
-    for (let tx = 0; tx < GRID_W; tx++)
-      for (let ty = 0; ty < GRID_H; ty++)
-        lane.grid[tx][ty].mobilized = false;
-    for (let tx = 0; tx < GRID_W; tx++) {
-      for (let ty = 0; ty < GRID_H; ty++) {
-        const tile = lane.grid[tx][ty];
-        if (tile.type === "dead_tower" && tile.towerType) {
-          tile.type = "tower";
-          tile.hp = tile.maxHp || 100;
-          tile.atkCd = 0;
-        } else if (tile.type === "tower" && tile.towerType) {
-          tile.hp = tile.maxHp || tile.hp || 100;
-          tile.atkCd = 0;
-        }
+  }
+}
+
+function spawnScheduledWave(game) {
+  if (!game) return;
+
+  const nextRoundNumber = getUpcomingWaveNumber(game);
+  const waveDef = resolveWaveForRound(game, nextRoundNumber);
+  if (!waveDef)
+    return false;
+
+  if (game.hasSpawnedWave)
+    finalizeCompletedWave(game);
+
+  game.roundNumber = nextRoundNumber;
+
+  resetWaveIntervalState(game);
+  const waveSizes = {};
+  for (const lane of game.lanes) {
+    if (lane.eliminated) continue;
+    waveSizes[lane.laneIndex] = waveDef.spawn_qty;
+    for (let i = 0; i < waveDef.spawn_qty; i++) _spawnWaveUnit(game, lane, waveDef);
+  }
+
+  game.hasSpawnedWave = true;
+  game.lastWaveSpawnTick = game.tick;
+  game._pendingEvents.push({
+    type: "ml_wave_start",
+    roundNumber: game.roundNumber,
+    waveSizes,
+  });
+  return true;
+}
+
+function grantScheduledIncome(game) {
+  if (!game) return;
+  const interval = Math.max(1, Math.floor(Number(game.incomeIntervalTicks) || INCOME_INTERVAL_TICKS));
+  if (!Number.isInteger(game.nextIncomeTick) || game.nextIncomeTick <= 0)
+    game.nextIncomeTick = game.tick + interval;
+
+  while (game.tick >= game.nextIncomeTick) {
+    for (const lane of game.lanes) {
+      if (lane && !lane.eliminated)
+        lane.gold += lane.income;
+    }
+    game.nextIncomeTick += interval;
+  }
+}
+
+function runScheduledBarracksSends(game) {
+  if (!game) return;
+  for (const lane of game.lanes) {
+    if (!lane || lane.eliminated)
+      continue;
+
+    ensureBarracksSiteStates(lane, game);
+    for (const siteDef of BARRACKS_SITE_DEFS) {
+      const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
+      if (!descriptor || !descriptor.isBuilt)
+        continue;
+
+      const interval = Math.max(1, descriptor.sendIntervalTicks);
+      let siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
+      if (!siteState)
+        continue;
+
+      if (!Number.isInteger(siteState.nextSendTick) || siteState.nextSendTick <= 0)
+        siteState.nextSendTick = game.tick + interval;
+
+      while (siteState != null && game.tick >= siteState.nextSendTick) {
+        const siteSnapshot = createBarracksSiteSnapshot(game, lane, siteDef.barracksId);
+        console.log(
+          `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
+          `barracksId='${siteDef.barracksId}' built=${siteSnapshot ? siteSnapshot.isBuilt : false} ` +
+          `roster=${summarizeBarracksSiteRosterEntries(siteSnapshot && siteSnapshot.roster)}`);
+        const spawnedCount = spawnScheduledBarracksRoster(game, lane, siteDef.barracksId);
+        console.log(
+          `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
+          `barracksId='${siteDef.barracksId}' spawnedCount=${spawnedCount}`);
+        siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
+        if (siteState != null)
+            siteState.nextSendTick += interval;
       }
     }
   }
-  game._pendingEvents.push({
-    type: "ml_round_start",
-    roundNumber: game.roundNumber,
-    teamHp: Object.assign({}, game.teamHp),
-  });
 }
 
-function _runAutosendBuild(game, lane) {
-  const as = lane.autosend;
-  if (!as || !as.enabled) return;
-  const keys = Array.isArray(as.loadoutKeys) && as.loadoutKeys.length > 0 ? as.loadoutKeys : [];
-  const priority = keys.filter(k => !!as.enabledUnits[k]);
-  if (priority.length === 0) return;
-  let iterations = 0;
-  while (iterations < 200) {
-    iterations++;
-    let bought = false;
-    for (const ut of priority) {
-      const def = resolveUnitDef(ut);
-      if (!def || lane.gold < def.cost) continue;
-      const targetIdx = findNextActiveOpponentLaneIndex(game, lane.laneIndex);
-      if (targetIdx === null) break;
-      lane.gold -= def.cost;
-      lane.income += def.income;
-      lane.totalSendSpend += def.cost;
-      lane.sendSpendThisRound += def.cost;
-      lane.sendCountThisRound += 1;
-      if (!game.pendingSends[targetIdx]) game.pendingSends[targetIdx] = [];
-      game.pendingSends[targetIdx].push({ unitType: ut, count: 1 });
-      bought = true;
-      break;
-    }
-    if (!bought) break;
+function runScheduledWaves(game) {
+  if (!game) return;
+  const interval = Math.max(1, Math.floor(Number(game.waveIntervalTicks) || WAVE_TIMER_TICKS));
+  if (!Number.isInteger(game.nextWaveTick) || game.nextWaveTick <= 0)
+    game.nextWaveTick = game.tick + interval;
+
+  while (game.tick >= game.nextWaveTick) {
+    spawnScheduledWave(game);
+    game.nextWaveTick += interval;
   }
+}
+
+function startNextWaveNow(game) {
+  if (!game || game.phase !== "playing")
+    return false;
+
+  if (!isCurrentWaveComplete(game))
+    return false;
+
+  const interval = Math.max(1, Math.floor(Number(game.waveIntervalTicks) || WAVE_TIMER_TICKS));
+  const spawned = spawnScheduledWave(game);
+  if (spawned)
+    game.nextWaveTick = Math.floor(Number(game.tick) || 0) + interval;
+  return spawned;
 }
 
 function mlTick(game) {
   if (!game || game.phase !== "playing") return;
-  if (game.awaitingPostWinDecision) return;
   game.tick += 1;
   if (!game.startedAt) game.startedAt = Date.now();
-  game.roundStateTicks = (game.roundStateTicks || 0) + 1;
+  grantScheduledIncome(game);
+  runScheduledWaves(game);
+  runScheduledBarracksSends(game);
+  game.roundState = "combat";
+  game.roundStateTicks = Number.isInteger(game.lastWaveSpawnTick)
+    ? Math.max(0, game.tick - game.lastWaveSpawnTick)
+    : game.tick;
 
-  // ── BUILD PHASE ──────────────────────────────────────────────────────────────
-  if (game.roundState === "build") {
-    if (game.roundStateTicks >= (game.buildPhaseTicks || BUILD_PHASE_TICKS)) _startCombat(game);
-    return;
-  }
-
-  // ── TRANSITION PHASE ─────────────────────────────────────────────────────────
-  if (game.roundState === "transition") {
-    if (game.roundStateTicks >= (game.transitionPhaseTicks || TRANSITION_PHASE_TICKS)) _startBuild(game);
-    return;
-  }
-
-  // ── COMBAT PHASE ─────────────────────────────────────────────────────────────
   for (const lane of game.lanes) {
     if (lane.eliminated) continue;
 
@@ -1330,13 +5810,60 @@ function mlTick(game) {
     while (lane.spawnQueue.length > 0) {
       const unit = lane.spawnQueue.shift();
       const idx  = unit.spawnIndex ?? 0;
-      unit.posX    = idx % GRID_W;
-      unit.posY    = Math.floor(idx / GRID_W);
-      unit.pathIdx = unit.posY;
+      const spawnLogicalPos = unit.spawnLogicalPos || {
+        x: idx % GRID_W,
+        y: Math.floor(idx / GRID_W),
+      };
+      const routeInit = initializeMovingUnitRouteState(game, lane, unit, spawnLogicalPos);
+      if (!routeInit || !routeInit.ok) {
+        log.error("[SpawnAudit][ServerLive] rejected", {
+          reason: routeInit && routeInit.reason ? routeInit.reason : "Route initialization failed",
+          unitId: unit && unit.id || null,
+          unitType: unit && unit.type || null,
+          targetLaneIndex: lane.laneIndex,
+          sourceLaneIndex: Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1,
+          sourceBarracksKey: unit && (unit.sourceBarracksKey || unit.sourceBarracksId) || null,
+          spawnSourceType: resolveSpawnSourceTypeFromUnit(unit),
+          requestedLogicalPosition: spawnLogicalPos,
+        });
+        continue;
+      }
+      unit.ownerLane = Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0
+        ? unit.sourceLaneIndex
+        : -1;
+      unit.ownerLaneIndex = unit.ownerLane;
+      applyCanonicalUnitMirrors(game, lane, unit);
+      log.info("[SpawnAudit][ServerLive] materialized", {
+        spawnType: resolveSpawnSourceTypeFromUnit(unit),
+        unitId: unit.id,
+        unitType: unit.type,
+        targetLaneIndex: lane.laneIndex,
+        targetTeam: lane.team || null,
+        sourceLaneIndex: Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1,
+        sourceTeam: unit.sourceTeam || null,
+        sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
+        routeType: unit.routeType,
+        currentSegment: unit.currentSegment,
+        segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
+        resolvedMarkerName: "server_route_graph",
+        resolvedLogicalPosition: spawnLogicalPos,
+        fallbackUsed: false,
+        authoring: "server",
+      });
+      if (unit.sourceBarracksKey || unit.sourceBarracksId) {
+        console.log(
+          `[BarracksTrace][ServerSpawn] tick=${game.tick} targetLane=${lane.laneIndex} ` +
+          `unit='${unit.id}' type='${unit.type}' barracksId='${unit.sourceBarracksKey || unit.sourceBarracksId}' ` +
+          `sourceLane=${unit.sourceLaneIndex} sourceTeam='${unit.sourceTeam || ""}'`);
+      }
       lane.units.push(unit);
       if (unit.abilities && unit.abilities.length > 0) {
         resolveAbilityHook(game, lane, unit, "onSpawn", {});
       }
+    }
+
+    for (const unit of lane.units) {
+      applyCanonicalUnitMirrors(game, lane, unit);
     }
 
     // Decrement cooldowns
@@ -1383,6 +5910,7 @@ function mlTick(game) {
         const unitsInRange = [];
         for (const u of lane.units) {
           if (u.hp <= 0 || u.isDefender) continue;
+          if (!isRouteUnitHostileToLane(game, lane, u)) continue;
           // Use raw float pathIdx for row distance — avoids Math.floor rounding units out of range.
           if (Math.abs(ty - u.pathIdx) <= effRows) unitsInRange.push(u);
         }
@@ -1419,118 +5947,64 @@ function mlTick(game) {
     }
 
     // ── Mobile defender AI ────────────────────────────────────────────────────
-    const splitAttackers = lane.units.filter(u => u.isWaveUnit && u.hp > 0 && u.posY < GRID_H);
-
     for (const d of lane.units) {
       if (!d.isDefender || d.hp <= 0) continue;
 
-      const atkRange = getUnitAttackRange(d.type);
-      const spd      = d.moveSpeed || DEFENDER_BASE_SPEED;
-
-      if (d.defState === 'split_guard') {
-        // Split clearance → teleport to merge bridge (pt3: Island_Split exit)
-        if (splitAttackers.length === 0) {
-          d.defState    = 'merge_guard';
-          d.posX        = assignMergeSlot(lane, d);
-          d.posY        = MERGE_BRIDGE_ENTRY_IDX;
-          d.pathIdx     = MERGE_BRIDGE_ENTRY_IDX;
-          d.combatTarget = null;
-          continue;
-        }
-
-        // Validate stale target
-        if (d.combatTarget) {
-          if (!lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0))
-            d.combatTarget = null;
-        }
-
-        // Acquire nearest attacker in split zone
-        if (!d.combatTarget) {
-          let best = null, bestDist = Infinity;
-          for (const wu of splitAttackers) {
-            const dd = dist2D(d, wu);
-            if (dd < bestDist) { bestDist = dd; best = wu; }
-          }
-          if (best) d.combatTarget = { unitId: best.id };
-        }
-
-        if (d.combatTarget) {
-          const t = lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0);
-          if (t) {
-            const dist = dist2D(d, t);
-            if (dist <= atkRange + 0.15) {
-              if (d.atkCd <= 0) _doAttack(game, lane, d, t);
-            } else {
-              moveToward2D(d, t.posX, t.posY, spd, 0, GRID_W - 1, 0, GRID_H - 1);
-            }
-          } else {
-            d.combatTarget = null;
-          }
-        } else {
-          // No target — advance toward attacker spawn side
-          moveToward2D(d, d.posX, 0, spd, 0, GRID_W - 1, 0, GRID_H - 1);
-        }
-
-      } else if (d.defState === 'merge_guard') {
-        const maxY          = GRID_H + SHARED_SUFFIX_LENGTH - 1;
-        const mergeAttackers = lane.units.filter(u => u.isWaveUnit && u.hp > 0 && u.posY >= GRID_H);
-
-        if (d.combatTarget) {
-          if (!lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0))
-            d.combatTarget = null;
-        }
-        if (!d.combatTarget && mergeAttackers.length > 0) {
-          let best = null, bestDist = Infinity;
-          for (const wu of mergeAttackers) {
-            const dd = dist2D(d, wu);
-            if (dd < bestDist) { bestDist = dd; best = wu; }
-          }
-          if (best) d.combatTarget = { unitId: best.id };
-        }
-        if (d.combatTarget) {
-          const t = lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0);
-          if (t) {
-            const dist = dist2D(d, t);
-            if (dist <= atkRange + 0.15) {
-              if (d.atkCd <= 0) _doAttack(game, lane, d, t);
-            } else {
-              moveToward2D(d, t.posX, t.posY, spd, 0, GRID_W - 1, GRID_H, maxY);
-            }
-          }
-        }
+      d.guardAnchorX = Number.isFinite(d.guardAnchorX) ? d.guardAnchorX : d.posX;
+      d.guardAnchorY = Number.isFinite(d.guardAnchorY) ? d.guardAnchorY : d.posY;
+      const liveAttackers = lane.units.filter((u) => !u.isDefender && u.hp > 0 && isRouteUnitHostileToLane(game, lane, u));
+      if (d.combatTarget && !lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0))
+        d.combatTarget = null;
+      if (!d.combatTarget && liveAttackers.length > 0) {
+        const best = pickDefenderCombatTarget(lane, d, liveAttackers, null);
+        if (best)
+          d.combatTarget = { unitId: best.id, kind: "unit" };
       }
+
+      const holdSpeed = d.moveSpeed || DEFENDER_BASE_SPEED;
+      if (d.combatTarget) {
+        const holdTarget = lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0);
+        if (!holdTarget) {
+          d.combatTarget = null;
+        } else {
+          const holdDist = dist2D(d, holdTarget);
+          const holdStopDist = getUnitStopDistance(d.type, holdTarget.type);
+          if (holdDist <= holdStopDist) {
+            if (d.atkCd <= 0)
+              _doAttack(game, lane, d, holdTarget);
+          } else {
+            moveTowardContact2D(d, holdTarget, holdSpeed, holdStopDist, -64, 64, -64, 64);
+            clampUnitToAnchor(d, d.guardAnchorX, d.guardAnchorY, DEFENDER_HOLD_LEASH, -64, 64, -64, 64);
+          }
+        }
+      } else {
+        moveTowardPoint2D(d, d.guardAnchorX, d.guardAnchorY, holdSpeed, -64, 64, -64, 64);
+      }
+      continue;
     }
 
-    // Wave unit movement, defender attacks, and leaks
-    const fullPath = lane.fullPath || lane.path || [];
-    const pathLen = fullPath.length || 1;
+    // Wave unit movement, defender attacks, and Town Core assaults
     const dotDeadIds = new Set();
 
     for (const u of lane.units) {
+      if (lane.eliminated)
+        break;
       if (u.hp <= 0) continue;
       if (u.isDefender) continue;  // defenders handled above
+      u.combatState = WAVE_UNIT_STATES.IDLE;
+      u.routeState = WAVE_UNIT_STATES.IDLE;
+      u.blockedByStructure = false;
+      u.blockedByStructureId = null;
+      u.blockedByStructureType = null;
       resolveStatuses(u, game.tick);
-      if (u.hp <= 0) { dotDeadIds.add(u.id); continue; }
-
-      // Reached end → leak; damages this lane's side's teamHp
-      if (u.pathIdx >= pathLen - 1) {
-        u.hp = 0;
-        combatLog.logEvent(game, 'leak', { unitId: u.id, unitType: u.type, lane: lane.laneIndex });
-        const side = lane.side;
-        if (side && game.teamHp && game.teamHp[side] !== undefined) {
-          game.teamHp[side] = Math.max(0, game.teamHp[side] - 1);
-          lane.totalLeaksTaken += 1;
-          lane.leakCountThisRound += 1;
-          lane.lifeLossThisRound += 1;
-          for (const l of game.lanes) {
-            if (l.side === side) l.lives = game.teamHp[side];
-          }
-          if (game.teamHp[side] <= 0) {
-            for (const l of game.lanes) {
-              if (l.side === side && !l.eliminated) l.eliminated = true;
-            }
-          }
-        }
+      if (u.hp <= 0) {
+        u.combatState = WAVE_UNIT_STATES.DEAD;
+        u.routeState = WAVE_UNIT_STATES.DEAD;
+        dotDeadIds.add(u.id);
+        traceWaveUnitTick(game, lane, u, null, {
+          movementAdvanced: false,
+          coreDamageApplied: false,
+        });
         continue;
       }
 
@@ -1538,7 +6012,7 @@ function mlTick(game) {
       const def = resolveUnitDef(u.type);
       if (def && def.warlockDebuff && (u.warlockCd === undefined || u.warlockCd <= 0)) {
         u.warlockCd = WARLOCK_DEBUFF_CD;
-        const pos = getUnitTilePos(u, lane.path);
+        const pos = getUnitTilePos(u, lane.fullPath);
         if (pos) {
           let bestTile = null, bestDist = Infinity;
           for (let dtx = 0; dtx < GRID_W; dtx++) {
@@ -1557,74 +6031,201 @@ function mlTick(game) {
       }
 
       // ── Wave unit combat target tracking (mobile defenders) ─────────────────
-      // Validate stale target
+      // Validate stale target.
+      {
       if (u.combatTarget && u.combatTarget.unitId) {
-        const t = lane.units.find(x => x.id === u.combatTarget.unitId && x.hp > 0);
-        if (!t || !canEngageDefenderInZone(u, t)) u.combatTarget = null;
-      }
-
-      // Acquire target: nearest mobile defender in the same combat zone within engagement range.
-      // Do not cap attackers per defender: if a defender is alive, wave units should commit
-      // instead of pathing past it toward the castle.
-      if (!u.combatTarget) {
-        const engageRange = getUnitEngagementRange(u.type);
-        let best = null, bestDist = Infinity;
-        for (const du of lane.units) {
-          if (!canEngageDefenderInZone(u, du)) continue;
-          const dd = dist2D(u, du);
-          if (dd > engageRange) continue;
-          if (dd < bestDist) { bestDist = dd; best = du; }
-        }
-        if (best) u.combatTarget = { unitId: best.id };
-      }
-
-      let attackedDefender = false;
-      if (u.combatTarget && u.combatTarget.unitId) {
-        const t        = lane.units.find(x => x.id === u.combatTarget.unitId && x.hp > 0);
-        const atkRange = getUnitAttackRange(u.type);
-        if (t) {
-          const dist = dist2D(u, t);
-          if (dist <= atkRange + 0.15) {
-            if (u.atkCd <= 0) {
-              // Wave units deal melee instant damage to mobile defenders
-              const dmg = def ? def.dmg : (u.baseDmg || 1);
-              t.hp = Math.max(0, t.hp - dmg);
-              if (t.hp <= 0) {
-                const htile = lane.grid[t.homeTx] && lane.grid[t.homeTx][t.homeTy];
-                if (htile) { htile.type = 'dead_tower'; htile.mobilized = false; }
-                lane.mobileDefenders.delete(`${t.homeTx}_${t.homeTy}`);
-                combatLog.logEvent(game, 'defender_killed', { x: t.homeTx, y: t.homeTy, defenderType: t.type, killedBy: u.id, killedByType: u.type, lane: lane.laneIndex });
-                u.combatTarget = null;
-              }
-              u.atkCd = def ? (def.atkCdTicks || 20) : 20;
-              attackedDefender = true;
-            } else {
-              attackedDefender = true; // in range but on cooldown — hold position
-            }
-          } else {
-            // Move toward defender
-            moveToward2D(u, t.posX, t.posY, u.baseSpeed || 0.18, 0, GRID_W - 1, 0, GRID_H + SHARED_SUFFIX_LENGTH - 1);
-          }
-        } else {
+        const target = resolveWaveCombatTarget(game, lane, u.combatTarget);
+        if (!target) {
+          u.combatTarget = null;
+        } else if (target.kind === "unit" && !canRouteUnitEngageTarget(game, lane, u, target.entity)) {
           u.combatTarget = null;
         }
       }
 
-      // Advance toward castle when not engaged
-      if (!u.combatTarget && !attackedDefender) {
-        const maxY = GRID_H + SHARED_SUFFIX_LENGTH - 1;
-        moveToward2D(u, SPAWN_X, maxY, u.baseSpeed || 0.18, 0, GRID_W - 1, 0, maxY);
+      if (u.combatTarget && u.combatTarget.unitId) {
+        const existingTarget = resolveWaveCombatTarget(game, lane, u.combatTarget);
+        if (!existingTarget || (existingTarget.kind === "unit" && !canRouteUnitEngageTarget(game, lane, u, existingTarget.entity))) {
+          u.combatTarget = null;
+        }
       }
+
+      const preferredTarget = getWaveUnitPreferredTarget(game, lane, u);
+      if (preferredTarget && preferredTarget.kind === "unit") {
+        if (
+          !u.combatTarget ||
+          u.combatTarget.kind !== "unit" ||
+          u.combatTarget.unitId !== preferredTarget.entity.id ||
+          u.combatTarget.laneIndex !== preferredTarget.laneIndex
+        ) {
+          u.combatTarget = {
+            unitId: preferredTarget.entity.id,
+            kind: "unit",
+            laneIndex: preferredTarget.laneIndex,
+          };
+        }
+      }
+
+      if (!u.combatTarget) {
+        const blockingTarget = findBlockingStructureTarget(game, lane, u);
+        if (blockingTarget) {
+          if (blockingTarget.buildingType === "town_core")
+            markTownCoreBreach(game, lane, u, blockingTarget);
+          u.blockedByStructure = true;
+          u.blockedByStructureId = blockingTarget.unitId;
+          u.blockedByStructureType = blockingTarget.buildingType || blockingTarget.type || null;
+          u.combatTarget = {
+            unitId: blockingTarget.unitId,
+            kind: "fortress_pad",
+            padId: blockingTarget.padId,
+          };
+        }
+      }
+
+      let attackedTarget = false;
+      let movementAdvanced = false;
+      let coreDamageApplied = false;
+      if (u.combatTarget && u.combatTarget.unitId) {
+        let target = resolveWaveCombatTarget(game, lane, u.combatTarget);
+        if (!target) {
+          u.combatTarget = null;
+        } else if (target.kind === "unit") {
+          u.combatState = WAVE_UNIT_STATES.COMBAT;
+          u.routeState = WAVE_UNIT_STATES.COMBAT;
+          const t = target.entity;
+          const targetLane = Number.isInteger(target.laneIndex)
+            ? getLaneByIndex(game, target.laneIndex)
+            : resolveRouteUnitLane(game, t, lane);
+          const dist = dist2D(u, t);
+          const stopDist = getUnitStopDistance(u.type, t.type);
+          if (dist <= stopDist + CONTACT_SLOT_TOLERANCE) {
+            if (u.atkCd <= 0) {
+              const dmg = Math.max(1, Math.floor(Number(u.baseDmg) || Number(def && def.dmg) || 1));
+              const cooldownTicks = Math.max(1, Math.floor(Number(u.atkCdTicks) || Number(def && def.atkCdTicks) || 20));
+              t.hp = Math.max(0, t.hp - dmg);
+              u.attackPulse = (u.attackPulse || 0) + 1;
+              if (t.hp <= 0) {
+                if (t.isDefender) {
+                  const defenderLane = targetLane || lane;
+                  const htile = defenderLane.grid[t.homeTx] && defenderLane.grid[t.homeTx][t.homeTy];
+                  if (htile) {
+                    htile.type = "dead_tower";
+                    htile.mobilized = false;
+                  }
+                  defenderLane.mobileDefenders.delete(`${t.homeTx}_${t.homeTy}`);
+                  combatLog.logEvent(game, "defender_killed", {
+                    x: t.homeTx,
+                    y: t.homeTy,
+                    defenderType: t.type,
+                    killedBy: u.id,
+                    killedByType: u.type,
+                    lane: defenderLane.laneIndex,
+                  });
+                } else {
+                  combatLog.logEvent(game, "route_unit_killed", {
+                    unitId: t.id,
+                    unitType: t.type,
+                    lane: targetLane ? targetLane.laneIndex : null,
+                    killedBy: u.id,
+                    killedByType: u.type,
+                    killedByLane: lane.laneIndex,
+                  });
+                }
+                u.combatTarget = null;
+              }
+              u.atkCd = cooldownTicks;
+              attackedTarget = true;
+            } else {
+              attackedTarget = true;
+            }
+          } else {
+            const slotPoint = getContactSlotPoint(lane, u, t, stopDist);
+            moveTowardPoint2D(u, slotPoint.x, slotPoint.y, u.baseSpeed || 0.18, -64, 64, -64, 64);
+            movementAdvanced = true;
+          }
+        } else if (target.kind === "fortress_pad") {
+          u.combatState = WAVE_UNIT_STATES.COMBAT;
+          u.routeState = WAVE_UNIT_STATES.COMBAT;
+          const dist = Math.sqrt(
+            Math.pow(target.posX - u.posX, 2) +
+            Math.pow(target.posY - u.posY, 2)
+          );
+          const stopDist = getUnitStopDistance(u.type, target.type);
+          if (dist <= stopDist + CONTACT_SLOT_TOLERANCE) {
+            if (u.atkCd <= 0) {
+              const result = attackFortressPad(game, lane, u, target);
+              if (result.destroyed)
+                u.combatTarget = null;
+              coreDamageApplied = result.damageApplied > 0;
+              attackedTarget = true;
+            } else {
+              attackedTarget = true;
+            }
+          } else {
+            const slotPoint = getContactSlotPoint(lane, u, target, stopDist);
+            moveTowardPoint2D(u, slotPoint.x, slotPoint.y, u.baseSpeed || 0.18, -64, 64, -64, 64);
+            movementAdvanced = true;
+          }
+        }
+      }
+
+      if (!u.combatTarget && !attackedTarget) {
+        u.combatState = WAVE_UNIT_STATES.MOVING;
+        u.routeState = WAVE_UNIT_STATES.MOVING;
+        if (!Array.isArray(u.routeSegments) || u.routeSegments.length === 0) {
+          if (!u._missingRouteLogged) {
+            u._missingRouteLogged = true;
+            log.error("[WaveUnitTrace] missing_route_contract", {
+              tick: game.tick,
+              laneIndex: lane.laneIndex,
+              unitId: u.id,
+              unitType: u.type,
+              spawnSourceType: resolveSpawnSourceTypeFromUnit(u),
+              sourceLaneIndex: Number.isInteger(u.sourceLaneIndex) ? u.sourceLaneIndex : -1,
+              sourceBarracksKey: u.sourceBarracksKey || u.sourceBarracksId || null,
+            });
+          }
+        } else {
+          advanceRouteState(u, u.baseSpeed || 0.18);
+          setUnitRouteSnapshotState(u);
+          u._missingRouteLogged = false;
+          log.info("[WaveUnitTrace] movement_progress", {
+            tick: game.tick,
+            laneIndex: lane.laneIndex,
+            unitId: u.id,
+            unitType: u.type,
+            spawnSourceType: resolveSpawnSourceTypeFromUnit(u),
+            pathId: buildRoutePathId(u.routeSegments),
+            currentWaypointIndex: Math.max(0, Math.floor(Number(u.routeSegmentIndex) || 0)),
+            nextWaypoint: resolveUnitNextWaypoint(u),
+            movementState: u.routeState,
+            segmentProgress: Number.isFinite(u.segmentProgress) ? Number(u.segmentProgress.toFixed(3)) : null,
+            pathIdx: Number.isFinite(u.pathIdx) ? Number(u.pathIdx.toFixed(3)) : null,
+            routeWorldX: Number.isFinite(u.routeWorldX) ? Number(u.routeWorldX.toFixed(3)) : null,
+            routeWorldY: Number.isFinite(u.routeWorldY) ? Number(u.routeWorldY.toFixed(3)) : null,
+          });
+        }
+        movementAdvanced = true;
+      }
+
+      const traceTarget = u.combatTarget ? resolveWaveCombatTarget(game, lane, u.combatTarget) : null;
+      traceWaveUnitTick(game, lane, u, traceTarget, {
+        movementAdvanced,
+        coreDamageApplied,
+        preferredTargetReason: preferredTarget ? preferredTarget.reason : null,
+      });
+      }
+      continue;
     }
 
-    const splitUnits = lane.units.filter(u => u.hp > 0 && (u.posY !== undefined ? u.posY < GRID_H : u.pathIdx < GRID_H));
-    const mergeUnits = lane.units.filter(u => u.hp > 0 && (u.posY !== undefined ? u.posY >= GRID_H : u.pathIdx >= GRID_H));
-    applySeparation2D(splitUnits, MIN_UNIT_SPACING, 0, GRID_W - 1, 0, GRID_H);
-    applySeparation2D(mergeUnits, MIN_UNIT_SPACING, 0, GRID_W - 1, GRID_H, GRID_H + SHARED_SUFFIX_LENGTH - 1);
+    for (const unit of lane.units) {
+      applyCanonicalUnitMirrors(game, lane, unit);
+    }
 
+    if (lane.eliminated)
+      continue;
     // DEBUG: log max pathIdx once per second (every 20 ticks) so we can see if units enter suffix
     if (game.tick % 20 === 0 && lane.units.length > 0) {
-      const waveUnits = lane.units.filter(u => u.isWaveUnit && u.hp > 0);
+      const waveUnits = lane.units.filter(u => !u.isDefender && u.hp > 0);
       if (waveUnits.length > 0) {
         const maxIdx = Math.max(...waveUnits.map(u => u.pathIdx));
         const minIdx = Math.min(...waveUnits.map(u => u.pathIdx));
@@ -1659,7 +6260,7 @@ function mlTick(game) {
       if (u.abilities && u.abilities.length > 0) {
         resolveAbilityHook(game, lane, u, "onDeath", {});
       }
-      if (u.isWaveUnit) {
+      if (isScheduledWaveUnit(u)) {
         lane.gold += u.bounty || 1;
         combatLog.logEvent(game, 'wave_unit_killed', { unitId: u.id, unitType: u.type, bounty: u.bounty || 1, lane: lane.laneIndex });
       }
@@ -1680,234 +6281,103 @@ function mlTick(game) {
         });
         game.finalSnapshotCaptured = true;
       }
+      game.finalGameOverReason = "all_town_cores_destroyed";
+      game.finalGameOverDebug = {
+        tick: game.tick,
+        coreStates: buildTownCoreStateSummary(game),
+      };
+      log.warn("[TownCoreTrace] final game over triggered", {
+        tick: game.tick,
+        reason: game.finalGameOverReason,
+        coreStates: game.finalGameOverDebug.coreStates,
+      });
       game.phase = "ended";
       game.matchState = "final_game_over";
-      game.winner = game.officialWinnerLane;
-    } else {
-      const aliveTeams = new Set(activeLanes.map(l => l.team));
-      if (game.matchState === "active_pvp" && aliveTeams.size === 1) {
-        const winningLane = activeLanes[0];
-        const winningTeam = winningLane ? winningLane.team : null;
-        const winningSide = winningLane ? winningLane.side : null;
-        const losingLane = game.lanes.find((lane) => !lane.eliminated && lane.team !== winningTeam)
-          || game.lanes.find((lane) => lane.team !== winningTeam);
-        if (!game.finalSnapshotCaptured) {
-          game.roundSnapshots.push({
-            round: game.roundNumber,
-            terminal: true,
-            elapsedSeconds: Math.floor(game.tick / TICK_HZ),
-            lanes: game.lanes.map(l => createRoundSnapshotLane(game, l)),
-          });
-          game.finalSnapshotCaptured = true;
-        }
-        game.matchState = "pvp_resolved";
-        game.awaitingPostWinDecision = true;
-        game.winner = winningLane ? winningLane.laneIndex : null;
-        game.officialWinnerLane = winningLane ? winningLane.laneIndex : null;
-        game.officialWinningTeam = winningTeam;
-        game.officialWinningSide = winningSide;
-        game.losingTeam = losingLane ? losingLane.team || null : null;
-        game.losingSide = losingLane ? losingLane.side || null : null;
-        game.pvpResolvedAtTick = game.tick;
-      }
+      game.winner = Number.isInteger(game.officialWinnerLane) ? game.officialWinnerLane : null;
+    } else if (game.hasSpawnedWave && isCurrentWaveComplete(game)) {
+      startNextWaveNow(game);
     }
-  }
-
-  // Combat end: if all lanes clear, move to transition
-  if (game.phase === "playing" && game.roundState === "combat") {
-    const activeLanes = game.lanes.filter(l => !l.eliminated);
-    const allClear = activeLanes.every(
-      l => l.units.filter(u => u.isWaveUnit).length === 0 && l.spawnQueue.length === 0
-    );
-    if (allClear) _startTransition(game);
   }
 }
 
 function createMLSnapshot(game) {
-  const survivalTicks = game.continuedIntoSurvival && Number.isInteger(game.survivalStartedAtTick)
-    ? Math.max(0, game.tick - game.survivalStartedAtTick)
-    : 0;
-  return {
-    tick: game.tick,
-    phase: game.phase,
-    winner: game.winner,
-    matchState: game.matchState || (game.phase === "ended" ? "final_game_over" : "active_pvp"),
-    officialWinnerLane: game.officialWinnerLane,
-    continuedIntoSurvival: !!game.continuedIntoSurvival,
-    survivalDurationTicks: survivalTicks,
-    incomeTicksRemaining: 0,
-    // Round state
-    roundState: game.roundState || "build",
-    roundNumber: game.roundNumber || 1,
-    roundStateTicks: game.roundStateTicks || 0,
-    buildPhaseTotal: game.buildPhaseTicks || BUILD_PHASE_TICKS,
-    transitionPhaseTotal: game.transitionPhaseTicks || TRANSITION_PHASE_TICKS,
-    teamHp: game.teamHp || { left: game.teamHpMax || TEAM_HP_START, right: game.teamHpMax || TEAM_HP_START },
-    teamHpMax: game.teamHpMax || TEAM_HP_START,
-    lanes: game.lanes.map(lane => {
-      const towerCells = [];
-      const mobilizedCells = [];
-      const deadCells = [];
-      for (let x = 0; x < GRID_W; x++) {
-        for (let y = 0; y < GRID_H; y++) {
-          const tile = lane.grid[x][y];
-          if (tile.type === "tower" && !tile.mobilized) {
-            towerCells.push({
-              x, y, type: tile.towerType, level: tile.towerLevel,
-              targetMode: tile.targetMode || "first",
-              debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
-              hp: tile.hp != null ? tile.hp : tile.maxHp,
-              maxHp: tile.maxHp || null,
-            });
-          } else if (tile.type === "tower" && tile.mobilized) {
-            // Mobilized: unit has moved out of tile — render as floor but
-            // keep metadata so the client can show upgrade/sell on tap.
-            mobilizedCells.push({
-              x, y, type: tile.towerType, level: tile.towerLevel,
-            });
-          } else if (tile.type === "dead_tower") {
-            deadCells.push({ x, y, type: tile.towerType });
-          }
-        }
-      }
-
-      const projectiles = lane.projectiles.map(p => ({
-        id: p.id,
-        ownerLane: p.ownerLane,
-        sourceKind: p.sourceKind,
-        projectileType: p.projectileType,
-        damageType: p.damageType,
-        isSplash: p.isSplash,
-        fromX: p.fromX, fromY: p.fromY,
-        toX: p.toX, toY: p.toY,
-        progress: 1 - p.ticksRemaining / p.ticksTotal,
-      }));
-
-      const snapFullPath = lane.fullPath || lane.path || [];
-      return {
-        laneIndex: lane.laneIndex,
-        team: lane.team || "red",
-        side: lane.side || null,
-        slotKey: lane.slotKey || null,
-        slotColor: lane.slotColor || null,
-        branchId: lane.branchId || null,
-        branchLabel: lane.branchLabel || null,
-        castleSide: lane.castleSide || null,
-        eliminated: lane.eliminated,
-        gold: lane.gold,
-        income: lane.income,
-        lives: lane.lives,
-        barracksLevel: lane.barracks.level,
-        towerCells,
-        mobilizedCells,
-        deadCells,
-        path: lane.path || [],
-        fullPathLength: snapFullPath.length,
-        units: lane.units.map(u => {
-          const pos = getUnitTilePos(u, lane.path);
-          const gx = (u.posX !== undefined) ? u.posX : (pos ? pos.x : SPAWN_X);
-          const gy = (u.posY !== undefined) ? u.posY : (pos ? pos.y : SPAWN_YG);
-          return {
-            id: u.id,
-            ownerLane: u.ownerLane,
-            type: u.type,
-            skinKey: u.skinKey || null,
-            pathIdx: u.pathIdx,
-            gridX: gx,
-            gridY: gy,
-            // normProgress is suffix-relative: 0 = grid end (pt2), 1 = castle (pt5).
-            // On-branch units (pathIdx < GRID_H) report 0; Unity uses TileToWorld for those.
-            // This makes the on-branch → suffix transition seamless (TileToWorld at row GRID_H === pt2).
-            normProgress: u.pathIdx <= GRID_H ? 0
-                : Math.min(1, (u.pathIdx - GRID_H) / (SHARED_SUFFIX_LENGTH - 1)),
-            hp: u.hp,
-            maxHp: u.maxHp,
-            isWaveUnit:   u.isWaveUnit  || false,
-            isDefender:   u.isDefender  || false,
-            isAttacking:  !!(u.combatTarget && u.combatTarget.unitId),
-            level:        u.isWaveUnit ? 1 : (lane.barracksLevel || 1),
-          };
-        }),
-        spawnQueueLength: lane.spawnQueue.length,
-        projectiles,
-        autosend: lane.autosend ? {
-          enabled: !!lane.autosend.enabled,
-          enabledUnits: Object.assign({}, lane.autosend.enabledUnits || {}),
-          rate: lane.autosend.rate || "normal",
-          tickCounter: Number(lane.autosend.tickCounter) || 0,
-        } : {
-          enabled: false,
-          enabledUnits: {},
-          rate: "normal",
-          tickCounter: 0,
-        },
-      };
-    }),
-  };
+  return buildMLSnapshot(game, {
+    WAVE_TIMER_TICKS,
+    TEAM_HP_START,
+    GRID_W,
+    GRID_H,
+    SPAWN_X,
+    SPAWN_YG,
+    SHARED_SUFFIX_LENGTH,
+    BARRACKS_SITE_DEFS,
+    ensureBarracksSiteStates,
+    getBarracksSiteSendIntervalTicks,
+    normalizeBarracksSiteId,
+    describeBarracksSite,
+    isScheduledWaveUnit,
+    resolveSpawnSourceTypeFromUnit,
+    buildRoutePathId,
+    resolveUnitNextWaypoint,
+    syncLegacyBarracksAggregate,
+    getUnitTilePos,
+    createFortressPadSnapshot,
+    createBarracksSiteSnapshot,
+    createLaneUpcomingWavePreview,
+    createLaneUpcomingWaveQueue,
+    createBarracksRosterSnapshot,
+    createHeroRosterSnapshot,
+    resolveLaneAllegianceKey,
+    resolveUnitAllegianceKey,
+    resolveUnitOwnerLaneIndex,
+    resolveUnitTargetLaneIndex,
+    resolveUnitPathContractType,
+    resolveUnitSourceBarracksId,
+    resolveUnitStance,
+  });
 }
 
 function createMLPublicConfig(options) {
-  const opt = normalizeGameOptions(options);
-  const allUnitTypes = typeof getAllUnitTypes === "function" ? getAllUnitTypes() : [];
-
-  function pickSoundFields(ut) {
-    return {
-      sound_spawn:  ut.sound_spawn  || null,
-      sound_attack: ut.sound_attack || null,
-      sound_hit:    ut.sound_hit    || null,
-      sound_death:  ut.sound_death  || null,
-    };
-  }
-
-  const fixedUnitTypes = allUnitTypes
-    .filter(ut => ut.enabled !== false && Number(ut.build_cost) > 0)
-    .map(ut => ({
-      key: ut.key,
-      name: ut.name,
-      build_cost: Number(ut.build_cost) || 0,
-      range: Number(ut.range) * GRID_W,
-      attack_damage: Number(ut.attack_damage) || 0,
-      attack_speed: Number(ut.attack_speed) || 1,
-      damage_type: ut.damage_type || "NORMAL",
-      icon_url: ut.icon_url || null,
-      ...pickSoundFields(ut),
-    }));
-
-  const movingUnitTypes = allUnitTypes
-    .filter(ut => ut.enabled !== false && Number(ut.send_cost) > 0)
-    .map(ut => ({
-      key: ut.key,
-      name: ut.name,
-      send_cost: Number(ut.send_cost) || 1,
-      income: Number(ut.income) || 0,
-      ...pickSoundFields(ut),
-    }));
-
-  return {
-    tickHz: TICK_HZ,
-    incomeIntervalTicks: INCOME_INTERVAL_TICKS,
-    startGold: opt.startGold,
-    startIncome: opt.startIncome,
-    livesStart: opt.livesStart,
-    gridW: GRID_W,
-    gridH: GRID_H,
-    unitDefs: getMovingUnitDefMap(),
-    towerDefs: getFixedUnitDefMap(),
-    towerMaxLevel: TOWER_MAX_LEVEL,
-    barracksInfinite: true,
-    barracksCostBase: BARRACKS_COST_BASE,
-    barracksReqIncomeBase: BARRACKS_REQ_INCOME_BASE,
-    barracksLevels: [],
-    // Wave defense
-    teamHpStart: opt.teamHpStart,
-    buildPhaseTicks: opt.buildPhaseTicks,
-    transitionPhaseTicks: opt.transitionPhaseTicks,
-    escalationPerExtraRound: ESCALATION_PER_EXTRA_ROUND,
-    battlefieldTopology: opt.battlefieldTopology,
-    slotDefinitions: opt.battlefieldTopology.slotDefinitions,
-    fixedUnitTypes,
-    movingUnitTypes,
-  };
+  return buildMLPublicConfig(options, {
+    TICK_HZ,
+    INCOME_INTERVAL_TICKS,
+    GRID_W,
+    GRID_H,
+    TOWER_MAX_LEVEL,
+    TEAM_HP_START,
+    BARRACKS_COST_BASE,
+    BARRACKS_REQ_INCOME_BASE,
+    BARRACKS_ROSTER_REFUND_PCT,
+    BARRACKS_SEND_TIMER_TICKS,
+    WAVE_TIMER_TICKS,
+    ESCALATION_PER_EXTRA_ROUND,
+    BASE_COMBAT_PATH_SPEED,
+    BARRACKS_LEVEL_ONE_SPEED_MULT,
+    SPEED_UPGRADE_STEP,
+    FORTRESS_BUILDING_DEFS,
+    FORTRESS_PAD_DEFS,
+    BARRACKS_SITE_DEFS,
+    BARRACKS_ROSTER_DEFS,
+    HERO_ROSTER_DEFS,
+    MARKET_ROSTER_DEFS,
+    normalizeGameOptions,
+    getMlRuntimeSettings,
+    getAllUnitTypes,
+    getMovingUnitDefMap,
+    getFixedUnitDefMap,
+    getBuildingBranchLabel,
+    getFortressMaxTier,
+    getFortressBuildCost,
+    getBarracksRosterBuyCost,
+    getBarracksRosterSellRefund,
+    getBuildingDisplayName,
+    getBuildingTierDisplayName,
+    getBarracksRosterLockedReason,
+    getHeroRosterLockedReason,
+    getBarracksSiteTierRequirement,
+    getBarracksSiteBuildCost,
+    getBarracksSiteMaxLevel,
+    resolveFortPresentationConfig,
+  });
 }
 
 /**
@@ -1945,6 +6415,8 @@ module.exports = {
   UNIT_DEFS,
   TOWER_DEFS,
   TEAM_HP_START,
+  BARRACKS_SEND_TIMER_TICKS,
+  WAVE_TIMER_TICKS,
   BUILD_PHASE_TICKS,
   TRANSITION_PHASE_TICKS,
   getBarracksLevelDef,
@@ -1953,11 +6425,23 @@ module.exports = {
   getFixedUnitDefMap,
   GRID_W,
   GRID_H,
+  validateSpawnDefinition,
   createMLGame,
   applyMLAction,
   mlTick,
+  startNextWaveNow,
   createMLSnapshot,
   createMLPublicConfig,
   resolveTowerDef,
   getLaneBuildValue,
+  getUpcomingWaveNumber,
+  countRemainingWaveMobs,
+  isCurrentWaveComplete,
+  resolveWaveForRound,
+  ROUTE_TYPES,
+  resolveTargetLaneForBarracksSend,
+  buildRouteSegments,
+  initializeMovingUnitRouteState,
+  getLaneTownCoreCombatTarget,
 };
+

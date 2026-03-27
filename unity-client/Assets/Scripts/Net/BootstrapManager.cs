@@ -20,9 +20,11 @@ namespace CastleDefender.Net
     {
         [Tooltip("Name of the first scene to load after singletons have initialised.")]
         [SerializeField] string FirstScene = "Login";
+        GameObject _runtimeAudioListener;
 
         void Awake()
         {
+            EnsureBootstrapAudioListener();
             Debug.Log($"[BootstrapManager] Awake on '{gameObject.scene.name}'.");
         }
 
@@ -33,6 +35,27 @@ namespace CastleDefender.Net
             yield return null;
             Debug.Log($"[BootstrapManager] Requesting LoadingScreen transition to '{FirstScene}'.");
             LoadingScreen.LoadScene(FirstScene);
+        }
+
+        void EnsureBootstrapAudioListener()
+        {
+            if (_runtimeAudioListener != null)
+                return;
+
+            if (FindFirstObjectByType<AudioListener>(FindObjectsInactive.Include) != null)
+                return;
+
+            _runtimeAudioListener = new GameObject("BootstrapAudioListener");
+            _runtimeAudioListener.AddComponent<AudioListener>();
+        }
+
+        void OnDestroy()
+        {
+            if (_runtimeAudioListener == null)
+                return;
+
+            Destroy(_runtimeAudioListener);
+            _runtimeAudioListener = null;
         }
     }
 }

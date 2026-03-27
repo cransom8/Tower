@@ -21,6 +21,8 @@ using UnityEngine.EventSystems;
 /// </summary>
 public class CameraController : MonoBehaviour
 {
+    static readonly System.Collections.Generic.List<FortressPadAnchor> s_fortressBoundsAnchors = new();
+
     [Header("References")]
     public Transform CameraTarget;
     public Camera MainCam;
@@ -428,6 +430,9 @@ public class CameraController : MonoBehaviour
 
     void ConfigureBoundsFromGrid()
     {
+        if (ConfigureBoundsFromFortressAnchors())
+            return;
+
         var grid = FindFirstObjectByType<TileGrid>();
         if (grid == null)
             return;
@@ -458,6 +463,39 @@ public class CameraController : MonoBehaviour
         const float marginZ = 8f;
         BoundsMin = new Vector2(Mathf.Min(minX - marginX, -140f), minZ - marginZ);
         BoundsMax = new Vector2(Mathf.Max(maxX + marginX, 140f), maxZ + marginZ);
+    }
+
+    bool ConfigureBoundsFromFortressAnchors()
+    {
+        if (FortressPadAnchor.CollectAnchors(s_fortressBoundsAnchors) <= 0)
+            return false;
+
+        float minX = float.MaxValue;
+        float maxX = float.MinValue;
+        float minZ = float.MaxValue;
+        float maxZ = float.MinValue;
+
+        for (int i = 0; i < s_fortressBoundsAnchors.Count; i++)
+        {
+            var anchor = s_fortressBoundsAnchors[i];
+            if (anchor == null)
+                continue;
+
+            var bounds = anchor.GetWorldBounds();
+            if (bounds.min.x < minX) minX = bounds.min.x;
+            if (bounds.max.x > maxX) maxX = bounds.max.x;
+            if (bounds.min.z < minZ) minZ = bounds.min.z;
+            if (bounds.max.z > maxZ) maxZ = bounds.max.z;
+        }
+
+        if (minX == float.MaxValue || minZ == float.MaxValue)
+            return false;
+
+        const float marginX = 10f;
+        const float marginZ = 10f;
+        BoundsMin = new Vector2(minX - marginX, minZ - marginZ);
+        BoundsMax = new Vector2(maxX + marginX, maxZ + marginZ);
+        return true;
     }
 
     bool IsPointerOverUi()

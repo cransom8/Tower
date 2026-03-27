@@ -14,7 +14,20 @@ function makeParty(id, size) {
   };
 }
 
-test("2v2 matcher can skip an incompatible duo and use a later compatible duo with solos", () => {
+test("legacy public queue formats normalize into the shared FFA survival bucket", () => {
+  const normalized = matchQueueManager.normalizeQueueRequest({
+    gameType: "line_wars",
+    matchFormat: "2v2",
+    ranked: true,
+  });
+
+  assert.equal(normalized.gameType, "line_wars");
+  assert.equal(normalized.matchFormat, "ffa");
+  assert.equal(normalized.ranked, true);
+  assert.equal(matchQueueManager.makeBucketKey(normalized.gameType, normalized.matchFormat, normalized.ranked), "line_wars:ffa:1");
+});
+
+test("public matchmaking assembles solo entrants into one FFA survival match", () => {
   const originalSetInterval = global.setInterval;
   const originalClearInterval = global.clearInterval;
   let tick = null;
@@ -26,51 +39,25 @@ test("2v2 matcher can skip an incompatible duo and use a later compatible duo wi
   global.clearInterval = () => {};
 
   const partiesById = new Map([
-    ["duo-high", makeParty("duo-high", 2)],
-    ["duo-fit", makeParty("duo-fit", 2)],
     ["solo-a", makeParty("solo-a", 1)],
     ["solo-b", makeParty("solo-b", 1)],
+    ["solo-c", makeParty("solo-c", 1)],
   ]);
   const socketByPlayerId = new Map();
   const found = [];
 
   try {
-    matchQueueManager.addToQueue("duo-high", {
-      gameType: "line_wars",
-      matchFormat: "2v2",
-      ranked: false,
-      partySize: 2,
-      rating: 1800,
-      queueEnteredAt: Date.now(),
-      region: "global",
-    });
-    matchQueueManager.addToQueue("duo-fit", {
-      gameType: "line_wars",
-      matchFormat: "2v2",
-      ranked: false,
-      partySize: 2,
-      rating: 1200,
-      queueEnteredAt: Date.now(),
-      region: "global",
-    });
-    matchQueueManager.addToQueue("solo-a", {
-      gameType: "line_wars",
-      matchFormat: "2v2",
-      ranked: false,
-      partySize: 1,
-      rating: 1180,
-      queueEnteredAt: Date.now(),
-      region: "global",
-    });
-    matchQueueManager.addToQueue("solo-b", {
-      gameType: "line_wars",
-      matchFormat: "2v2",
-      ranked: false,
-      partySize: 1,
-      rating: 1220,
-      queueEnteredAt: Date.now(),
-      region: "global",
-    });
+    for (const partyId of partiesById.keys()) {
+      matchQueueManager.addToQueue(partyId, {
+        gameType: "line_wars",
+        matchFormat: "ffa",
+        ranked: false,
+        partySize: 1,
+        rating: 1200,
+        queueEnteredAt: Date.now(),
+        region: "global",
+      });
+    }
 
     matchQueueManager.startMatchmakingLoop({}, partiesById, socketByPlayerId, (...args) => found.push(args));
     assert.ok(typeof tick === "function");
@@ -78,25 +65,22 @@ test("2v2 matcher can skip an incompatible duo and use a later compatible duo wi
 
     assert.equal(found.length, 1);
     const [, , mode, teams, bucketKey] = found[0];
-    assert.equal(mode, "line_wars:2v2:0");
-    assert.equal(bucketKey, "line_wars:2v2:0");
+    assert.equal(mode, "line_wars:ffa:0");
+    assert.equal(bucketKey, "line_wars:ffa:0");
     assert.deepEqual(
       teams.map((team) => team.map((ticket) => ticket.partyId)),
-      [["duo-fit"], ["solo-a", "solo-b"]]
+      [["solo-a"], ["solo-b"], ["solo-c"]]
     );
-    assert.equal(matchQueueManager.getQueueEntry("duo-high")?.partyId, "duo-high");
-    assert.equal(matchQueueManager.getQueueEntry("duo-fit"), null);
-    assert.equal(matchQueueManager.getQueueEntry("solo-a"), null);
-    assert.equal(matchQueueManager.getQueueEntry("solo-b"), null);
   } finally {
     matchQueueManager.stopMatchmakingLoop();
-    ["duo-high", "duo-fit", "solo-a", "solo-b"].forEach((partyId) => matchQueueManager.removeFromQueue(partyId));
+    for (const partyId of partiesById.keys())
+      matchQueueManager.removeFromQueue(partyId);
     global.setInterval = originalSetInterval;
     global.clearInterval = originalClearInterval;
   }
 });
 
-test("lobby updates normalize aliased match formats", () => {
+test("private lobbies always expose the FFA survival ruleset and reject team assignment", () => {
   const lobby = matchQueueManager.createLobby({
     hostSocketId: "host-1",
     hostDisplayName: "Host",
@@ -106,16 +90,30 @@ test("lobby updates normalize aliased match formats", () => {
   });
 
   try {
-    const err = matchQueueManager.updateLobby("host-1", {
+    assert.equal(lobby.matchFormat, "ffa");
+    assert.equal(lobby.pvpMode, "ffa");
+
+    const updateErr = matchQueueManager.updateLobby("host-1", {
       gameType: "linewars",
       matchFormat: "duel",
+      pvpMode: "teams",
     });
+    assert.equal(updateErr, null);
 
-    assert.equal(err, null);
     const updated = matchQueueManager.getLobby(lobby.lobbyId);
     assert.equal(updated.gameType, "line_wars");
-    assert.equal(updated.matchFormat, "1v1");
-    assert.equal(updated.pvpMode, "1v1");
+    assert.equal(updated.matchFormat, "ffa");
+    assert.equal(updated.pvpMode, "ffa");
+
+    const snapshot = matchQueueManager.lobbySnapshot(updated);
+    assert.equal(snapshot.matchFormat, "ffa");
+    assert.equal(snapshot.pvpMode, "ffa");
+    assert.equal(snapshot.members[0].team, null);
+
+    assert.equal(
+      matchQueueManager.assignTeam("host-1", "host-1", "red"),
+      "Team assignment is no longer supported. Matches now use free-for-all survival lanes."
+    );
   } finally {
     matchQueueManager.disbandLobby(lobby.lobbyId);
     matchQueueManager.cleanupSocket("host-1");

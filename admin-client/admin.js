@@ -18,7 +18,7 @@ const S = {
   players:    { q: '', offset: 0, total: 0, rows: [] },
   matches:    { tab: 'history', status: '', mode: '', offset: 0, total: 0, rows: [], live: [] },
   audit:      { offset: 0, total: 0, rows: [] },
-  units:      { view: 'kanban', displayFields: [], unitTypes: [], selectedIds: [] },
+  units:      { view: 'kanban', displayFields: [], unitTypes: [], selectedIds: [], usageScopeFilter: 'all' },
   liveHandle: null,
   branding:   null,
 };
@@ -462,7 +462,7 @@ async function loadForgeWarsConfig() {
       api('GET', '/admin/ml-waves/configs').catch(() => ({ configs: [] })),
       api('GET', '/admin/barracks-levels').catch(() => ({ levels: [] })),
       api('GET', '/admin/asset-packs').catch(() => ([])),
-      api('GET', '/admin/game-config').catch(() => ({ multilane: { globalParams: {} } })),
+      api('GET', '/admin/game-config'),
       api('GET', '/admin/game-config/history?mode=multilane').catch(() => ({ versions: [] })),
     ]);
 
@@ -476,12 +476,13 @@ async function loadForgeWarsConfig() {
 
     const enabledUnits = unitTypes.filter((ut) => ut.enabled);
     const visibleUnits = enabledUnits.filter((ut) => ut.display_to_players !== false);
-    const attackers = enabledUnits.filter((ut) => ut.behavior_mode === 'moving' || ut.behavior_mode === 'both');
-    const defenders = enabledUnits.filter((ut) => ut.build_cost > 0 && (ut.behavior_mode === 'fixed' || ut.behavior_mode === 'both'));
+    const waveUnits = enabledUnits.filter((ut) => unitCanAppearInWave(ut));
+    const loadoutUnits = enabledUnits.filter((ut) => unitCanAppearInLoadout(ut));
     const defaultWave = waves.find((cfg) => cfg.is_default) || null;
     const latestBarracks = barracksLevels.length ? barracksLevels[barracksLevels.length - 1] : null;
     const enabledAssetPacks = assetPacks.filter((pack) => pack.enabled);
     const gp = configData?.multilane?.globalParams || {};
+    const configError = configData?.configErrors?.multilane || '';
     const canWrite = can('config.write');
     const historyHtml = configHistory.slice(0, 5).map((v) => `
       <tr>
@@ -511,8 +512,8 @@ async function loadForgeWarsConfig() {
           <div class="section-header"><h3>Unit Catalog</h3></div>
           <div class="section-body">
             <div><strong>${enabledUnits.length}</strong> enabled unit types</div>
-            <div class="text-muted" style="font-size:12px;margin-top:4px">${attackers.length} attackers/loadout units</div>
-            <div class="text-muted" style="font-size:12px;margin-top:4px">${defenders.length} buildable defenders · ${visibleUnits.length} shown to players</div>
+            <div class="text-muted" style="font-size:12px;margin-top:4px">${loadoutUnits.length} loadout-eligible · ${waveUnits.length} wave-eligible</div>
+            <div class="text-muted" style="font-size:12px;margin-top:4px">${visibleUnits.length} shown to players</div>
             <button class="btn-sm" style="margin-top:12px" onclick="navigate('units')">Open Unit Catalog</button>
           </div>
         </div>
@@ -545,21 +546,26 @@ async function loadForgeWarsConfig() {
       <div class="section" style="margin-bottom:18px">
         <div class="section-header"><h3>Match Start Settings</h3></div>
         <div class="section-body">
+          ${configError ? `
+            <div class="text-danger" style="font-size:12px;margin-bottom:12px">
+              ${esc(configError)}
+            </div>
+          ` : ''}
           <p class="text-muted" style="font-size:12px;margin-bottom:12px">
             These values are now used by newly created Forge Wars matches and are sent to Unity in <code>ml_match_config</code> / match snapshots.
           </p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
             <div class="form-group">
               <label>Start Gold</label>
-              <input id="fw-start-gold" type="number" min="0" step="1" value="${esc(String(gp.startGold ?? 70))}" ${canWrite ? '' : 'disabled'}>
+              <input id="fw-start-gold" type="number" min="0" step="1" value="${esc(String(gp.startGold ?? ''))}" ${canWrite ? '' : 'disabled'}>
             </div>
             <div class="form-group">
               <label>Start Income</label>
-              <input id="fw-start-income" type="number" min="0" step="0.1" value="${esc(String(gp.startIncome ?? 10))}" ${canWrite ? '' : 'disabled'}>
+              <input id="fw-start-income" type="number" min="0" step="0.1" value="${esc(String(gp.startIncome ?? ''))}" ${canWrite ? '' : 'disabled'}>
             </div>
             <div class="form-group">
               <label>Team HP</label>
-              <input id="fw-team-hp-start" type="number" min="1" step="1" value="${esc(String(gp.teamHpStart ?? 20))}" ${canWrite ? '' : 'disabled'}>
+              <input id="fw-team-hp-start" type="number" min="1" step="1" value="${esc(String(gp.teamHpStart ?? ''))}" ${canWrite ? '' : 'disabled'}>
             </div>
           </div>
           <p class="text-muted" style="font-size:12px;margin-top:10px">
@@ -568,11 +574,11 @@ async function loadForgeWarsConfig() {
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:10px">
             <div class="form-group">
               <label>Build Phase Ticks</label>
-              <input id="fw-build-phase-ticks" type="number" min="20" step="1" value="${esc(String(gp.buildPhaseTicks ?? 600))}" ${canWrite ? '' : 'disabled'}>
+              <input id="fw-build-phase-ticks" type="number" min="20" step="1" value="${esc(String(gp.buildPhaseTicks ?? ''))}" ${canWrite ? '' : 'disabled'}>
             </div>
             <div class="form-group">
               <label>Transition Ticks</label>
-              <input id="fw-transition-phase-ticks" type="number" min="20" step="1" value="${esc(String(gp.transitionPhaseTicks ?? 200))}" ${canWrite ? '' : 'disabled'}>
+              <input id="fw-transition-phase-ticks" type="number" min="20" step="1" value="${esc(String(gp.transitionPhaseTicks ?? ''))}" ${canWrite ? '' : 'disabled'}>
             </div>
           </div>
           ${canWrite ? `
@@ -622,25 +628,40 @@ async function loadForgeWarsConfig() {
 }
 
 async function saveForgeWarsSettings() {
-  if (!configData?.multilane) {
+  if (!configData) {
     toast('Current Forge Wars config is not loaded yet.', 'err');
     return;
   }
 
-  const num = (id, fallback = 0) => {
+  const requireNum = (id, label) => {
     const v = parseFloat(document.getElementById(id)?.value);
-    return Number.isFinite(v) ? v : fallback;
+    if (!Number.isFinite(v)) throw new Error(`${label} is required.`);
+    return v;
   };
 
-  const nextConfig = JSON.parse(JSON.stringify(configData.multilane));
-  const teamHpStart = Math.max(1, Math.floor(num('fw-team-hp-start', 20)));
+  const nextConfig = JSON.parse(JSON.stringify(configData.multilane || { globalParams: {} }));
+  let teamHpStart;
+  let startGold;
+  let startIncome;
+  let buildPhaseTicks;
+  let transitionPhaseTicks;
+  try {
+    startGold = requireNum('fw-start-gold', 'Start Gold');
+    startIncome = requireNum('fw-start-income', 'Start Income');
+    teamHpStart = Math.max(1, Math.floor(requireNum('fw-team-hp-start', 'Team HP')));
+    buildPhaseTicks = Math.max(20, Math.floor(requireNum('fw-build-phase-ticks', 'Build Phase Ticks')));
+    transitionPhaseTicks = Math.max(20, Math.floor(requireNum('fw-transition-phase-ticks', 'Transition Ticks')));
+  } catch (err) {
+    toast(err.message || 'All match start settings are required.', 'err');
+    return;
+  }
   nextConfig.globalParams = Object.assign({}, nextConfig.globalParams || {}, {
-    startGold: num('fw-start-gold', 70),
-    startIncome: num('fw-start-income', 10),
+    startGold,
+    startIncome,
     livesStart: teamHpStart,
     teamHpStart,
-    buildPhaseTicks: Math.max(20, Math.floor(num('fw-build-phase-ticks', 600))),
-    transitionPhaseTicks: Math.max(20, Math.floor(num('fw-transition-phase-ticks', 200))),
+    buildPhaseTicks,
+    transitionPhaseTicks,
   });
 
   try {
@@ -2987,7 +3008,7 @@ const mlWaveState = {
   configs: [],
   editingId: null,
   editingWaves: [],   // [{wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult}]
-  unitTypes: [],      // populated from /api/units on first load
+  unitTypes: [],      // populated from /admin/unit-types on first load
 };
 
 async function loadSurvival() {
@@ -2995,12 +3016,12 @@ async function loadSurvival() {
   try {
     const [configsData, unitsData] = await Promise.all([
       api('GET', '/admin/ml-waves/configs'),
-      api('GET', '/api/units').catch(() => ({ units: [] })),
+      api('GET', '/admin/unit-types').catch(() => ({ unitTypes: [] })),
     ]);
     mlWaveState.configs = configsData.configs || [];
-    mlWaveState.unitTypes = (unitsData.units || [])
-      .filter(u => u.behavior_mode === 'moving' || u.behavior_mode === 'both')
-      .map(u => u.key);
+    mlWaveState.unitTypes = (unitsData.unitTypes || [])
+      .filter((u) => unitCanAppearInWave(u))
+      .map((u) => u.key);
     mlWaveState.editingId = null;
     renderMLWaveConfigList();
   } catch (err) {
@@ -3101,14 +3122,13 @@ function renderMLWaveEditor(config) {
   const canWrite = can('config.write');
   const waves = mlWaveState.editingWaves;
   const unitTypes = mlWaveState.unitTypes;
-  const unitOpts = unitTypes.map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join('');
 
   const rows = waves.map((w, i) => `
     <tr>
       <td style="text-align:center;color:#94a3b8;font-size:12px">${w.wave_number}</td>
       <td>
         <select class="inp" style="width:100%;font-size:12px" onchange="mlWaveRowChange(${i},'unit_type',this.value)" ${canWrite ? '' : 'disabled'}>
-          ${unitTypes.map(u => `<option value="${esc(u)}" ${u === w.unit_type ? 'selected' : ''}>${esc(u)}</option>`).join('')}
+          ${Array.from(new Set([...unitTypes, w.unit_type])).map(u => `<option value="${esc(u)}" ${u === w.unit_type ? 'selected' : ''}>${esc(u)}</option>`).join('')}
         </select>
       </td>
       <td><input type="number" class="inp" style="width:60px;font-size:12px" value="${w.spawn_qty}" min="1" max="200"
@@ -3234,6 +3254,41 @@ const UNIT_DTYPE_ORDER = ['NORMAL', 'PHYSICAL', 'PIERCE', 'SPLASH', 'SIEGE', 'MA
 const UNIT_ARMOR_COLORS = {
   UNARMORED: '#90a4ae', LIGHT: '#42a5f5', MEDIUM: '#ffa726', HEAVY: '#ef5350', MAGIC: '#7e57c2',
 };
+const UNIT_USAGE_SCOPE_LABELS = Object.freeze({
+  wave_only: 'Wave Only',
+  loadout_only: 'Loadout Only',
+  both: 'Both',
+  disabled: 'Disabled',
+});
+const UNIT_USAGE_SCOPE_COLORS = Object.freeze({
+  wave_only: '#ff7043',
+  loadout_only: '#42a5f5',
+  both: '#66bb6a',
+  disabled: '#78909c',
+});
+
+function normalizeUnitUsageScope(scope) {
+  const value = String(scope || '').trim().toLowerCase();
+  if (UNIT_USAGE_SCOPE_LABELS[value]) return value;
+  return 'both';
+}
+
+function unitCanAppearInLoadout(unitType) {
+  const scope = normalizeUnitUsageScope(unitType?.usage_scope);
+  if (!unitType?.enabled || (scope !== 'loadout_only' && scope !== 'both')) return false;
+  return Number(unitType.build_cost) > 0 && Number(unitType.range) > 0;
+}
+
+function unitCanAppearInWave(unitType) {
+  const scope = normalizeUnitUsageScope(unitType?.usage_scope);
+  return !!unitType?.enabled && (scope === 'wave_only' || scope === 'both');
+}
+
+function getVisibleUnitTypes(unitTypes) {
+  const scope = S.units.usageScopeFilter || 'all';
+  if (scope === 'all') return unitTypes;
+  return (unitTypes || []).filter((ut) => normalizeUnitUsageScope(ut.usage_scope) === scope);
+}
 
 async function loadUnits() {
   setContent('<p class="load">Loading unit types…</p>');
@@ -3336,10 +3391,16 @@ function toggleUnitSelection(id, selected) {
 window.toggleUnitSelection = toggleUnitSelection;
 
 function selectAllVisibleUnits() {
-  S.units.selectedIds = (S.units.unitTypes || []).map((ut) => ut.id);
+  S.units.selectedIds = getVisibleUnitTypes(S.units.unitTypes || []).map((ut) => ut.id);
   renderUnitsTab(S.units.unitTypes || [], S.units.displayFields || []);
 }
 window.selectAllVisibleUnits = selectAllVisibleUnits;
+
+function setUnitsUsageScopeFilter(value) {
+  S.units.usageScopeFilter = value || 'all';
+  renderUnitsTab(S.units.unitTypes || [], S.units.displayFields || []);
+}
+window.setUnitsUsageScopeFilter = setUnitsUsageScopeFilter;
 
 function clearUnitSelection() {
   S.units.selectedIds = [];
@@ -3360,6 +3421,9 @@ const BULK_INTEGER_FIELDS = new Set([
   'bounty',
   'projectile_travel_ticks',
   'damage_reduction_pct',
+]);
+const BULK_ENUM_FIELDS = new Set([
+  'usage_scope',
 ]);
 
 const BULK_NON_NEGATIVE_FIELDS = new Set([
@@ -3382,6 +3446,9 @@ function getCanonicalBulkField(field) {
 }
 
 function computeBulkFieldValue(field, operation, value, currentValue) {
+  if (BULK_ENUM_FIELDS.has(field)) {
+    return value;
+  }
   const numericCurrent = Number.isFinite(Number(currentValue)) ? Number(currentValue) : 0;
   let nextValue = value;
   if (operation === 'add') nextValue = numericCurrent + value;
@@ -3399,17 +3466,39 @@ function computeBulkFieldValue(field, operation, value, currentValue) {
   return nextValue;
 }
 
+function renderUnitsBulkValueControl() {
+  const host = document.getElementById('units-bulk-value-host');
+  const field = document.getElementById('units-bulk-field')?.value;
+  if (!host) return;
+  if (field === 'usage_scope') {
+    host.innerHTML = `
+      <select id="units-bulk-value" style="width:100%">
+        <option value="wave_only">Wave Only</option>
+        <option value="loadout_only">Loadout Only</option>
+        <option value="both">Both</option>
+        <option value="disabled">Disabled</option>
+      </select>
+    `;
+    return;
+  }
+  host.innerHTML = `<input id="units-bulk-value" type="number" step="0.01" value="2" style="width:100%">`;
+}
+
 function renderUnitsTab(unitTypes, displayFields) {
+  const visibleUnitTypes = getVisibleUnitTypes(unitTypes || []);
   const canWrite = can('config.write');
   const selectedIds = getSelectedUnitIds();
   const selectedCount = selectedIds.length;
-  const allVisibleSelected = !!unitTypes.length && unitTypes.every((ut) => selectedIds.includes(ut.id));
+  const allVisibleSelected = !!visibleUnitTypes.length && visibleUnitTypes.every((ut) => selectedIds.includes(ut.id));
 
   // ── List view rows
-  const listRows = unitTypes.map(ut => {
+  const listRows = visibleUnitTypes.map(ut => {
     const bColor = BEHAVIOR_BADGE_COLOR[ut.behavior_mode] || '#aaa';
     const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
     const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
+    const usageScope = normalizeUnitUsageScope(ut.usage_scope);
+    const usageLabel = UNIT_USAGE_SCOPE_LABELS[usageScope];
+    const usageColor = UNIT_USAGE_SCOPE_COLORS[usageScope];
     return `<tr>
       <td>${canWrite ? `<input type="checkbox" ${isUnitSelected(ut.id) ? 'checked' : ''}
         aria-label="Select ${esc(ut.name)}"
@@ -3418,6 +3507,7 @@ function renderUnitsTab(unitTypes, displayFields) {
       <td><code style="font-size:11px">${esc(ut.key)}</code></td>
       <td>${esc(ut.name)}</td>
       <td>${_utBadge(ut.behavior_mode, bColor)}</td>
+      <td>${_utBadge(usageLabel, usageColor)}</td>
       <td>${_utBadge(ut.damage_type, dColor)}</td>
       <td>${_utBadge(ut.armor_type, aColor)}</td>
       <td class="text-right">${ut.hp}</td>
@@ -3439,7 +3529,7 @@ function renderUnitsTab(unitTypes, displayFields) {
 
   // ── Kanban cards grouped by damage type
   const unitsByDamageType = new Map();
-  unitTypes.forEach((ut) => {
+  visibleUnitTypes.forEach((ut) => {
     const key = String(ut.damage_type || 'OTHER').toUpperCase();
     if (!unitsByDamageType.has(key)) unitsByDamageType.set(key, []);
     unitsByDamageType.get(key).push(ut);
@@ -3449,6 +3539,9 @@ function renderUnitsTab(unitTypes, displayFields) {
     const bColor = BEHAVIOR_BADGE_COLOR[ut.behavior_mode] || '#aaa';
     const dColor = UNIT_DTYPE_COLORS[ut.damage_type] || '#aaa';
     const aColor = UNIT_ARMOR_COLORS[ut.armor_type]  || '#aaa';
+    const usageScope = normalizeUnitUsageScope(ut.usage_scope);
+    const usageLabel = UNIT_USAGE_SCOPE_LABELS[usageScope];
+    const usageColor = UNIT_USAGE_SCOPE_COLORS[usageScope];
     return `<div class="unit-kanban-card${ut.enabled ? '' : ' ukc-disabled'}" onclick="openUnitTypeModal(${ut.id})">
       ${canWrite ? `<label style="position:absolute;top:10px;left:10px;z-index:2;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:999px;background:rgba(12,18,28,0.88);border:1px solid rgba(255,255,255,0.12)" onclick="event.stopPropagation()">
         <input type="checkbox" ${isUnitSelected(ut.id) ? 'checked' : ''} aria-label="Select ${esc(ut.name)}"
@@ -3461,6 +3554,7 @@ function renderUnitsTab(unitTypes, displayFields) {
       <div class="ukc-desc">${esc(ut.description || '')}</div>
       <div class="ukc-badges">
         ${_utBadge(ut.behavior_mode, bColor)}
+        ${_utBadge(usageLabel, usageColor)}
         ${_utBadge(ut.damage_type, dColor)}
         ${_utBadge(ut.armor_type, aColor)}
       </div>
@@ -3505,10 +3599,17 @@ function renderUnitsTab(unitTypes, displayFields) {
       <div>
         <h2 style="margin:0">Unit Types <span style="font-size:14px;color:var(--muted)">${unitTypes.length}</span></h2>
         <p class="text-muted" style="font-size:12px;margin:4px 0 0">
-          Attackers (moving), Defenders (fixed), and Special units. Green dot = shown to players.
+          Usage scope controls whether a unit can appear in waves, loadout, both, or neither. Green dot = shown to players.
         </p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
+        <select class="inp" style="min-width:160px" onchange="setUnitsUsageScopeFilter(this.value)">
+          <option value="all" ${S.units.usageScopeFilter === 'all' ? 'selected' : ''}>All Usage Scopes</option>
+          <option value="wave_only" ${S.units.usageScopeFilter === 'wave_only' ? 'selected' : ''}>Wave Only</option>
+          <option value="loadout_only" ${S.units.usageScopeFilter === 'loadout_only' ? 'selected' : ''}>Loadout Only</option>
+          <option value="both" ${S.units.usageScopeFilter === 'both' ? 'selected' : ''}>Both</option>
+          <option value="disabled" ${S.units.usageScopeFilter === 'disabled' ? 'selected' : ''}>Disabled</option>
+        </select>
         <div class="units-view-toggle">
           <button class="units-view-btn ${S.units.view === 'list' ? 'active' : ''}" id="units-view-list" onclick="switchUnitsView('list')">≡ List</button>
           <button class="units-view-btn ${S.units.view === 'kanban' ? 'active' : ''}" id="units-view-kanban" onclick="switchUnitsView('kanban')">⊞ Kanban</button>
@@ -3529,16 +3630,17 @@ function renderUnitsTab(unitTypes, displayFields) {
           </p>
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">
             <span class="text-muted" style="font-size:12px">Selected units: <strong>${selectedCount}</strong></span>
-            <button class="btn-sm" onclick="selectAllVisibleUnits()" ${unitTypes.length ? '' : 'disabled'}>${allVisibleSelected ? 'All Visible Selected' : 'Select All Visible'}</button>
+            <button class="btn-sm" onclick="selectAllVisibleUnits()" ${visibleUnitTypes.length ? '' : 'disabled'}>${allVisibleSelected ? 'All Visible Selected' : 'Select All Visible'}</button>
             <button class="btn-sm" onclick="clearUnitSelection()" ${selectedCount ? '' : 'disabled'}>Clear Selection</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end">
             <div class="form-group">
               <label>Field</label>
-              <select id="units-bulk-field" style="width:100%">
+              <select id="units-bulk-field" style="width:100%" onchange="renderUnitsBulkValueControl()">
                 <option value="hp">HP</option>
                 <option value="attack_damage">Attack Damage</option>
                 <option value="attack_speed">Attack Speed</option>
+                <option value="usage_scope">Usage Scope</option>
                 <option value="running_speed">Running Speed</option>
                 <option value="pathing_speed">Pathing Speed</option>
                 <option value="range">Range</option>
@@ -3560,7 +3662,9 @@ function renderUnitsTab(unitTypes, displayFields) {
             </div>
             <div class="form-group">
               <label>Value</label>
-              <input id="units-bulk-value" type="number" step="0.01" value="2" style="width:100%">
+              <div id="units-bulk-value-host">
+                <input id="units-bulk-value" type="number" step="0.01" value="2" style="width:100%">
+              </div>
             </div>
             <div class="form-group">
               <label>Scope</label>
@@ -3586,19 +3690,19 @@ function renderUnitsTab(unitTypes, displayFields) {
         <thead><tr>
           <th style="width:36px">${canWrite ? `<input type="checkbox" ${allVisibleSelected ? 'checked' : ''}
             aria-label="Select all visible units" onclick="event.stopPropagation()" onchange="${allVisibleSelected ? 'clearUnitSelection()' : 'selectAllVisibleUnits()'}">` : ''}</th>
-          <th>Key</th><th>Name</th><th>Mode</th><th>Dmg Type</th>
+          <th>Key</th><th>Name</th><th>Mode</th><th>Usage</th><th>Dmg Type</th>
           <th>Armor</th><th>HP</th><th>Send$</th><th>Build$</th><th>On</th>
           <th>Actions</th>
         </tr></thead>
         <tbody>
-          ${listRows || `<tr><td colspan="${canWrite ? 11 : 10}" class="text-muted" style="padding:20px;text-align:center">No unit types found.</td></tr>`}
+          ${listRows || `<tr><td colspan="${canWrite ? 12 : 11}" class="text-muted" style="padding:20px;text-align:center">No unit types found for this filter.</td></tr>`}
         </tbody>
       </table>
     </div>
 
     <div id="units-kanban-wrap" style="${S.units.view === 'kanban' ? '' : 'display:none'}">
       <div class="tower-kanban">
-        ${damageColumns || '<p class="text-muted" style="padding:20px">No unit types found.</p>'}
+        ${damageColumns || '<p class="text-muted" style="padding:20px">No unit types found for this filter.</p>'}
       </div>
     </div>
 
@@ -3616,6 +3720,7 @@ function renderUnitsTab(unitTypes, displayFields) {
     </div>
   `);
 
+  if (canWrite) renderUnitsBulkValueControl();
   renderDisplaySettings(displayFields, unitTypes);
   loadBarracksLevels();
 }
@@ -3761,12 +3866,18 @@ async function bulkUpdateUnits() {
   const requestedField = document.getElementById('units-bulk-field')?.value;
   const operation = document.getElementById('units-bulk-operation')?.value;
   const scope = document.getElementById('units-bulk-scope')?.value || 'all';
-  const value = parseFloat(document.getElementById('units-bulk-value')?.value);
   const unitIds = getSelectedUnitIds();
   const field = getCanonicalBulkField(requestedField);
+  const rawValue = document.getElementById('units-bulk-value')?.value;
+  const isEnumField = BULK_ENUM_FIELDS.has(field);
+  const value = isEnumField ? rawValue : parseFloat(rawValue);
 
-  if (!Number.isFinite(value)) {
-    toast('Bulk-edit value must be numeric.', 'err');
+  if (isEnumField ? !value : !Number.isFinite(value)) {
+    toast(isEnumField ? 'Bulk-edit value is required.' : 'Bulk-edit value must be numeric.', 'err');
+    return;
+  }
+  if (isEnumField && operation !== 'set') {
+    toast('Usage scope bulk edits only support Set.', 'err');
     return;
   }
   if (scope === 'selected' && !unitIds.length) {
@@ -3864,6 +3975,9 @@ async function openUnitTypeModal(id) {
       </div>
       <div class="form-group">
         <label>Behavior Mode</label>${sel('behavior_mode', ['moving','fixed','both'])}
+      </div>
+      <div class="form-group">
+        <label>Usage Scope</label>${sel('usage_scope', ['wave_only','loadout_only','both','disabled'])}
       </div>
       <div class="form-group" style="display:flex;align-items:center;gap:8px;padding-top:20px">
         <input type="checkbox" id="ut-enabled" ${chk('enabled') || (!ut ? 'checked' : '')}>
@@ -4015,6 +4129,7 @@ function readUnitTypeForm() {
     name:                 g('ut-name')?.value.trim(),
     description:          g('ut-description')?.value.trim(),
     behavior_mode:        g('ut-behavior_mode')?.value,
+    usage_scope:          g('ut-usage_scope')?.value,
     enabled:              g('ut-enabled')?.checked ?? true,
     hp:                   num('ut-hp'),
     attack_damage:        num('ut-attack_damage'),

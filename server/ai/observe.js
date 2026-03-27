@@ -140,18 +140,6 @@ function chooseObservationTarget(game, laneIndex, runtime) {
   return opponents[0].laneIndex;
 }
 
-function getLastEnemySendSummary(runtime, myLaneIndex, targetLaneIndex) {
-  const incoming = runtime && runtime.incomingSendHistoryByLane && runtime.incomingSendHistoryByLane[myLaneIndex];
-  const list = Array.isArray(incoming) ? incoming : [];
-  if (list.length === 0) return null;
-  if (Number.isInteger(targetLaneIndex)) {
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].sourceLaneIndex === targetLaneIndex) return list[i];
-    }
-  }
-  return list[list.length - 1];
-}
-
 function buildLastSendVector(summary, localUnitTypes) {
   const types = localUnitTypes || UNIT_TYPES;
   const unitOneHot = types.map((u) => (summary && summary.unitType === u ? 1 : 0));
@@ -202,8 +190,7 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
     return clamp01(targetTowerStats.counts[t] / targetTowerTotal);
   });
 
-  const lastEnemySend = getLastEnemySendSummary(runtime, laneIndex, targetLaneIndex);
-  const lastEnemySendSummary = buildLastSendVector(lastEnemySend, localUnitTypes);
+  const lastEnemySendSummary = buildLastSendVector(null, localUnitTypes);
 
   const oppSide = lane.side === "left" ? "right" : "left";
   const named = {
@@ -264,4 +251,3 @@ module.exports = {
   estimateLaneDefense,
   summarizeTowerStats,
 };
-

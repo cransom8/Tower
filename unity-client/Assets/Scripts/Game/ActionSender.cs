@@ -3,10 +3,8 @@
 //
 // Usage:
 //   ActionSender.PlaceUnit(col, row, "goblin");
-//   ActionSender.SpawnUnit("footman");
-//   ActionSender.SetAutosend(true, enabledUnits, loadoutKeys);
+//   Fortress-mode unit flow now comes from barracks actions only.
 
-using System.Collections.Generic;
 using UnityEngine;
 using CastleDefender.Net;
 
@@ -52,16 +50,63 @@ namespace CastleDefender.Game
         public static void UpgradeBarracks()
             => SendAction("upgrade_barracks");
 
-        public static void SpawnUnit(string unitType)
-            => SendAction("spawn_unit", new { unitType });
+        public static void BuildOnPad(string padId)
+            => SendAction("build_on_pad", new { padId });
 
-        public static void SetAutosend(bool enabled, Dictionary<string, bool> enabledUnits, string[] loadoutKeys)
-            => SendAction("set_autosend", new
+        public static void UpgradeBuilding(string padId, string buildingType = null)
+            => SendAction("upgrade_building", new { padId, buildingType });
+
+        public static void BuildBarracksSite(string barracksId)
+            => SendAction("build_barracks_site", new { barracksId });
+
+        public static void UpgradeBarracksSite(string barracksId)
+            => SendAction("upgrade_barracks_site", new { barracksId });
+
+        public static void BuyBarracksUnit(string rosterKey, string barracksId = null, int count = 1)
+        {
+            if (string.IsNullOrWhiteSpace(barracksId))
             {
-                enabled,
-                enabledUnits,
-                loadoutKeys
-            });
+                Debug.LogError(
+                    $"[BarracksTrace][ClientBuy] Refusing to send buy_barracks_unit for rosterKey='{rosterKey}' " +
+                    "because barracksId is missing.");
+                return;
+            }
+
+            count = Mathf.Max(1, count);
+            Debug.Log(
+                $"[BarracksTrace][ClientBuy] rosterKey='{rosterKey}' barracksId='{barracksId}' count={count}");
+            SendAction("buy_barracks_unit", new { rosterKey, barracksId, count });
+        }
+
+        public static void SellBarracksUnit(string rosterKey, string barracksId = null)
+        {
+            if (string.IsNullOrWhiteSpace(barracksId))
+            {
+                Debug.LogError(
+                    $"[BarracksTrace][ClientBuy] Refusing to send sell_barracks_unit for rosterKey='{rosterKey}' " +
+                    "because barracksId is missing.");
+                return;
+            }
+
+            Debug.Log(
+                $"[BarracksTrace][ClientBuy] sell rosterKey='{rosterKey}' barracksId='{barracksId}'");
+            SendAction("sell_barracks_unit", new { rosterKey, barracksId });
+        }
+
+        public static void DeployBarracksHero(string heroKey, string barracksId = null)
+        {
+            if (string.IsNullOrWhiteSpace(barracksId))
+            {
+                Debug.LogError(
+                    $"[BarracksTrace][ClientHero] Refusing to send deploy_barracks_hero for heroKey='{heroKey}' " +
+                    "because barracksId is missing.");
+                return;
+            }
+
+            Debug.Log(
+                $"[BarracksTrace][ClientHero] heroKey='{heroKey}' barracksId='{barracksId}'");
+            SendAction("deploy_barracks_hero", new { heroKey, barracksId });
+        }
 
         public static void ClassicSpawnUnit(string unitType)
             => SendAction("spawn_unit", new { unitType });
@@ -87,6 +132,12 @@ namespace CastleDefender.Game
 
         public static void MLForceStart()
             => NetworkManager.Instance.Emit("ml_force_start", new { });
+
+        public static void RequestStartWaveVote()
+        {
+            Debug.Log("[WaveStart][Client] emitting ml_start_wave_vote");
+            NetworkManager.Instance.Emit("ml_start_wave_vote", null);
+        }
 
         public static void AddAI(string difficulty)
             => NetworkManager.Instance.Emit("add_ai_to_ml_room", new { difficulty });
@@ -119,7 +170,7 @@ namespace CastleDefender.Game
         public static void QueueLeave()
             => NetworkManager.Instance.Emit("queue:leave", null);
 
-        public static void LobbyCreate(string gameType, string matchFormat, string pvpMode = "teams", string displayName = "Player", int[] unitTypeIds = null)
+        public static void LobbyCreate(string gameType, string matchFormat, string pvpMode = "ffa", string displayName = "Player", int[] unitTypeIds = null)
             => NetworkManager.Instance.Emit("lobby:create",
                new { gameType, matchFormat, pvpMode, displayName, unitTypeIds });
 

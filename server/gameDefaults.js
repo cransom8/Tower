@@ -41,7 +41,7 @@ const MULTILANE = {
   globalParams: {
     tickHz: 20,
     incomeIntervalSeconds: 12,
-    startGold: 70,
+    startGold: 140,
     startIncome: 10,
     livesStart: 20,
     towerMaxLevel: 10,

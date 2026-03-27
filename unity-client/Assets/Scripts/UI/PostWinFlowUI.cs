@@ -76,14 +76,9 @@ namespace CastleDefender.UI
             nm.OnMLSurvivalContinuationStarted -= HandleSurvivalStarted;
             nm.OnMLGameOver -= HandleGameOver;
             nm.OnMLMatchReady -= HandleMatchReady;
-            nm.OnMLPvPResolved += HandlePvPResolved;
-            nm.OnMLSurvivalContinuationStarted += HandleSurvivalStarted;
             nm.OnMLGameOver += HandleGameOver;
             nm.OnMLMatchReady += HandleMatchReady;
             _subscribed = true;
-
-            if (nm.LastMLPvPResolved != null && nm.CurrentMLMatchState == "pvp_resolved")
-                HandlePvPResolved(nm.LastMLPvPResolved);
         }
 
         void Unsubscribe()
@@ -146,17 +141,7 @@ namespace CastleDefender.UI
 
         void HandlePvPResolved(MLPvPResolvedPayload payload)
         {
-            _winnerDecisionSubmitted = false;
-            int myLane = NetworkManager.Instance != null ? NetworkManager.Instance.MyLaneIndex : -1;
-            bool amWinner = payload != null && payload.winnerLaneIndices != null && System.Array.IndexOf(payload.winnerLaneIndices, myLane) >= 0;
-
-            if (amWinner)
-            {
-                ShowWinnerPrompt();
-                return;
-            }
-
-            ShowLoserPrompt();
+            HidePanel();
         }
 
         void HandleSurvivalStarted(MLSurvivalContinuationStartedPayload _)

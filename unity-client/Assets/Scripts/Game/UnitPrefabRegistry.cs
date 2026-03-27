@@ -33,7 +33,7 @@ namespace CastleDefender.Game
         [Tooltip("One entry per unit type key (must match server DB key exactly).")]
         public Entry[] entries;
 
-        [Tooltip("Used when no entry and no skin matches the unit type key.")]
+        [Tooltip("Legacy field. Runtime no longer substitutes fallback prefabs when resolution fails.")]
         public GameObject fallbackPrefab;
 
         // ── Skin entries (override prefab for a specific unit type) ───────────
@@ -57,7 +57,6 @@ namespace CastleDefender.Game
         Dictionary<string, SkinEntry> _skinDict; // key = skinKey
         readonly HashSet<string> _loggedMissingUnits = new(System.StringComparer.OrdinalIgnoreCase);
         readonly HashSet<string> _loggedMissingSkins = new(System.StringComparer.OrdinalIgnoreCase);
-        static GameObject s_runtimeFallbackPrefab;
 
         void OnEnable() => Rebuild();
 
@@ -91,17 +90,15 @@ namespace CastleDefender.Game
                 if (IsRenderablePrefab(remotePrefab, out string remoteIssue))
                     return remotePrefab;
 
-                if (TryGet(key, out var localEntry) && localEntry.prefab != null)
-                {
-                    Debug.LogWarning($"[UnitPrefabRegistry] Remote prefab for unit '{key}' is incomplete ({remoteIssue}). Falling back to local prefab '{localEntry.prefab.name}'.");
-                    return localEntry.prefab;
-                }
-
-                Debug.LogWarning($"[UnitPrefabRegistry] Remote prefab for unit '{key}' is incomplete ({remoteIssue}). No local prefab fallback is assigned.");
+                LogBrokenRemoteUnitPrefabOnce(key, remoteIssue, remoteContent);
+                return null;
             }
 
-            if (TryGet(key, out var e) && e.prefab != null) return e.prefab;
-            return ResolveMissingUnitPrefab(key, remoteContent);
+            if (TryGet(key, out var e) && e.prefab != null)
+                return e.prefab;
+
+            LogMissingUnitOnce(key, remoteContent);
+            return null;
         }
 
         public float GetScale(string key) =>
@@ -127,7 +124,8 @@ namespace CastleDefender.Game
                     if (IsRenderablePrefab(remoteSkinPrefab, out string remoteIssue))
                         return remoteSkinPrefab;
 
-                    Debug.LogWarning($"[UnitPrefabRegistry] Remote skin prefab '{skinKey}' is incomplete ({remoteIssue}). Falling back to unit '{unitType ?? "<unknown>"}'.");
+                    LogBrokenRemoteSkinPrefabOnce(skinKey, unitType, remoteIssue, remoteContent);
+                    return null;
                 }
 
                 if (_skinDict == null) Rebuild();
@@ -135,8 +133,43 @@ namespace CastleDefender.Game
                     return s.prefab;
 
                 LogMissingSkinOnce(skinKey, unitType, remoteContent);
+                return null;
             }
             return GetPrefab(unitType);
+        }
+
+        public bool TryGetUnitTypeForSkin(string skinKey, out string unitType)
+        {
+            unitType = null;
+            if (string.IsNullOrWhiteSpace(skinKey))
+                return false;
+
+            if (_skinDict == null) Rebuild();
+            if (!_skinDict.TryGetValue(skinKey.Trim(), out var entry) || string.IsNullOrWhiteSpace(entry.unitType))
+                return false;
+
+            unitType = entry.unitType.Trim();
+            return !string.IsNullOrWhiteSpace(unitType);
+        }
+
+        public static bool TryResolveUnitTypeForSkinFromLoadedRegistries(string skinKey, out string unitType)
+        {
+            unitType = null;
+            if (string.IsNullOrWhiteSpace(skinKey))
+                return false;
+
+            var registries = Resources.FindObjectsOfTypeAll<UnitPrefabRegistry>();
+            for (int i = 0; i < registries.Length; i++)
+            {
+                var registry = registries[i];
+                if (registry == null)
+                    continue;
+
+                if (registry.TryGetUnitTypeForSkin(skinKey, out unitType))
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -153,31 +186,20 @@ namespace CastleDefender.Game
             return GetScale(unitType);
         }
 
-        GameObject ResolveMissingUnitPrefab(string key, RemoteContentManager remoteContent)
-        {
-            if (fallbackPrefab != null)
-            {
-                LogMissingUnitOnce(key, remoteContent, usedAssignedFallback: true);
-                return fallbackPrefab;
-            }
-
-            LogMissingUnitOnce(key, remoteContent, usedAssignedFallback: false);
-            return GetOrCreateRuntimeFallbackPrefab();
-        }
-
-        void LogMissingUnitOnce(string key, RemoteContentManager remoteContent, bool usedAssignedFallback)
+        void LogMissingUnitOnce(string key, RemoteContentManager remoteContent)
         {
             string normalizedKey = string.IsNullOrWhiteSpace(key) ? "<empty>" : key.Trim();
             if (!_loggedMissingUnits.Add(normalizedKey))
                 return;
 
-            string fallbackKind = usedAssignedFallback ? "assigned fallback prefab" : "runtime placeholder prefab";
-            string message = $"[UnitPrefabRegistry] Missing prefab for unit '{normalizedKey}'. Using {fallbackKind}.";
+            string message =
+                $"[UnitPrefabRegistry] Missing prefab for unit '{normalizedKey}'. " +
+                "Runtime no longer substitutes a fallback prefab. Fix the registry entry or remote content manifest.";
 
             if (IsCriticalUnit(remoteContent, normalizedKey))
                 Debug.LogError(message);
             else
-                Debug.LogWarning(message);
+                Debug.LogError(message);
         }
 
         void LogMissingSkinOnce(string skinKey, string unitType, RemoteContentManager remoteContent)
@@ -186,12 +208,46 @@ namespace CastleDefender.Game
             if (!_loggedMissingSkins.Add(normalizedKey))
                 return;
 
-            string message = $"[UnitPrefabRegistry] Missing prefab for skin '{normalizedKey}'. Falling back to unit '{unitType ?? "<unknown>"}'.";
+            string message =
+                $"[UnitPrefabRegistry] Missing prefab for skin '{normalizedKey}' on unit '{unitType ?? "<unknown>"}'. " +
+                "Runtime no longer falls back to the base unit prefab for unresolved skins.";
 
             if (IsCriticalSkin(remoteContent, normalizedKey))
                 Debug.LogError(message);
             else
-                Debug.LogWarning(message);
+                Debug.LogError(message);
+        }
+
+        void LogBrokenRemoteUnitPrefabOnce(string key, string issue, RemoteContentManager remoteContent)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(key) ? "<empty>" : key.Trim();
+            if (!_loggedMissingUnits.Add($"broken:{normalizedKey}"))
+                return;
+
+            string message =
+                $"[UnitPrefabRegistry] Remote prefab for unit '{normalizedKey}' is broken ({issue}). " +
+                "Runtime no longer falls back to the local registry or placeholder geometry.";
+
+            if (IsCriticalUnit(remoteContent, normalizedKey))
+                Debug.LogError(message);
+            else
+                Debug.LogError(message);
+        }
+
+        void LogBrokenRemoteSkinPrefabOnce(string skinKey, string unitType, string issue, RemoteContentManager remoteContent)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(skinKey) ? "<empty>" : skinKey.Trim();
+            if (!_loggedMissingSkins.Add($"broken:{normalizedKey}"))
+                return;
+
+            string message =
+                $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
+                "Runtime no longer falls back to a different skin or the base unit prefab.";
+
+            if (IsCriticalSkin(remoteContent, normalizedKey))
+                Debug.LogError(message);
+            else
+                Debug.LogError(message);
         }
 
         static bool IsRenderablePrefab(GameObject prefab, out string issue)
@@ -274,48 +330,6 @@ namespace CastleDefender.Game
             }
 
             return true;
-        }
-
-        static GameObject GetOrCreateRuntimeFallbackPrefab()
-        {
-            if (s_runtimeFallbackPrefab != null)
-                return s_runtimeFallbackPrefab;
-
-            var root = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            root.name = "RuntimeMissingUnitFallback";
-            root.SetActive(false);
-            root.hideFlags = HideFlags.HideAndDontSave;
-
-            var collider = root.GetComponent<Collider>();
-            if (collider != null)
-                Object.Destroy(collider);
-
-            var renderer = root.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                var material = renderer.material;
-                material.color = new Color(1f, 0.25f, 0.25f, 1f);
-            }
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = "MissingMarker";
-            marker.transform.SetParent(root.transform, false);
-            marker.transform.localPosition = new Vector3(0f, 0.75f, 0f);
-            marker.transform.localScale = new Vector3(0.75f, 0.2f, 0.75f);
-
-            var markerCollider = marker.GetComponent<Collider>();
-            if (markerCollider != null)
-                Object.Destroy(markerCollider);
-
-            var markerRenderer = marker.GetComponent<Renderer>();
-            if (markerRenderer != null)
-            {
-                var markerMaterial = markerRenderer.material;
-                markerMaterial.color = new Color(0.12f, 0.12f, 0.12f, 1f);
-            }
-
-            s_runtimeFallbackPrefab = root;
-            return s_runtimeFallbackPrefab;
         }
 
         static bool IsCriticalUnit(RemoteContentManager remoteContent, string unitKey)

@@ -2,7 +2,7 @@
 
 const simMl = require("../sim-multilane");
 const { BotBrain } = require("./bot");
-const { clampCountBucket, createDoNothingAction, translateActionToCommands, validateActionAgainstGame } = require("./actions");
+const { createDoNothingAction, translateActionToCommands, validateActionAgainstGame } = require("./actions");
 const { computeReward } = require("./reward");
 
 function captureStateLite(game) {
@@ -34,14 +34,10 @@ class RuntimeTracker {
     this.maxHistory = Math.max(8, Number(opt.maxHistory) || 24);
 
     this.laneLeakHistory = {};
-    this.sendHistoryBySourceLane = {};
-    this.incomingSendHistoryByLane = {};
-    this.lastSendBySourceLane = {};
     this.invalidActionCountByLane = {};
     this.invalidActionsThisTickByLane = {};
     this.recentLifeLossByLane = {};
     this.currentTargetByLane = {};
-    this.teamPlans = {};
     this.cumulativeRewardByLane = {};
     this.lastRewardByLane = {};
 
@@ -52,8 +48,6 @@ class RuntimeTracker {
     for (const lane of (game && game.lanes) || []) {
       const i = lane.laneIndex;
       if (!Array.isArray(this.laneLeakHistory[i])) this.laneLeakHistory[i] = [0];
-      if (!Array.isArray(this.sendHistoryBySourceLane[i])) this.sendHistoryBySourceLane[i] = [];
-      if (!Array.isArray(this.incomingSendHistoryByLane[i])) this.incomingSendHistoryByLane[i] = [];
       if (!Number.isFinite(this.invalidActionCountByLane[i])) this.invalidActionCountByLane[i] = 0;
       if (!Number.isFinite(this.invalidActionsThisTickByLane[i])) this.invalidActionsThisTickByLane[i] = 0;
       if (!Number.isFinite(this.recentLifeLossByLane[i])) this.recentLifeLossByLane[i] = 0;
@@ -87,29 +81,6 @@ class RuntimeTracker {
   recordInvalidAction(laneIndex) {
     this.invalidActionCountByLane[laneIndex] = (this.invalidActionCountByLane[laneIndex] || 0) + 1;
     this.invalidActionsThisTickByLane[laneIndex] = (this.invalidActionsThisTickByLane[laneIndex] || 0) + 1;
-  }
-
-  recordSendEvent(sourceLaneIndex, targetLaneIndex, unitType, requestedCountBucket, actualCount, tick) {
-    const event = {
-      tick: Number(tick) || 0,
-      sourceLaneIndex,
-      targetLaneIndex,
-      unitType: String(unitType || ""),
-      countBucket: clampCountBucket(requestedCountBucket || actualCount || 1),
-      actualCount: Math.max(0, Number(actualCount) || 0),
-    };
-    const out = this.sendHistoryBySourceLane[sourceLaneIndex] || [];
-    out.push(event);
-    while (out.length > this.maxHistory) out.shift();
-    this.sendHistoryBySourceLane[sourceLaneIndex] = out;
-    this.lastSendBySourceLane[sourceLaneIndex] = event;
-
-    if (Number.isInteger(targetLaneIndex)) {
-      const incoming = this.incomingSendHistoryByLane[targetLaneIndex] || [];
-      incoming.push(event);
-      while (incoming.length > this.maxHistory) incoming.shift();
-      this.incomingSendHistoryByLane[targetLaneIndex] = incoming;
-    }
   }
 
   afterSimTick(prevState, nextState) {
@@ -157,14 +128,10 @@ class RuntimeTracker {
     return {
       waveTickInterval: this.waveTickInterval,
       laneLeakHistory: this.laneLeakHistory,
-      sendHistoryBySourceLane: this.sendHistoryBySourceLane,
-      incomingSendHistoryByLane: this.incomingSendHistoryByLane,
-      lastSendBySourceLane: this.lastSendBySourceLane,
       invalidActionCountByLane: this.invalidActionCountByLane,
       invalidActionsThisTickByLane: this.invalidActionsThisTickByLane,
       recentLifeLossByLane: this.recentLifeLossByLane,
       currentTargetByLane: this.currentTargetByLane,
-      teamPlans: this.teamPlans,
       cumulativeRewardByLane: this.cumulativeRewardByLane,
       lastRewardByLane: this.lastRewardByLane,
     };
@@ -187,7 +154,6 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
       action: createDoNothingAction(),
       reason: checked.reason,
       appliedCommands: 0,
-      sendSpawnedCount: 0,
     };
   }
 
@@ -201,12 +167,10 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
       action: checked.normalized,
       reason: mapped.reason,
       appliedCommands: 0,
-      sendSpawnedCount: 0,
     };
   }
 
   let appliedCommands = 0;
-  let sendSpawnedCount = 0;
   let lastReason = null;
   const maxCommands = Number.isFinite(opt.maxCommandsPerAction) ? Math.max(1, Math.floor(opt.maxCommandsPerAction)) : Infinity;
   for (let i = 0; i < mapped.commands.length && i < maxCommands; i++) {
@@ -217,22 +181,10 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
       break;
     }
     appliedCommands += 1;
-    if (command.type === "spawn_unit") sendSpawnedCount += 1;
   }
 
   if (mapped.commands.length > 0 && appliedCommands === 0) {
     runtime.recordInvalidAction(laneIndex);
-  }
-
-  if (checked.normalized.type === "SEND_UNITS" && sendSpawnedCount > 0) {
-    runtime.recordSendEvent(
-      laneIndex,
-      checked.normalized.laneId,
-      checked.normalized.unitType,
-      checked.normalized.countBucket,
-      sendSpawnedCount,
-      tick
-    );
   }
 
   return {
@@ -242,7 +194,6 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
     action: checked.normalized,
     reason: lastReason,
     appliedCommands,
-    sendSpawnedCount,
   };
 }
 

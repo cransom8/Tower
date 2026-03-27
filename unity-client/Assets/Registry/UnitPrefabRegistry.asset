@@ -163,5 +163,221 @@ MonoBehaviour:
     scale: 0.7
     tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
     tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_peasant
+    prefab: {fileID: 155500, guid: 53eb1e18130e9be4387a785b482187e1, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_scout
+    prefab: {fileID: 177316, guid: 6652791f0d19f3b408a94277d330b59b, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_settler
+    prefab: {fileID: 9173185916814592734, guid: cc1d9ae112f9093468713bfc446711b2, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_light_infantry
+    prefab: {fileID: 111318, guid: 46628851bff3fa341a13534728534ea3, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_spearman
+    prefab: {fileID: 123088, guid: 0755a95e2e1b5f44e8226989fb76f2cf, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_archer
+    prefab: {fileID: 179124, guid: 04c79b5f6e9ebab48af48fdcf7b6d570, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_crossbowman
+    prefab: {fileID: 145858, guid: e93eced9cc2d545428e4a4b45713048d, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_heavy_infantry
+    prefab: {fileID: 150198, guid: b4a1d0e6439682a4e958fb7c874ccb8c, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_halberdier
+    prefab: {fileID: 163764, guid: 148322894bbd52e488116a8616dfbe4c, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_heavy_swordman
+    prefab: {fileID: 182410, guid: 75925c365bd895145beefbc806717633, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_light_cavalry
+    prefab: {fileID: 172856, guid: 4e3c7da5fb6ce5a47a0a7dbc18b843c6, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_heavy_cavalry
+    prefab: {fileID: 197908, guid: 892bd1c95e4ec2f43a7e0a49c68f27f1, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_priest
+    prefab: {fileID: 169256, guid: 7b4e51ccca67b514d883b197e0f59efd, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_high_priest
+    prefab: {fileID: 190810, guid: 5f6ee5df488746f4ca1b939fbaac29e2, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mage
+    prefab: {fileID: 145554, guid: 1854a3b64b66724429ff0b04e0891fc1, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_paladin
+    prefab: {fileID: 190608, guid: 675bfa49ad0f04c47b900d8546860383, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_commander
+    prefab: {fileID: 134188, guid: a9733678a87478b4689672067b7718fb, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_king
+    prefab: {fileID: 169662, guid: 3c54df43aea316143beec51be2902cac, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_scout
+    prefab: {fileID: 151392, guid: 3444512bc6a211a4fbc66458b13748ed, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_knight
+    prefab: {fileID: 158504, guid: 511c566bd068dca4bb9794da5f53052a, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_mage
+    prefab: {fileID: 165872, guid: bc0e691c888319a4daf7fd1c112e7d03, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_paladin
+    prefab: {fileID: 115186, guid: 3b5b8018d62c7fb43b2805cf19ffaff7, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_priest
+    prefab: {fileID: 182384, guid: 9948d4669f9006844a963afb88d60afa, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
+  - key: tt_mounted_king
+    prefab: {fileID: 110684, guid: a36479667d1b0f74bbd661b17c3f9476, type: 3}
+    scale: 1
+    tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
+    tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
   fallbackPrefab: {fileID: 1324118086745280975, guid: 7d8a9a68a27399947bc44c7117a88d93, type: 3}
-  skinEntries: []
+  skinEntries:
+  - skinKey: tt_peasant
+    unitType: tt_peasant
+    prefab: {fileID: 155500, guid: 53eb1e18130e9be4387a785b482187e1, type: 3}
+    scale: 1
+  - skinKey: tt_scout
+    unitType: tt_scout
+    prefab: {fileID: 177316, guid: 6652791f0d19f3b408a94277d330b59b, type: 3}
+    scale: 1
+  - skinKey: tt_settler
+    unitType: tt_settler
+    prefab: {fileID: 9173185916814592734, guid: cc1d9ae112f9093468713bfc446711b2, type: 3}
+    scale: 1
+  - skinKey: tt_light_infantry
+    unitType: tt_light_infantry
+    prefab: {fileID: 111318, guid: 46628851bff3fa341a13534728534ea3, type: 3}
+    scale: 1
+  - skinKey: tt_spearman
+    unitType: tt_spearman
+    prefab: {fileID: 123088, guid: 0755a95e2e1b5f44e8226989fb76f2cf, type: 3}
+    scale: 1
+  - skinKey: tt_archer
+    unitType: tt_archer
+    prefab: {fileID: 179124, guid: 04c79b5f6e9ebab48af48fdcf7b6d570, type: 3}
+    scale: 1
+  - skinKey: tt_crossbowman
+    unitType: tt_crossbowman
+    prefab: {fileID: 145858, guid: e93eced9cc2d545428e4a4b45713048d, type: 3}
+    scale: 1
+  - skinKey: tt_heavy_infantry
+    unitType: tt_heavy_infantry
+    prefab: {fileID: 150198, guid: b4a1d0e6439682a4e958fb7c874ccb8c, type: 3}
+    scale: 1
+  - skinKey: tt_halberdier
+    unitType: tt_halberdier
+    prefab: {fileID: 163764, guid: 148322894bbd52e488116a8616dfbe4c, type: 3}
+    scale: 1
+  - skinKey: tt_heavy_swordman
+    unitType: tt_heavy_swordman
+    prefab: {fileID: 182410, guid: 75925c365bd895145beefbc806717633, type: 3}
+    scale: 1
+  - skinKey: tt_light_cavalry
+    unitType: tt_light_cavalry
+    prefab: {fileID: 172856, guid: 4e3c7da5fb6ce5a47a0a7dbc18b843c6, type: 3}
+    scale: 1
+  - skinKey: tt_heavy_cavalry
+    unitType: tt_heavy_cavalry
+    prefab: {fileID: 197908, guid: 892bd1c95e4ec2f43a7e0a49c68f27f1, type: 3}
+    scale: 1
+  - skinKey: tt_priest
+    unitType: tt_priest
+    prefab: {fileID: 169256, guid: 7b4e51ccca67b514d883b197e0f59efd, type: 3}
+    scale: 1
+  - skinKey: tt_high_priest
+    unitType: tt_high_priest
+    prefab: {fileID: 190810, guid: 5f6ee5df488746f4ca1b939fbaac29e2, type: 3}
+    scale: 1
+  - skinKey: tt_mage
+    unitType: tt_mage
+    prefab: {fileID: 145554, guid: 1854a3b64b66724429ff0b04e0891fc1, type: 3}
+    scale: 1
+  - skinKey: tt_paladin
+    unitType: tt_paladin
+    prefab: {fileID: 190608, guid: 675bfa49ad0f04c47b900d8546860383, type: 3}
+    scale: 1
+  - skinKey: tt_commander
+    unitType: tt_commander
+    prefab: {fileID: 134188, guid: a9733678a87478b4689672067b7718fb, type: 3}
+    scale: 1
+  - skinKey: tt_king
+    unitType: tt_king
+    prefab: {fileID: 169662, guid: 3c54df43aea316143beec51be2902cac, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_scout
+    unitType: tt_mounted_scout
+    prefab: {fileID: 151392, guid: 3444512bc6a211a4fbc66458b13748ed, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_knight
+    unitType: tt_mounted_knight
+    prefab: {fileID: 158504, guid: 511c566bd068dca4bb9794da5f53052a, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_mage
+    unitType: tt_mounted_mage
+    prefab: {fileID: 165872, guid: bc0e691c888319a4daf7fd1c112e7d03, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_paladin
+    unitType: tt_mounted_paladin
+    prefab: {fileID: 115186, guid: 3b5b8018d62c7fb43b2805cf19ffaff7, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_priest
+    unitType: tt_mounted_priest
+    prefab: {fileID: 182384, guid: 9948d4669f9006844a963afb88d60afa, type: 3}
+    scale: 1
+  - skinKey: tt_mounted_king
+    unitType: tt_mounted_king
+    prefab: {fileID: 110684, guid: a36479667d1b0f74bbd661b17c3f9476, type: 3}
+    scale: 1

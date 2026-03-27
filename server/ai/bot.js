@@ -9,7 +9,6 @@ const {
   createDoNothingAction,
   makeTileId,
   makeTowerId,
-  clampCountBucket,
 } = require("./actions");
 const { buildObservation, estimateLaneThreat, estimateLaneDefense } = require("./observe");
 const targeting = require("./targeting");
@@ -101,20 +100,6 @@ function getLane(game, laneIndex) {
   return game && game.lanes && game.lanes[laneIndex];
 }
 
-function getUnitCostMultiplier(lane) {
-  const br = lane && lane.barracks ? lane.barracks : {};
-  if (Number.isFinite(br.unitCostMult)) return Math.max(0, Number(br.unitCostMult));
-  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
-  return 1;
-}
-
-function getUnitCost(lane, unitType, unitDefs) {
-  const defs = unitDefs || simMl.UNIT_DEFS;
-  const def = defs[unitType];
-  if (!def) return Infinity;
-  return Math.ceil(def.cost * getUnitCostMultiplier(lane));
-}
-
 function getUnitDps(def) {
   if (!def) return 0;
   const damage = Number(def.dmg ?? def.attack_damage) || 0;
@@ -171,10 +156,6 @@ function estimateActionCost(game, laneIndex, action, unitDefs) {
     const tile = lane.grid[x] && lane.grid[x][y];
     return getTowerUpgradeCost(tile);
   }
-  if (action.type === AI_ACTION_TYPE.SEND_UNITS) {
-    const c = clampCountBucket(Number(action.countBucket) || 1);
-    return getUnitCost(lane, action.unitType, unitDefs) * c;
-  }
   return 0;
 }
 
@@ -216,11 +197,9 @@ class BotBrain {
       lastActionTick: -1,
       currentTargetLaneIndex: null,
       targetHoldUntilTick: 0,
-      tankPressureBias: 0,
       laneSwitches: 0,
       lastTargetLaneIndex: null,
       lastTargetSwitchTick: -1,
-      lastSendByTarget: {},
       observationDim: 0,
       lastLeakTick: -9999,
       lastBigLeakTick: -9999,
@@ -231,18 +210,6 @@ class BotBrain {
   updateMemory(game, runtime) {
     const lane = getLane(game, this.laneIndex);
     if (!lane) return;
-
-    // Adaptive memory: when target leaks shortly after tank sends, increase tank preference.
-    const currentTarget = this.memory.currentTargetLaneIndex;
-    const recentLifeLoss = runtime && runtime.recentLifeLossByLane && Number(runtime.recentLifeLossByLane[currentTarget]) || 0;
-    const lastSend = runtime && runtime.lastSendBySourceLane && runtime.lastSendBySourceLane[this.laneIndex];
-    if (lastSend && Number.isInteger(currentTarget) && lastSend.targetLaneIndex === currentTarget) {
-      this.memory.lastSendByTarget[currentTarget] = lastSend;
-      if (recentLifeLoss > 0 && TANK_UNITS.has(lastSend.unitType)) {
-        this.memory.tankPressureBias = Math.min(2.5, this.memory.tankPressureBias + recentLifeLoss * 0.35);
-      }
-    }
-    this.memory.tankPressureBias = Math.max(0, this.memory.tankPressureBias - 0.02);
 
     const obs = buildObservation(game, this.laneIndex, runtime, this.unitDefs);
     this.memory.observationDim = obs.vector.length;
@@ -272,7 +239,7 @@ class BotBrain {
   }
 
   chooseTowerType(game, lane, targetLaneIndex, danger, context) {
-    const loadoutKeys = lane.autosend && lane.autosend.loadoutKeys;
+    const loadoutKeys = Array.isArray(lane && lane.loadoutKeys) ? lane.loadoutKeys : null;
     const pool = loadoutKeys && loadoutKeys.length > 0
       ? loadoutKeys.filter((key) => this.unitDefs[key])
       : this.unitTypes.slice();
@@ -308,7 +275,6 @@ class BotBrain {
       if (danger && incomingMix.swarm >= 4) score += range * 1.8 + dps / 18;
       if (danger && incomingMix.heavy >= 3) score += hp / 80 + dps / 16;
       if (targetMix.magic >= 3) score += hp / 120;
-      if (this.memory.tankPressureBias > 1.0) score += hp / 90 + dps / 16;
       if (context && context.recentLeaks > 0) score += range * 1.2 + hp / 100;
       if (roundStage === "early") score += (buildCost > 0 ? 24 / buildCost : 0) + income * 0.3;
       if (roundStage === "late") score += dps / 12 + range * 1.4;
@@ -403,106 +369,14 @@ class BotBrain {
   }
 
   findEcoAction(game, lane, danger) {
-    if (danger) return null;
-    const next = getBarracksUpgradeCost(lane);
-    const cost = Number(next && (next.cost ?? next.upgradeCost));
-    const reqIncome = Number(next && next.reqIncome);
-    if (!Number.isFinite(cost) || !Number.isFinite(reqIncome)) return null;
-    if (lane.income < reqIncome) return null;
-    if (lane.gold < cost) return null;
-    const action = { type: AI_ACTION_TYPE.UPGRADE_INCOME };
-    const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
-    return legal.ok ? legal.normalized : null;
-  }
-
-  chooseSendUnitType(game, targetLaneIndex, danger, context) {
-    const targetLane = getLane(game, targetLaneIndex);
-    const unitMix = scanUnitMix(targetLane ? targetLane.units : [], targetLaneIndex);
-    const preference = this.personalityProfile.preferredUnits.slice();
-    const roundStage = getRoundStage(game.roundNumber);
-
-    if (this.memory.tankPressureBias > 0.8) {
-      preference.unshift("ogre", "troll");
-    }
-    if (danger) {
-      preference.unshift("goblin");
-    }
-    if (context && context.opponentRecentLeaks >= 2) {
-      preference.unshift("werewolf", "griffin", "ogre");
-    }
-    if (roundStage === "early") {
-      preference.unshift("goblin", "kobold");
-    } else if (roundStage === "late") {
-      preference.unshift("chimera", "demon_lord", "manticora");
-    }
-    if (unitMix.swarm >= 6) {
-      preference.unshift("mountain_dragon");
-    }
-
-    const dedup = [];
-    for (const u of preference) {
-      if (this.unitTypes.includes(u) && !dedup.includes(u)) dedup.push(u);
-    }
-    for (const fallback of this.unitTypes) {
-      if (!dedup.includes(fallback)) dedup.push(fallback);
-    }
-    return dedup[0] || "goblin";
-  }
-
-  chooseSendBucket(game, lane, unitType, reserveGold, spikePlan, context) {
-    const unitCost = getUnitCost(lane, unitType, this.unitDefs);
-    if (!Number.isFinite(unitCost) || unitCost <= 0) return null;
-    const maxAffordable = Math.floor(Math.max(0, lane.gold - reserveGold) / unitCost);
-    if (maxAffordable <= 0) return null;
-    const roundStage = getRoundStage(game.roundNumber);
-
-    if (spikePlan && Number.isFinite(spikePlan.countBucket)) {
-      const spikeBucket = clampCountBucket(spikePlan.countBucket);
-      if (spikeBucket <= maxAffordable) return spikeBucket;
-    }
-
-    if (context && context.opponentWeakWindow && roundStage !== "early") {
-      if (maxAffordable >= 10) return 10;
-      if (maxAffordable >= 5) return 5;
-    }
-
-    for (const b of this.personalityProfile.sendBucketBias) {
-      if (b <= maxAffordable) return b;
-    }
-    if (maxAffordable >= 10) return 10;
-    if (maxAffordable >= 5) return 5;
-    if (maxAffordable >= 3) return 3;
-    return 1;
-  }
-
-  findSendAction(game, lane, targetLaneIndex, danger, spikePlan, context) {
-    if (!isInteger(targetLaneIndex)) return null;
-    const unitType = this.chooseSendUnitType(game, targetLaneIndex, danger, context);
-    const reserveGold = context && Number.isFinite(context.reserveGold)
-      ? context.reserveGold
-      : (danger ? 26 : 10);
-    const countBucket = this.chooseSendBucket(game, lane, unitType, reserveGold, spikePlan, context);
-    if (!countBucket) return null;
-    const action = {
-      type: AI_ACTION_TYPE.SEND_UNITS,
-      unitType,
-      laneId: targetLaneIndex,
-      countBucket,
-    };
-    const legal = validateActionAgainstGame(game, this.laneIndex, action, { unitDefs: this.unitDefs });
-    return legal.ok ? legal.normalized : null;
+    return null;
   }
 
   applyGuardrails(game, lane, action, danger, fallbackDefenseAction) {
     if (!action || action.type === AI_ACTION_TYPE.DO_NOTHING) return action;
     const spend = estimateActionCost(game, this.laneIndex, action, this.unitDefs);
-    const postGold = lane.gold - spend;
-    const safetyReserve = danger ? 20 : 6;
-
-    if (postGold < safetyReserve && action.type === AI_ACTION_TYPE.SEND_UNITS) {
+    if (lane.gold - spend < 0)
       return fallbackDefenseAction || createDoNothingAction();
-    }
-    if (postGold < 0) return createDoNothingAction();
     return action;
   }
 
@@ -545,11 +419,6 @@ class BotBrain {
     this.memory.nextThinkTick = currentTick + this.reactionDelayTicks;
 
     const targetLaneIndex = this.chooseTarget(game, runtime);
-    let spikePlan = null;
-    if (targetLaneIndex !== null) {
-      targeting.planTeamSpike(game, this.laneIndex, runtime, this.rng, targetLaneIndex);
-      spikePlan = targeting.shouldSyncSpikeNow(game, this.laneIndex, runtime, 4);
-    }
 
     // Defensive and pressure context from actual lane state (no hidden info).
     const threat = estimateLaneThreat(lane, this.unitDefs);
@@ -584,7 +453,6 @@ class BotBrain {
       this.memory.targetHoldUntilTick = currentTick;
     }
     const pressureWindow = !danger && (
-      spikePlan ||
       targetRecentLeaks > 0 ||
       targetThreat > targetDefense * 1.08 ||
       (roundStage === "late" && lane.gold >= 90)
@@ -609,14 +477,12 @@ class BotBrain {
       teammateIncome,
       opponentRecentLeaks: targetRecentLeaks,
       opponentWeakWindow: targetDefense <= Math.max(2, targetThreat * 0.95),
-      teamBurstLikely: !!spikePlan || teammateGold / Math.max(1, botCountOnTeam - 1 || 1) >= 70,
     };
 
     const buildAction = this.findBuildTowerAction(game, lane, targetLaneIndex, danger, contextView);
     const upgradeAction = this.findUpgradeTowerAction(game, lane, danger);
     const defenseAction = buildAction || upgradeAction;
     const ecoAction = this.findEcoAction(game, lane, danger);
-    const sendAction = this.findSendAction(game, lane, targetLaneIndex, danger, spikePlan, contextView);
     const doNothing = createDoNothingAction();
 
     const obs = buildObservation(game, this.laneIndex, runtime, this.unitDefs);
@@ -640,17 +506,6 @@ class BotBrain {
       candidates.push({
         action: ecoAction,
         score: this.personalityProfile.ecoWeight * ecoNeed * (danger ? 0.2 : 1.0) * (ecoWindow ? 1.1 : 0.7),
-      });
-    }
-    if (sendAction) {
-      const pressureBase = this.personalityProfile.pressureWeight * (danger ? 0.18 : (pressureWindow ? 1.22 : 0.92));
-      const spikeBonus = spikePlan ? 1.0 : 0;
-      const depthBonus = 0.05 * this.planningDepth;
-      const weaknessBonus = targetRecentLeaks > 0 ? 0.55 : 0;
-      const lateFinisherBonus = roundStage === "late" && lane.gold >= 120 ? 0.8 : 0;
-      candidates.push({
-        action: sendAction,
-        score: pressureBase + spikeBonus + depthBonus + weaknessBonus + lateFinisherBonus,
       });
     }
     candidates.push({

@@ -22,7 +22,13 @@ namespace CastleDefender.UI
             return null;
         }
 
-        public static UnitPortraitCamera Create(string rootName, UnitPrefabRegistry registry, out GameObject root, out RenderTexture renderTexture)
+        public static UnitPortraitCamera Create(
+            string rootName,
+            UnitPrefabRegistry registry,
+            out GameObject root,
+            out RenderTexture renderTexture,
+            int textureSize = 256,
+            Color? backgroundColor = null)
         {
             int studioIndex = s_nextStudioIndex++;
             Vector3 studioOrigin = new Vector3(studioIndex * StudioSpacing, 0f, 50f);
@@ -44,7 +50,7 @@ namespace CastleDefender.UI
 
             var cam = camGO.AddComponent<Camera>();
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.11f, 0.14f, 0.20f, 1f);
+            cam.backgroundColor = backgroundColor ?? new Color(0.11f, 0.14f, 0.20f, 1f);
             cam.cullingMask = 1 << PortraitLayer;
             cam.fieldOfView = 45f;
             cam.nearClipPlane = 0.1f;
@@ -74,7 +80,7 @@ namespace CastleDefender.UI
             fillLight.shadows = LightShadows.None;
             fillLight.cullingMask = 1 << PortraitLayer;
 
-            renderTexture = new RenderTexture(256, 256, 24, RenderTextureFormat.ARGB32);
+            renderTexture = new RenderTexture(textureSize, textureSize, 24, RenderTextureFormat.ARGB32);
             renderTexture.antiAliasing = 2;
             renderTexture.Create();
             cam.targetTexture = renderTexture;
@@ -87,6 +93,8 @@ namespace CastleDefender.UI
             portraitCam.RotationY = 180f;
             portraitCam.FrameFill = 0.86f;
             portraitCam.VerticalFocus = 0.64f;
+            portraitCam.CameraHeightBias = 0.02f;
+            portraitCam.LookAtHeightBias = 0.06f;
             return portraitCam;
         }
     }

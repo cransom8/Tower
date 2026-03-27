@@ -32,10 +32,18 @@ INSERT INTO ml_wave_configs (name, description, is_default)
 SELECT 'Standard', 'Default 10-wave progression. Repeats wave 10 with +10% stats per extra round.', TRUE
 WHERE NOT EXISTS (SELECT 1 FROM ml_wave_configs WHERE name = 'Standard');
 
--- Seed waves for config id=1
+WITH standard_config AS (
+  SELECT id
+  FROM ml_wave_configs
+  WHERE name = 'Standard'
+  ORDER BY id
+  LIMIT 1
+)
 INSERT INTO ml_waves (config_id, wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult)
-SELECT 1, w.wave_number, w.unit_type, w.spawn_qty, w.hp_mult, w.dmg_mult, w.speed_mult
-FROM (VALUES
+SELECT sc.id, w.wave_number, w.unit_type, w.spawn_qty, w.hp_mult, w.dmg_mult, w.speed_mult
+FROM standard_config sc
+CROSS JOIN (
+VALUES
   (1,  'goblin',   8,  1.00, 1.00, 1.00),
   (2,  'goblin',  10,  1.20, 1.10, 1.00),
   (3,  'orc',      8,  1.00, 1.00, 1.00),

@@ -23,7 +23,6 @@ namespace CastleDefender.Editor
         const string TemplateGroup   = "Remote Units 01"; // copy remote path settings from here
         static readonly (string key, string sourcePath)[] SupplementalPortraitSources =
         {
-            ("giant_rat", "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Giant Rat/Textures/T_GiantRat_BaseColor.png"),
             ("fantasy_wolf", "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/Fantasy Animals Pack/Fantasy Wolf/Textures/T_FantasyWolf_BaseColor.png"),
         };
 

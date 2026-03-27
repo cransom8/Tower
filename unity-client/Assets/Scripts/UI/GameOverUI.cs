@@ -92,10 +92,11 @@ namespace CastleDefender.UI
             var myStat = GetMyFinalStat(p);
             if (Txt_CauseLoss != null)
             {
-                string winnerLine = !string.IsNullOrEmpty(p.winnerName)
+                bool hasWinner = p.winnerLaneIndex >= 0;
+                string winnerLine = hasWinner && !string.IsNullOrEmpty(p.winnerName)
                     ? $"Winner: {p.winnerName}"
-                    : (!string.IsNullOrEmpty(p.winningTeam) ? $"Winner: {p.winningTeam}" : "Match complete");
-                Txt_CauseLoss.text = $"{winnerLine}  •  {p.causeLoss ?? "Lives reduced to 0"}";
+                    : (hasWinner && !string.IsNullOrEmpty(p.winningTeam) ? $"Winner: {p.winningTeam}" : "Survival run complete");
+                Txt_CauseLoss.text = $"{winnerLine}  •  {p.causeLoss ?? "Town Core destroyed"}";
             }
             if (Txt_Duration != null)
             {

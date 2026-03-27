@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace CastleDefender.Editor
 {
-    // Ensures WebGL builds do not accidentally embed remote-only unit prefabs via registry references.
+    // Ensures player builds do not accidentally embed remote-only unit prefabs via registry references.
     public sealed class RemoteContentBuildStripper : IPreprocessBuildWithReport, IPostprocessBuildWithReport
     {
         const string RegistryPath = "Assets/Registry/UnitPrefabRegistry.asset";
@@ -35,15 +35,15 @@ namespace CastleDefender.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            if (report?.summary.platform != BuildTarget.WebGL)
+            if (!ShouldStripForBuild(report?.summary.platform ?? BuildTarget.NoTarget))
                 return;
 
-            PrepareRegistryForWebGLBuild();
+            PrepareRegistryForPlayerBuild(report.summary.platform);
         }
 
         public void OnPostprocessBuild(BuildReport report)
         {
-            if (report?.summary.platform != BuildTarget.WebGL)
+            if (!ShouldStripForBuild(report?.summary.platform ?? BuildTarget.NoTarget))
                 return;
 
             RestoreRegistryAfterBuild();
@@ -55,7 +55,7 @@ namespace CastleDefender.Editor
             RestoreRegistryAfterBuild();
         }
 
-        static void PrepareRegistryForWebGLBuild()
+        static void PrepareRegistryForPlayerBuild(BuildTarget target)
         {
             if (s_registryStripped)
                 return;
@@ -79,10 +79,10 @@ namespace CastleDefender.Editor
             PersistBackupToDisk(assetPath, s_backupContents);
 
             if (!RemoteContentStripRegistryReferences.StripRegistryReferences(saveAssets: true))
-                throw new BuildFailedException("Failed to strip remote prefab references from UnitPrefabRegistry before WebGL build.");
+                throw new BuildFailedException($"Failed to strip remote prefab references from UnitPrefabRegistry before {target} build.");
 
             s_registryStripped = true;
-            Debug.Log($"[RemoteContentBuildStripper] Stripped registry references for WebGL build: {assetPath}");
+            Debug.Log($"[RemoteContentBuildStripper] Stripped registry references for {target} build: {assetPath}");
         }
 
         static void RestoreRegistryAfterBuild()
@@ -114,6 +114,11 @@ namespace CastleDefender.Editor
                 return LegacyRegistryPath;
 
             return null;
+        }
+
+        static bool ShouldStripForBuild(BuildTarget target)
+        {
+            return target == BuildTarget.WebGL || target == BuildTarget.Android;
         }
 
         static void PersistBackupToDisk(string assetPath, string contents)

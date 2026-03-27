@@ -3,6 +3,11 @@ node_modules/
 
 # Log files
 *.log
+*.aab
+*.apks
+*.jks
+*.keystore
+.local-secrets/
 
 # Unity generated folders and local IDE files
 unity-client/Library/

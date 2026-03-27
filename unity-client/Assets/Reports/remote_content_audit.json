@@ -1,5 +1,5 @@
 {
-    "generatedAt": "2026-03-16T02:59:10.1272850Z",
+    "generatedAt": "2026-03-20T21:13:03.8669901Z",
     "registryPath": "Assets/Registry/UnitPrefabRegistry.asset",
     "units": [
         {
@@ -18,6 +18,11 @@
             "recommendedContentKey": "goblin",
             "recommendedAddressablesLabel": "goblin",
             "recommendedPrefabAddress": "units/goblin",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -36,6 +41,11 @@
             "recommendedContentKey": "kobold",
             "recommendedAddressablesLabel": "kobold",
             "recommendedPrefabAddress": "units/kobold",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -54,6 +64,11 @@
             "recommendedContentKey": "hobgoblin",
             "recommendedAddressablesLabel": "hobgoblin",
             "recommendedPrefabAddress": "units/hobgoblin",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -72,6 +87,11 @@
             "recommendedContentKey": "orc",
             "recommendedAddressablesLabel": "orc",
             "recommendedPrefabAddress": "units/orc",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -90,6 +110,11 @@
             "recommendedContentKey": "ogre",
             "recommendedAddressablesLabel": "ogre",
             "recommendedPrefabAddress": "units/ogre",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -108,6 +133,11 @@
             "recommendedContentKey": "troll",
             "recommendedAddressablesLabel": "troll",
             "recommendedPrefabAddress": "units/troll",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -126,6 +156,11 @@
             "recommendedContentKey": "cyclops",
             "recommendedAddressablesLabel": "cyclops",
             "recommendedPrefabAddress": "units/cyclops",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -144,6 +179,11 @@
             "recommendedContentKey": "ghoul",
             "recommendedAddressablesLabel": "ghoul",
             "recommendedPrefabAddress": "units/ghoul",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -162,6 +202,11 @@
             "recommendedContentKey": "skeleton_knight",
             "recommendedAddressablesLabel": "skeleton_knight",
             "recommendedPrefabAddress": "units/skeleton_knight",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -180,6 +225,11 @@
             "recommendedContentKey": "undead_warrior",
             "recommendedAddressablesLabel": "undead_warrior",
             "recommendedPrefabAddress": "units/undead_warrior",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -198,6 +248,11 @@
             "recommendedContentKey": "mummy",
             "recommendedAddressablesLabel": "mummy",
             "recommendedPrefabAddress": "units/mummy",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -216,6 +271,11 @@
             "recommendedContentKey": "vampire",
             "recommendedAddressablesLabel": "vampire",
             "recommendedPrefabAddress": "units/vampire",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -234,6 +294,11 @@
             "recommendedContentKey": "giant_viper",
             "recommendedAddressablesLabel": "giant_viper",
             "recommendedPrefabAddress": "units/giant_viper",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -252,6 +317,11 @@
             "recommendedContentKey": "darkness_spider",
             "recommendedAddressablesLabel": "darkness_spider",
             "recommendedPrefabAddress": "units/darkness_spider",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -270,6 +340,11 @@
             "recommendedContentKey": "lizard_warrior",
             "recommendedAddressablesLabel": "lizard_warrior",
             "recommendedPrefabAddress": "units/lizard_warrior",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -288,6 +363,11 @@
             "recommendedContentKey": "dragonide",
             "recommendedAddressablesLabel": "dragonide",
             "recommendedPrefabAddress": "units/dragonide",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -306,6 +386,11 @@
             "recommendedContentKey": "wyvern",
             "recommendedAddressablesLabel": "wyvern",
             "recommendedPrefabAddress": "units/wyvern",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -324,6 +409,11 @@
             "recommendedContentKey": "hydra",
             "recommendedAddressablesLabel": "hydra",
             "recommendedPrefabAddress": "units/hydra",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -342,6 +432,11 @@
             "recommendedContentKey": "mountain_dragon",
             "recommendedAddressablesLabel": "mountain_dragon",
             "recommendedPrefabAddress": "units/mountain_dragon",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -360,6 +455,11 @@
             "recommendedContentKey": "werewolf",
             "recommendedAddressablesLabel": "werewolf",
             "recommendedPrefabAddress": "units/werewolf",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -378,6 +478,11 @@
             "recommendedContentKey": "harpy",
             "recommendedAddressablesLabel": "harpy",
             "recommendedPrefabAddress": "units/harpy",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -396,6 +501,11 @@
             "recommendedContentKey": "griffin",
             "recommendedAddressablesLabel": "griffin",
             "recommendedPrefabAddress": "units/griffin",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -414,6 +524,11 @@
             "recommendedContentKey": "manticora",
             "recommendedAddressablesLabel": "manticora",
             "recommendedPrefabAddress": "units/manticora",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -432,6 +547,11 @@
             "recommendedContentKey": "chimera",
             "recommendedAddressablesLabel": "chimera",
             "recommendedPrefabAddress": "units/chimera",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -450,6 +570,11 @@
             "recommendedContentKey": "evil_watcher",
             "recommendedAddressablesLabel": "evil_watcher",
             "recommendedPrefabAddress": "units/evil_watcher",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -468,6 +593,11 @@
             "recommendedContentKey": "oak_tree_ent",
             "recommendedAddressablesLabel": "oak_tree_ent",
             "recommendedPrefabAddress": "units/oak_tree_ent",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -486,6 +616,11 @@
             "recommendedContentKey": "ice_golem",
             "recommendedAddressablesLabel": "ice_golem",
             "recommendedPrefabAddress": "units/ice_golem",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -504,6 +639,11 @@
             "recommendedContentKey": "demon_lord",
             "recommendedAddressablesLabel": "demon_lord",
             "recommendedPrefabAddress": "units/demon_lord",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -522,6 +662,11 @@
             "recommendedContentKey": "giant_rat",
             "recommendedAddressablesLabel": "giant_rat",
             "recommendedPrefabAddress": "units/giant_rat",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         },
         {
@@ -540,9 +685,567 @@
             "recommendedContentKey": "fantasy_wolf",
             "recommendedAddressablesLabel": "fantasy_wolf",
             "recommendedPrefabAddress": "units/fantasy_wolf",
+            "resolvedPortraitKey": "",
+            "recommendedPortraitAddress": "",
+            "portraitAssetPath": "",
+            "hasPortraitAsset": false,
+            "portraitIsAddressable": false,
             "warnings": []
         }
     ],
-    "skins": [],
+    "skins": [
+        {
+            "kind": "skin",
+            "key": "tt_peasant",
+            "unitType": "goblin",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Peasant.prefab",
+            "assetGuid": "53eb1e18130e9be4387a785b482187e1",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_peasant",
+            "addressableLabels": [
+                "skin",
+                "tt_peasant"
+            ],
+            "recommendedContentKey": "tt_peasant",
+            "recommendedAddressablesLabel": "tt_peasant",
+            "recommendedPrefabAddress": "skins/tt_peasant",
+            "resolvedPortraitKey": "goblin",
+            "recommendedPortraitAddress": "portraits/goblin",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/goblin.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_scout",
+            "unitType": "kobold",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Scout.prefab",
+            "assetGuid": "6652791f0d19f3b408a94277d330b59b",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_scout",
+            "addressableLabels": [
+                "skin",
+                "tt_scout"
+            ],
+            "recommendedContentKey": "tt_scout",
+            "recommendedAddressablesLabel": "tt_scout",
+            "recommendedPrefabAddress": "skins/tt_scout",
+            "resolvedPortraitKey": "kobold",
+            "recommendedPortraitAddress": "portraits/kobold",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/kobold.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_settler",
+            "unitType": "giant_rat",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Settler.prefab",
+            "assetGuid": "cc1d9ae112f9093468713bfc446711b2",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_settler",
+            "addressableLabels": [
+                "skin",
+                "tt_settler"
+            ],
+            "recommendedContentKey": "tt_settler",
+            "recommendedAddressablesLabel": "tt_settler",
+            "recommendedPrefabAddress": "skins/tt_settler",
+            "resolvedPortraitKey": "giant_rat",
+            "recommendedPortraitAddress": "portraits/giant_rat",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/giant_rat.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_light_infantry",
+            "unitType": "hobgoblin",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Light_Infantry.prefab",
+            "assetGuid": "46628851bff3fa341a13534728534ea3",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_light_infantry",
+            "addressableLabels": [
+                "skin",
+                "tt_light_infantry"
+            ],
+            "recommendedContentKey": "tt_light_infantry",
+            "recommendedAddressablesLabel": "tt_light_infantry",
+            "recommendedPrefabAddress": "skins/tt_light_infantry",
+            "resolvedPortraitKey": "hobgoblin",
+            "recommendedPortraitAddress": "portraits/hobgoblin",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/hobgoblin.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_spearman",
+            "unitType": "ghoul",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Spearman.prefab",
+            "assetGuid": "0755a95e2e1b5f44e8226989fb76f2cf",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_spearman",
+            "addressableLabels": [
+                "skin",
+                "tt_spearman"
+            ],
+            "recommendedContentKey": "tt_spearman",
+            "recommendedAddressablesLabel": "tt_spearman",
+            "recommendedPrefabAddress": "skins/tt_spearman",
+            "resolvedPortraitKey": "ghoul",
+            "recommendedPortraitAddress": "portraits/ghoul",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/ghoul.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_archer",
+            "unitType": "harpy",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Archer.prefab",
+            "assetGuid": "04c79b5f6e9ebab48af48fdcf7b6d570",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_archer",
+            "addressableLabels": [
+                "skin",
+                "tt_archer"
+            ],
+            "recommendedContentKey": "tt_archer",
+            "recommendedAddressablesLabel": "tt_archer",
+            "recommendedPrefabAddress": "skins/tt_archer",
+            "resolvedPortraitKey": "harpy",
+            "recommendedPortraitAddress": "portraits/harpy",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/harpy.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_crossbowman",
+            "unitType": "darkness_spider",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Crossbowman.prefab",
+            "assetGuid": "e93eced9cc2d545428e4a4b45713048d",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_crossbowman",
+            "addressableLabels": [
+                "skin",
+                "tt_crossbowman"
+            ],
+            "recommendedContentKey": "tt_crossbowman",
+            "recommendedAddressablesLabel": "tt_crossbowman",
+            "recommendedPrefabAddress": "skins/tt_crossbowman",
+            "resolvedPortraitKey": "darkness_spider",
+            "recommendedPortraitAddress": "portraits/darkness_spider",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/darkness_spider.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_infantry",
+            "unitType": "orc",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Heavy_Infantry.prefab",
+            "assetGuid": "b4a1d0e6439682a4e958fb7c874ccb8c",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_heavy_infantry",
+            "addressableLabels": [
+                "skin",
+                "tt_heavy_infantry"
+            ],
+            "recommendedContentKey": "tt_heavy_infantry",
+            "recommendedAddressablesLabel": "tt_heavy_infantry",
+            "recommendedPrefabAddress": "skins/tt_heavy_infantry",
+            "resolvedPortraitKey": "orc",
+            "recommendedPortraitAddress": "portraits/orc",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/orc.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_halberdier",
+            "unitType": "troll",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Halberdier.prefab",
+            "assetGuid": "148322894bbd52e488116a8616dfbe4c",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_halberdier",
+            "addressableLabels": [
+                "skin",
+                "tt_halberdier"
+            ],
+            "recommendedContentKey": "tt_halberdier",
+            "recommendedAddressablesLabel": "tt_halberdier",
+            "recommendedPrefabAddress": "skins/tt_halberdier",
+            "resolvedPortraitKey": "troll",
+            "recommendedPortraitAddress": "portraits/troll",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/troll.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_swordman",
+            "unitType": "ogre",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_HeavySwordman.prefab",
+            "assetGuid": "75925c365bd895145beefbc806717633",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_heavy_swordman",
+            "addressableLabels": [
+                "skin",
+                "tt_heavy_swordman"
+            ],
+            "recommendedContentKey": "tt_heavy_swordman",
+            "recommendedAddressablesLabel": "tt_heavy_swordman",
+            "recommendedPrefabAddress": "skins/tt_heavy_swordman",
+            "resolvedPortraitKey": "ogre",
+            "recommendedPortraitAddress": "portraits/ogre",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/ogre.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_light_cavalry",
+            "unitType": "werewolf",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Light_Cavalry.prefab",
+            "assetGuid": "4e3c7da5fb6ce5a47a0a7dbc18b843c6",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_light_cavalry",
+            "addressableLabels": [
+                "skin",
+                "tt_light_cavalry"
+            ],
+            "recommendedContentKey": "tt_light_cavalry",
+            "recommendedAddressablesLabel": "tt_light_cavalry",
+            "recommendedPrefabAddress": "skins/tt_light_cavalry",
+            "resolvedPortraitKey": "werewolf",
+            "recommendedPortraitAddress": "portraits/werewolf",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/werewolf.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_heavy_cavalry",
+            "unitType": "wyvern",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Heavy_Cavalry.prefab",
+            "assetGuid": "892bd1c95e4ec2f43a7e0a49c68f27f1",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_heavy_cavalry",
+            "addressableLabels": [
+                "skin",
+                "tt_heavy_cavalry"
+            ],
+            "recommendedContentKey": "tt_heavy_cavalry",
+            "recommendedAddressablesLabel": "tt_heavy_cavalry",
+            "recommendedPrefabAddress": "skins/tt_heavy_cavalry",
+            "resolvedPortraitKey": "wyvern",
+            "recommendedPortraitAddress": "portraits/wyvern",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/wyvern.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_priest",
+            "unitType": "undead_warrior",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Priest.prefab",
+            "assetGuid": "7b4e51ccca67b514d883b197e0f59efd",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_priest",
+            "addressableLabels": [
+                "skin",
+                "tt_priest"
+            ],
+            "recommendedContentKey": "tt_priest",
+            "recommendedAddressablesLabel": "tt_priest",
+            "recommendedPrefabAddress": "skins/tt_priest",
+            "resolvedPortraitKey": "undead_warrior",
+            "recommendedPortraitAddress": "portraits/undead_warrior",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/undead_warrior.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_high_priest",
+            "unitType": "mummy",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_HighPriest.prefab",
+            "assetGuid": "5f6ee5df488746f4ca1b939fbaac29e2",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_high_priest",
+            "addressableLabels": [
+                "skin",
+                "tt_high_priest"
+            ],
+            "recommendedContentKey": "tt_high_priest",
+            "recommendedAddressablesLabel": "tt_high_priest",
+            "recommendedPrefabAddress": "skins/tt_high_priest",
+            "resolvedPortraitKey": "mummy",
+            "recommendedPortraitAddress": "portraits/mummy",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/mummy.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mage",
+            "unitType": "evil_watcher",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mage.prefab",
+            "assetGuid": "1854a3b64b66724429ff0b04e0891fc1",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mage",
+            "addressableLabels": [
+                "skin",
+                "tt_mage"
+            ],
+            "recommendedContentKey": "tt_mage",
+            "recommendedAddressablesLabel": "tt_mage",
+            "recommendedPrefabAddress": "skins/tt_mage",
+            "resolvedPortraitKey": "evil_watcher",
+            "recommendedPortraitAddress": "portraits/evil_watcher",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/evil_watcher.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_paladin",
+            "unitType": "griffin",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Paladin.prefab",
+            "assetGuid": "675bfa49ad0f04c47b900d8546860383",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_paladin",
+            "addressableLabels": [
+                "skin",
+                "tt_paladin"
+            ],
+            "recommendedContentKey": "tt_paladin",
+            "recommendedAddressablesLabel": "tt_paladin",
+            "recommendedPrefabAddress": "skins/tt_paladin",
+            "resolvedPortraitKey": "griffin",
+            "recommendedPortraitAddress": "portraits/griffin",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/griffin.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_commander",
+            "unitType": "manticora",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Commander.prefab",
+            "assetGuid": "a9733678a87478b4689672067b7718fb",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_commander",
+            "addressableLabels": [
+                "skin",
+                "tt_commander"
+            ],
+            "recommendedContentKey": "tt_commander",
+            "recommendedAddressablesLabel": "tt_commander",
+            "recommendedPrefabAddress": "skins/tt_commander",
+            "resolvedPortraitKey": "manticora",
+            "recommendedPortraitAddress": "portraits/manticora",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/manticora.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_king",
+            "unitType": "cyclops",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_King.prefab",
+            "assetGuid": "3c54df43aea316143beec51be2902cac",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_king",
+            "addressableLabels": [
+                "skin",
+                "tt_king"
+            ],
+            "recommendedContentKey": "tt_king",
+            "recommendedAddressablesLabel": "tt_king",
+            "recommendedPrefabAddress": "skins/tt_king",
+            "resolvedPortraitKey": "cyclops",
+            "recommendedPortraitAddress": "portraits/cyclops",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/cyclops.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_scout",
+            "unitType": "fantasy_wolf",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_Scout.prefab",
+            "assetGuid": "3444512bc6a211a4fbc66458b13748ed",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_scout",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_scout"
+            ],
+            "recommendedContentKey": "tt_mounted_scout",
+            "recommendedAddressablesLabel": "tt_mounted_scout",
+            "recommendedPrefabAddress": "skins/tt_mounted_scout",
+            "resolvedPortraitKey": "fantasy_wolf",
+            "recommendedPortraitAddress": "portraits/fantasy_wolf",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/fantasy_wolf.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_knight",
+            "unitType": "skeleton_knight",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_Knight.prefab",
+            "assetGuid": "511c566bd068dca4bb9794da5f53052a",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_knight",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_knight"
+            ],
+            "recommendedContentKey": "tt_mounted_knight",
+            "recommendedAddressablesLabel": "tt_mounted_knight",
+            "recommendedPrefabAddress": "skins/tt_mounted_knight",
+            "resolvedPortraitKey": "skeleton_knight",
+            "recommendedPortraitAddress": "portraits/skeleton_knight",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/skeleton_knight.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_mage",
+            "unitType": "vampire",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_Mage.prefab",
+            "assetGuid": "bc0e691c888319a4daf7fd1c112e7d03",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_mage",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_mage"
+            ],
+            "recommendedContentKey": "tt_mounted_mage",
+            "recommendedAddressablesLabel": "tt_mounted_mage",
+            "recommendedPrefabAddress": "skins/tt_mounted_mage",
+            "resolvedPortraitKey": "vampire",
+            "recommendedPortraitAddress": "portraits/vampire",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/vampire.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_paladin",
+            "unitType": "chimera",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_Paladin.prefab",
+            "assetGuid": "3b5b8018d62c7fb43b2805cf19ffaff7",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_paladin",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_paladin"
+            ],
+            "recommendedContentKey": "tt_mounted_paladin",
+            "recommendedAddressablesLabel": "tt_mounted_paladin",
+            "recommendedPrefabAddress": "skins/tt_mounted_paladin",
+            "resolvedPortraitKey": "chimera",
+            "recommendedPortraitAddress": "portraits/chimera",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/chimera.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_priest",
+            "unitType": "lizard_warrior",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_Priest.prefab",
+            "assetGuid": "9948d4669f9006844a963afb88d60afa",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_priest",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_priest"
+            ],
+            "recommendedContentKey": "tt_mounted_priest",
+            "recommendedAddressablesLabel": "tt_mounted_priest",
+            "recommendedPrefabAddress": "skins/tt_mounted_priest",
+            "resolvedPortraitKey": "lizard_warrior",
+            "recommendedPortraitAddress": "portraits/lizard_warrior",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/lizard_warrior.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        },
+        {
+            "kind": "skin",
+            "key": "tt_mounted_king",
+            "unitType": "demon_lord",
+            "assetPath": "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/prefabs/TT_Mounted_King.prefab",
+            "assetGuid": "a36479667d1b0f74bbd661b17c3f9476",
+            "hasPrefab": true,
+            "isAddressable": true,
+            "addressableAddress": "skins/tt_mounted_king",
+            "addressableLabels": [
+                "skin",
+                "tt_mounted_king"
+            ],
+            "recommendedContentKey": "tt_mounted_king",
+            "recommendedAddressablesLabel": "tt_mounted_king",
+            "recommendedPrefabAddress": "skins/tt_mounted_king",
+            "resolvedPortraitKey": "demon_lord",
+            "recommendedPortraitAddress": "portraits/demon_lord",
+            "portraitAssetPath": "Assets/AddressableContent/UnitPortraits/demon_lord.png",
+            "hasPortraitAsset": true,
+            "portraitIsAddressable": true,
+            "warnings": []
+        }
+    ],
     "warnings": []
 }

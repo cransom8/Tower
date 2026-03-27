@@ -14,6 +14,7 @@
 
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine.UI;
 using CastleDefender.Net;
@@ -58,9 +59,9 @@ namespace CastleDefender.Game
         [Header("Wave Defense HUD (assign TMP_Text references)")]
         [Tooltip("Shows 'Wave N' or 'Round N'.")]
         public TMP_Text TxtRound;
-        [Tooltip("Shows BUILD / COMBAT / TRANSITION phase badge.")]
+        [Tooltip("Shows the live fortress loop label.")]
         public TMP_Text TxtPhase;
-        [Tooltip("Seconds remaining in the current phase.")]
+        [Tooltip("Shows the live wave and barracks timers.")]
         public TMP_Text TxtCountdown;
         [Tooltip("Top gold display for the active lane.")]
         public TMP_Text TxtGoldTop;
@@ -74,6 +75,7 @@ namespace CastleDefender.Game
         Image _teamHpRightFill;
 
         const int TickHz = 20; // must match server TICK_HZ
+        static readonly List<FortressPadAnchor> s_cameraAnchors = new();
 
         string _playerSide;     // "left" | "right" — cached on first snapshot
         string _prevRoundState; // tracks previous round state for transition detection
@@ -94,6 +96,9 @@ namespace CastleDefender.Game
 
         void OnEnable()
         {
+            EnsureWaveCombatRuntime();
+            EnsureCenterBarracksOnboardingRuntime();
+
             var sa = SnapshotApplier.Instance;
             if (sa != null && !_hudSubscribed)
             {
@@ -175,7 +180,7 @@ namespace CastleDefender.Game
             UpdateTeamHpVisual(
                 TxtTeamHpLeft,
                 _teamHpLeftFill,
-                "Left",
+                "Left Side",
                 teamHpStart,
                 teamHpStart,
                 new Color(1f, 0.92f, 0.2f));
@@ -183,7 +188,7 @@ namespace CastleDefender.Game
             UpdateTeamHpVisual(
                 TxtTeamHpRight,
                 _teamHpRightFill,
-                "Right",
+                "Right Side",
                 teamHpStart,
                 teamHpStart,
                 Color.white);
@@ -200,27 +205,16 @@ namespace CastleDefender.Game
             if (TxtRound != null)
                 TxtRound.text = $"Wave {snap.roundNumber}";
 
-            // Phase badge
-            if (TxtPhase != null)
-            {
-                TxtPhase.text = snap.roundState switch
-                {
-                    "build"      => "BUILD",
-                    "combat"     => "COMBAT",
-                    "transition" => "NEXT WAVE",
-                    _            => snap.roundState?.ToUpper() ?? ""
-                };
-            }
+            int waveSeconds = sa != null ? sa.GetWaveTimerSecondsRemaining() : 0;
+            int sendSeconds = lane != null && sa != null ? sa.GetBarracksSendSecondsRemaining(lane.laneIndex) : 0;
 
-            // Countdown (ticks → seconds, ceil so "0" only shows on exact zero)
+            if (TxtPhase != null)
+                TxtPhase.text = "LIVE";
+
             if (TxtCountdown != null)
-            {
-                int ticksLeft = snap.roundState == "build" && snap.buildPhaseTotal > 0
-                    ? (snap.buildPhaseTotal - snap.roundStateTicks)
-                    : snap.roundStateTicks;
-                int secs = Mathf.CeilToInt((float)ticksLeft / TickHz);
-                TxtCountdown.text = secs > 0 ? $"{secs}s" : "";
-            }
+                TxtCountdown.text = lane != null
+                    ? $"Wave {waveSeconds}s  Send {sendSeconds}s"
+                    : $"Wave {waveSeconds}s";
 
             if (lane != null)
             {
@@ -231,7 +225,7 @@ namespace CastleDefender.Game
                     TxtIncomeTop.text = $"Inc {lane.income:0.0}";
             }
 
-            // Wave-start audio cue: play a sound when build phase transitions to combat
+            // Legacy phase transition cue kept inert for compatibility snapshots.
             if (_prevRoundState == "build" && snap.roundState == "combat")
                 AudioManager.I?.Play(AudioManager.SFX.UpgradeBarracks, 0.6f);
             _prevRoundState = snap.roundState;
@@ -250,7 +244,7 @@ namespace CastleDefender.Game
                 UpdateTeamHpVisual(
                     TxtTeamHpLeft,
                     _teamHpLeftFill,
-                    "Left",
+                    "Left Side",
                     hp.left,
                     teamHpMax,
                     _playerSide == "left"
@@ -260,7 +254,7 @@ namespace CastleDefender.Game
                 UpdateTeamHpVisual(
                     TxtTeamHpRight,
                     _teamHpRightFill,
-                    "Right",
+                    "Right Side",
                     hp.right,
                     teamHpMax,
                     _playerSide == "right"
@@ -272,6 +266,8 @@ namespace CastleDefender.Game
         void Awake()
         {
             InitPools();
+            EnsureWaveCombatRuntime();
+            EnsureCenterBarracksOnboardingRuntime();
             EnsureCameraPOV();
             _cameraLockCountdown = CameraLockFrames;
             EnsureWaveHUD();   // auto-create phase/round labels if not wired
@@ -280,6 +276,8 @@ namespace CastleDefender.Game
 
         void Start()
         {
+            EnsureWaveCombatRuntime();
+
             // When entering from Lobby -> Loading -> Game_ML, camera objects can finish
             // initialization after Awake; re-apply POV at Start and next frame.
             EnsureCameraPOV();
@@ -357,6 +355,17 @@ namespace CastleDefender.Game
             return null;
         }
 
+        static void EnsureWaveCombatRuntime()
+        {
+            WaveSnapshotRuntimeSpawner.EnsureRuntimeSpawner();
+        }
+
+        void EnsureCenterBarracksOnboardingRuntime()
+        {
+            if (GetComponent<CenterBarracksOnboardingController>() == null)
+                gameObject.AddComponent<CenterBarracksOnboardingController>();
+        }
+
         void EnsureCameraPOV()
         {
             if (!ForceCameraPreset) return;
@@ -390,6 +399,24 @@ namespace CastleDefender.Game
                     { int bc = TileGrid.GetBranchConfigIndex(ls.branchId); if (bc >= 0) { branchCfg = bc; break; } }
             }
 
+            if (TryGetFortressLaneCameraFrame(cam, laneIndex, out var fortressFocus, out var fortressScreenUp, out var fortressOrthoSize))
+            {
+                cam.orthographicSize = fortressOrthoSize;
+                cam.transform.position = fortressFocus + Vector3.up * Mathf.Max(CameraHeight, 11f);
+                cam.transform.LookAt(fortressFocus, fortressScreenUp);
+
+                var fortressCtrl = FindFirstObjectByType<global::CameraController>();
+                if (fortressCtrl == null)
+                    fortressCtrl = gameObject.AddComponent<global::CameraController>();
+
+                fortressCtrl.MainCam = cam;
+                if (fortressCtrl.CameraTarget == null)
+                    fortressCtrl.CameraTarget = cam.transform;
+
+                fortressCtrl.SnapToCurrentPosition();
+                return;
+            }
+
             Vector3 castlePos  = TileGrid.TileToWorld(branchCfg, 5, 27);
             Vector3 spawnPos   = TileGrid.TileToWorld(branchCfg, 5, 0);
             Vector3 laneCenter = (castlePos + spawnPos) * 0.5f;
@@ -413,6 +440,136 @@ namespace CastleDefender.Game
 
             // Sync the controller so pan/zoom starts from exactly this position.
             ctrl.SnapToCurrentPosition();
+        }
+
+        bool TryGetFortressLaneCameraFrame(Camera cam, int laneIndex, out Vector3 focusWorld, out Vector3 screenUp, out float orthoSize)
+        {
+            focusWorld = Vector3.zero;
+            screenUp = Vector3.forward;
+            orthoSize = CameraOrthoSize;
+
+            string slotColor = ResolveLaneSlotColor(laneIndex);
+            if (FortressPadAnchor.CollectAnchors(s_cameraAnchors, slotColor, laneIndex) <= 0)
+                return false;
+
+            bool hasBounds = false;
+            Bounds laneBounds = default;
+            FortressPadAnchor townCoreAnchor = null;
+            FortressPadAnchor barracksAnchor = null;
+
+            for (int i = 0; i < s_cameraAnchors.Count; i++)
+            {
+                var anchor = s_cameraAnchors[i];
+                if (anchor == null)
+                    continue;
+
+                var bounds = anchor.GetWorldBounds();
+                if (!hasBounds)
+                {
+                    laneBounds = bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    laneBounds.Encapsulate(bounds);
+                }
+
+                if (townCoreAnchor == null &&
+                    anchor.MatchesPad("town_core_pad"))
+                {
+                    townCoreAnchor = anchor;
+                }
+
+                if (barracksAnchor == null &&
+                    anchor.MatchesPad("barracks_pad"))
+                {
+                    barracksAnchor = anchor;
+                }
+            }
+
+            if (!hasBounds)
+                return false;
+
+            focusWorld = laneBounds.center;
+            if (townCoreAnchor != null)
+            {
+                Vector3 outward = barracksAnchor != null
+                    ? barracksAnchor.FocusTransform.position - townCoreAnchor.FocusTransform.position
+                    : laneBounds.center - townCoreAnchor.FocusTransform.position;
+                outward.y = 0f;
+                if (outward.sqrMagnitude > 0.001f)
+                    screenUp = outward.normalized;
+            }
+
+            if (screenUp.sqrMagnitude < 0.001f)
+                screenUp = Vector3.forward;
+
+            Vector3 screenRight = Vector3.Cross(Vector3.up, screenUp).normalized;
+            if (screenRight.sqrMagnitude < 0.001f)
+                screenRight = Vector3.right;
+
+            float halfVertical = 0f;
+            float halfHorizontal = 0f;
+            for (int i = 0; i < s_cameraAnchors.Count; i++)
+            {
+                var anchor = s_cameraAnchors[i];
+                if (anchor == null)
+                    continue;
+
+                ExpandProjectedExtents(anchor.GetWorldBounds(), focusWorld, screenRight, screenUp, ref halfHorizontal, ref halfVertical);
+            }
+
+            const float verticalPadding = 2.5f;
+            const float horizontalPadding = 3.5f;
+            float aspect = cam != null && cam.pixelHeight > 0
+                ? Mathf.Max(0.1f, cam.aspect)
+                : 16f / 9f;
+            orthoSize = Mathf.Max(
+                CameraOrthoSize,
+                halfVertical + verticalPadding,
+                (halfHorizontal + horizontalPadding) / aspect);
+
+            focusWorld = new Vector3(focusWorld.x, laneBounds.center.y, focusWorld.z);
+            return true;
+        }
+
+        string ResolveLaneSlotColor(int laneIndex)
+        {
+            var sa = SnapshotApplier.Instance;
+            var lane = sa?.GetLane(laneIndex);
+            if (!string.IsNullOrWhiteSpace(lane?.slotColor))
+                return lane.slotColor;
+
+            var assignments = sa?.LatestMLMatchReady?.laneAssignments;
+            if (assignments != null)
+            {
+                for (int i = 0; i < assignments.Length; i++)
+                {
+                    var assignment = assignments[i];
+                    if (assignment != null && assignment.laneIndex == laneIndex && !string.IsNullOrWhiteSpace(assignment.slotColor))
+                        return assignment.slotColor;
+                }
+            }
+
+            return FortressPadAnchor.LaneIndexToLaneKey(laneIndex);
+        }
+
+        static void ExpandProjectedExtents(Bounds bounds, Vector3 center, Vector3 rightAxis, Vector3 upAxis, ref float halfWidth, ref float halfHeight)
+        {
+            Vector3 ext = bounds.extents;
+            for (int sx = -1; sx <= 1; sx += 2)
+            {
+                for (int sy = -1; sy <= 1; sy += 2)
+                {
+                    for (int sz = -1; sz <= 1; sz += 2)
+                    {
+                        Vector3 corner = bounds.center + Vector3.Scale(ext, new Vector3(sx, sy, sz));
+                        Vector3 delta = corner - center;
+                        halfWidth = Mathf.Max(halfWidth, Mathf.Abs(Vector3.Dot(delta, rightAxis)));
+                        halfHeight = Mathf.Max(halfHeight, Mathf.Abs(Vector3.Dot(delta, upAxis)));
+                    }
+                }
+            }
         }
 
         IEnumerator EnsureCameraPOVNextFrame()
@@ -455,9 +612,9 @@ namespace CastleDefender.Game
             if (TxtRound == null)
                 TxtRound = GetOrMakeLabel(hudGO, "Txt_Round", "Wave 1", 100f, 18, Color.white);
             if (TxtPhase == null)
-                TxtPhase = GetOrMakeLabel(hudGO, "Txt_Phase", "BUILD", 90f, 18, new Color(0.3f, 1f, 0.45f));
+                TxtPhase = GetOrMakeLabel(hudGO, "Txt_Phase", "LIVE", 90f, 18, new Color(0.3f, 1f, 0.45f));
             if (TxtCountdown == null)
-                TxtCountdown = GetOrMakeLabel(hudGO, "Txt_Countdown", "30s", 64f, 18, new Color(1f, 0.9f, 0.3f));
+                TxtCountdown = GetOrMakeLabel(hudGO, "Txt_Countdown", "Wave 120s", 128f, 18, new Color(1f, 0.9f, 0.3f));
             if (TxtGoldTop == null)
                 TxtGoldTop = GetOrMakeLabel(hudGO, "Txt_GoldTop", "Gold 0", 92f, 18, new Color(1f, 0.86f, 0.27f));
             if (TxtIncomeTop == null)

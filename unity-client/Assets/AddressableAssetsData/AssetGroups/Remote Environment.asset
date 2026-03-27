@@ -15,8 +15,18 @@ MonoBehaviour:
   m_GroupName: Remote Environment
   m_GUID: 39e8f40c84b8b284e90819147522fe44
   m_SerializeEntries:
-  - m_GUID: 814d785e6d994a64cb99784a1cad0e1f
+  - m_GUID: 0475ea37ddfa4bd4eb313da83987853e
+    m_Address: environment/tiles/castle
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 25c99cba1b867914496ed3cc3d2805ee
     m_Address: environment/game_ml
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 54249b75716b556439764a7e4f7de421
+    m_Address: environment/tiles/floor
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RTS Combat Architect"
+  short_description: "Plan performant RTS combat and data"
+  default_prompt: "Use $design-rts-combat-architecture to review this Unity and server work for performance, combat feel, RTS scaling, and durable match data."

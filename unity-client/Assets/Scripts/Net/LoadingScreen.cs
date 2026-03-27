@@ -47,7 +47,7 @@ public class LoadingScreen : MonoBehaviour
         "Upgrade Barracks to boost your income on every unit spawn.",
         "Cannons have a 1.5-tile splash radius - great against clustered units.",
         "Place defenders on your lane during the build phase - they respawn after each wave.",
-        "Send enemy units during the build phase to add pressure to opponents' waves.",
+        "Barracks are the only source of outbound units, so build and stock them to keep pressure on the battlefield.",
         "Ballistas outrange all other towers - great for back-line sniping.",
     };
 
@@ -375,7 +375,7 @@ public class LoadingScreen : MonoBehaviour
         if (_pendingScene == "Game_ML")
         {
             yield return null;
-            NetworkManager.Instance?.Emit("ml_gameplay_ready");
+            NetworkManager.Instance?.RequestGameplayReady();
             NetworkManager.Instance?.Emit("ml_content_progress", new { percent = 1.0f, state = "Ready" });
         }
 
@@ -483,19 +483,6 @@ public class LoadingScreen : MonoBehaviour
 
             if (!remoteContent.HasCompletedLobbyEntryPreparation)
             {
-                if (ShouldAllowLocalContentFallback(remoteContent))
-                {
-                    Debug.LogWarning($"[LoadingScreen] Continuing with local content fallback. {remoteContent.LastError}");
-                    _pendingLobbyEntryPreparation = false;
-                    if (loadingLabel)
-                        loadingLabel.text = "Remote content unavailable, using local assets";
-                    if (tipText)
-                        tipText.text = "Addressables could not initialize, so this session will use bundled local assets.";
-                    SetProgressTarget(0.72f);
-                    yield return new WaitForSecondsRealtime(0.35f);
-                    yield break;
-                }
-
                 FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required lobby content could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
@@ -514,7 +501,7 @@ public class LoadingScreen : MonoBehaviour
             if (loadingLabel)
                 loadingLabel.text = "Preparing first-match gameplay content";
 
-            yield return remoteContent.PreloadCriticalContentForSession((progress, status) =>
+            yield return remoteContent.PreloadWaveContentForSession((progress, status) =>
             {
                 SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
                 if (loadingLabel && !string.IsNullOrWhiteSpace(status))
@@ -523,7 +510,7 @@ public class LoadingScreen : MonoBehaviour
                     new { percent = Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)), state = status ?? "Downloading match assets" });
             }, requester: $"LoadingScreen.SceneGate:{_pendingScene}");
 
-            if (!remoteContent.HasCompletedCriticalPreload)
+            if (!remoteContent.HasCompletedWavePreload)
             {
                 FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required gameplay content could not be prepared."),
@@ -597,24 +584,6 @@ public class LoadingScreen : MonoBehaviour
 
         if (loadingLabel)
             loadingLabel.text = "Required content ready";
-    }
-
-    static bool ShouldAllowLocalContentFallback(RemoteContentManager remoteContent)
-    {
-        if (remoteContent == null)
-            return false;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-        return false;
-#endif
-
-        if (remoteContent.LastFailureStage == RemoteContentManager.CriticalPreloadFailureStage.AddressablesInitialization)
-            return true;
-
-        string error = remoteContent.LastError ?? string.Empty;
-        return error.IndexOf("RuntimeData is null", StringComparison.OrdinalIgnoreCase) >= 0
-            || error.IndexOf("Unable to load runtime data", StringComparison.OrdinalIgnoreCase) >= 0
-            || error.IndexOf("StreamingAssets/aa/settings.json", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     static string BuildFailureTitle(RemoteContentManager.CriticalPreloadFailureStage stage, string fallback)

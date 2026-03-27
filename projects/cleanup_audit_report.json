@@ -1,0 +1,1033 @@
+{
+  "generatedAt": "2026-03-21T16:41:11.739Z",
+  "buildScenes": [
+    {
+      "enabled": true,
+      "path": "Assets/Scenes/Bootstrap.unity",
+      "guid": "957e7381751777a4990598b4ab328a84",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Login.unity",
+      "guid": "d9c8f450845b2de429e1b57295916e6c",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Lobby.unity",
+      "guid": "744e6e3bc3bfd2b468420aa30835f774",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Loading.unity",
+      "guid": "90086f6fdd2bcca4eb30c4c255a308bb",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Loadout.unity",
+      "guid": "72dfc9bb200acab4285c28c0572487f5",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Game_ML.unity",
+      "guid": "825b9b19178b44e4bbbba94bcf2ddf8d",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/PostGame.unity",
+      "guid": "dad9eb76e96341f499aa29165fc3f63f",
+      "exists": true
+    },
+    {
+      "enabled": false,
+      "path": "Assets/Scenes/Game_Classic.unity",
+      "guid": "6e8a9b8bfb8e91446bfcc448db2e06ab",
+      "exists": false
+    }
+  ],
+  "addressables": [
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Default Local Group.asset",
+      "groupName": "Default Local Group",
+      "entryCount": 0,
+      "entries": []
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Environment.asset",
+      "groupName": "Remote Environment",
+      "entryCount": 3,
+      "entries": [
+        {
+          "guid": "0475ea37ddfa4bd4eb313da83987853e",
+          "address": "environment/tiles/castle"
+        },
+        {
+          "guid": "51a64085eca59fc468326dc5bf0a9b69",
+          "address": "environment/game_ml"
+        },
+        {
+          "guid": "54249b75716b556439764a7e4f7de421",
+          "address": "environment/tiles/floor"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Environment Dressing.asset",
+      "groupName": "Remote Environment Dressing",
+      "entryCount": 1,
+      "entries": [
+        {
+          "guid": "d405f0515222641439f9d5717dcb4d9d",
+          "address": "environment/game_ml_dressing"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Portraits.asset",
+      "groupName": "Remote Portraits",
+      "entryCount": 54,
+      "entries": [
+        {
+          "guid": "02cfaa07d6ba250488b6db03bd49262f",
+          "address": "portraits/evil_watcher"
+        },
+        {
+          "guid": "0957c3bd3c47c9640ba68bf0eb76fbc3",
+          "address": "portraits/chimera"
+        },
+        {
+          "guid": "0c1ba006dd81d9b48a93c8b5b3568c56",
+          "address": "portraits/ogre"
+        },
+        {
+          "guid": "0c8c7a2226cc27740b02a552eef06e39",
+          "address": "portraits/hobgoblin"
+        },
+        {
+          "guid": "0eff66aca32338540a570e4d0ecd5d37",
+          "address": "portraits/darkness_spider"
+        },
+        {
+          "guid": "124bb722f1eec0c4a9a9324cbd173ac8",
+          "address": "portraits/tt_peasant"
+        },
+        {
+          "guid": "15458776b4a06354aa2c9079d5a943ed",
+          "address": "portraits/tt_mage"
+        },
+        {
+          "guid": "156b79da721f6b741b6ad2da790425d7",
+          "address": "portraits/mountain_dragon"
+        },
+        {
+          "guid": "208bfa60cff8f1f478470b16ce3614f9",
+          "address": "portraits/skeleton_knight"
+        },
+        {
+          "guid": "238f01e803fe6e2469e7e5cf381acd0e",
+          "address": "portraits/tt_mounted_mage"
+        },
+        {
+          "guid": "2c0904d3de8877c43b166d289e752b1f",
+          "address": "portraits/harpy"
+        },
+        {
+          "guid": "3475e00b2b8607f4da7861ee3977be63",
+          "address": "portraits/vampire"
+        },
+        {
+          "guid": "35594555e43ce6248b5d02a5c4d83db3",
+          "address": "portraits/tt_light_cavalry"
+        },
+        {
+          "guid": "36280fa1e7e040a4bb4242b58cd87eb2",
+          "address": "portraits/troll"
+        },
+        {
+          "guid": "36838fbe2114fa4469af4564a821a468",
+          "address": "portraits/wyvern"
+        },
+        {
+          "guid": "3999f158cc3e3d64c96a29c7ba820bc3",
+          "address": "portraits/tt_heavy_infantry"
+        },
+        {
+          "guid": "3d78b2e481c16374e836009aba9624db",
+          "address": "portraits/fantasy_wolf"
+        },
+        {
+          "guid": "3f4cbe63c612e624e86a63cad4bfce0e",
+          "address": "portraits/cyclops"
+        },
+        {
+          "guid": "4e9994d235eb0004aaab42eb93bee72d",
+          "address": "portraits/tt_priest"
+        },
+        {
+          "guid": "53b227d52d23ecf40a578baad3fbd981",
+          "address": "portraits/tt_mounted_priest"
+        },
+        {
+          "guid": "55f8a31db6f1ced4fb59884947a41a9d",
+          "address": "portraits/orc"
+        },
+        {
+          "guid": "68fb2a6c380fdac47bbccaf762e1a77f",
+          "address": "portraits/tt_paladin"
+        },
+        {
+          "guid": "6b9a898a25b90c844a5b1cb5fdc202f3",
+          "address": "portraits/hydra"
+        },
+        {
+          "guid": "6c3f7085f14742649bd9a438bbd25b6f",
+          "address": "portraits/giant_viper"
+        },
+        {
+          "guid": "81d7b391faf45af498e5f095c0e25771",
+          "address": "portraits/tt_scout"
+        },
+        {
+          "guid": "8391dc854755e4143b3645dd2a0587e6",
+          "address": "portraits/tt_mounted_knight"
+        },
+        {
+          "guid": "84819c0948f6dd441ac58f4b4ad822ab",
+          "address": "portraits/tt_crossbowman"
+        },
+        {
+          "guid": "89eb928f5c9cd1d45b2de3b7bdd1be8e",
+          "address": "portraits/tt_spearman"
+        },
+        {
+          "guid": "9800943f9998d7841af3c5fa75d1c4dd",
+          "address": "portraits/oak_tree_ent"
+        },
+        {
+          "guid": "a0937c94d5a25f84caa48d90e2469570",
+          "address": "portraits/tt_king"
+        },
+        {
+          "guid": "a2e11bbb97a60ef4e9ff5be035c28016",
+          "address": "portraits/tt_archer"
+        },
+        {
+          "guid": "a6df93a3b1304ae48b2cc4c279b31328",
+          "address": "portraits/demon_lord"
+        },
+        {
+          "guid": "ad8f7e112d626914196a76cdeae6b43e",
+          "address": "portraits/tt_mounted_scout"
+        },
+        {
+          "guid": "af3b93d7400c6c143a1c80cef7bc8c65",
+          "address": "portraits/griffin"
+        },
+        {
+          "guid": "b0029a79cfa27c643b78a14c4a45d9df",
+          "address": "portraits/giant_rat"
+        },
+        {
+          "guid": "b5df939493b1dcb4784da7f588e55204",
+          "address": "portraits/goblin"
+        },
+        {
+          "guid": "b926f6564d1203548913ea1b8cd38ebb",
+          "address": "portraits/tt_heavy_swordman"
+        },
+        {
+          "guid": "bbf62ed824168344ba24cfc7cb48d9d1",
+          "address": "portraits/tt_heavy_cavalry"
+        },
+        {
+          "guid": "bc81e1595ecce774ba69816f796474d1",
+          "address": "portraits/werewolf"
+        },
+        {
+          "guid": "bcdc3ea49aff29e4ab0f4aa5a249bbe5",
+          "address": "portraits/undead_warrior"
+        },
+        {
+          "guid": "cb224b2cadefb0d49a5938bea9e67fc9",
+          "address": "portraits/dragonide"
+        },
+        {
+          "guid": "d057394dd08fd71488de0915013a0daf",
+          "address": "portraits/tt_mounted_king"
+        },
+        {
+          "guid": "d2387cf2ceda633458b9e194c9de0b81",
+          "address": "portraits/ice_golem"
+        },
+        {
+          "guid": "e0ed246c222497e44b2dd41833f69cfc",
+          "address": "portraits/tt_commander"
+        },
+        {
+          "guid": "e358307611d542f44873c67aedb0b591",
+          "address": "portraits/tt_mounted_paladin"
+        },
+        {
+          "guid": "e47185fffa992b24bb0f209515772108",
+          "address": "portraits/ghoul"
+        },
+        {
+          "guid": "e6fd67a9d7dc0844e80626d1bd024ba0",
+          "address": "portraits/kobold"
+        },
+        {
+          "guid": "e8efa06001831d64b94d56d4fb9fea55",
+          "address": "portraits/tt_settler"
+        },
+        {
+          "guid": "ef188cd000c444d49b55bd64911630f8",
+          "address": "portraits/tt_high_priest"
+        },
+        {
+          "guid": "f5a250ab42a5bc74293a8edc98fce3b4",
+          "address": "portraits/tt_halberdier"
+        },
+        {
+          "guid": "f60ce8e3e4d7a8c428c50f3c4cb0ace2",
+          "address": "portraits/lizard_warrior"
+        },
+        {
+          "guid": "f62747f3a77032e48a0127e436e7f41f",
+          "address": "portraits/manticora"
+        },
+        {
+          "guid": "f87378e5412996a4ebdf46029266d99e",
+          "address": "portraits/mummy"
+        },
+        {
+          "guid": "ff7de9f9cceffba4aaf332385e4e413f",
+          "address": "portraits/tt_light_infantry"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Scenes.asset",
+      "groupName": "Remote Scenes",
+      "entryCount": 6,
+      "entries": [
+        {
+          "guid": "72dfc9bb200acab4285c28c0572487f5",
+          "address": "Loadout"
+        },
+        {
+          "guid": "744e6e3bc3bfd2b468420aa30835f774",
+          "address": "Lobby"
+        },
+        {
+          "guid": "7ea5be47e8b7e824d8e7de5fe6e67d52",
+          "address": "PostGame"
+        },
+        {
+          "guid": "825b9b19178b44e4bbbba94bcf2ddf8d",
+          "address": "Game_ML"
+        },
+        {
+          "guid": "90086f6fdd2bcca4eb30c4c255a308bb",
+          "address": "Loading"
+        },
+        {
+          "guid": "d9c8f450845b2de429e1b57295916e6c",
+          "address": "Login"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Skins 01.asset",
+      "groupName": "Remote Skins 01",
+      "entryCount": 7,
+      "entries": [
+        {
+          "guid": "46628851bff3fa341a13534728534ea3",
+          "address": "skins/tt_light_infantry"
+        },
+        {
+          "guid": "511c566bd068dca4bb9794da5f53052a",
+          "address": "skins/tt_mounted_knight"
+        },
+        {
+          "guid": "53eb1e18130e9be4387a785b482187e1",
+          "address": "skins/tt_peasant"
+        },
+        {
+          "guid": "7b4e51ccca67b514d883b197e0f59efd",
+          "address": "skins/tt_priest"
+        },
+        {
+          "guid": "9948d4669f9006844a963afb88d60afa",
+          "address": "skins/tt_mounted_priest"
+        },
+        {
+          "guid": "cc1d9ae112f9093468713bfc446711b2",
+          "address": "skins/tt_settler"
+        },
+        {
+          "guid": "e93eced9cc2d545428e4a4b45713048d",
+          "address": "skins/tt_crossbowman"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Skins 02.asset",
+      "groupName": "Remote Skins 02",
+      "entryCount": 7,
+      "entries": [
+        {
+          "guid": "148322894bbd52e488116a8616dfbe4c",
+          "address": "skins/tt_halberdier"
+        },
+        {
+          "guid": "4e3c7da5fb6ce5a47a0a7dbc18b843c6",
+          "address": "skins/tt_light_cavalry"
+        },
+        {
+          "guid": "6652791f0d19f3b408a94277d330b59b",
+          "address": "skins/tt_scout"
+        },
+        {
+          "guid": "75925c365bd895145beefbc806717633",
+          "address": "skins/tt_heavy_swordman"
+        },
+        {
+          "guid": "892bd1c95e4ec2f43a7e0a49c68f27f1",
+          "address": "skins/tt_heavy_cavalry"
+        },
+        {
+          "guid": "a36479667d1b0f74bbd661b17c3f9476",
+          "address": "skins/tt_mounted_king"
+        },
+        {
+          "guid": "bc0e691c888319a4daf7fd1c112e7d03",
+          "address": "skins/tt_mounted_mage"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Skins 03.asset",
+      "groupName": "Remote Skins 03",
+      "entryCount": 10,
+      "entries": [
+        {
+          "guid": "04c79b5f6e9ebab48af48fdcf7b6d570",
+          "address": "skins/tt_archer"
+        },
+        {
+          "guid": "0755a95e2e1b5f44e8226989fb76f2cf",
+          "address": "skins/tt_spearman"
+        },
+        {
+          "guid": "1854a3b64b66724429ff0b04e0891fc1",
+          "address": "skins/tt_mage"
+        },
+        {
+          "guid": "3444512bc6a211a4fbc66458b13748ed",
+          "address": "skins/tt_mounted_scout"
+        },
+        {
+          "guid": "3b5b8018d62c7fb43b2805cf19ffaff7",
+          "address": "skins/tt_mounted_paladin"
+        },
+        {
+          "guid": "3c54df43aea316143beec51be2902cac",
+          "address": "skins/tt_king"
+        },
+        {
+          "guid": "5f6ee5df488746f4ca1b939fbaac29e2",
+          "address": "skins/tt_high_priest"
+        },
+        {
+          "guid": "675bfa49ad0f04c47b900d8546860383",
+          "address": "skins/tt_paladin"
+        },
+        {
+          "guid": "a9733678a87478b4689672067b7718fb",
+          "address": "skins/tt_commander"
+        },
+        {
+          "guid": "b4a1d0e6439682a4e958fb7c874ccb8c",
+          "address": "skins/tt_heavy_infantry"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 01.asset",
+      "groupName": "Remote Units 01",
+      "entryCount": 4,
+      "entries": [
+        {
+          "guid": "938a7ee8cf2318f4698d8ede62d86f63",
+          "address": "units/griffin"
+        },
+        {
+          "guid": "9ab829a698d6c2f44adbc501c1dcab88",
+          "address": "units/dragonide"
+        },
+        {
+          "guid": "ad405f3b7601d1c4e8ca0e4bcc5ace47",
+          "address": "units/mummy"
+        },
+        {
+          "guid": "e297ec5bfb121ea4d8d4f2b1462c7139",
+          "address": "units/chimera"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 02.asset",
+      "groupName": "Remote Units 02",
+      "entryCount": 6,
+      "entries": [
+        {
+          "guid": "31ac62305d486dc4c838d6af0ac2184d",
+          "address": "units/manticora"
+        },
+        {
+          "guid": "54f014f3cd0120a4c8cc995bfa362da5",
+          "address": "units/oak_tree_ent"
+        },
+        {
+          "guid": "745c0d8fad9112c48a312f59a723edd7",
+          "address": "units/undead_warrior"
+        },
+        {
+          "guid": "acbed4bda4b4c3946b62431133c93eff",
+          "address": "units/hobgoblin"
+        },
+        {
+          "guid": "d89d194afc9cc9a4aa37607eb492731c",
+          "address": "units/ice_golem"
+        },
+        {
+          "guid": "e3ead0c238774324ab46a062753bc58a",
+          "address": "units/hydra"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 03.asset",
+      "groupName": "Remote Units 03",
+      "entryCount": 5,
+      "entries": [
+        {
+          "guid": "26a427142a8a3584a8996bf10d8e3e9c",
+          "address": "units/giant_rat"
+        },
+        {
+          "guid": "2998a8227ed4d0b489de47d522a89ede",
+          "address": "units/darkness_spider"
+        },
+        {
+          "guid": "3a56fb6285749e044ac5b658413f7413",
+          "address": "units/lizard_warrior"
+        },
+        {
+          "guid": "7d8a9a68a27399947bc44c7117a88d93",
+          "address": "units/goblin"
+        },
+        {
+          "guid": "efe5ee49c2510d84f883f1603f5d56ac",
+          "address": "units/ghoul"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 04.asset",
+      "groupName": "Remote Units 04",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "46b95e7012bd5bc40adc5cfc3e545600",
+          "address": "units/orc"
+        },
+        {
+          "guid": "e91d5ed1e32e58445b15fef4961ad9c3",
+          "address": "units/giant_viper"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 05.asset",
+      "groupName": "Remote Units 05",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "0890e3d3941655a4184bae9bcd1d7353",
+          "address": "units/skeleton_knight"
+        },
+        {
+          "guid": "903aef66cc7cefc46aee27b2a5d14472",
+          "address": "units/kobold"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 06.asset",
+      "groupName": "Remote Units 06",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "0667415b01e76884cba42083e2cb68e7",
+          "address": "units/harpy"
+        },
+        {
+          "guid": "bce56b09cc3045e45954ef482db16125",
+          "address": "units/vampire"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 07.asset",
+      "groupName": "Remote Units 07",
+      "entryCount": 3,
+      "entries": [
+        {
+          "guid": "5728b873e0893b44f884697fdab3eff5",
+          "address": "units/demon_lord"
+        },
+        {
+          "guid": "5d845c2fa5772d64a9e902a1cecadac6",
+          "address": "units/cyclops"
+        },
+        {
+          "guid": "ff0f021e5b0c2dd45969c89a13996d75",
+          "address": "units/ogre"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 08.asset",
+      "groupName": "Remote Units 08",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "e8681fa5cadc52e4db86f36d49531ca5",
+          "address": "units/werewolf"
+        },
+        {
+          "guid": "ec3b6630249c4d64997f2f543f17fc69",
+          "address": "units/troll"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 09.asset",
+      "groupName": "Remote Units 09",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "0d96a8f77c162b64790022dc086760f8",
+          "address": "units/mountain_dragon"
+        },
+        {
+          "guid": "f81c4c2b075ae0f4ca87efd4c7ffebff",
+          "address": "units/evil_watcher"
+        }
+      ]
+    },
+    {
+      "file": "unity-client/Assets/AddressableAssetsData/AssetGroups/Remote Units 10.asset",
+      "groupName": "Remote Units 10",
+      "entryCount": 2,
+      "entries": [
+        {
+          "guid": "cb199b960f13ee642b6305dfba722e8b",
+          "address": "units/fantasy_wolf"
+        },
+        {
+          "guid": "cbe72ca99324f91409be40862ffc0f19",
+          "address": "units/wyvern"
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "count": 5,
+    "files": [
+      "unity-client/Assets/Resources/Icons/towers/archer_icon.png",
+      "unity-client/Assets/Resources/Icons/towers/ballista_icon.png",
+      "unity-client/Assets/Resources/Icons/towers/cannon_icon.png",
+      "unity-client/Assets/Resources/Icons/towers/fighter_icon.png",
+      "unity-client/Assets/Resources/Icons/towers/mage_icon.png"
+    ]
+  },
+  "staleSceneFiles": [
+    "unity-client/Assets/InitTestScene5a7c2bf1-7ac0-4d3a-a439-9c10fc133b11.unity",
+    "unity-client/Assets/InitTestScenee25f400d-1706-4255-943a-0635645e48a2.unity",
+    "unity-client/Assets/InitTestScenefd29f798-4bcd-4bef-9bc2-bd4206af00bf.unity",
+    "unity-client/Assets/_Recovery/0 (1).unity",
+    "unity-client/Assets/_Recovery/0 (2).unity",
+    "unity-client/Assets/_Recovery/0.unity"
+  ],
+  "missingHardcodedAssetPaths": [
+    {
+      "file": "unity-client/Assets/Scripts/Editor/WebGlPlayerSizeAudit.cs",
+      "missingAssetPath": "Assets/AddressableContent/Portraits/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/ConvertPrefabMaterialsToURP.cs",
+      "missingAssetPath": "Assets/Materials/Converted"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/ApplyLVEMaterials.cs",
+      "missingAssetPath": "Assets/Materials/GameBoard_Stone.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildLavaFalls.cs",
+      "missingAssetPath": "Assets/Materials/LavaFall.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/LVESceneSetup.cs",
+      "missingAssetPath": "Assets/Materials/LVE"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/LVESceneSetup.cs",
+      "missingAssetPath": "Assets/Materials/LVE/BridgeDeck_Mat.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/LVESceneSetup.cs",
+      "missingAssetPath": "Assets/Materials/LVE/Lava_Floor_Mat.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/LVESceneSetup.cs",
+      "missingAssetPath": "Assets/Materials/Tiles/MatFloor.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/ApplyGreenWallSelection.cs",
+      "missingAssetPath": "Assets/Materials/TT_RTS_Buildings_Green_URP.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/CreateHFCUnitPrefabs.cs",
+      "missingAssetPath": "Assets/Materials/Units/HFC"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/EditorPaths.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/ApplyLVEMaterials.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Materials/lava_rocks_01_BC.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RescaleMapAndApplyRockMaterials.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Materials/lava_rocks_01_BC.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupMapPrimitives.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Materials/lava_rocks_01_BC.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildBridgeDetails.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs V2/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildCliffWalls.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs V2/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildLVEIslandsAndBridges.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs V2/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildMapEdgeWalls.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs V2/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildBridgeDetails.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildCliffWalls.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildLVEIslandsAndBridges.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildMapEdgeWalls.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Cliffs/Vertex Paint Prefabs/Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RescaleMapAndApplyRockMaterials.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Ground and River Textures/Ground Material/Ground_01.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupMapPrimitives.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Ground and River Textures/Ground Material/Ground_01.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupTileGrids.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/HD and URP Support Packs/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupMapPrimitives.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Lava Materials/Lava_2_flow Lake.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/ApplyLVEMaterials.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Lava Materials/Lava_3_flow.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildLavaFalls.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Lava Materials/Lava_3_flow.mat"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildLavaParticles.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Particles/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildBridgeRocks.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Rocks/Vertex Paint Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BuildRockScatter.cs",
+      "missingAssetPath": "Assets/NatureManufacture Assets/L.V.E- Lava and Volcano Environment/Rocks/Vertex Paint Prefabs/"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupBloomOnly.cs",
+      "missingAssetPath": "Assets/PostProcess"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupLavaPostProcess.cs",
+      "missingAssetPath": "Assets/PostProcess"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupBloomOnly.cs",
+      "missingAssetPath": "Assets/PostProcess/LavaBloom.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupLavaPostProcess.cs",
+      "missingAssetPath": "Assets/PostProcess/LavaScene.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/EditorPaths.cs",
+      "missingAssetPath": "Assets/Prefabs/Tiles/WallTile.prefab"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupCombatSystems.cs",
+      "missingAssetPath": "Assets/Prefabs/Tiles/WallTile.prefab"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupTileGrids.cs",
+      "missingAssetPath": "Assets/Prefabs/Tiles/WallTile.prefab"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/BundledUnitRegistryHydrator.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RemoteContentAddressablesSync.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RemoteContentAudit.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RemoteContentBuildStripper.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/RemoteContentStripRegistryReferences.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/SetupTTRTSSkins.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/UnitPortraitBakeTools.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    },
+    {
+      "file": "unity-client/Assets/Scripts/Editor/WebGlPlayerSizeAudit.cs",
+      "missingAssetPath": "Assets/UnitPrefabRegistry.asset"
+    }
+  ],
+  "duplicateAdminClient": {
+    "left": "admin-client",
+    "right": "server/admin-client",
+    "identical": false,
+    "onlyLeft": [],
+    "onlyRight": [
+      "assets/uploads/towers/1773897350648-2b14f710bb8a-unity-client_-_Loadout_-_Web_-_Unity_6_3_LTS__60.jpg"
+    ],
+    "differing": [
+      "assets/units/footman.svg",
+      "assets/units/golem.svg",
+      "assets/units/ironclad.svg",
+      "assets/units/runner.svg",
+      "assets/units/warlock.svg"
+    ]
+  },
+  "serverBackupRefs": [
+    "client_backup_",
+    "server/admin-client",
+    "ServerData"
+  ],
+  "resourcesLoadRefs": [
+    "unity-client/Assets/MCPForUnity/Editor/Resources/Editor/Windows.cs",
+    "unity-client/Assets/Scripts/Editor/PromoteGameEnvironmentEditPreview.cs",
+    "unity-client/Assets/Scripts/Editor/SetupTileGrids.cs",
+    "unity-client/Assets/Scripts/Editor/WireTileMenus.cs",
+    "unity-client/Assets/Scripts/Game/LaneColorVisual.cs",
+    "unity-client/Assets/Scripts/Game/UnitPrefabRegistry.cs",
+    "unity-client/Assets/Scripts/Net/RemoteContentManager.cs"
+  ],
+  "remoteAutomationScripts": [
+    "unity-client/Assets/Scripts/Editor/BuildWinterEnvironmentAddressables.cs",
+    "unity-client/Assets/Scripts/Editor/BuildWinterEnvironmentAddressables.cs.meta",
+    "unity-client/Assets/Scripts/Editor/CommitSceneEnvironmentInstances.cs",
+    "unity-client/Assets/Scripts/Editor/CommitSceneEnvironmentInstances.cs.meta",
+    "unity-client/Assets/Scripts/Editor/PromoteGameEnvironmentEditPreview.cs",
+    "unity-client/Assets/Scripts/Editor/PromoteGameEnvironmentEditPreview.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentAddressablesSync.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentAddressablesSync.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentAudit.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentAudit.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildAddressables.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildAddressables.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildCli.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildCli.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildStripper.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentBuildStripper.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentStripRegistryReferences.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentStripRegistryReferences.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteContentVerificationTools.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteContentVerificationTools.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoteEnvironmentSceneAudit.cs",
+    "unity-client/Assets/Scripts/Editor/RemoteEnvironmentSceneAudit.cs.meta",
+    "unity-client/Assets/Scripts/Editor/RemoveOptionalEnvironmentLandmarkProps.cs",
+    "unity-client/Assets/Scripts/Editor/RemoveOptionalEnvironmentLandmarkProps.cs.meta",
+    "unity-client/Assets/Scripts/Editor/SetupPortraitAddressables.cs",
+    "unity-client/Assets/Scripts/Editor/SetupPortraitAddressables.cs.meta",
+    "unity-client/Assets/Scripts/Editor/SetupRemoteEnvironmentAddressables.cs",
+    "unity-client/Assets/Scripts/Editor/SetupRemoteEnvironmentAddressables.cs.meta",
+    "unity-client/Assets/Scripts/Editor/SetupRemoteSceneAddressables.cs",
+    "unity-client/Assets/Scripts/Editor/SetupRemoteSceneAddressables.cs.meta",
+    "unity-client/Assets/Scripts/Editor/UnitPortraitBakeTools.cs",
+    "unity-client/Assets/Scripts/Editor/UnitPortraitBakeTools.cs.meta"
+  ],
+  "duplicateMigrationPrefixes": [
+    {
+      "prefix": "050",
+      "count": 2
+    }
+  ],
+  "folderSizes": [
+    {
+      "path": "server/client_backup_20260306_233552",
+      "fileCount": 31,
+      "sizeMb": 5.68
+    },
+    {
+      "path": "server/client_backup_20260306_235052",
+      "fileCount": 17,
+      "sizeMb": 15.87
+    },
+    {
+      "path": "server/client_backup_20260307_002446",
+      "fileCount": 17,
+      "sizeMb": 15.69
+    },
+    {
+      "path": "server/client_backup_20260313_154057",
+      "fileCount": 20,
+      "sizeMb": 16.39
+    },
+    {
+      "path": "server/client_backup_20260313_184750",
+      "fileCount": 17,
+      "sizeMb": 929.97
+    },
+    {
+      "path": "server/client_backup_20260313_203649",
+      "fileCount": 18,
+      "sizeMb": 206.19
+    },
+    {
+      "path": "server/client_backup_20260313_204502",
+      "fileCount": 18,
+      "sizeMb": 202.99
+    },
+    {
+      "path": "server/client_backup_20260313_214135",
+      "fileCount": 18,
+      "sizeMb": 201.92
+    },
+    {
+      "path": "server/client_backup_20260313_214851",
+      "fileCount": 18,
+      "sizeMb": 201.94
+    },
+    {
+      "path": "server/client_backup_20260313_220455",
+      "fileCount": 22,
+      "sizeMb": 293.5
+    },
+    {
+      "path": "unity-client/Assets/_Recovery",
+      "fileCount": 6,
+      "sizeMb": 0.97
+    },
+    {
+      "path": "unity-client/Assets/Backup enviroments",
+      "fileCount": 4,
+      "sizeMb": 3.5
+    },
+    {
+      "path": "builds",
+      "fileCount": 2,
+      "sizeMb": 42.63
+    },
+    {
+      "path": "admin-client",
+      "fileCount": 52,
+      "sizeMb": 60.76
+    },
+    {
+      "path": "server/admin-client",
+      "fileCount": 53,
+      "sizeMb": 60.76
+    },
+    {
+      "path": "server/client",
+      "fileCount": 23,
+      "sizeMb": 13.6
+    },
+    {
+      "path": "unity-client/ServerData",
+      "fileCount": 70,
+      "sizeMb": 3495.05
+    },
+    {
+      "path": "server/migrations",
+      "fileCount": 54,
+      "sizeMb": 0.08
+    },
+    {
+      "path": "unity-client/Assets/AddressableContent",
+      "fileCount": 163,
+      "sizeMb": 12.47
+    },
+    {
+      "path": "unity-client/Assets/Resources",
+      "fileCount": 13,
+      "sizeMb": 0.06
+    },
+    {
+      "path": "archive_pending_deletion",
+      "fileCount": 23,
+      "sizeMb": 1.38
+    }
+  ]
+}

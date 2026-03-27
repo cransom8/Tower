@@ -1,4 +1,4 @@
-// InfoBar.cs — Top HUD bar: lives | gold | income ring | barracks button
+// InfoBar.cs — Top HUD bar: Town Core HP | gold | income ring | barracks button
 //
 // SETUP (Game_ML.unity):
 //   Canvas (Screen Space Overlay)
@@ -21,6 +21,9 @@ namespace CastleDefender.UI
 {
     public class InfoBar : MonoBehaviour
     {
+        const string RuntimeBarracksButtonName = "RuntimeBarracksButton";
+        const string RuntimeBarracksPanelHostName = "RuntimeBarracksPanelHost";
+
         [Header("Text fields")]
         public TMP_Text TxtLives;
         public TMP_Text TxtGold;
@@ -64,6 +67,8 @@ namespace CastleDefender.UI
         Coroutine _goldFlash;
         Coroutine _livesFlash;
         Coroutine _barracksFlash;
+        bool _barracksButtonHooked;
+        Button _hookedBarracksButton;
 
         const int TickHz = 20;
 
@@ -77,13 +82,7 @@ namespace CastleDefender.UI
                 if (gm != null) FloatTextAnchor = gm.CastleTileTransform;
             }
 
-            if (BtnBarracks != null)
-            {
-                // Defensive: scene wiring can drift; keep barracks button usable.
-                BtnBarracks.gameObject.SetActive(true);
-                BtnBarracks.interactable = true;
-                BtnBarracks.onClick.AddListener(OnBarracksClick);
-            }
+            EnsureBarracksUiBootstrapped();
 
             // Prevent layout overlap between income text and barracks controls.
             AutoFixBarracksLayout();
@@ -91,9 +90,14 @@ namespace CastleDefender.UI
 
         void Update()
         {
-            var snap = SnapshotApplier.Instance?.LatestML;
-            var lane = SnapshotApplier.Instance?.MyLane;
+            EnsureBarracksUiBootstrapped();
+            var snapshotApplier = SnapshotApplier.Instance;
+            var snap = snapshotApplier?.LatestML;
+            var lane = snapshotApplier?.MyLane;
             if (lane == null) return;
+
+            if (snapshotApplier?.LatestMLMatchConfig != null && snapshotApplier.LatestMLMatchConfig.incomeIntervalTicks > 0)
+                IncomePeriodTicks = snapshotApplier.LatestMLMatchConfig.incomeIntervalTicks;
 
             int displayHp = ResolveDisplayedHp(snap, lane);
             int displayHpMax = ResolveDisplayedHpMax(snap, lane);
@@ -101,23 +105,27 @@ namespace CastleDefender.UI
             // HP
             if (displayHp != _prevLives)
             {
-                string hpText = displayHpMax > 0 ? $"HP: {displayHp}/{displayHpMax}" : $"HP: {displayHp}";
+                string hpText = displayHpMax > 0 ? $"Core HP: {displayHp}/{displayHpMax}" : $"Core HP: {displayHp}";
                 if (TxtLives != null) TxtLives.text = hpText;
                 if (TxtTeamHpLeft != null && string.IsNullOrEmpty(TxtTeamHpLeft.text))
                     TxtTeamHpLeft.text = hpText;
                 if (_prevLives >= 0)
                 {
-                    if (TxtLives != null)
+                    int hpLost = Mathf.Max(0, _prevLives - displayHp);
+                    if (hpLost > 0 && TxtLives != null)
                     {
                         if (_livesFlash != null) StopCoroutine(_livesFlash);
                         _livesFlash = StartCoroutine(FlashTmpColor(TxtLives, TxtLives.color, Color.red, 0.15f, 2));
                     }
-                    AudioManager.I?.Play(AudioManager.SFX.LifeLost);
-                    PostProcessController.I?.ImpactFlash();
-                    if (FloatTextAnchor != null)
-                        FloatingText.Spawn("-1 Life",
-                            FloatTextAnchor.position + Vector3.up * 0.5f,
-                            FloatingText.Kind.LifeLoss);
+                    if (hpLost > 0)
+                    {
+                        AudioManager.I?.Play(AudioManager.SFX.LifeLost);
+                        PostProcessController.I?.ImpactFlash();
+                        if (FloatTextAnchor != null)
+                            FloatingText.Spawn($"-{hpLost} Core HP",
+                                FloatTextAnchor.position + Vector3.up * 0.5f,
+                                FloatingText.Kind.LifeLoss);
+                    }
                 }
                 _prevLives = displayHp;
             }
@@ -205,9 +213,157 @@ namespace CastleDefender.UI
 
         void OnBarracksClick()
         {
+            EnsureBarracksUiBootstrapped();
             var lane = SnapshotApplier.Instance?.MyLane;
             if (lane == null) return;
-            BarracksPanel?.Show(lane.barracksLevel, lane.gold, lane.income);
+            BarracksPanel?.Show();
+        }
+
+        void EnsureBarracksUiBootstrapped()
+        {
+            if (BarracksPanel == null)
+                BarracksPanel = FindOrCreateRuntimeBarracksPanel();
+
+            if (BtnBarracks == null || TxtBarracksLv == null)
+                EnsureRuntimeBarracksButton();
+
+            if (BtnBarracks == null)
+                return;
+
+            BtnBarracks.gameObject.SetActive(true);
+            BtnBarracks.interactable = true;
+            if (_hookedBarracksButton != BtnBarracks)
+            {
+                if (_hookedBarracksButton != null)
+                    _hookedBarracksButton.onClick.RemoveListener(OnBarracksClick);
+
+                _hookedBarracksButton = BtnBarracks;
+                _barracksButtonHooked = false;
+            }
+
+            bool shouldOwnBarracksClick = string.Equals(BtnBarracks.name, RuntimeBarracksButtonName);
+            if (!shouldOwnBarracksClick)
+            {
+                BtnBarracks.onClick.RemoveListener(OnBarracksClick);
+                _barracksButtonHooked = false;
+                return;
+            }
+
+            if (!_barracksButtonHooked)
+            {
+                BtnBarracks.onClick.RemoveListener(OnBarracksClick);
+                BtnBarracks.onClick.AddListener(OnBarracksClick);
+                _barracksButtonHooked = true;
+            }
+        }
+
+        BarracksPanel FindOrCreateRuntimeBarracksPanel()
+        {
+            var canvas = GetComponentInParent<Canvas>();
+            if (canvas == null)
+                canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+                return null;
+
+            var existing = canvas.transform.Find(RuntimeBarracksPanelHostName);
+            GameObject host;
+            if (existing != null)
+            {
+                host = existing.gameObject;
+            }
+            else
+            {
+                host = new GameObject(RuntimeBarracksPanelHostName, typeof(RectTransform));
+                host.transform.SetParent(canvas.transform, false);
+                var rect = host.GetComponent<RectTransform>();
+                rect.anchorMin = new Vector2(0.5f, 0.5f);
+                rect.anchorMax = new Vector2(0.5f, 0.5f);
+                rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.sizeDelta = Vector2.zero;
+                rect.anchoredPosition = Vector2.zero;
+            }
+
+            var panel = host.GetComponent<BarracksPanel>();
+            if (panel == null)
+                panel = host.AddComponent<BarracksPanel>();
+            return panel;
+        }
+
+        void EnsureRuntimeBarracksButton()
+        {
+            var canvas = GetComponentInParent<Canvas>();
+            if (canvas == null)
+                canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+                return;
+
+            Transform existing = canvas.transform.Find(RuntimeBarracksButtonName);
+            Button button;
+            if (existing != null)
+            {
+                button = existing.GetComponent<Button>();
+            }
+            else
+            {
+                var buttonGo = new GameObject(RuntimeBarracksButtonName, typeof(RectTransform), typeof(Image), typeof(Button));
+                buttonGo.transform.SetParent(canvas.transform, false);
+                var rect = buttonGo.GetComponent<RectTransform>();
+                rect.anchorMin = new Vector2(0.5f, 1f);
+                rect.anchorMax = new Vector2(0.5f, 1f);
+                rect.pivot = new Vector2(0.5f, 1f);
+                rect.sizeDelta = new Vector2(196f, 52f);
+                rect.anchoredPosition = new Vector2(0f, -86f);
+
+                var image = buttonGo.GetComponent<Image>();
+                image.color = new Color(0.18f, 0.30f, 0.22f, 0.94f);
+                button = buttonGo.GetComponent<Button>();
+
+                var titleGo = new GameObject("Title", typeof(RectTransform), typeof(TextMeshProUGUI));
+                titleGo.transform.SetParent(buttonGo.transform, false);
+                var titleRect = titleGo.GetComponent<RectTransform>();
+                titleRect.anchorMin = new Vector2(0f, 0.45f);
+                titleRect.anchorMax = new Vector2(1f, 1f);
+                titleRect.offsetMin = new Vector2(10f, -4f);
+                titleRect.offsetMax = new Vector2(-10f, 0f);
+                var title = titleGo.GetComponent<TextMeshProUGUI>();
+                title.font = TMP_Settings.defaultFontAsset;
+                title.fontSize = 20f;
+                title.fontStyle = FontStyles.Bold;
+                title.alignment = TextAlignmentOptions.Center;
+                title.color = Color.white;
+                title.text = "Progression";
+
+                var levelGo = new GameObject("Level", typeof(RectTransform), typeof(TextMeshProUGUI));
+                levelGo.transform.SetParent(buttonGo.transform, false);
+                var levelRect = levelGo.GetComponent<RectTransform>();
+                levelRect.anchorMin = new Vector2(0f, 0f);
+                levelRect.anchorMax = new Vector2(1f, 0.5f);
+                levelRect.offsetMin = new Vector2(10f, 4f);
+                levelRect.offsetMax = new Vector2(-10f, 0f);
+                TxtBarracksLv = levelGo.GetComponent<TextMeshProUGUI>();
+                TxtBarracksLv.font = TMP_Settings.defaultFontAsset;
+                TxtBarracksLv.fontSize = 15f;
+                TxtBarracksLv.alignment = TextAlignmentOptions.Center;
+                TxtBarracksLv.color = new Color(0.96f, 0.91f, 0.60f, 0.98f);
+                TxtBarracksLv.text = "Tech Tree";
+            }
+
+            BtnBarracks = button;
+            BtnBarracks.transform.SetAsLastSibling();
+            if (TxtBarracksLv == null)
+            {
+                var level = BtnBarracks.transform.Find("Level");
+                if (level != null)
+                    TxtBarracksLv = level.GetComponent<TextMeshProUGUI>();
+            }
+
+            var titleLabel = BtnBarracks.transform.Find("Title");
+            if (titleLabel != null && titleLabel.TryGetComponent<TextMeshProUGUI>(out var titleText))
+                titleText.text = "Progression";
+            if (TxtBarracksLv != null)
+                TxtBarracksLv.text = "Tech Tree";
+
+            _barracksButtonHooked = false;
         }
 
         void AutoFixBarracksLayout()
@@ -236,10 +392,10 @@ namespace CastleDefender.UI
         {
             if (_playerSide == null)
             {
-                var sa = SnapshotApplier.Instance;
-                if (sa != null)
+                var snapshotApplier = SnapshotApplier.Instance;
+                if (snapshotApplier != null)
                 {
-                    var myLane = sa.MyLane;
+                    var myLane = snapshotApplier.MyLane;
                     if (myLane != null)
                         _playerSide = myLane.side;
                 }
@@ -248,32 +404,25 @@ namespace CastleDefender.UI
             if (TxtWave != null)
                 TxtWave.text = $"Wave {snap.roundNumber}";
 
+            var snapshotApplierInstance = SnapshotApplier.Instance;
+            var lane = snapshotApplierInstance != null ? snapshotApplierInstance.MyLane : null;
+            int waveSeconds = snapshotApplierInstance != null ? snapshotApplierInstance.GetWaveTimerSecondsRemaining() : 0;
+            int sendSeconds = lane != null && snapshotApplierInstance != null ? snapshotApplierInstance.GetBarracksSendSecondsRemaining(lane.laneIndex) : 0;
+
             if (TxtPhase != null)
-            {
-                TxtPhase.text = snap.roundState switch
-                {
-                    "build"      => "BUILD",
-                    "combat"     => "COMBAT",
-                    "transition" => "NEXT WAVE",
-                    _            => snap.roundState?.ToUpper() ?? ""
-                };
-            }
+                TxtPhase.text = "LIVE";
 
             if (TxtCountdown != null)
-            {
-                int ticksLeft = snap.roundState == "build" && snap.buildPhaseTotal > 0
-                    ? (snap.buildPhaseTotal - snap.roundStateTicks)
-                    : snap.roundStateTicks;
-                int secs = Mathf.CeilToInt((float)ticksLeft / TickHz);
-                TxtCountdown.text = secs > 0 ? $"{secs}s" : "--";
-            }
+                TxtCountdown.text = lane != null
+                    ? $"Wave {waveSeconds}s  Send {sendSeconds}s"
+                    : $"Wave {waveSeconds}s";
 
             var hp = snap.teamHp;
             if (hp == null) return;
 
             if (TxtTeamHpLeft != null)
             {
-                TxtTeamHpLeft.text = $"Left Team {hp.left}";
+                TxtTeamHpLeft.text = $"Left Side {hp.left}";
                 TxtTeamHpLeft.color = _playerSide == "left"
                     ? new Color(1f, 0.92f, 0.2f)
                     : new Color(1f, 1f, 1f, 0.75f);
@@ -281,7 +430,7 @@ namespace CastleDefender.UI
 
             if (TxtTeamHpRight != null)
             {
-                TxtTeamHpRight.text = $"Right Team {hp.right}";
+                TxtTeamHpRight.text = $"Right Side {hp.right}";
                 TxtTeamHpRight.color = _playerSide == "right"
                     ? new Color(1f, 0.92f, 0.2f)
                     : new Color(1f, 1f, 1f, 0.75f);
@@ -294,18 +443,21 @@ namespace CastleDefender.UI
             if (_playerSide == null && !string.IsNullOrWhiteSpace(lane.side))
                 _playerSide = lane.side;
 
-            var hp = snap?.teamHp;
-            if (hp != null)
-            {
-                if (_playerSide == "right") return hp.right;
-                if (_playerSide == "left") return hp.left;
-            }
+            if (SnapshotApplier.Instance != null
+                && SnapshotApplier.Instance.TryGetTownCoreHp(lane.laneIndex, out int currentHp, out _))
+                return currentHp;
+
             return lane.lives;
         }
 
         int ResolveDisplayedHpMax(MLSnapshot snap, MLLaneSnap lane)
         {
-            if (snap != null && snap.teamHpMax > 0) return snap.teamHpMax;
+            if (lane != null
+                && SnapshotApplier.Instance != null
+                && SnapshotApplier.Instance.TryGetTownCoreHp(lane.laneIndex, out _, out int maxHp)
+                && maxHp > 0)
+                return maxHp;
+
             return lane != null ? Mathf.Max(lane.lives, 0) : 0;
         }
 

@@ -3,10 +3,22 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const gameConfig = require("../../gameConfig");
 const { setUnitTypesForTests } = require("../../unitTypes");
 const simMl = require("../../sim-multilane");
 const { BotBrain } = require("../bot");
 const { createBotController, runHeadlessMatch, captureStateLite } = require("../sim_runner");
+
+const VALID_MULTILANE_CONFIG = {
+  globalParams: {
+    startGold: 140,
+    startIncome: 10,
+    livesStart: 20,
+    teamHpStart: 20,
+    buildPhaseTicks: 600,
+    transitionPhaseTicks: 200,
+  },
+};
 
 function makeUnit(key, options = {}) {
   return {
@@ -57,6 +69,14 @@ setUnitTypesForTests([
   makeUnit("giant_viper", { send_cost: 24, build_cost: 40, income: 3, hp: 118, attack_damage: 21, attack_speed: 1.05, path_speed: 0.23, range: 0.26, damage_type: "MAGIC" }),
   makeUnit("evil_watcher", { send_cost: 28, build_cost: 44, income: 3, hp: 126, attack_damage: 22, attack_speed: 0.95, path_speed: 0.2, range: 0.32, damage_type: "MAGIC" }),
 ]);
+
+test.beforeEach(() => {
+  gameConfig.setActiveConfig("multilane", VALID_MULTILANE_CONFIG);
+});
+
+test.afterEach(() => {
+  gameConfig.setActiveConfig("multilane", null);
+});
 
 function makeFfaGame(playerCount) {
   const teams = new Array(playerCount).fill(0).map((_, i) => `ffa-${i}`);
@@ -122,18 +142,18 @@ test("personalities diverge on first defensive build from identical state", () =
   for (const personality of personalities) {
     const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 80, startIncome: 8 });
     const lane = game.lanes[0];
+    game.roundState = "build";
     lane.lives = 6;
     lane.gold = 80;
     lane.income = 8;
-    lane.autosend.loadoutKeys = ["archer", "fighter", "mage", "ballista", "cannon"];
-    lane.autosend.enabledUnits = Object.fromEntries(lane.autosend.loadoutKeys.map((key) => [key, false]));
+    lane.loadoutKeys = ["archer", "fighter", "mage", "ballista", "cannon"];
 
     const bot = new BotBrain({
       laneIndex: 0,
       difficulty: "hard",
       personality,
       seed: `personality-build-${personality}`,
-      unitDefMap: Object.fromEntries(lane.autosend.loadoutKeys.map((key) => [key, simMl.resolveUnitDef(key)])),
+      unitDefMap: Object.fromEntries(lane.loadoutKeys.map((key) => [key, simMl.resolveUnitDef(key)])),
     });
 
     bot.memory.nextThinkTick = 0;

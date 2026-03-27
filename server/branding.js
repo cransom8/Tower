@@ -6,9 +6,9 @@ const DEFAULT_BRANDING = Object.freeze({
   publicBrowserTitle: "Forge Wars - Multiplayer",
   adminTitle: "Forge Wars Admin",
   adminLoginTitle: "Forge Wars Control",
-  loadoutTitle: "Loadout",
-  loadoutHint: "Choose five units for this match",
-  loadoutBuilderTitle: "Loadout Builder",
+  loadoutTitle: "Race Progression",
+  loadoutHint: "Review races, units, and upgrade paths before the match begins",
+  loadoutBuilderTitle: "Race Progression Viewer",
 });
 
 const BRANDING_LIMITS = Object.freeze({

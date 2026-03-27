@@ -133,11 +133,13 @@ namespace CastleDefender.UI
                 {
                     if (SummaryRows[i] == null) continue;
                     var s = stats[i];
+                    bool hasWinner = _payload.winnerLaneIndex >= 0;
                     bool isWinner = !string.IsNullOrEmpty(_payload.winningTeam)
                         ? s.team == _payload.winningTeam
-                        : s.laneIndex == _payload.winnerLaneIndex;
+                        : hasWinner && s.laneIndex == _payload.winnerLaneIndex;
+                    string resultLabel = isWinner ? "WIN" : (s.eliminated ? "LOSS" : "ACTIVE");
                     SummaryRows[i].text =
-                        $"<b>{s.displayName}</b>  {(isWinner ? "WIN" : "LOSS")}  " +
+                        $"<b>{s.displayName}</b>  {resultLabel}  " +
                         $"Income:{s.income:F0}  " +
                         $"Build:{s.buildValue:F0}  " +
                         $"BuildSpend:{s.totalBuildSpend:F0}  " +
@@ -233,7 +235,7 @@ namespace CastleDefender.UI
                                   $" BuildSpend:{l.buildSpend:F0}" +
                                   $" Sends:{l.sendSpend:F0}/{l.sendCount}" +
                                   $" Leak:{l.leaksTaken}" +
-                                  $" LifeLoss:{l.leakDamage}" +
+                                  $" CoreDmg:{l.leakDamage}" +
                                   $" Result:{l.holdResult}" +
                                   $" HP:{l.teamHp}");
                     }

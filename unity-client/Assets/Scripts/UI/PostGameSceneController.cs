@@ -1,5 +1,7 @@
 using System;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 using CastleDefender.Net;
@@ -10,6 +12,7 @@ namespace CastleDefender.UI
     public class PostGameSceneController : MonoBehaviour
     {
         const string SceneName = "PostGame";
+        const float StableOpenLogDelaySeconds = 0.2f;
 
         Canvas _canvas;
         TMP_Text _resultText;
@@ -23,6 +26,7 @@ namespace CastleDefender.UI
         PostGameStatsPanel _statsPanel;
         MLGameOverPayload _payload;
         bool _rematchRequested;
+        bool _lobbyRequested;
         bool _transitioningToLoadout;
 
         void Awake()
@@ -55,12 +59,23 @@ namespace CastleDefender.UI
             var nm = NetworkManager.Instance;
             _payload = nm != null ? nm.LastMLGameOver : null;
             ShowPayload(_payload);
+            Debug.Log(
+                $"[PostGameFlow] Post-game opened. scene={SceneName} " +
+                $"result={_resultText?.text ?? "UNKNOWN"} winnerLane={_payload?.winnerLaneIndex ?? -1} round={_payload?.finalRound ?? -1}.");
+
+            StartCoroutine(EnsureEventSystemReady());
 
             if (nm != null && nm.LastRematchStatus != null)
                 HandleRematchStatus(nm.LastRematchStatus);
 
-            if (nm != null && nm.PendingLoadoutPhase != null)
-                BeginLoadoutTransition();
+            if (ShouldResumePendingLoadoutTransition(nm))
+            {
+                BeginLoadoutTransition(nm.PendingLoadoutPhase);
+            }
+            else
+            {
+                StartCoroutine(LogStableOpenState());
+            }
         }
 
         void ShowPayload(MLGameOverPayload payload)
@@ -71,47 +86,47 @@ namespace CastleDefender.UI
             {
                 _resultText.text = "MATCH COMPLETE";
                 _winnerText.text = "No post-game data available.";
-                _causeText.text = "Return to lobby or start a new match.";
+                _causeText.text = "Exit to Lobby or start a new match.";
                 _summaryText.text = string.Empty;
                 return;
             }
 
             int myLaneIndex = NetworkManager.Instance != null ? NetworkManager.Instance.MyLaneIndex : -1;
             bool isWinner = payload.winnerLaneIndex == myLaneIndex;
+            bool hasWinner = payload.winnerLaneIndex >= 0;
             _resultText.text = isWinner ? "VICTORY" : "DEFEAT";
             _resultText.color = isWinner
                 ? new Color(1f, 0.84f, 0.25f)
                 : new Color(0.92f, 0.34f, 0.32f);
 
-            _winnerText.text = !string.IsNullOrWhiteSpace(payload.winnerName)
+            _winnerText.text = hasWinner && !string.IsNullOrWhiteSpace(payload.winnerName)
                 ? $"Winner: {payload.winnerName}"
-                : (!string.IsNullOrWhiteSpace(payload.winningTeam) ? $"Winner: {payload.winningTeam}" : "Winner: Unknown");
+                : (hasWinner && !string.IsNullOrWhiteSpace(payload.winningTeam) ? $"Winner: {payload.winningTeam}" : "Survival run complete");
 
-            string baseSummary = $"{payload.causeLoss ?? "Lives reduced to 0"}  •  PvP {payload.gameDuration / 60}m {payload.gameDuration % 60}s";
-            if (payload.continuedIntoSurvival)
-                baseSummary += $"  •  Survival {payload.survivalDuration / 60}m {payload.survivalDuration % 60}s";
+            int survivalSeconds = payload.survivalDuration > 0 ? payload.survivalDuration : payload.gameDuration;
+            string summaryCause = !string.IsNullOrWhiteSpace(payload.causeLoss)
+                ? payload.causeLoss
+                : $"Survival ended on Wave {payload.finalRound}";
+            string baseSummary = $"{summaryCause}  -  Survival {survivalSeconds / 60}m {survivalSeconds % 60}s";
             _causeText.text = baseSummary;
 
             var myStat = GetMyStat(payload, myLaneIndex);
             if (myStat != null)
             {
-                string continuation = payload.continuedIntoSurvival
-                    ? $"    Survival +{payload.survivalExtraRounds} waves"
-                    : "    Survival skipped";
+                string continuation = $"    Final Wave {payload.finalRound}";
                 _summaryText.text =
                     $"Income {myStat.income:F0}    Build {myStat.buildValue:F0}    Sends {myStat.totalSendSpend:F0}/{myStat.totalSendCount}    " +
                     $"Leaks {myStat.totalLeaksTaken}    Hold {myStat.longestHoldStreak}{continuation}";
             }
             else
             {
-                _summaryText.text = payload.continuedIntoSurvival
-                    ? $"Final Wave {payload.finalRound}    Survival +{payload.survivalExtraRounds} waves"
-                    : $"Final Wave {payload.finalRound}";
+                _summaryText.text = $"Final Wave {payload.finalRound}";
             }
         }
 
         void HandleRematchStatus(RematchStatusPayload payload)
         {
+            if (_lobbyRequested) return;
             if (_rematchLabel == null || _rematchButton == null) return;
             if (payload == null)
             {
@@ -146,33 +161,35 @@ namespace CastleDefender.UI
 
         void HandleRematchStarting(RematchStartingPayload _)
         {
+            if (_lobbyRequested) return;
             if (_rematchLabel != null) _rematchLabel.text = "Rematch starting...";
             if (_rematchButton != null) _rematchButton.interactable = false;
         }
 
         void HandleMatchReady(MLMatchReadyPayload _)
         {
+            if (_lobbyRequested || _transitioningToLoadout) return;
+            Debug.Log("[PostGameFlow] Rematch accepted. Preparing loadout readiness from post-game.");
             if (_rematchLabel != null) _rematchLabel.text = "Preparing rematch...";
-            // Emit ml_loadout_ready once critical content is ready (same as LobbyUI.WaitForContentAndEmitLoadoutReady).
-            // Server Barrier 1 blocks ml_loadout_phase_start until all clients emit this.
             StartCoroutine(WaitForContentAndEmitLoadoutReady());
         }
 
         System.Collections.IEnumerator WaitForContentAndEmitLoadoutReady()
         {
             var rc = RemoteContentManager.EnsureInstance();
-            if (!rc.HasCompletedCriticalPreload)
+            if (!rc.HasCompletedLoadoutPreload)
             {
-                Debug.Log("[PostGame] Critical content not yet ready — running preload before emitting loadout ready");
-                yield return rc.PreloadCriticalContentForSession(requester: "PostGame.MatchReady");
+                Debug.Log("[PostGameFlow] Loadout content not ready; preloading before rematch.");
+                yield return rc.PreloadLoadoutContentForSession(requester: "PostGame.MatchReady");
             }
 
-            Debug.Log("[PostGame] Emitting ml_loadout_ready");
-            NetworkManager.Instance?.Emit("ml_loadout_ready");
+            Debug.Log("[PostGameFlow] Emitting ml_loadout_ready from post-game.");
+            NetworkManager.Instance?.RequestLoadoutReady();
         }
 
         void HandleLoadoutPhaseStart(MLLoadoutPhaseStartPayload payload)
         {
+            if (_lobbyRequested) return;
             BeginLoadoutTransition(payload);
         }
 
@@ -180,42 +197,34 @@ namespace CastleDefender.UI
         {
             if (_transitioningToLoadout) return;
             _transitioningToLoadout = true;
+            Debug.Log("[PostGameFlow] Transitioning cleanly from post-game to loadout.");
             NetworkManager.Instance?.ClearPostGameData();
-            LoadingScreen.LoadScene("Loadout");
-        }
-
-        static string[] ExtractPortraitKeys(MLLoadoutPhaseStartPayload payload)
-        {
-            var availableUnits = payload?.availableUnits;
-            if (availableUnits == null || availableUnits.Length == 0)
-                return Array.Empty<string>();
-
-            var keys = new System.Collections.Generic.List<string>(availableUnits.Length);
-            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < availableUnits.Length; i++)
-            {
-                string key = availableUnits[i]?.key?.Trim();
-                if (string.IsNullOrWhiteSpace(key) || !seen.Add(key))
-                    continue;
-
-                keys.Add(key);
-            }
-
-            return keys.ToArray();
+            LoadingScreen.LoadSceneWithRemoteContentGate(
+                "Loadout",
+                portraitKeys: RaceProgressionCatalog.GetPortraitWarmupKeys(payload?.availableRaceIds));
         }
 
         void OnRematch()
         {
-            if (_rematchRequested) return;
+            if (_rematchRequested || _lobbyRequested || _transitioningToLoadout) return;
             _rematchRequested = true;
             _rematchLabel.text = "Waiting for opponent...";
             _rematchButton.interactable = false;
+            Debug.Log("[PostGameFlow] Rematch clicked. Waiting for opponent vote.");
             ActionSender.RequestRematch();
         }
 
         void OnLobby()
         {
+            if (_lobbyRequested || _transitioningToLoadout) return;
+            _lobbyRequested = true;
+            if (_rematchButton != null) _rematchButton.interactable = false;
+            if (_lobbyButton != null) _lobbyButton.interactable = false;
+            Debug.Log("[PostGameFlow] Exit to Lobby clicked.");
+            ClearReconnectPrefs();
+            NetworkManager.Instance?.Emit("leave_game", null);
             NetworkManager.Instance?.ClearPostGameData();
+            Debug.Log("[PostGameFlow] Transitioning cleanly from post-game to lobby.");
             LoadingScreen.LoadScene("Lobby");
         }
 
@@ -241,14 +250,26 @@ namespace CastleDefender.UI
 
         void EnsureUi()
         {
-            _canvas = FindFirstObjectByType<Canvas>();
+            if (_canvas != null && _resultText != null)
+                return;
+
+            _canvas = FindCanvasInScene(gameObject.scene);
             if (_canvas == null)
             {
-                var canvasGo = new GameObject("Canvas");
+                var canvasGo = new GameObject("PostGameCanvas");
+                SceneManager.MoveGameObjectToScene(canvasGo, gameObject.scene);
                 _canvas = canvasGo.AddComponent<Canvas>();
                 _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-                canvasGo.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                _canvas.sortingOrder = 200;
+                var scaler = canvasGo.AddComponent<CanvasScaler>();
+                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(1920f, 1080f);
+                scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
                 canvasGo.AddComponent<GraphicRaycaster>();
+            }
+            else if (_canvas.GetComponent<GraphicRaycaster>() == null)
+            {
+                _canvas.gameObject.AddComponent<GraphicRaycaster>();
             }
 
             var backdrop = MakePanel(_canvas.transform, "Backdrop", new Color(0.04f, 0.03f, 0.05f, 1f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -261,7 +282,7 @@ namespace CastleDefender.UI
             _rematchLabel = MakeText(card.transform, "TxtRematchStatus", "Ready for rematch?", 16, new Vector2(0.08f, 0.34f), new Vector2(0.92f, 0.42f), FontStyles.Italic, TextAlignmentOptions.MidlineLeft);
 
             _rematchButton = MakeButton(card.transform, "BtnRematch", "Rematch", new Vector2(0.08f, 0.18f), new Vector2(0.32f, 0.28f), new Color(0.72f, 0.23f, 0.18f, 1f));
-            _lobbyButton = MakeButton(card.transform, "BtnLobby", "Return To Lobby", new Vector2(0.36f, 0.18f), new Vector2(0.62f, 0.28f), new Color(0.23f, 0.25f, 0.30f, 1f));
+            _lobbyButton = MakeButton(card.transform, "BtnLobby", "Exit to Lobby", new Vector2(0.36f, 0.18f), new Vector2(0.62f, 0.28f), new Color(0.23f, 0.25f, 0.30f, 1f));
             _statsButton = MakeButton(card.transform, "BtnStats", "View Report", new Vector2(0.66f, 0.18f), new Vector2(0.92f, 0.28f), new Color(0.18f, 0.38f, 0.56f, 1f));
 
             _rematchButton.onClick.AddListener(OnRematch);
@@ -269,6 +290,99 @@ namespace CastleDefender.UI
             _statsButton.onClick.AddListener(OnStats);
 
             _statsPanel = BuildStatsPanel(backdrop.transform);
+        }
+
+        bool ShouldResumePendingLoadoutTransition(NetworkManager nm)
+        {
+            if (nm == null || nm.PendingLoadoutPhase == null)
+                return false;
+
+            if (string.Equals(nm.CurrentMLMatchState, "final_game_over", StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.LogWarning("[PostGameFlow] Ignoring stale pending loadout phase while post-game modal is active.");
+                return false;
+            }
+
+            return true;
+        }
+
+        System.Collections.IEnumerator EnsureEventSystemReady()
+        {
+            yield return null;
+            yield return null;
+
+            var currentEventSystem = EventSystem.current;
+            if (currentEventSystem != null && currentEventSystem.gameObject.scene == gameObject.scene)
+                yield break;
+
+            var sceneEventSystem = FindEventSystemInScene(gameObject.scene);
+            if (sceneEventSystem != null)
+            {
+                if (sceneEventSystem.GetComponent<StandaloneInputModule>() == null)
+                    sceneEventSystem.gameObject.AddComponent<StandaloneInputModule>();
+                Debug.Log("[PostGameFlow] Reusing scene-local EventSystem for post-game input.");
+                yield break;
+            }
+
+            var eventSystemGo = new GameObject("PostGameEventSystem");
+            SceneManager.MoveGameObjectToScene(eventSystemGo, gameObject.scene);
+            eventSystemGo.AddComponent<EventSystem>();
+            eventSystemGo.AddComponent<StandaloneInputModule>();
+            Debug.Log("[PostGameFlow] Created scene-local EventSystem for post-game input.");
+        }
+
+        System.Collections.IEnumerator LogStableOpenState()
+        {
+            yield return new WaitForSecondsRealtime(StableOpenLogDelaySeconds);
+
+            if (_lobbyRequested || _transitioningToLoadout)
+                yield break;
+
+            bool modalActive =
+                _canvas != null &&
+                _canvas.gameObject.activeInHierarchy &&
+                _rematchButton != null &&
+                _rematchButton.gameObject.activeInHierarchy;
+            Debug.Log($"[PostGameFlow] Post-game remained active and is awaiting input (modalActive={modalActive}).");
+        }
+
+        static Canvas FindCanvasInScene(Scene scene)
+        {
+            if (!scene.IsValid())
+                return null;
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var canvas = root.GetComponentInChildren<Canvas>(true);
+                if (canvas != null)
+                    return canvas;
+            }
+
+            return null;
+        }
+
+        static EventSystem FindEventSystemInScene(Scene scene)
+        {
+            if (!scene.IsValid())
+                return null;
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var eventSystem = root.GetComponentInChildren<EventSystem>(true);
+                if (eventSystem != null)
+                    return eventSystem;
+            }
+
+            return null;
+        }
+
+        static void ClearReconnectPrefs()
+        {
+            PlayerPrefs.DeleteKey("reconnect_token");
+            PlayerPrefs.DeleteKey("reconnect_code");
+            PlayerPrefs.DeleteKey("reconnect_lane");
+            PlayerPrefs.DeleteKey("reconnect_gametype");
+            PlayerPrefs.Save();
         }
 
         PostGameStatsPanel BuildStatsPanel(Transform parent)

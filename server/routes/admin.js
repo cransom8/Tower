@@ -10,6 +10,9 @@ const fsp      = fs.promises;
 const path     = require('path');
 const log      = require('../logger');
 const branding = require('../branding');
+const unitTypes = require('../unitTypes');
+const { getLockedWavePlan, getTTOnboarding, getWavePreview } = require('../waveDefenseSpec');
+const { VALID_UNIT_USAGE_SCOPES, normalizeUnitUsageScope, canUseInWaves } = require('../unitUsage');
 
 const UUID_RE      = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FLAG_NAME_RE = /^[a-z_]{1,64}$/;
@@ -1275,12 +1278,22 @@ router.patch('/flags/:name', requireAdmin, requirePermission('flag.write'), asyn
 
 // ── Game config ───────────────────────────────────────────────────────────────
 
-// GET /admin/game-config — active config for a mode (defaults if nothing published)
+// GET /admin/game-config — active config for a mode
 router.get('/game-config', requireAdmin, async (req, res) => {
   const { CLASSIC, MULTILANE } = require('../gameDefaults');
   const defaults = { classic: CLASSIC, multilane: MULTILANE };
+  const blankMultilane = { globalParams: {} };
+  const configErrors = {};
 
-  if (!process.env.DATABASE_URL) return res.json({ classic: defaults.classic, multilane: defaults.multilane, dbSource: false });
+  if (!process.env.DATABASE_URL) {
+    configErrors.multilane = '[gameConfig] DATABASE_URL is not configured. Publish and activate a multilane config before starting a match.';
+    return res.json({
+      classic: defaults.classic,
+      multilane: blankMultilane,
+      dbSource: false,
+      configErrors,
+    });
+  }
   const db  = require('../db');
   const cfg = {};
   try {
@@ -1288,12 +1301,20 @@ router.get('/game-config', requireAdmin, async (req, res) => {
       `SELECT mode, config_json FROM game_configs WHERE is_active=true`
     );
     for (const row of r.rows) cfg[row.mode] = row.config_json;
-  } catch { /* use defaults */ }
+  } catch (err) {
+    log.error('[admin] route error', { err: err.message });
+    return res.status(500).json({ error: 'Unable to load active game configs.' });
+  }
+
+  if (!cfg.multilane) {
+    configErrors.multilane = '[gameConfig] Missing active multilane config. Publish and activate one before starting a Forge Wars match.';
+  }
 
   res.json({
     classic:   cfg.classic   || defaults.classic,
-    multilane: cfg.multilane || defaults.multilane,
+    multilane: cfg.multilane || blankMultilane,
     dbSource: Object.keys(cfg).length > 0,
+    configErrors,
   });
 });
 
@@ -1351,24 +1372,31 @@ router.post('/game-config', requireAdmin, requirePermission('config.write'), asy
   const { mode, config, label, notes, activate = true } = req.body;
   if (!['classic','multilane'].includes(mode)) return res.status(400).json({ error: 'mode must be classic or multilane' });
   if (!config || typeof config !== 'object') return res.status(400).json({ error: 'config object required' });
+  const gameConfig = require('../gameConfig');
+  let validatedConfig;
+
+  try {
+    validatedConfig = gameConfig.validateConfig(mode, config, `published ${mode} config`);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || 'Invalid game config' });
+  }
 
   // Basic validation
-  if (config.unitDefs) {
-    for (const [name, u] of Object.entries(config.unitDefs)) {
+  if (validatedConfig.unitDefs) {
+    for (const [name, u] of Object.entries(validatedConfig.unitDefs)) {
       if (!Number.isFinite(u.cost) || u.cost <= 0) return res.status(400).json({ error: `Unit ${name}: cost must be > 0` });
       if (!Number.isFinite(u.hp)   || u.hp   <= 0) return res.status(400).json({ error: `Unit ${name}: hp must be > 0` });
       if (!Number.isFinite(u.dmg)  || u.dmg  <= 0) return res.status(400).json({ error: `Unit ${name}: dmg must be > 0` });
     }
   }
-  if (config.towerDefs) {
-    for (const [name, t] of Object.entries(config.towerDefs)) {
+  if (validatedConfig.towerDefs) {
+    for (const [name, t] of Object.entries(validatedConfig.towerDefs)) {
       if (!Number.isFinite(t.cost) || t.cost <= 0) return res.status(400).json({ error: `Tower ${name}: cost must be > 0` });
       if (!Number.isFinite(t.dmg)  || t.dmg  <= 0) return res.status(400).json({ error: `Tower ${name}: dmg must be > 0` });
     }
   }
 
   try {
-    const gameConfig = require('../gameConfig');
     const versionRes = await db.query(
       `SELECT COALESCE(MAX(version),0)+1 AS next FROM game_configs WHERE mode=$1`, [mode]
     );
@@ -1382,12 +1410,12 @@ router.post('/game-config', requireAdmin, requirePermission('config.write'), asy
       `INSERT INTO game_configs (mode, version, label, config_json, notes, published_by, is_active)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, mode, version, label, is_active, published_at`,
       [mode, version, (label || '').slice(0, 80) || null,
-       JSON.stringify(config), (notes || '').slice(0, 500) || null,
+       JSON.stringify(validatedConfig), (notes || '').slice(0, 500) || null,
        req.adminEmail || 'ADMIN_SECRET', !!activate]
     );
     await audit(db, 'publish_config', 'game_config', result.rows[0].id,
       { mode, version, label, activate }, req.adminEmail, req.ip);
-    if (activate) gameConfig.setActiveConfig(mode, config);
+    if (activate) gameConfig.setActiveConfig(mode, validatedConfig);
     res.status(201).json({ config: result.rows[0], note: activate ? 'Changes are active for new matches now.' : 'Saved without activating.' });
   } catch (err) {
     log.error('[admin] route error', { err: err.message });
@@ -1859,6 +1887,12 @@ router.put('/ml-waves/configs/:id/waves', requireAdmin, requirePermission('confi
   try {
     const cfgCheck = await db.query(`SELECT id FROM ml_wave_configs WHERE id=$1`, [id]);
     if (!cfgCheck.rows[0]) return res.status(404).json({ error: 'Config not found' });
+    const unitRows = await db.query(`SELECT key, enabled, usage_scope FROM unit_types`);
+    const waveEligible = new Set(unitRows.rows.filter((ut) => canUseInWaves(ut)).map((ut) => ut.key));
+    const invalidWaveUnit = waves.find((w) => !waveEligible.has(w.unit_type.toLowerCase().trim()));
+    if (invalidWaveUnit) {
+      return res.status(400).json({ error: `Unit ${invalidWaveUnit.unit_type} is not eligible for wave usage` });
+    }
 
     await db.query(`DELETE FROM ml_waves WHERE config_id=$1`, [id]);
     for (const w of waves) {
@@ -1896,8 +1930,60 @@ router.get('/ml-waves/default', requireAdmin, async (req, res) => {
 
 // ── Unit Types CRUD ────────────────────────────────────────────────────────────
 
+router.get('/wave-defense/spec', requireAdmin, async (_req, res) => {
+  try {
+    const allUnits = typeof unitTypes.getAllUnitTypes === 'function' ? unitTypes.getAllUnitTypes() : [];
+    const unitTypeMap = Object.fromEntries((allUnits || []).map((ut) => [ut.key, ut]));
+    res.json({
+      wavePlan: getWavePreview(unitTypeMap),
+      onboarding: getTTOnboarding(unitTypeMap),
+    });
+  } catch (err) {
+    log.error('[admin] GET /wave-defense/spec error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/ml-waves/configs/:id/apply-wave-defense-spec', requireAdmin, requirePermission('config.write'), async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const cfgCheck = await db.query(`SELECT id FROM ml_wave_configs WHERE id=$1`, [id]);
+    if (!cfgCheck.rows[0]) return res.status(404).json({ error: 'Config not found' });
+
+    const waves = getLockedWavePlan();
+    await db.query(`DELETE FROM ml_waves WHERE config_id=$1`, [id]);
+    for (const w of waves) {
+      await db.query(
+        `INSERT INTO ml_waves (config_id, wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, w.wave_number, w.unit_type, w.spawn_qty, w.hp_mult, w.dmg_mult, w.speed_mult]
+      );
+    }
+
+    await audit(
+      db,
+      'apply_wave_defense_spec',
+      'ml_wave_config',
+      id,
+      { wave_count: waves.length },
+      req.adminEmail,
+      req.ip
+    );
+
+    const wr = await db.query(`SELECT * FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`, [id]);
+    res.json({ waves: wr.rows, preview: getWavePreview() });
+  } catch (err) {
+    log.error('[admin] POST /ml-waves/configs/:id/apply-wave-defense-spec error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 const UNIT_TYPE_FIELDS = [
-  'key','name','description','enabled','display_to_players',
+  'key','name','description','enabled','display_to_players','usage_scope',
   'hp','attack_damage','attack_speed','range','path_speed',
   'damage_type','armor_type','damage_reduction_pct',
   'send_cost','build_cost','income','refund_pct',
@@ -1927,6 +2013,9 @@ const UNIT_BULK_NUMERIC_FIELDS = new Set([
   'bounty',
   'projectile_travel_ticks',
   'damage_reduction_pct',
+]);
+const UNIT_BULK_ENUM_FIELDS = new Set([
+  'usage_scope',
 ]);
 const UNIT_BULK_FIELD_ALIASES = Object.freeze({
   running_speed: 'path_speed',
@@ -1997,6 +2086,8 @@ function validateUnitTypeBody(body) {
   const errs = [];
   if (body.key !== undefined && !UNIT_KEY_RE.test(body.key))
     errs.push('key must be lowercase letters/numbers/underscores, 1–64 chars');
+  if (body.usage_scope !== undefined && !VALID_UNIT_USAGE_SCOPES.includes(normalizeUnitUsageScope(body.usage_scope)))
+    errs.push('invalid usage_scope');
   if (body.damage_type !== undefined && !VALID_DAMAGE_TYPES.includes(body.damage_type))
     errs.push('invalid damage_type');
   if (body.armor_type !== undefined && !VALID_ARMOR_TYPES.includes(body.armor_type))
@@ -2128,13 +2219,24 @@ router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.w
       .filter((id) => Number.isInteger(id) && id > 0)
   ));
 
-  if (!UNIT_BULK_NUMERIC_FIELDS.has(requestedField) && !UNIT_BULK_NUMERIC_FIELDS.has(field)) {
+  if (
+    !UNIT_BULK_NUMERIC_FIELDS.has(requestedField) &&
+    !UNIT_BULK_NUMERIC_FIELDS.has(field) &&
+    !UNIT_BULK_ENUM_FIELDS.has(requestedField) &&
+    !UNIT_BULK_ENUM_FIELDS.has(field)
+  ) {
     return res.status(400).json({ error: 'Unsupported bulk-edit field' });
   }
   if (!['set', 'add', 'multiply'].includes(operation)) {
     return res.status(400).json({ error: 'Unsupported bulk-edit operation' });
   }
-  if (!Number.isFinite(value)) {
+  const isEnumField = UNIT_BULK_ENUM_FIELDS.has(field);
+  if (isEnumField) {
+    if (operation !== 'set') return res.status(400).json({ error: 'Enum bulk edits only support set' });
+    if (!VALID_UNIT_USAGE_SCOPES.includes(normalizeUnitUsageScope(req.body?.value))) {
+      return res.status(400).json({ error: 'Invalid usage_scope value' });
+    }
+  } else if (!Number.isFinite(value)) {
     return res.status(400).json({ error: 'Bulk-edit value must be numeric' });
   }
 
@@ -2160,19 +2262,24 @@ router.post('/unit-types/bulk-update', requireAdmin, requirePermission('config.w
   const whereClause = whereClauses.length ? whereClauses.join(' AND ') : 'TRUE';
 
   let expr;
-  if (operation === 'set') expr = '$1';
-  else if (operation === 'add') expr = `COALESCE(${field}, 0) + $1`;
-  else expr = `COALESCE(${field}, 0) * $1`;
+  if (isEnumField) {
+    params[0] = normalizeUnitUsageScope(req.body?.value);
+    expr = '$1';
+  } else {
+    if (operation === 'set') expr = '$1';
+    else if (operation === 'add') expr = `COALESCE(${field}, 0) + $1`;
+    else expr = `COALESCE(${field}, 0) * $1`;
 
-  if (UNIT_BULK_INTEGER_FIELDS.has(field)) {
-    expr = `ROUND((${expr})::numeric)::int`;
-  }
+    if (UNIT_BULK_INTEGER_FIELDS.has(field)) {
+      expr = `ROUND((${expr})::numeric)::int`;
+    }
 
-  if (['send_cost', 'build_cost', 'income', 'refund_pct', 'bounty', 'projectile_travel_ticks', 'damage_reduction_pct', 'hp', 'attack_damage', 'attack_speed', 'range', 'path_speed'].includes(field)) {
-    expr = `GREATEST(0, ${expr})`;
-  }
-  if (field === 'projectile_travel_ticks') {
-    expr = `GREATEST(1, ${expr})`;
+    if (['send_cost', 'build_cost', 'income', 'refund_pct', 'bounty', 'projectile_travel_ticks', 'damage_reduction_pct', 'hp', 'attack_damage', 'attack_speed', 'range', 'path_speed'].includes(field)) {
+      expr = `GREATEST(0, ${expr})`;
+    }
+    if (field === 'projectile_travel_ticks') {
+      expr = `GREATEST(1, ${expr})`;
+    }
   }
 
   try {
@@ -2244,6 +2351,7 @@ router.post('/unit-types', requireAdmin, requirePermission('config.write'), asyn
   const errs = validateUnitTypeBody(req.body);
   if (errs.length) return res.status(400).json({ error: errs.join('; ') });
   try {
+    if (req.body.usage_scope !== undefined) req.body.usage_scope = normalizeUnitUsageScope(req.body.usage_scope);
     const cols = UNIT_TYPE_FIELDS.filter(f => req.body[f] !== undefined);
     const vals = cols.map(f => req.body[f]);
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
@@ -2271,6 +2379,7 @@ router.patch('/unit-types/:id', requireAdmin, requirePermission('config.write'),
   if (errs.length) return res.status(400).json({ error: errs.join('; ') });
   const updates = {};
   for (const f of UNIT_TYPE_FIELDS) if (req.body[f] !== undefined) updates[f] = req.body[f];
+  if (updates.usage_scope !== undefined) updates.usage_scope = normalizeUnitUsageScope(updates.usage_scope);
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
   try {
     const setClauses = Object.keys(updates).map((k, i) => `${k}=$${i + 2}`).join(', ');

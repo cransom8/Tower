@@ -84,6 +84,15 @@ public class AudioManager : MonoBehaviour
         StartCoroutine(BeginAmbientWhenReady());
     }
 
+    void OnDestroy()
+    {
+        if (I == this)
+            I = null;
+
+        _sfxSource = null;
+        _ambientSource = null;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Public API
     // ─────────────────────────────────────────────────────────────────────────
@@ -99,6 +108,9 @@ public class AudioManager : MonoBehaviour
 
     public void Play(SFX sfx, float volumeScale = 1f)
     {
+        if (this == null || _sfxSource == null)
+            return;
+
         AudioClip clip = ClipFor(sfx);
         if (clip == null) return;
         _sfxSource.PlayOneShot(clip, volumeScale);

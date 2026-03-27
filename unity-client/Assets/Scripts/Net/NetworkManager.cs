@@ -54,12 +54,17 @@ namespace CastleDefender.Net
         // the Loadout scene may still be loading when the first broadcast arrives.
         public MLMatchPreparationStatePayload LastPreparationState { get; private set; }
         public MLMatchReadyPayload LastMLMatchReady { get; private set; }
+        public MLWaveReadyStatePayload LastMLWaveReadyState { get; private set; }
+        public MLWaveStartPayload LastMLWaveStart { get; private set; }
 
-        public string CurrentMLMatchState { get; private set; } = "active_pvp";
+        public string CurrentMLMatchState { get; private set; } = "active_survival";
         public MLPvPResolvedPayload LastMLPvPResolved { get; private set; }
         public MLGameOverPayload LastMLGameOver { get; private set; }
         public ClassicGameOverPayload LastClassicGameOver { get; private set; }
         public RematchStatusPayload LastRematchStatus { get; private set; }
+        bool _finalGameOverHandledForCurrentMatch;
+        bool _pendingLoadoutReadySignal;
+        bool _pendingGameplayReadySignal;
 
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
@@ -73,6 +78,8 @@ namespace CastleDefender.Net
         public event Action<MLLoadoutPhaseEndPayload>         OnMLLoadoutPhaseEnd;
         public event Action<MLMatchPreparationStatePayload>   OnMLMatchPreparationState;
         public event Action<MLMatchCancelledPayload>          OnMLMatchCancelled;
+        public event Action<MLWaveReadyStatePayload>          OnMLWaveReadyState;
+        public event Action<MLWaveStartPayload>               OnMLWaveStart;
 
         // ── Classic Lobby events ──────────────────────────────────────────────
         public event Action<ClassicRoomCreatedPayload>  OnClassicRoomCreated;
@@ -99,7 +106,6 @@ namespace CastleDefender.Net
         public event Action<MLLaneReassignedPayload>     OnMLLaneReassigned;
 
         // ── Send queue ────────────────────────────────────────────────────────
-        public event Action<QueueUpdatePayload> OnQueueUpdate;
 
         // ── Queue & Lobby system (Phase U5) ───────────────────────────────────
         public event Action<QueueStatusPayload>  OnQueueStatus;
@@ -115,6 +121,7 @@ namespace CastleDefender.Net
 
         // ── Connection events ─────────────────────────────────────────────────
         public event Action<ErrorPayload> OnErrorMsg;
+        public event Action<MLAllChatMessagePayload> OnAllChatMessage;
         public event Action               OnConnected;
         public event Action               OnDisconnected;
 
@@ -199,6 +206,8 @@ namespace CastleDefender.Net
             JSIO_On("ml_loadout_phase_end");
             JSIO_On("ml_match_preparation_state");
             JSIO_On("ml_match_cancelled");
+            JSIO_On("ml_wave_ready_state");
+            JSIO_On("ml_wave_start");
             JSIO_On("room_created");
             JSIO_On("room_joined");
             JSIO_On("match_ready");
@@ -215,8 +224,8 @@ namespace CastleDefender.Net
             JSIO_On("ml_player_eliminated");
             JSIO_On("ml_spectator_join");
             JSIO_On("ml_lane_reassigned");
-            JSIO_On("queue_update");
             JSIO_On("error_message");
+            JSIO_On("ml_chat_message");
             // Queue & Lobby (Phase U5)
             JSIO_On("queue_status");
             JSIO_On("match_found");
@@ -292,13 +301,17 @@ namespace CastleDefender.Net
                 case "ml_match_ready":
                 {
                     var p = JsonUtility.FromJson<MLMatchReadyPayload>(json);
-                    CurrentMLMatchState = "active_pvp";
+                    ResetPostGameFlowState("ml_match_ready");
+                    CurrentMLMatchState = "active_survival";
                     LastMLPvPResolved = null;
                     LastMLGameOver = null;
                     LastPreparationState = null;
+                    LastMLWaveReadyState = null;
+                    LastMLWaveStart = null;
                     LastMLMatchReady = p;
                     Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                     OnMLMatchReady?.Invoke(p);
+                    TryEmitPendingCriticalReadySignals("ml_match_ready");
                     break;
                 }
                 case "ml_match_config":
@@ -308,15 +321,18 @@ namespace CastleDefender.Net
                     {
                         LastMatchLoadout = cfg.loadout;
                         PendingLoadoutPhase = null; // phase complete
+                        ClearPendingLoadoutReady("ml_match_config");
                     }
                     OnMLMatchConfig?.Invoke(cfg);
+                    TryEmitPendingCriticalReadySignals("ml_match_config");
                     break;
                 }
                 case "ml_loadout_phase_start":
                 {
                     var p = JsonUtility.FromJson<MLLoadoutPhaseStartPayload>(json);
                     PendingLoadoutPhase = p;
-                    Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s units={p.availableUnits?.Length}");
+                    ClearPendingLoadoutReady("ml_loadout_phase_start");
+                    Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s races={p.availableRaceIds?.Length ?? 0} units={p.availableUnits?.Length ?? 0}");
                     OnMLLoadoutPhaseStart?.Invoke(p);
                     break;
                 }
@@ -338,8 +354,25 @@ namespace CastleDefender.Net
                 case "ml_match_cancelled":
                 {
                     var p = JsonUtility.FromJson<MLMatchCancelledPayload>(json);
+                    ClearPendingLoadoutReady("ml_match_cancelled");
+                    ClearPendingGameplayReady("ml_match_cancelled");
                     Debug.LogWarning($"[NM] ml_match_cancelled reason={p.reason} message={p.message}");
                     OnMLMatchCancelled?.Invoke(p);
+                    break;
+                }
+                case "ml_wave_ready_state":
+                {
+                    var p = JsonUtility.FromJson<MLWaveReadyStatePayload>(json);
+                    LastMLWaveReadyState = p;
+                    OnMLWaveReadyState?.Invoke(p);
+                    break;
+                }
+                case "ml_wave_start":
+                {
+                    var p = JsonUtility.FromJson<MLWaveStartPayload>(json);
+                    LastMLWaveStart = p;
+                    Debug.Log($"[NM] ml_wave_start round={p.roundNumber}");
+                    OnMLWaveStart?.Invoke(p);
                     break;
                 }
                 case "room_created":
@@ -371,6 +404,7 @@ namespace CastleDefender.Net
                 {
                     var p = JsonUtility.FromJson<MLSnapshot>(json);
                     CurrentMLMatchState = !string.IsNullOrEmpty(p.matchState) ? p.matchState : CurrentMLMatchState;
+                    ClearPendingGameplayReady("ml_state_snapshot");
                     OnMLStateSnapshot?.Invoke(p);
                     break;
                 }
@@ -385,7 +419,7 @@ namespace CastleDefender.Net
                 case "ml_survival_continuation_started":
                 {
                     LastMLPvPResolved = null;
-                    CurrentMLMatchState = "survival_continuation";
+                    CurrentMLMatchState = "active_survival";
                     OnMLSurvivalContinuationStarted?.Invoke(JsonUtility.FromJson<MLSurvivalContinuationStartedPayload>(json));
                     break;
                 }
@@ -444,9 +478,6 @@ namespace CastleDefender.Net
                     OnMLLaneReassigned?.Invoke(p);
                     break;
                 }
-                case "queue_update":
-                    OnQueueUpdate?.Invoke(JsonConvert.DeserializeObject<QueueUpdatePayload>(json));
-                    break;
                 case "error_message":
                 {
                     var p = JsonUtility.FromJson<ErrorPayload>(json);
@@ -455,6 +486,12 @@ namespace CastleDefender.Net
                     break;
                 }
                 // ── Queue & Lobby (Phase U5) ──────────────────────────────────
+                case "ml_chat_message":
+                {
+                    var p = JsonUtility.FromJson<MLAllChatMessagePayload>(json);
+                    OnAllChatMessage?.Invoke(p);
+                    break;
+                }
                 case "queue_status":
                     OnQueueStatus?.Invoke(JsonUtility.FromJson<QueueStatusPayload>(json));
                     break;
@@ -599,13 +636,16 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("ml_match_ready", resp =>
             {
                 var p = FromResp<MLMatchReadyPayload>(resp);
-                CurrentMLMatchState = "active_pvp";
+                ResetPostGameFlowState("ml_match_ready");
+                CurrentMLMatchState = "active_survival";
                 LastMLPvPResolved = null;
                 LastMLGameOver = null;
                 LastPreparationState = null;
+                LastMLWaveReadyState = null;
                 LastMLMatchReady = p;
                 Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                 OnMLMatchReady?.Invoke(p);
+                TryEmitPendingCriticalReadySignals("ml_match_ready");
             });
 
             _socket.OnUnityThread("ml_match_config", resp =>
@@ -615,15 +655,18 @@ namespace CastleDefender.Net
                 {
                     LastMatchLoadout = cfg.loadout;
                     PendingLoadoutPhase = null; // phase complete
+                    ClearPendingLoadoutReady("ml_match_config");
                 }
                 OnMLMatchConfig?.Invoke(cfg);
+                TryEmitPendingCriticalReadySignals("ml_match_config");
             });
 
             _socket.OnUnityThread("ml_loadout_phase_start", resp =>
             {
                 var p = FromResp<MLLoadoutPhaseStartPayload>(resp);
                 PendingLoadoutPhase = p;
-                Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s units={p.availableUnits?.Length}");
+                ClearPendingLoadoutReady("ml_loadout_phase_start");
+                Debug.Log($"[NM] ml_loadout_phase_start mode={p.selectionMode} timeout={p.timeoutSeconds}s races={p.availableRaceIds?.Length ?? 0} units={p.availableUnits?.Length ?? 0}");
                 OnMLLoadoutPhaseStart?.Invoke(p);
             });
 
@@ -645,8 +688,25 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("ml_match_cancelled", resp =>
             {
                 var p = FromResp<MLMatchCancelledPayload>(resp);
+                ClearPendingLoadoutReady("ml_match_cancelled");
+                ClearPendingGameplayReady("ml_match_cancelled");
                 Debug.LogWarning($"[NM] ml_match_cancelled reason={p.reason} message={p.message}");
                 OnMLMatchCancelled?.Invoke(p);
+            });
+
+            _socket.OnUnityThread("ml_wave_ready_state", resp =>
+            {
+                var p = FromResp<MLWaveReadyStatePayload>(resp);
+                LastMLWaveReadyState = p;
+                OnMLWaveReadyState?.Invoke(p);
+            });
+
+            _socket.OnUnityThread("ml_wave_start", resp =>
+            {
+                var p = FromResp<MLWaveStartPayload>(resp);
+                LastMLWaveStart = p;
+                Debug.Log($"[NM] ml_wave_start round={p.roundNumber}");
+                OnMLWaveStart?.Invoke(p);
             });
 
             // ── Classic Lobby ─────────────────────────────────────────────────
@@ -680,6 +740,7 @@ namespace CastleDefender.Net
             {
                 var p = FromResp<MLSnapshot>(resp);
                 CurrentMLMatchState = !string.IsNullOrEmpty(p.matchState) ? p.matchState : CurrentMLMatchState;
+                ClearPendingGameplayReady("ml_state_snapshot");
                 OnMLStateSnapshot?.Invoke(p);
             });
 
@@ -694,7 +755,7 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("ml_survival_continuation_started", resp =>
             {
                 LastMLPvPResolved = null;
-                CurrentMLMatchState = "survival_continuation";
+                CurrentMLMatchState = "active_survival";
                 OnMLSurvivalContinuationStarted?.Invoke(FromResp<MLSurvivalContinuationStartedPayload>(resp));
             });
 
@@ -761,10 +822,6 @@ namespace CastleDefender.Net
                 OnMLLaneReassigned?.Invoke(p);
             });
 
-            _socket.OnUnityThread("queue_update", resp =>
-            {
-                OnQueueUpdate?.Invoke(FromResp<QueueUpdatePayload>(resp));
-            });
 
             // ── Queue & Lobby (Phase U5) ───────────────────────────────────────
             _socket.OnUnityThread("queue_status", resp =>
@@ -828,6 +885,11 @@ namespace CastleDefender.Net
                 OnErrorMsg?.Invoke(p);
             });
 
+            _socket.OnUnityThread("ml_chat_message", resp =>
+            {
+                OnAllChatMessage?.Invoke(FromResp<MLAllChatMessagePayload>(resp));
+            });
+
             _socket.Connect();
         }
 
@@ -865,33 +927,141 @@ namespace CastleDefender.Net
 
         void HandleIncomingMLGameOver(MLGameOverPayload payload)
         {
+            if (payload == null)
+            {
+                Debug.LogWarning("[PostGameFlow] Ignoring null ml_game_over payload.");
+                return;
+            }
+
+            if (_finalGameOverHandledForCurrentMatch)
+            {
+                LastMLGameOver = payload;
+                Debug.LogWarning(
+                    $"[PostGameFlow] Duplicate ml_game_over ignored " +
+                    $"(winnerLane={payload.winnerLaneIndex}, round={payload.finalRound}, state={payload.matchState ?? "final_game_over"}).");
+                return;
+            }
+
+            _finalGameOverHandledForCurrentMatch = true;
             CurrentMLMatchState = !string.IsNullOrEmpty(payload.matchState) ? payload.matchState : "final_game_over";
             LastMLPvPResolved = null;
             LastMLGameOver = payload;
             LastRematchStatus = null;
+            PendingLoadoutPhase = null;
+            LastPreparationState = null;
+            LastMLWaveReadyState = null;
+            Debug.Log(
+                $"[PostGameFlow] Match ended. winnerLane={payload.winnerLaneIndex} " +
+                $"round={payload.finalRound} state={CurrentMLMatchState} survival={payload.continuedIntoSurvival}.");
             OnMLGameOver?.Invoke(payload);
 
             string activeScene = SceneManager.GetActiveScene().name;
             if (activeScene != "PostGame")
             {
+                Debug.Log($"[PostGameFlow] Opening post-game scene from '{activeScene}'.");
                 LoadingScreen.LoadScene("PostGame");
+            }
+            else
+            {
+                Debug.Log("[PostGameFlow] Post-game scene already active; keeping modal open.");
             }
         }
 
         public void ClearPostGameData()
         {
-            CurrentMLMatchState = "active_pvp";
+            CurrentMLMatchState = "active_survival";
             LastMLPvPResolved = null;
             LastMLGameOver = null;
             LastClassicGameOver = null;
             LastRematchStatus = null;
+            LastMLWaveReadyState = null;
+            _pendingLoadoutReadySignal = false;
+            _pendingGameplayReadySignal = false;
+        }
+
+        void ResetPostGameFlowState(string reason)
+        {
+            if (_finalGameOverHandledForCurrentMatch || LastMLGameOver != null || LastRematchStatus != null)
+                Debug.Log($"[PostGameFlow] Resetting post-game flow ({reason}).");
+
+            _finalGameOverHandledForCurrentMatch = false;
+        }
+
+        void TryEmitPendingCriticalReadySignals(string reason)
+        {
+            if (!IsConnected)
+                return;
+
+            if (_pendingLoadoutReadySignal)
+            {
+                Debug.Log($"[NM] Emitting pending ml_loadout_ready ({reason})");
+                Emit("ml_loadout_ready");
+            }
+
+            if (_pendingGameplayReadySignal)
+            {
+                Debug.Log($"[NM] Emitting pending ml_gameplay_ready ({reason})");
+                Emit("ml_gameplay_ready");
+            }
+        }
+
+        void ClearPendingLoadoutReady(string reason)
+        {
+            if (!_pendingLoadoutReadySignal)
+                return;
+
+            _pendingLoadoutReadySignal = false;
+            Debug.Log($"[NM] Cleared pending ml_loadout_ready ({reason})");
+        }
+
+        void ClearPendingGameplayReady(string reason)
+        {
+            if (!_pendingGameplayReadySignal)
+                return;
+
+            _pendingGameplayReadySignal = false;
+            Debug.Log($"[NM] Cleared pending ml_gameplay_ready ({reason})");
+        }
+
+        public void RequestLoadoutReady()
+        {
+            _pendingLoadoutReadySignal = true;
+            if (!IsConnected)
+                Debug.Log("[NM] Queueing ml_loadout_ready until the socket reconnects.");
+            TryEmitPendingCriticalReadySignals("request_loadout_ready");
+        }
+
+        public void RequestGameplayReady()
+        {
+            _pendingGameplayReadySignal = true;
+            if (!IsConnected)
+                Debug.Log("[NM] Queueing ml_gameplay_ready until the socket reconnects.");
+            TryEmitPendingCriticalReadySignals("request_gameplay_ready");
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        /// <summary>Send the player's confirmed loadout unit type IDs to the server.</summary>
+        /// <summary>Send the player's confirmed race selection to the server.</summary>
+        public void EmitLoadoutConfirm(string raceId)
+        {
+            Emit("ml_loadout_confirm", new { raceId });
+        }
+
+        /// <summary>Legacy path: send explicit loadout unit type IDs to the server.</summary>
         public void EmitLoadoutConfirm(int[] unitTypeIds)
         {
             Emit("ml_loadout_confirm", new { unitTypeIds });
+        }
+
+        public void EmitAllChatMessage(string message)
+        {
+            string trimmed = message?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                Debug.LogWarning("[NM] Refusing to emit ml_chat_message because the message was empty.");
+                return;
+            }
+
+            Emit("ml_chat_message", new { message = trimmed });
         }
 
         /// <summary>Emit a socket event. Pass null to emit with no payload.</summary>

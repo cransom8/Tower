@@ -1,26 +1,5 @@
-// BuildTTRTSUnitPrefabs.cs
-// Menu: Castle Defender → Setup → Build TT-RTS Unit Prefabs (24)
-//
-// The 24 TT-RTS placeholder prefabs (TT_Light_Infantry, TT_Archer, etc.) were
-// empty shell GameObjects.  The sample controllers in controllers/ are also
-// stubs — each has only one state (e.g. "infantry_01_idle") whose name never
-// matches the state-name arrays in LaneRenderer ("Idle", "Walk", "Attack1" …).
-//
-// This script fixes both problems in one pass:
-//   1. Rebuilds each controller in controllers/ with states named exactly as
-//      LaneRenderer.TryCrossFade() expects:
-//        Idle · Walk · Run · Attack1 · Attack2 · Damage · Death
-//      Each state is wired to the correct animation clip from the pack FBXes.
-//   2. Rebuilds each prefab from the source character FBX
-//      (TT_RTS_Characters_customizable or TT_RTS_Cavalry_customizable), adds
-//      an Animator (controller + avatar), applies TT_RTS_Units_white.mat to all
-//      SkinnedMeshRenderers, and overwrites the placeholder.
-//
-// Safe to re-run: controllers and prefabs are fully replaced each time.
-// Run AFTER importing the TT-RTS pack; then run SetupTTRTSSkins to register the
-// skin entries in UnitPrefabRegistry.
-
 using System.Collections.Generic;
+using CastleDefender.Game;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -28,141 +7,192 @@ using Object = UnityEngine.Object;
 
 public static class BuildTTRTSUnitPrefabs
 {
-    // ── Base paths ────────────────────────────────────────────────────────────
-    const string BASE    = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard";
-    const string AI      = BASE + "/animation/animation_infantry";
-    const string AC      = BASE + "/animation/animation_cavalry";
-    const string CTRL    = BASE + "/controllers";
-    const string PFB     = BASE + "/prefabs";
-    const string MAT_W   = BASE + "/models/materials/color/Units/TT_RTS_Units_white.mat";
-    const string FBX_INF = BASE + "/models/units/TT_RTS_Characters_customizable.FBX";
-    const string FBX_CAV = BASE + "/models/units/TT_RTS_Cavalry_customizable.FBX";
+    const string BasePath = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard";
+    const string InfantryAnimationPath = BasePath + "/animation/animation_infantry";
+    const string CavalryAnimationPath = BasePath + "/animation/animation_cavalry";
+    const string ControllerPath = BasePath + "/controllers";
+    const string PrefabPath = BasePath + "/prefabs";
+    const string NeutralUnitMaterialPath = BasePath + "/models/materials/color/Units/TT_RTS_Units_white.mat";
+    const string InfantrySourcePath = BasePath + "/models/units/TT_RTS_Characters_customizable.FBX";
+    const string RedTeamMaterialPath = "Assets/Materials/TT/TT_RTS_Units_red_URP.mat";
+    const string BlueTeamMaterialPath = "Assets/Materials/TT/TT_RTS_Units_blue_URP.mat";
+    const string YellowTeamMaterialPath = "Assets/Materials/TT/TT_RTS_Units_yellow_URP.mat";
+    const string GreenTeamMaterialPath = "Assets/Materials/TT/TT_RTS_Units_green_URP.mat";
 
-    // ── Animation group descriptor ────────────────────────────────────────────
     struct AnimGroup
     {
-        public string idle, walk, run, attack, attack2, damage, death;
+        public string idle;
+        public string walk;
+        public string run;
+        public string attack;
+        public string attack2;
+        public string damage;
+        public string death;
     }
 
-    // Infantry-style group: attack_A / attack_B variants
-    static AnimGroup InfGrp(string sub, string pfx) => new AnimGroup
+    struct Loadout
     {
-        idle    = $"{AI}/{sub}/{pfx}_01_idle.FBX",
-        walk    = $"{AI}/{sub}/{pfx}_02_walk.FBX",
-        run     = $"{AI}/{sub}/{pfx}_03_run.FBX",
-        attack  = $"{AI}/{sub}/{pfx}_04_attack_A.FBX",
-        attack2 = $"{AI}/{sub}/{pfx}_04_attack_B.FBX",
-        damage  = $"{AI}/{sub}/{pfx}_05_damage.FBX",
-        death   = $"{AI}/{sub}/{pfx}_06_death_A.FBX",
-    };
+        public string body;
+        public string head;
+        public string rightHand;
+        public string leftHand;
+        public string shield;
+        public string backpack;
+        public bool tintBody;
+        public bool tintShield;
+    }
 
-    // Cavalry-style group: single attack, no _B variant
-    static AnimGroup CavGrp(string sub, string pfx) => new AnimGroup
+    struct UnitDef
     {
-        idle    = $"{AC}/{sub}/{pfx}_01_idle.FBX",
-        walk    = $"{AC}/{sub}/{pfx}_02_walk.FBX",
-        run     = $"{AC}/{sub}/{pfx}_03_run.FBX",
-        attack  = $"{AC}/{sub}/{pfx}_04_attack.FBX",
-        attack2 = null,
-        damage  = $"{AC}/{sub}/{pfx}_05_damage.FBX",
-        death   = $"{AC}/{sub}/{pfx}_06_death_A.FBX",
-    };
+        public string prefabName;
+        public string ctrlKey;
+        public string animGroup;
+        public Loadout loadout;
+    }
+
+    struct TeamMaterials
+    {
+        public Material red;
+        public Material blue;
+        public Material yellow;
+        public Material green;
+    }
+
+    static AnimGroup InfantryGroup(string subFolder, string prefix)
+    {
+        return new AnimGroup
+        {
+            idle = $"{InfantryAnimationPath}/{subFolder}/{prefix}_01_idle.FBX",
+            walk = $"{InfantryAnimationPath}/{subFolder}/{prefix}_02_walk.FBX",
+            run = $"{InfantryAnimationPath}/{subFolder}/{prefix}_03_run.FBX",
+            attack = $"{InfantryAnimationPath}/{subFolder}/{prefix}_04_attack_A.FBX",
+            attack2 = $"{InfantryAnimationPath}/{subFolder}/{prefix}_04_attack_B.FBX",
+            damage = $"{InfantryAnimationPath}/{subFolder}/{prefix}_05_damage.FBX",
+            death = $"{InfantryAnimationPath}/{subFolder}/{prefix}_06_death_A.FBX",
+        };
+    }
+
+    static AnimGroup CavalryGroup(string subFolder, string prefix)
+    {
+        return new AnimGroup
+        {
+            idle = $"{CavalryAnimationPath}/{subFolder}/{prefix}_01_idle.FBX",
+            walk = $"{CavalryAnimationPath}/{subFolder}/{prefix}_02_walk.FBX",
+            run = $"{CavalryAnimationPath}/{subFolder}/{prefix}_03_run.FBX",
+            attack = $"{CavalryAnimationPath}/{subFolder}/{prefix}_04_attack.FBX",
+            attack2 = null,
+            damage = $"{CavalryAnimationPath}/{subFolder}/{prefix}_05_damage.FBX",
+            death = $"{CavalryAnimationPath}/{subFolder}/{prefix}_06_death_A.FBX",
+        };
+    }
 
     static readonly Dictionary<string, AnimGroup> Groups = new Dictionary<string, AnimGroup>
     {
-        ["Infantry"]  = InfGrp("Infantry",        "infantry"),
-        ["Archer"]    = InfGrp("Archer",           "archer"),
-        ["Crossbow"]  = InfGrp("Crossbow",         "crossbow"),
-        ["Polearm"]   = InfGrp("Polearm",          "polearm"),
-        ["Shield"]    = InfGrp("Shield",           "shield"),
-        ["Cavalry"]   = CavGrp("cavalry",          "cavalry"),
-        ["CavArcher"] = CavGrp("cavalry_archer",   "cav_archer"),
-        ["CavSpear"]  = CavGrp("cavalry_spear_A",  "cav_spear_A"),
+        ["Infantry"] = InfantryGroup("Infantry", "infantry"),
+        ["Archer"] = InfantryGroup("Archer", "archer"),
+        ["Crossbow"] = InfantryGroup("Crossbow", "crossbow"),
+        ["Polearm"] = InfantryGroup("Polearm", "polearm"),
+        ["Shield"] = InfantryGroup("Shield", "shield"),
+        ["Cavalry"] = CavalryGroup("cavalry", "cavalry"),
+        ["CavArcher"] = CavalryGroup("cavalry_archer", "cav_archer"),
+        ["CavSpear"] = CavalryGroup("cavalry_spear_A", "cav_spear_A"),
     };
-
-    // ── Unit definitions ──────────────────────────────────────────────────────
-    struct UnitDef
-    {
-        public string prefabName;  // filename in prefabs/ (no .prefab)
-        public string ctrlKey;     // filename in controllers/ (no .controller)
-        public string animGroup;   // key in Groups dict
-        public bool   isCavalry;   // true → use Cavalry FBX; false → Characters FBX
-    }
 
     static readonly UnitDef[] Units =
     {
-        // ── Foot: basic ───────────────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Peasant",        ctrlKey="tt_peasant",        animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_Scout",          ctrlKey="tt_scout",          animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_Settler",        ctrlKey="tt_settler",        animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_Light_Infantry", ctrlKey="tt_light_infantry", animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_Spearman",       ctrlKey="tt_spearman",       animGroup="Polearm",   isCavalry=false },
-        // ── Foot: ranged ──────────────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Archer",         ctrlKey="tt_archer",         animGroup="Archer",    isCavalry=false },
-        new UnitDef { prefabName="TT_Crossbowman",    ctrlKey="tt_crossbowman",    animGroup="Crossbow",  isCavalry=false },
-        // ── Foot: medium / heavy ──────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Heavy_Infantry", ctrlKey="tt_heavy_infantry", animGroup="Shield",    isCavalry=false },
-        new UnitDef { prefabName="TT_Halberdier",     ctrlKey="tt_halberdier",     animGroup="Polearm",   isCavalry=false },
-        new UnitDef { prefabName="TT_HeavySwordman",  ctrlKey="tt_heavy_swordman", animGroup="Infantry",  isCavalry=false },
-        // ── Foot: support / magic ─────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Priest",         ctrlKey="tt_priest",         animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_HighPriest",     ctrlKey="tt_high_priest",    animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_Mage",           ctrlKey="tt_mage",           animGroup="Infantry",  isCavalry=false },
-        // ── Foot: elite ───────────────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Paladin",        ctrlKey="tt_paladin",        animGroup="Shield",    isCavalry=false },
-        new UnitDef { prefabName="TT_Commander",      ctrlKey="tt_commander",      animGroup="Infantry",  isCavalry=false },
-        new UnitDef { prefabName="TT_King",           ctrlKey="tt_king",           animGroup="Infantry",  isCavalry=false },
-        // ── Cavalry ───────────────────────────────────────────────────────────
-        new UnitDef { prefabName="TT_Light_Cavalry",   ctrlKey="tt_light_cavalry",   animGroup="Cavalry",  isCavalry=true  },
-        new UnitDef { prefabName="TT_Heavy_Cavalry",   ctrlKey="tt_heavy_cavalry",   animGroup="Cavalry",  isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_Scout",   ctrlKey="tt_mounted_scout",   animGroup="Cavalry",  isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_Knight",  ctrlKey="tt_mounted_knight",  animGroup="Cavalry",  isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_Mage",    ctrlKey="tt_mounted_mage",    animGroup="CavArcher",isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_Paladin", ctrlKey="tt_mounted_paladin", animGroup="CavSpear", isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_Priest",  ctrlKey="tt_mounted_priest",  animGroup="CavArcher",isCavalry=true  },
-        new UnitDef { prefabName="TT_Mounted_King",    ctrlKey="tt_mounted_king",    animGroup="Cavalry",  isCavalry=true  },
+        new UnitDef { prefabName = "TT_Peasant", ctrlKey = "tt_peasant", animGroup = "Infantry", loadout = LoadoutWith("Body_01a", "Head_01a", rightHand: "w_short_sword", tintBody: true) },
+        new UnitDef { prefabName = "TT_Scout", ctrlKey = "tt_scout", animGroup = "Archer", loadout = LoadoutWith("Body_06a", "Head_05a", leftHand: "w_short_bow", backpack: "quiver_A", tintBody: true) },
+        new UnitDef { prefabName = "TT_Settler", ctrlKey = "tt_settler", animGroup = "Infantry", loadout = LoadoutWith("Body_01b", "Head_01b", rightHand: "w_club", tintBody: true) },
+        new UnitDef { prefabName = "TT_Light_Infantry", ctrlKey = "tt_light_infantry", animGroup = "Infantry", loadout = LoadoutWith("Body_10a", "Head_04a", rightHand: "w_sword", tintBody: true) },
+        new UnitDef { prefabName = "TT_Spearman", ctrlKey = "tt_spearman", animGroup = "Polearm", loadout = LoadoutWith("Body_02a", "Head_02a", rightHand: "w_spear", tintBody: true) },
+        new UnitDef { prefabName = "TT_Archer", ctrlKey = "tt_archer", animGroup = "Archer", loadout = LoadoutWith("Body_03a", "Head_03a", leftHand: "w_recurve_bow", backpack: "quiver_A", tintBody: true) },
+        new UnitDef { prefabName = "TT_Crossbowman", ctrlKey = "tt_crossbowman", animGroup = "Crossbow", loadout = LoadoutWith("Body_10b", "Head_10b", rightHand: "w_crossbow", tintBody: true) },
+        new UnitDef { prefabName = "TT_Heavy_Infantry", ctrlKey = "tt_heavy_infantry", animGroup = "Shield", loadout = LoadoutWith("Body_04a", "Head_04a", shield: "shield_02", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Halberdier", ctrlKey = "tt_halberdier", animGroup = "Polearm", loadout = LoadoutWith("Body_11a", "Head_10c", rightHand: "w_halberd", tintBody: true) },
+        new UnitDef { prefabName = "TT_HeavySwordman", ctrlKey = "tt_heavy_swordman", animGroup = "Shield", loadout = LoadoutWith("Body_12a", "Head_04a", rightHand: "w_sword_B", shield: "shield_09", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Priest", ctrlKey = "tt_priest", animGroup = "Infantry", loadout = LoadoutWith("Body_11b", "Head_11b", leftHand: "w_staff_B", tintBody: true) },
+        new UnitDef { prefabName = "TT_HighPriest", ctrlKey = "tt_high_priest", animGroup = "Infantry", loadout = LoadoutWith("Body_12b", "Head_12a", leftHand: "w_staff_D", tintBody: true) },
+        new UnitDef { prefabName = "TT_Mage", ctrlKey = "tt_mage", animGroup = "Infantry", loadout = LoadoutWith("Body_10d", "Head_11c", leftHand: "w_staff_C", tintBody: true) },
+        new UnitDef { prefabName = "TT_Paladin", ctrlKey = "tt_paladin", animGroup = "Shield", loadout = LoadoutWith("Body_11a", "Head_10c", rightHand: "w_broad_sword", shield: "shield_20", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Commander", ctrlKey = "tt_commander", animGroup = "Infantry", loadout = LoadoutWith("Body_12b", "Head_05a", leftHand: "w_staff_A", tintBody: true) },
+        new UnitDef { prefabName = "TT_King", ctrlKey = "tt_king", animGroup = "Infantry", loadout = LoadoutWith("Body_13c", "Head_12e", rightHand: "w_broad_sword_B", tintBody: true) },
+        new UnitDef { prefabName = "TT_Light_Cavalry", ctrlKey = "tt_light_cavalry", animGroup = "Polearm", loadout = LoadoutWith("Body_12d", "Head_10a", rightHand: "w_pike", shield: "shield_05", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Heavy_Cavalry", ctrlKey = "tt_heavy_cavalry", animGroup = "Shield", loadout = LoadoutWith("Body_10b", "Head_10c", rightHand: "w_broad_sword_B", shield: "shield_12", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Mounted_Scout", ctrlKey = "tt_mounted_scout", animGroup = "Archer", loadout = LoadoutWith("Body_06b", "Head_05b", leftHand: "w_long_bow", backpack: "quiver_B", tintBody: true) },
+        new UnitDef { prefabName = "TT_Mounted_Knight", ctrlKey = "tt_mounted_knight", animGroup = "Infantry", loadout = LoadoutWith("Body_10b", "Head_10c", rightHand: "w_TH_sword", tintBody: true) },
+        new UnitDef { prefabName = "TT_Mounted_Mage", ctrlKey = "tt_mounted_mage", animGroup = "Infantry", loadout = LoadoutWith("Body_11d", "Head_11e", leftHand: "w_staff_C", tintBody: true) },
+        new UnitDef { prefabName = "TT_Mounted_Paladin", ctrlKey = "tt_mounted_paladin", animGroup = "Shield", loadout = LoadoutWith("Body_11a", "Head_10c", rightHand: "w_spear", shield: "shield_16", tintBody: true, tintShield: true) },
+        new UnitDef { prefabName = "TT_Mounted_Priest", ctrlKey = "tt_mounted_priest", animGroup = "Infantry", loadout = LoadoutWith("Body_06a", "Head_05a", leftHand: "w_staff_A", tintBody: true) },
+        new UnitDef { prefabName = "TT_Mounted_King", ctrlKey = "tt_mounted_king", animGroup = "Infantry", loadout = LoadoutWith("Body_12e", "Head_12d", leftHand: "w_staff_D", tintBody: true) },
     };
 
-    // ── Entry point ───────────────────────────────────────────────────────────
+    static Loadout LoadoutWith(
+        string body,
+        string head,
+        string rightHand = null,
+        string leftHand = null,
+        string shield = null,
+        string backpack = null,
+        bool tintBody = false,
+        bool tintShield = false)
+    {
+        return new Loadout
+        {
+            body = body,
+            head = head,
+            rightHand = rightHand,
+            leftHand = leftHand,
+            shield = shield,
+            backpack = backpack,
+            tintBody = tintBody,
+            tintShield = tintShield,
+        };
+    }
+
     [MenuItem("Castle Defender/Setup/Build TT-RTS Unit Prefabs (24)")]
     public static void Run()
     {
-        var matWhite = AssetDatabase.LoadAssetAtPath<Material>(MAT_W);
-        if (matWhite == null)
+        var neutralMaterial = AssetDatabase.LoadAssetAtPath<Material>(NeutralUnitMaterialPath);
+        var teamMaterials = new TeamMaterials
         {
-            Debug.LogError("[BuildTTRTSUnitPrefabs] White material not found: " + MAT_W);
+            red = AssetDatabase.LoadAssetAtPath<Material>(RedTeamMaterialPath),
+            blue = AssetDatabase.LoadAssetAtPath<Material>(BlueTeamMaterialPath),
+            yellow = AssetDatabase.LoadAssetAtPath<Material>(YellowTeamMaterialPath),
+            green = AssetDatabase.LoadAssetAtPath<Material>(GreenTeamMaterialPath),
+        };
+
+        if (neutralMaterial == null || teamMaterials.red == null || teamMaterials.blue == null || teamMaterials.yellow == null || teamMaterials.green == null)
+        {
+            Debug.LogError("[BuildTTRTSUnitPrefabs] Required TT materials are missing.");
             return;
         }
 
-        var infAvatar = LoadAvatarFromFBX(FBX_INF);
-        var cavAvatar = LoadAvatarFromFBX(FBX_CAV);
+        var infantryAvatar = LoadAvatarFromFBX(InfantrySourcePath);
+        int built = 0;
+        int failed = 0;
 
-        int built = 0, failed = 0;
-
-        foreach (var u in Units)
+        foreach (var unit in Units)
         {
-            if (!Groups.TryGetValue(u.animGroup, out var grp))
+            if (!Groups.TryGetValue(unit.animGroup, out var group))
             {
-                Debug.LogError($"[BuildTTRTSUnitPrefabs] Unknown anim group '{u.animGroup}' for {u.prefabName}");
+                Debug.LogError($"[BuildTTRTSUnitPrefabs] Unknown anim group '{unit.animGroup}' for {unit.prefabName}.");
                 failed++;
                 continue;
             }
 
-            // 1. Rebuild AnimatorController
-            string ctrlPath = $"{CTRL}/{u.ctrlKey}.controller";
-            var ctrl = BuildController(ctrlPath, grp);
-            if (ctrl == null) { failed++; continue; }
-
-            // 2. Rebuild prefab from source FBX
-            string fbxPath    = u.isCavalry ? FBX_CAV : FBX_INF;
-            var    avatar     = u.isCavalry ? cavAvatar : infAvatar;
-            string prefabPath = $"{PFB}/{u.prefabName}.prefab";
-
-            bool ok = BuildPrefab(prefabPath, fbxPath, ctrl, avatar, matWhite);
-            if (ok)
+            string controllerAssetPath = $"{ControllerPath}/{unit.ctrlKey}.controller";
+            var controller = BuildController(controllerAssetPath, group);
+            if (controller == null)
             {
-                Debug.Log($"[BuildTTRTSUnitPrefabs] ✓ {u.prefabName}");
+                failed++;
+                continue;
+            }
+
+            string prefabAssetPath = $"{PrefabPath}/{unit.prefabName}.prefab";
+            if (BuildPrefab(prefabAssetPath, controller, infantryAvatar, neutralMaterial, teamMaterials, unit.loadout))
+            {
                 built++;
+                Debug.Log($"[BuildTTRTSUnitPrefabs] Built {unit.prefabName}.");
             }
             else
             {
@@ -172,109 +202,280 @@ public static class BuildTTRTSUnitPrefabs
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
-        Debug.Log($"[BuildTTRTSUnitPrefabs] Done — built={built}  failed={failed}");
+        Debug.Log($"[BuildTTRTSUnitPrefabs] Done. built={built} failed={failed}");
     }
 
-    // ── Build a controller with LaneRenderer-compatible state names ───────────
-    static AnimatorController BuildController(string path, AnimGroup g)
+    static AnimatorController BuildController(string path, AnimGroup group)
     {
-        // Delete stale controller (the old single-state copy from SetupTTRTSSkins)
         if (AssetDatabase.LoadAssetAtPath<Object>(path) != null)
             AssetDatabase.DeleteAsset(path);
 
-        var ctrl = AnimatorController.CreateAnimatorControllerAtPath(path);
-        var sm   = ctrl.layers[0].stateMachine;
+        var controller = AnimatorController.CreateAnimatorControllerAtPath(path);
+        var stateMachine = controller.layers[0].stateMachine;
+        bool defaultStateAssigned = false;
 
-        bool defaultSet = false;
-        void Add(string stateName, string fbxPath)
+        void AddState(string stateName, string clipPath)
         {
-            if (string.IsNullOrEmpty(fbxPath)) return;
-            var clip = LoadClip(fbxPath);
+            if (string.IsNullOrEmpty(clipPath))
+                return;
+
+            var clip = LoadClip(clipPath);
             if (clip == null)
             {
-                Debug.LogWarning($"[BuildTTRTSUnitPrefabs] Clip not found, skipping state '{stateName}': {fbxPath}");
+                Debug.LogWarning($"[BuildTTRTSUnitPrefabs] Missing clip '{clipPath}' for state '{stateName}'.");
                 return;
             }
-            var state = sm.AddState(stateName);
+
+            var state = stateMachine.AddState(stateName);
             state.motion = clip;
             state.writeDefaultValues = false;
-            if (!defaultSet) { sm.defaultState = state; defaultSet = true; }
+            if (!defaultStateAssigned)
+            {
+                stateMachine.defaultState = state;
+                defaultStateAssigned = true;
+            }
         }
 
-        Add("Idle",    g.idle);
-        Add("Walk",    g.walk);
-        Add("Run",     g.run);
-        Add("Attack1", g.attack);
-        Add("Attack2", g.attack2);
-        Add("Damage",  g.damage);
-        Add("Death",   g.death);
+        AddState("Idle", group.idle);
+        AddState("Walk", group.walk);
+        AddState("Run", group.run);
+        AddState("Attack1", group.attack);
+        AddState("Attack2", group.attack2);
+        AddState("Damage", group.damage);
+        AddState("Death", group.death);
 
-        EditorUtility.SetDirty(ctrl);
+        EditorUtility.SetDirty(controller);
         AssetDatabase.SaveAssets();
-        return ctrl;
+        return controller;
     }
 
-    // ── Build (overwrite) a unit prefab ───────────────────────────────────────
-    static bool BuildPrefab(string prefabPath, string fbxPath,
-                            AnimatorController ctrl, Avatar avatar, Material mat)
+    static bool BuildPrefab(
+        string prefabAssetPath,
+        AnimatorController controller,
+        Avatar avatar,
+        Material neutralMaterial,
+        TeamMaterials teamMaterials,
+        Loadout loadout)
     {
-        var fbxRoot = AssetDatabase.LoadAssetAtPath<GameObject>(fbxPath);
-        if (fbxRoot == null)
+        var sourceRoot = AssetDatabase.LoadAssetAtPath<GameObject>(InfantrySourcePath);
+        if (sourceRoot == null)
         {
-            Debug.LogError("[BuildTTRTSUnitPrefabs] FBX not found: " + fbxPath);
+            Debug.LogError("[BuildTTRTSUnitPrefabs] Infantry source model is missing.");
             return false;
         }
 
-        var go = Object.Instantiate(fbxRoot);
-        go.name = System.IO.Path.GetFileNameWithoutExtension(prefabPath);
+        var instance = Object.Instantiate(sourceRoot);
+        instance.name = System.IO.Path.GetFileNameWithoutExtension(prefabAssetPath);
 
-        // Ensure Animator on root
-        var anim = go.GetComponent<Animator>() ?? go.AddComponent<Animator>();
-        anim.runtimeAnimatorController = ctrl;
-        if (avatar != null) anim.avatar = avatar;
-        anim.applyRootMotion = false;
-        anim.updateMode      = AnimatorUpdateMode.Normal;
-        anim.cullingMode     = AnimatorCullingMode.AlwaysAnimate;
-
-        // Apply white material to all SkinnedMeshRenderers
-        // (LaneRenderer will tint it per-team via _BaseColor at runtime)
-        foreach (var smr in go.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        try
         {
-            var mats = new Material[smr.sharedMaterials.Length];
-            for (int i = 0; i < mats.Length; i++) mats[i] = mat;
-            smr.sharedMaterials = mats;
+            var animator = instance.GetComponent<Animator>() ?? instance.AddComponent<Animator>();
+            animator.runtimeAnimatorController = controller;
+            animator.avatar = avatar;
+            animator.applyRootMotion = false;
+            animator.updateMode = AnimatorUpdateMode.Normal;
+            animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+
+            if (!ApplyLoadout(instance, loadout, neutralMaterial, teamMaterials, out string error))
+            {
+                Debug.LogError($"[BuildTTRTSUnitPrefabs] {instance.name}: {error}");
+                return false;
+            }
+
+            var savedPrefab = PrefabUtility.SaveAsPrefabAsset(instance, prefabAssetPath);
+            if (savedPrefab == null)
+            {
+                Debug.LogError($"[BuildTTRTSUnitPrefabs] Failed to save prefab '{prefabAssetPath}'.");
+                return false;
+            }
+
+            return true;
         }
-
-        var saved = PrefabUtility.SaveAsPrefabAsset(go, prefabPath);
-        Object.DestroyImmediate(go);
-
-        if (saved == null)
+        finally
         {
-            Debug.LogError("[BuildTTRTSUnitPrefabs] Failed to save prefab: " + prefabPath);
+            Object.DestroyImmediate(instance);
+        }
+    }
+
+    static bool ApplyLoadout(
+        GameObject root,
+        Loadout loadout,
+        Material neutralMaterial,
+        TeamMaterials teamMaterials,
+        out string error)
+    {
+        error = null;
+        var tintTargets = new List<TeamColorMaterialProfile.Target>();
+
+        if (!TryKeepSingleBody(root, loadout.body, out var bodyRenderer))
+        {
+            error = $"Body '{loadout.body}' was not found.";
             return false;
         }
+
+        if (!TryKeepSingleChildRenderer(root, "Bip001/Bip001 Pelvis/Bip001 Spine/Bip001 Neck/Bip001 Head/HEAD_CONTAINER", loadout.head, out _))
+        {
+            error = $"Head '{loadout.head}' was not found.";
+            return false;
+        }
+
+        if (!TryKeepSingleChildRenderer(root, "Bip001/Bip001 Pelvis/Bip001 Spine/Bip001 R Clavicle/Bip001 R UpperArm/Bip001 R Forearm/Bip001 R Hand/R_hand_container", loadout.rightHand, out _))
+        {
+            error = $"Right-hand item '{loadout.rightHand}' was not found.";
+            return false;
+        }
+
+        if (!TryKeepSingleChildRenderer(root, "Bip001/Bip001 Pelvis/Bip001 Spine/Bip001 L Clavicle/Bip001 L UpperArm/Bip001 L Forearm/Bip001 L Hand/L_hand_container", loadout.leftHand, out _))
+        {
+            error = $"Left-hand item '{loadout.leftHand}' was not found.";
+            return false;
+        }
+
+        if (!TryKeepSingleChildRenderer(root, "Bip001/Bip001 Pelvis/Bip001 Spine/Bip001 L Clavicle/Bip001 L UpperArm/Bip001 L Forearm/Bip001 L Hand/L_shield_container", loadout.shield, out var shieldRenderer))
+        {
+            error = $"Shield '{loadout.shield}' was not found.";
+            return false;
+        }
+
+        if (!TryKeepSingleChildRenderer(root, "Bip001/Bip001 Pelvis/Bip001 Spine/Backpack_container", loadout.backpack, out _))
+        {
+            error = $"Backpack item '{loadout.backpack}' was not found.";
+            return false;
+        }
+
+        foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            AssignMaterial(renderer, neutralMaterial);
+
+        if (loadout.tintBody && bodyRenderer != null)
+        {
+            AssignMaterial(bodyRenderer, teamMaterials.blue);
+            tintTargets.Add(new TeamColorMaterialProfile.Target
+            {
+                renderer = bodyRenderer,
+                replaceAllMaterials = true,
+                materialIndex = -1,
+            });
+        }
+
+        if (loadout.tintShield && shieldRenderer != null)
+        {
+            AssignMaterial(shieldRenderer, teamMaterials.blue);
+            tintTargets.Add(new TeamColorMaterialProfile.Target
+            {
+                renderer = shieldRenderer,
+                replaceAllMaterials = true,
+                materialIndex = -1,
+            });
+        }
+
+        var teamColorProfile = root.GetComponent<TeamColorMaterialProfile>() ?? root.AddComponent<TeamColorMaterialProfile>();
+        teamColorProfile.ConfigureForEditor(
+            teamMaterials.red,
+            teamMaterials.blue,
+            teamMaterials.yellow,
+            teamMaterials.green,
+            tintTargets.ToArray());
+        EditorUtility.SetDirty(teamColorProfile);
+
         return true;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    static bool TryKeepSingleBody(GameObject root, string selectedBodyName, out Renderer selectedRenderer)
+    {
+        selectedRenderer = null;
+        foreach (var bodyRenderer in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (!bodyRenderer.name.StartsWith("Body_", System.StringComparison.Ordinal))
+                continue;
 
-    // Loads the first non-preview AnimationClip sub-asset from an FBX.
+            if (string.Equals(bodyRenderer.name, selectedBodyName, System.StringComparison.Ordinal))
+            {
+                selectedRenderer = bodyRenderer;
+                continue;
+            }
+
+            Object.DestroyImmediate(bodyRenderer.gameObject);
+        }
+
+        return selectedRenderer != null;
+    }
+
+    static bool TryKeepSingleChildRenderer(GameObject root, string containerPath, string selectedChildName, out Renderer selectedRenderer)
+    {
+        selectedRenderer = null;
+        Transform container = FindTransformByPath(root.transform, containerPath);
+        if (container == null)
+            return string.IsNullOrEmpty(selectedChildName);
+
+        for (int i = container.childCount - 1; i >= 0; i--)
+        {
+            var child = container.GetChild(i);
+            if (!string.Equals(child.name, selectedChildName, System.StringComparison.Ordinal))
+            {
+                Object.DestroyImmediate(child.gameObject);
+                continue;
+            }
+
+            selectedRenderer = child.GetComponent<Renderer>();
+        }
+
+        return selectedChildName == null || selectedRenderer != null;
+    }
+
+    static Transform FindTransformByPath(Transform root, string path)
+    {
+        if (root == null || string.IsNullOrEmpty(path))
+            return null;
+
+        string[] segments = path.Split('/');
+        Transform current = root;
+        for (int i = 0; i < segments.Length; i++)
+        {
+            current = current.Find(segments[i]);
+            if (current == null)
+                return null;
+        }
+
+        return current;
+    }
+
+    static void AssignMaterial(Renderer renderer, Material material)
+    {
+        if (renderer == null || material == null)
+            return;
+
+        int materialCount = renderer.sharedMaterials != null && renderer.sharedMaterials.Length > 0
+            ? renderer.sharedMaterials.Length
+            : 1;
+        var materials = new Material[materialCount];
+        for (int i = 0; i < materials.Length; i++)
+            materials[i] = material;
+        renderer.sharedMaterials = materials;
+    }
+
     static AnimationClip LoadClip(string fbxPath)
     {
-        if (string.IsNullOrEmpty(fbxPath)) return null;
-        foreach (var a in AssetDatabase.LoadAllAssetsAtPath(fbxPath))
-            if (a is AnimationClip c && !c.name.Contains("__preview__"))
-                return c;
+        if (string.IsNullOrEmpty(fbxPath))
+            return null;
+
+        foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(fbxPath))
+        {
+            if (asset is AnimationClip clip && !clip.name.Contains("__preview__"))
+                return clip;
+        }
+
         return null;
     }
 
-    // Loads the Avatar sub-asset embedded in an FBX.
     static Avatar LoadAvatarFromFBX(string fbxPath)
     {
-        foreach (var a in AssetDatabase.LoadAllAssetsAtPath(fbxPath))
-            if (a is Avatar av && av != null)
-                return av;
-        Debug.LogWarning("[BuildTTRTSUnitPrefabs] No avatar found in FBX: " + fbxPath);
+        foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(fbxPath))
+        {
+            if (asset is Avatar avatar && avatar != null)
+                return avatar;
+        }
+
+        Debug.LogWarning($"[BuildTTRTSUnitPrefabs] No avatar found in '{fbxPath}'.");
         return null;
     }
 }

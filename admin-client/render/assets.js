@@ -3,16 +3,6 @@
 
   const DEFAULT_MANIFEST = Object.freeze({
     images: Object.freeze({
-      unit_icon_runner: 'assets/units/runner.svg',
-      unit_icon_footman: 'assets/units/footman.png',
-      unit_icon_ironclad: 'assets/units/ironclad.svg',
-      unit_icon_warlock: 'assets/units/warlock.svg',
-      unit_icon_golem: 'assets/units/golem.svg',
-      unit_atlas_runner: 'assets/units/atlas/runner.png',
-      unit_atlas_footman: 'assets/units/atlas/footman.png',
-      unit_atlas_ironclad: 'assets/units/atlas/ironclad.png',
-      unit_atlas_warlock: 'assets/units/atlas/warlock.png',
-      unit_atlas_golem: 'assets/units/atlas/golem.png',
       bridge_lane_tiles: 'assets/Bridge/lane_tiles.jpg',
       wall_straight: 'assets/walls/wall_straight.png',
       wall_corner: 'assets/walls/wall_corner.png',

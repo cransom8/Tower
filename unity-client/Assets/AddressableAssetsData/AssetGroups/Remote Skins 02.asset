@@ -14,7 +14,63 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
   m_GroupName: Remote Skins 02
   m_GUID: 9cd45beb9e66be04599b15d07903f928
-  m_SerializeEntries: []
+  m_SerializeEntries:
+  - m_GUID: 148322894bbd52e488116a8616dfbe4c
+    m_Address: skins/tt_halberdier
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_halberdier
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 4e3c7da5fb6ce5a47a0a7dbc18b843c6
+    m_Address: skins/tt_light_cavalry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_light_cavalry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6652791f0d19f3b408a94277d330b59b
+    m_Address: skins/tt_scout
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_scout
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 75925c365bd895145beefbc806717633
+    m_Address: skins/tt_heavy_swordman
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_heavy_swordman
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 892bd1c95e4ec2f43a7e0a49c68f27f1
+    m_Address: skins/tt_heavy_cavalry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_heavy_cavalry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a36479667d1b0f74bbd661b17c3f9476
+    m_Address: skins/tt_mounted_king
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_king
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bc0e691c888319a4daf7fd1c112e7d03
+    m_Address: skins/tt_mounted_mage
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_mage
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
   m_SchemaSet:

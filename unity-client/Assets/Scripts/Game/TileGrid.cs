@@ -15,15 +15,17 @@
 // Legacy TileToWorld(col, row) uses straight +Z layout for backward compat.
 //
 // Battlefield layout (4-player):
-//   Lane 0  Red    left side   upper strip  row goes −X, col goes −Z
-//   Lane 1  Gold   left side   lower strip  row goes −X, col goes −Z
-//   Lane 2  Blue   right side  upper strip  row goes +X, col goes +Z
-//   Lane 3  Green  right side  lower strip  row goes +X, col goes +Z
-//   Center island at world origin; left castles at X≈−27, right castles at X≈+27.
+//   Lane 0  Red    top-left branch
+//   Lane 1  Gold   bottom-left branch
+//   Lane 2  Blue   top-right branch
+//   Lane 3  Green  bottom-right branch
+//   The battlefield is arranged around a center mine shaft, with a top loop island,
+//   a bottom loop island, and side bridges leading to the castle islands.
 
 using System.Collections.Generic;
 using UnityEngine;
 using CastleDefender.Net;
+using CastleDefender.UI;
 
 namespace CastleDefender.Game
 {
@@ -67,6 +69,16 @@ namespace CastleDefender.Game
         [Tooltip("Optional prefab placed at each path waypoint (should include a Light). If null a point light is created at runtime.")]
         public GameObject WaypointMarkerPrefab;
 
+        [Header("Lane identity markers (optional)")]
+        [Tooltip("If assigned, spawned at the lane entrance as a colored gate post. If null, a capsule primitive is created at runtime.")]
+        public GameObject LaneMarkerPrefab;
+
+        [Header("Deprecated Fortress Marker Settings")]
+        [Tooltip("Deprecated. Fortress mode now binds directly to scene-authored FortressPadAnchor objects instead of spawning runtime pad markers.")]
+        public GameObject FortressPadMarkerPrefab;
+        [Tooltip("Deprecated. Fortress mode no longer spawns runtime pad markers.")]
+        public float FortressPadMarkerYOffset = 0.18f;
+
         // ── Public static geometry ────────────────────────────────────────────
         public const float TileW = 1f;  // 1 world unit per tile (bridge 27 units / 27 rows = 1; row 27 extends 1 tile onto island)
         public const float TileH = 1f;
@@ -75,12 +87,10 @@ namespace CastleDefender.Game
         // Each branch has an origin (world pos of col=0, row=0), a per-column
         // step direction, and a per-row step direction.
         //
-        // Col 5 is the center column. Upper strips center at Z = +8, lower at Z = -8.
-        // Row 0 starts one tile inside the center-island edge, and row 27 ends one tile
-        // inside the split/merge-island edge. The current compact map spans:
-        //   center island edge at X = +/-11
-        //   inner split bridges from X = +/-11 to +/-38
-        //   split / merge islands from X = +/-38 to +/-49
+        // Col 5 is the center column for each branch. The four build lanes sit on two
+        // opposing loop islands: two lanes on the top island and two on the bottom.
+        // Row 0 begins near the center mine shaft approach and row 27 reaches the outer
+        // end of the branch before units transition to the side bridge / castle route.
 
         struct BranchConfig
         {
@@ -91,14 +101,31 @@ namespace CastleDefender.Game
             { origin = o; colDir = c; rowDir = r; }
         }
 
+        // The winter board uses raised lane slabs around the forge floor.
+        // Tile centers sit slightly above the slab top so the grid renders cleanly on the lane surface.
+        const float LaneTileSurfaceY = 2.54f;
+
         static readonly BranchConfig[] _branchConfigs =
         {
-            // Origins computed from the current bridge layout in Game_ML.
-            new BranchConfig(new Vector3(-12f, 1f, 13f),  new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 0 Red   upper-left
-            new BranchConfig(new Vector3(-12f, 1f, -3f),  new Vector3(0f,0f,-1f), new Vector3(-1f,0f,0f)), // Lane 1 Gold  lower-left
-            new BranchConfig(new Vector3( 12f, 1f,  3f),  new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 2 Blue  upper-right
-            new BranchConfig(new Vector3( 12f, 1f,-13f),  new Vector3(0f,0f, 1f), new Vector3( 1f,0f,0f)), // Lane 3 Green lower-right
+            // Lane slabs in GameEnvironment:
+            // row 0 begins at the inner edge nearest the mine/forge side, row 27 reaches the outer edge.
+            new BranchConfig(new Vector3( 14f, LaneTileSurfaceY, -5f), new Vector3( 0f,0f, 1f), new Vector3( 1f,0f, 0f)), // Lane 0 Red   east lane
+            new BranchConfig(new Vector3(-14f, LaneTileSurfaceY,  5f), new Vector3( 0f,0f,-1f), new Vector3(-1f,0f, 0f)), // Lane 1 Gold  west lane
+            new BranchConfig(new Vector3( -5f, LaneTileSurfaceY,-14f), new Vector3( 1f,0f, 0f), new Vector3( 0f,0f,-1f)), // Lane 2 Blue  south lane
+            new BranchConfig(new Vector3(  5f, LaneTileSurfaceY, 14f), new Vector3(-1f,0f, 0f), new Vector3( 0f,0f, 1f)), // Lane 3 Green north lane
         };
+
+        // Fallback lane colors used before the server snapshot arrives.
+        // Must match SnapshotApplier.TryResolveSlotColor: Red, Gold, Blue, Green.
+        static readonly Color[] _laneFallbackColors =
+        {
+            new Color(0.86f, 0.25f, 0.22f),  // Lane 0 Red
+            new Color(0.92f, 0.74f, 0.20f),  // Lane 1 Gold
+            new Color(0.24f, 0.50f, 0.92f),  // Lane 2 Blue
+            new Color(0.20f, 0.72f, 0.42f),  // Lane 3 Green
+        };
+
+        static readonly string[] _laneColorNames = { "Red", "Gold", "Blue", "Green" };
 
         /// <summary>Maps tile (col, row) on a given branch to world space.</summary>
         public static Vector3 TileToWorld(int laneIndex, int col, int row)
@@ -124,18 +151,12 @@ namespace CastleDefender.Game
 
 static readonly Vector3[][] _lanePathWaypoints =
         {
-            // 6 waypoints per lane — units must pass through each in sequence.
+            // 6 waypoints per lane — center mine shaft -> top/bottom loop -> side bridge -> castle.
             // Y=1 = the top surface of the islands / bridges.
-            //   pt0 = center-island staging point
-            //   pt1 = bridge entry just before the buildable lane
-            //   pt2 = one tile beyond the build grid on the split / merge island
-            //   pt3 = transition onto the team bridge (Z merged to 0)
-            //   pt4 = midpoint on the team bridge
-            //   pt5 = base-island castle anchor
-            new[]{ new Vector3(  0f,1f,  8f), new Vector3(-11f,1f,  8f), new Vector3(-40f,1f,  8f), new Vector3(-49f,1f,0f), new Vector3(-69f,1f,0f), new Vector3(-82f,1f,0f) }, // Lane 0 Red
-            new[]{ new Vector3(  0f,1f, -8f), new Vector3(-11f,1f, -8f), new Vector3(-40f,1f, -8f), new Vector3(-49f,1f,0f), new Vector3(-69f,1f,0f), new Vector3(-82f,1f,0f) }, // Lane 1 Gold
-            new[]{ new Vector3(  0f,1f,  8f), new Vector3( 11f,1f,  8f), new Vector3( 40f,1f,  8f), new Vector3( 49f,1f,0f), new Vector3( 69f,1f,0f), new Vector3( 82f,1f,0f) }, // Lane 2 Blue
-            new[]{ new Vector3(  0f,1f, -8f), new Vector3( 11f,1f, -8f), new Vector3( 40f,1f, -8f), new Vector3( 49f,1f,0f), new Vector3( 69f,1f,0f), new Vector3( 82f,1f,0f) }, // Lane 3 Green
+            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f, 14f), new Vector3(-24f,1f, 14f), new Vector3(-38f,1f,  8f), new Vector3(-54f,1f,0f), new Vector3(-72f,1f,0f) }, // Lane 0 Red
+            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f,-14f), new Vector3(-24f,1f,-14f), new Vector3(-38f,1f, -8f), new Vector3(-54f,1f,0f), new Vector3(-72f,1f,0f) }, // Lane 1 Gold
+            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f, 14f), new Vector3( 24f,1f, 14f), new Vector3( 38f,1f,  8f), new Vector3( 54f,1f,0f), new Vector3( 72f,1f,0f) }, // Lane 2 Blue
+            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f,-14f), new Vector3( 24f,1f,-14f), new Vector3( 38f,1f, -8f), new Vector3( 54f,1f,0f), new Vector3( 72f,1f,0f) }, // Lane 3 Green
         };
 
         /// <summary>
@@ -179,6 +200,14 @@ static readonly Vector3[][] _lanePathWaypoints =
             if ((uint)laneIndex < (uint)_branchConfigs.Length)
                 return _branchConfigs[laneIndex].rowDir;
             return Vector3.forward;
+        }
+
+        /// <summary>Returns the world-space lateral direction across a lane (colDir).</summary>
+        public static Vector3 GetLaneLateralDir(int laneIndex)
+        {
+            if ((uint)laneIndex < (uint)_branchConfigs.Length)
+                return _branchConfigs[laneIndex].colDir;
+            return Vector3.right;
         }
 
         /// <summary>
@@ -248,6 +277,8 @@ static readonly Vector3[][] _lanePathWaypoints =
         readonly Dictionary<int, MLTowerCell>  _mobilizedMapBuf     = new();
         readonly Dictionary<int, MLDeadCell>   _deadMapBuf          = new();
         readonly HashSet<string>               _currentIdsBuf       = new();
+        readonly HashSet<string>               _legacyTileMenuBlockLogs = new();
+        readonly HashSet<string>               _tileMenuResolutionLogs = new();
         // Static attack state table (avoids per-call array alloc)
         static readonly string[] s_attackStates = { "Attack1", "Attack", "AttackSwordShield", "AttackDaggers", "Shoot", "Cast" };
 
@@ -255,6 +286,7 @@ static readonly Vector3[][] _lanePathWaypoints =
         bool                 _wasDrag;
         readonly HashSet<int>      _waypointTileIndices = new();
         readonly List<GameObject>  _waypointMarkers     = new();
+        readonly List<GameObject>  _laneMarkers         = new();
 
         // ─────────────────────────────────────────────────────────────────────
         void Awake()
@@ -277,9 +309,7 @@ static readonly Vector3[][] _lanePathWaypoints =
             if (_subscribed && SnapshotApplier.Instance != null)
                 SnapshotApplier.Instance.OnMLSnapshotApplied -= OnSnapshot;
             _subscribed = false;
-            foreach (var go in _waypointMarkers) if (go != null) Destroy(go);
-            _waypointMarkers.Clear();
-            _waypointTileIndices.Clear();
+            ClearLegacyTileGridVisuals();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -289,11 +319,27 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             var laneSnap = GetLaneSnap(snap, LaneIndex);
             if (laneSnap == null) return;
+            if (ShouldBlockLegacyTileMenu(out _))
+            {
+                ClearLegacyTileGridVisuals();
+                return;
+            }
+
             int branchCfg = GetBranchConfigIndex(laneSnap?.branchId);
-            if (branchCfg < 0) branchCfg = LaneIndex;   // fallback: identity mapping
+            if (branchCfg < 0)
+            {
+                Debug.LogError(
+                    $"[TileGrid] Lane {LaneIndex} on '{name}' received unknown branchId '{laneSnap?.branchId ?? "<null>"}'. " +
+                    "Grid rebuild is aborted instead of silently remapping the lane.");
+                RuntimeFailureMarker.Mark(transform, $"branch_{LaneIndex}", $"Lane {LaneIndex} missing branch config");
+                return;
+            }
+
+            RuntimeFailureMarker.Clear(transform, $"branch_{LaneIndex}");
 
             BuildFloorGridForLane(branchCfg);
             UpdateTiles(laneSnap);
+            ApplyFloorLaneColor();
         }
 
         // ── Grid rebuild ──────────────────────────────────────────────────────
@@ -313,6 +359,8 @@ static readonly Vector3[][] _lanePathWaypoints =
                 _tileTypes[i]  = null;
                 _towerTypes[i] = null;
             }
+            foreach (var go in _laneMarkers) if (go != null) Destroy(go);
+            _laneMarkers.Clear();
 
             // Place floor tiles at branch world positions
             for (int row = 0; row < Rows; row++)
@@ -327,8 +375,43 @@ static readonly Vector3[][] _lanePathWaypoints =
                 _tileTypes[idx]   = "floor";
             }
 
+            ApplyFloorLaneColor();
+            BuildLaneEntranceMarkers(branchCfg);
             _currentBranchCfg = branchCfg;
             BuildWaypointMarkers(branchCfg);
+        }
+
+        void ClearLegacyTileGridVisuals()
+        {
+            _towerHpFills.Clear();
+            _towerHpFillScales.Clear();
+            _towerHpFillPoses.Clear();
+            _towerAnimators.Clear();
+            _activeProjectileIds.Clear();
+
+            for (int i = 0; i < _tileObjects.Length; i++)
+            {
+                if (_tileObjects[i] != null)
+                {
+                    Destroy(_tileObjects[i]);
+                    _tileObjects[i] = null;
+                }
+
+                _tileTypes[i] = null;
+                _towerTypes[i] = null;
+            }
+
+            foreach (var go in _waypointMarkers)
+                if (go != null)
+                    Destroy(go);
+            _waypointMarkers.Clear();
+
+            foreach (var go in _laneMarkers)
+                if (go != null)
+                    Destroy(go);
+            _laneMarkers.Clear();
+            _waypointTileIndices.Clear();
+            _currentBranchCfg = -1;
         }
 
         // ── Waypoint markers ──────────────────────────────────────────────────
@@ -366,6 +449,139 @@ static readonly Vector3[][] _lanePathWaypoints =
                 if (TryWorldToTile(laneIndex, worldPos, out int col, out int row))
                     _waypointTileIndices.Add(row * Cols + col);
             }
+        }
+
+        // Lane floor color (Option E)
+        void ApplyFloorLaneColor()
+        {
+            // Keep the playable surface in the same winter palette as the map.
+            // Team identity still comes from units/UI/markers, not a saturated lane slab.
+            Color frostBase = new Color(0.92f, 0.955f, 1f, 1f);
+            Color frostEdge = new Color(0.82f, 0.88f, 0.94f, 1f);
+            Color rimColor = new Color(0.58f, 0.66f, 0.74f, 1f);
+            Color tintWeak = frostBase;
+            Color tintEdge = frostEdge;
+
+            for (int row = 0; row < Rows; row++)
+            for (int col = 0; col < Cols; col++)
+            {
+                int idx = row * Cols + col;
+                var go = _tileObjects[idx];
+                if (go == null) continue;
+                if (_tileTypes[idx] != "floor" && _tileTypes[idx] != "tower_mobilized") continue;
+
+                bool isEdge = col == 0 || col == Cols - 1;
+                Color tint = isEdge ? tintEdge : tintWeak;
+
+                foreach (var r in go.GetComponentsInChildren<Renderer>())
+                {
+                    var bridge = r.GetComponent<ToonShaderBridge>();
+                    if (bridge != null)
+                    {
+                        bridge.SetBaseColor(tint);
+                        bridge.SetRimColor(rimColor);
+                    }
+                    else
+                    {
+                        var mpb = new MaterialPropertyBlock();
+                        r.GetPropertyBlock(mpb);
+                        mpb.SetColor("_BaseColor", tint);
+                        mpb.SetColor("_RimColor", rimColor);
+                        r.SetPropertyBlock(mpb);
+                    }
+                }
+            }
+        }
+
+        // Lane entrance markers (Option C)
+        void BuildLaneEntranceMarkers(int branchCfg)
+        {
+            foreach (var go in _laneMarkers) if (go != null) Destroy(go);
+            _laneMarkers.Clear();
+
+            Color laneColor = SnapshotApplier.Instance != null
+                ? SnapshotApplier.Instance.GetLaneColor(LaneIndex, _laneFallbackColors[Mathf.Clamp(LaneIndex, 0, 3)])
+                : _laneFallbackColors[Mathf.Clamp(LaneIndex, 0, 3)];
+
+            string label = LaneIndex >= 0 && LaneIndex < _laneColorNames.Length
+                ? _laneColorNames[LaneIndex]
+                : $"Lane {LaneIndex + 1}";
+
+            int[] gateCols = { 0, Cols - 1 };
+            foreach (int gateCol in gateCols)
+            {
+                Vector3 pos = TileToWorld(branchCfg, gateCol, 0);
+                pos.y += 1.2f;
+
+                GameObject marker;
+                if (LaneMarkerPrefab != null)
+                {
+                    marker = Instantiate(LaneMarkerPrefab, pos, Quaternion.identity, transform);
+                }
+                else
+                {
+                    marker = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                    marker.transform.SetParent(transform);
+                    marker.transform.position = pos;
+                    marker.transform.localScale = new Vector3(0.25f, 0.6f, 0.25f);
+
+                    var capsuleCollider = marker.GetComponent<Collider>();
+                    if (capsuleCollider != null) Destroy(capsuleCollider);
+
+                }
+
+                foreach (var rend in marker.GetComponentsInChildren<Renderer>(true))
+                {
+                    var bridge = rend.GetComponent<ToonShaderBridge>();
+                    if (bridge != null)
+                    {
+                        bridge.SetBaseColor(laneColor);
+                        bridge.SetRimColor(laneColor);
+                    }
+                    else
+                    {
+                        var mpb = new MaterialPropertyBlock();
+                        rend.GetPropertyBlock(mpb);
+                        mpb.SetColor("_BaseColor", laneColor);
+                        mpb.SetColor("_EmissionColor", laneColor * 1.4f);
+                        mpb.SetColor("_RimColor", laneColor);
+                        rend.SetPropertyBlock(mpb);
+                    }
+                }
+
+                var light = marker.GetComponentInChildren<Light>(true);
+                if (light == null)
+                {
+                    var lightGo = new GameObject("MarkerLight");
+                    lightGo.transform.SetParent(marker.transform);
+                    lightGo.transform.localPosition = Vector3.up * 0.8f;
+                    light = lightGo.AddComponent<Light>();
+                }
+                light.type = LightType.Point;
+                light.color = laneColor;
+                light.intensity = 2.5f;
+                light.range = 5f;
+
+                marker.name = $"LaneMarker_{label}_{gateCol}";
+                _laneMarkers.Add(marker);
+            }
+
+            Vector3 labelPos = TileToWorld(branchCfg, 5, 0);
+            labelPos.y += 3f;
+
+            var labelGo = new GameObject($"LaneLabel_{label}");
+            labelGo.transform.SetParent(transform);
+            labelGo.transform.position = labelPos;
+
+            var tm = labelGo.AddComponent<TextMesh>();
+            tm.text = label;
+            tm.fontSize = 24;
+            tm.characterSize = 0.18f;
+            tm.alignment = TextAlignment.Center;
+            tm.anchor = TextAnchor.MiddleCenter;
+            tm.color = laneColor;
+
+            _laneMarkers.Add(labelGo);
         }
 
         /// <summary>Inverse of TileToWorld — returns the tile (col, row) for a world position, or false if outside the grid.</summary>
@@ -439,9 +655,11 @@ static readonly Vector3[][] _lanePathWaypoints =
                 GameObject prefab = (wanted == "tower" || wanted == "dead_tower")
                     ? GetTowerPrefab(wantedType)
                     : FloorPrefab;
+                string missingTowerMarkerKey = $"missing_tower_{LaneIndex}_{col}_{row}";
 
                 if (prefab != null)
                 {
+                    RuntimeFailureMarker.Clear(transform, missingTowerMarkerKey);
                     Vector3 pos = TileToWorld(_currentBranchCfg, col, row);
                     if (wanted == "tower" || wanted == "dead_tower") pos.y += TowerSpawnYOffset;
 
@@ -500,6 +718,15 @@ static readonly Vector3[][] _lanePathWaypoints =
                         _towerAnimators.Remove(idx);
                         ApplyDeadTint(_tileObjects[idx]);
                     }
+                }
+                else if (wanted == "tower" || wanted == "dead_tower")
+                {
+                    Vector3 markerWorld = TileToWorld(_currentBranchCfg, col, row) + Vector3.up * (TowerSpawnYOffset + 1.8f);
+                    RuntimeFailureMarker.MarkWorld(
+                        transform,
+                        missingTowerMarkerKey,
+                        markerWorld,
+                        $"Missing tower prefab '{wantedType}' lane {LaneIndex} [{col},{row}]");
                 }
 
                 _tileTypes[idx]  = wanted;
@@ -601,7 +828,16 @@ static readonly Vector3[][] _lanePathWaypoints =
             {
                 bool overUI = UnityEngine.EventSystems.EventSystem.current != null
                     && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
-                if (!_wasDrag && !overUI && TryPickTile(Input.mousePosition, out int cc, out int rr))
+                if (_wasDrag || overUI)
+                    return;
+
+                if (ShouldBlockLegacyTileMenu(out string reason))
+                {
+                    LogLegacyTileMenuBlocked("HandleInput", reason);
+                    return;
+                }
+
+                if (TryPickTile(Input.mousePosition, out int cc, out int rr))
                     HandleTileClick(cc, rr);
             }
         }
@@ -613,6 +849,13 @@ static readonly Vector3[][] _lanePathWaypoints =
             var snap = SnapshotApplier.Instance?.LatestML;
             Debug.Log($"[TileGrid] tap ({col},{row}) roundState={snap?.roundState ?? "NULL"} snapNull={snap == null}");
             if (snap == null) return;
+
+            var lane = GetLaneSnap(snap, LaneIndex);
+            if (ShouldBlockLegacyTileMenu(out string reason))
+            {
+                LogLegacyTileMenuBlocked("HandleTileClick", reason);
+                return;
+            }
 
             int idx = row * Cols + col;
 
@@ -637,15 +880,14 @@ static readonly Vector3[][] _lanePathWaypoints =
             if (snap.roundState != "build") return;
 
             // Path endpoints (spawn / castle): never buildable
-            var lane = GetLaneSnap(snap, LaneIndex);
             if (lane != null)
             {
                 if (lane.path != null && lane.path.Length > 0)
                 {
                     var spawn  = lane.path[0];
                     var castle = lane.path[lane.path.Length - 1];
-                    if ((col == spawn.x  && row == spawn.y) ||
-                        (col == castle.x && row == castle.y)) return;
+                    if ((col == spawn.XRounded  && row == spawn.YRounded) ||
+                        (col == castle.XRounded && row == castle.YRounded)) return;
                 }
             }
 
@@ -661,6 +903,21 @@ static readonly Vector3[][] _lanePathWaypoints =
             }
         }
 
+        bool ShouldBlockLegacyTileMenu(out string reason)
+        {
+            return FortressSelectionController.ShouldBlockLegacyTileMenu(LaneIndex, out reason);
+        }
+
+        void LogLegacyTileMenuBlocked(string source, string reason)
+        {
+            string key = $"{source}|{reason}";
+            if (_legacyTileMenuBlockLogs.Add(key))
+            {
+                Debug.Log(
+                    $"[FortressSelection] Blocked legacy TileGrid path on '{name}' lane={LaneIndex} source='{source}'. {reason}");
+            }
+        }
+
         void TryResolveTileMenu()
         {
             if (TileMenu != null) return;
@@ -673,7 +930,14 @@ static readonly Vector3[][] _lanePathWaypoints =
                     tileMenus.Add(mb);
             }
 
-            if (tileMenus.Count == 0) return;
+            if (tileMenus.Count == 0)
+            {
+                ReportTileMenuResolutionFailure(
+                    "missing",
+                    $"[TileGrid] Lane {LaneIndex} on '{name}' could not find any ITileMenu implementation in scene '{gameObject.scene.name}'. " +
+                    "Tile interaction is disabled instead of binding to an arbitrary menu.");
+                return;
+            }
 
             tileMenus.Sort((a, b) =>
             {
@@ -683,9 +947,24 @@ static readonly Vector3[][] _lanePathWaypoints =
             });
 
             if (LaneIndex >= 0 && LaneIndex < tileMenus.Count)
+            {
                 TileMenuBehaviour = tileMenus[LaneIndex];
-            else
-                TileMenuBehaviour = tileMenus[0];
+                RuntimeFailureMarker.Clear(transform, "tile_menu_resolution");
+                return;
+            }
+
+            ReportTileMenuResolutionFailure(
+                "index",
+                $"[TileGrid] Lane {LaneIndex} on '{name}' found {tileMenus.Count} ITileMenu instance(s) in scene '{gameObject.scene.name}', " +
+                "but none matched this lane index. Runtime will not bind to the first available menu.");
+        }
+
+        void ReportTileMenuResolutionFailure(string reason, string message)
+        {
+            if (_tileMenuResolutionLogs.Add(reason))
+                Debug.LogError(message, this);
+
+            RuntimeFailureMarker.Mark(transform, "tile_menu_resolution", $"Tile menu error lane {LaneIndex}");
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -720,8 +999,25 @@ static readonly Vector3[][] _lanePathWaypoints =
 
         GameObject GetTowerPrefab(string type)
         {
-            if (Registry != null) { var p = Registry.GetPrefab(type); if (p != null) return p; }
-            return WallPrefab;
+            if (string.IsNullOrWhiteSpace(type))
+            {
+                Debug.LogError(
+                    $"[TileGrid] Lane {LaneIndex} on '{name}' tried to spawn a tower with an empty type key. " +
+                    "Runtime will not substitute WallPrefab.",
+                    this);
+                return null;
+            }
+
+            if (Registry == null)
+            {
+                Debug.LogError(
+                    $"[TileGrid] Lane {LaneIndex} on '{name}' is missing UnitPrefabRegistry. " +
+                    $"Tower '{type}' cannot spawn and runtime will not substitute WallPrefab.",
+                    this);
+                return null;
+            }
+
+            return Registry.GetPrefab(type);
         }
 
         static MLLaneSnap GetLaneSnap(MLSnapshot snap, int laneIndex)

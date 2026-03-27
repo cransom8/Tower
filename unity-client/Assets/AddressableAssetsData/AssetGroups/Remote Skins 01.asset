@@ -14,7 +14,63 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
   m_GroupName: Remote Skins 01
   m_GUID: 01c946027b30b844a8e3eadc58af5953
-  m_SerializeEntries: []
+  m_SerializeEntries:
+  - m_GUID: 46628851bff3fa341a13534728534ea3
+    m_Address: skins/tt_light_infantry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_light_infantry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 511c566bd068dca4bb9794da5f53052a
+    m_Address: skins/tt_mounted_knight
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_knight
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 53eb1e18130e9be4387a785b482187e1
+    m_Address: skins/tt_peasant
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_peasant
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 7b4e51ccca67b514d883b197e0f59efd
+    m_Address: skins/tt_priest
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_priest
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 9948d4669f9006844a963afb88d60afa
+    m_Address: skins/tt_mounted_priest
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_priest
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: cc1d9ae112f9093468713bfc446711b2
+    m_Address: skins/tt_settler
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_settler
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e93eced9cc2d545428e4a4b45713048d
+    m_Address: skins/tt_crossbowman
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_crossbowman
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
   m_SchemaSet:

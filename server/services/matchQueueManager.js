@@ -5,7 +5,7 @@ const crypto = require('crypto');
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const GAME_TYPES    = new Set(['line_wars', 'survival']);
-const MATCH_FORMATS = new Set(['1v1', '2v2', 'ffa']);
+const MATCH_FORMATS = new Set(['ffa']);
 const VALID_DIFFS   = new Set(['easy', 'medium', 'hard', 'insane']);
 const GAME_TYPE_ALIASES = new Map([
   ['linewars', 'line_wars'],
@@ -19,19 +19,19 @@ const GAME_TYPE_ALIASES = new Map([
   ['wave_defense', 'survival'],
 ]);
 const MATCH_FORMAT_ALIASES = new Map([
-  ['1v1', '1v1'],
-  ['duel', '1v1'],
-  ['solo', '1v1'],
-  ['2v2', '2v2'],
-  ['teams', '2v2'],
-  ['team', '2v2'],
+  ['1v1', 'ffa'],
+  ['duel', 'ffa'],
+  ['solo', 'ffa'],
+  ['2v2', 'ffa'],
+  ['teams', 'ffa'],
+  ['team', 'ffa'],
   ['ffa', 'ffa'],
   ['freeforall', 'ffa'],
   ['free_for_all', 'ffa'],
 ]);
 
 // Total player-slots needed to launch a match per format
-const FORMAT_SLOTS = { '1v1': 2, '2v2': 4, 'ffa': 4 };
+const FORMAT_SLOTS = { 'ffa': 4 };
 
 
 function makeBucketKey(gameType, matchFormat, ranked) {
@@ -45,7 +45,7 @@ function normalizeGameType(gameType, fallback = 'line_wars') {
   return canonical && GAME_TYPES.has(canonical) ? canonical : null;
 }
 
-function normalizeMatchFormat(matchFormat, fallback = '2v2') {
+function normalizeMatchFormat(matchFormat, fallback = 'ffa') {
   const raw = String(matchFormat || '').trim();
   if (!raw) return fallback;
   const compact = raw.toLowerCase().replace(/[\s_-]+/g, '');
@@ -66,7 +66,7 @@ function normalizeQueueRequest({ gameType, matchFormat, ranked } = {}) {
     const legacyMatch = legacyToken.match(/^(?:(ranked|casual)[_:])?(1v1|2v2|ffa)(?:[_:](ranked|casual))?$/);
     if (!legacyMatch) continue;
     normalizedGameType = normalizedGameType || 'line_wars';
-    normalizedMatchFormat = normalizedMatchFormat || legacyMatch[2];
+    normalizedMatchFormat = normalizedMatchFormat || 'ffa';
     const legacyRankToken = legacyMatch[1] || legacyMatch[3];
     if (legacyRankToken) normalizedRanked = legacyRankToken === 'ranked';
   }
@@ -81,12 +81,8 @@ function normalizeQueueRequest({ gameType, matchFormat, ranked } = {}) {
 // ── Public queue validation ───────────────────────────────────────────────────
 
 function validatePublicPartySize(matchFormat, partySize) {
-  if (matchFormat === '1v1' && partySize !== 1)
-    return 'Public 1v1 only supports solo players.';
-  if (matchFormat === '2v2' && partySize > 2)
-    return "Party of 4 can't join public 2v2. Use a private match.";
   if (matchFormat === 'ffa' && partySize !== 1)
-    return 'Public FFA only supports solo players.';
+    return 'Public survival queue only supports solo players.';
   return null;
 }
 
@@ -108,7 +104,7 @@ function _getQ(key) {
 function addToQueue(partyId, entry) {
   removeFromQueue(partyId);
   const gameType    = normalizeGameType(entry.gameType) || 'line_wars';
-  const matchFormat = normalizeMatchFormat(entry.matchFormat) || '2v2';
+  const matchFormat = normalizeMatchFormat(entry.matchFormat) || 'ffa';
   const ranked      = !!entry.ranked;
   const key         = makeBucketKey(gameType, matchFormat, ranked);
   _getQ(key).push({ ...entry, partyId, gameType, matchFormat, ranked });
@@ -168,71 +164,9 @@ function _ratingOk(a, b) {
 // ── Team assembly ─────────────────────────────────────────────────────────────
 // Returns [[teamA-tickets...], [teamB-tickets...], ...] or null
 
-function _tryMatch1v1(q) {
-  for (let i = 0; i < q.length; i++) {
-    for (let j = i + 1; j < q.length; j++) {
-      const a = q[i], b = q[j];
-      if (q.length >= 10 && a.region !== b.region) continue;
-      if (!_ratingOk(a, b)) continue;
-      q.splice(j, 1); q.splice(i, 1);
-      return [[a], [b]];
-    }
-  }
-  return null;
-}
-
-function _tryMatch2v2(q) {
-  // [party-of-2] vs [party-of-2]
-  const p2 = q.filter(e => (e.partySize || 1) === 2);
-  for (let i = 0; i < p2.length; i++) {
-    for (let j = i + 1; j < p2.length; j++) {
-      const a = p2[i], b = p2[j];
-      if (!_ratingOk(a, b)) continue;
-      [a, b].forEach(t => { const k = q.indexOf(t); if (k !== -1) q.splice(k, 1); });
-      return [[a], [b]];
-    }
-  }
-  // [party-of-2] + 2 solos
-  const solos = q.filter(e => (e.partySize || 1) === 1);
-  if (p2.length && solos.length >= 2) {
-    for (const duo of p2) {
-      const compat = solos.filter(s => _ratingOk(duo, s));
-      for (let i = 0; i < compat.length; i++) {
-        for (let j = i + 1; j < compat.length; j++) {
-          const s1 = compat[i], s2 = compat[j];
-          if (!_ratingOk(s1, s2)) continue;
-          [duo, s1, s2].forEach(t => { const k = q.indexOf(t); if (k !== -1) q.splice(k, 1); });
-          return [[duo], [s1, s2]];
-        }
-      }
-    }
-  }
-  // 4 solos
-  if (solos.length >= 4) {
-    for (let i = 0; i < solos.length; i++) {
-      const anchor = solos[i];
-      const rest = solos.filter((s, idx) => idx !== i && _ratingOk(anchor, s));
-      for (let a = 0; a < rest.length; a++) {
-        for (let b = a + 1; b < rest.length; b++) {
-          for (let c = b + 1; c < rest.length; c++) {
-            const group = [anchor, rest[a], rest[b], rest[c]];
-            const allCompatible = group.every((left, leftIdx) =>
-              group.every((right, rightIdx) => leftIdx === rightIdx || _ratingOk(left, right))
-            );
-            if (!allCompatible) continue;
-            group.forEach(t => { const k = q.indexOf(t); if (k !== -1) q.splice(k, 1); });
-            return [[group[0], group[2]], [group[1], group[3]]];
-          }
-        }
-      }
-    }
-  }
-  return null;
-}
-
 function _tryMatchFFA(q) {
   const solos = q.filter(e => (e.partySize || 1) === 1);
-  if (solos.length < 3) return null;
+  if (solos.length < 2) return null;
   const take = Math.min(solos.length, 4);
   const chosen = solos.slice(0, take);
   const minR = Math.min(...chosen.map(_rating));
@@ -243,8 +177,6 @@ function _tryMatchFFA(q) {
 }
 
 function _tryMatchBucket(q, matchFormat) {
-  if (matchFormat === '1v1') return _tryMatch1v1(q);
-  if (matchFormat === '2v2') return _tryMatch2v2(q);
   if (matchFormat === 'ffa') return _tryMatchFFA(q);
   return null;
 }
@@ -268,27 +200,12 @@ function startMatchmakingLoop(io, partiesById, socketByPlayerId, onMatchFound) {
   _handle = setInterval(() => {
     for (const [key, q] of queues) {
       if (!q.length) continue;
-      const [, matchFormat, rankedFlag] = key.split(':');
+      const [, matchFormat] = key.split(':');
       let safety = 0;
       while (safety++ < 100) {
         const teams = _tryMatchBucket(q, matchFormat);
         if (!teams) break;
-
-        // Resolve party objects for each team
-        const resolvedTeams = teams.map(team =>
-          team.map(t => partiesById.get(t.partyId)).filter(Boolean)
-        );
-
-        // For legacy 2v2 backward compat
-        const isLegacy2v2 = matchFormat === '2v2' && resolvedTeams.length === 2
-          && resolvedTeams[0].length === 1 && resolvedTeams[1].length === 1;
-
-        if (isLegacy2v2) {
-          const legacyMode = rankedFlag === '1' ? 'ranked_2v2' : 'casual_2v2';
-          onMatchFound(resolvedTeams[0][0], resolvedTeams[1][0], legacyMode, teams, key);
-        } else {
-          onMatchFound(null, null, key, teams, key);
-        }
+        onMatchFound(null, null, key, teams, key);
       }
     }
 
@@ -338,12 +255,11 @@ function createLobby({ hostSocketId, hostDisplayName, gameType, matchFormat, pvp
     code,
     hostSocketId,
     gameType:    normalizeGameType(gameType) || 'line_wars',
-    matchFormat: normalizeMatchFormat(matchFormat) || '2v2',
-    pvpMode:     pvpMode || matchFormat || '2v2',
+    matchFormat: 'ffa',
+    pvpMode:     'ffa',
     botSlots:    [],                           // [{ difficulty }]
-    settings:    { startIncome: 10, ...(settings || {}) },
+    settings:    { ...(settings || {}) },
     members:         new Map([[hostSocketId, { name: hostDisplayName || 'Player', isReady: false }]]),
-    teamAssignments: new Map(), // socketId → 'red'|'blue'|'green'|'orange'
     status:          'open',
     createdAt:   Date.now(),
   };
@@ -390,7 +306,6 @@ function leaveLobby(socketId) {
   const lobby = lobbiesById.get(id);
   if (!lobby) return { lobby: null, disbanded: false };
   lobby.members.delete(socketId);
-  lobby.teamAssignments.delete(socketId);
   lobbyBySockId.delete(socketId);
   if (lobby.hostSocketId === socketId) {
     const remaining = [...lobby.members.keys()];
@@ -425,17 +340,12 @@ function updateLobby(socketId, changes) {
   if (lobby.hostSocketId !== socketId)     return 'Only the host can update lobby settings.';
   if (lobby.status !== 'open')             return 'Lobby has already started.';
   const normalizedGameType = changes.gameType ? normalizeGameType(changes.gameType, null) : null;
-  const normalizedMatchFormat = changes.matchFormat ? normalizeMatchFormat(changes.matchFormat, null) : null;
   if (normalizedGameType) lobby.gameType = normalizedGameType;
-  if (normalizedMatchFormat) {
-    lobby.matchFormat = normalizedMatchFormat;
-    lobby.pvpMode = changes.pvpMode || normalizedMatchFormat;
-    // Trim bots that no longer fit
-    const max     = FORMAT_SLOTS[lobby.matchFormat] || 4;
-    const maxBots = Math.max(0, max - lobby.members.size);
-    if (lobby.botSlots.length > maxBots) lobby.botSlots.length = maxBots;
-  }
-  if (changes.pvpMode)   lobby.pvpMode   = changes.pvpMode;
+  lobby.matchFormat = 'ffa';
+  lobby.pvpMode = 'ffa';
+  const max     = FORMAT_SLOTS[lobby.matchFormat] || 4;
+  const maxBots = Math.max(0, max - lobby.members.size);
+  if (lobby.botSlots.length > maxBots) lobby.botSlots.length = maxBots;
   if (changes.settings)  lobby.settings  = { ...lobby.settings, ...changes.settings };
   return null;
 }
@@ -473,26 +383,10 @@ function setMemberReady(socketId, ready) {
   return { lobby, error: null };
 }
 
-const VALID_TEAMS = new Set(['red', 'blue', 'green', 'orange']);
-
-/**
- * Assign (or clear) a team color for a lobby member. Host only.
- * Pass team=null or team='' to clear the assignment (revert to auto).
- * @returns {string|null} error message or null
- */
-function assignTeam(hostSocketId, targetSocketId, team) {
+function assignTeam(hostSocketId) {
   const lobby = getLobbyForSocket(hostSocketId);
-  if (!lobby)                              return 'Not in a lobby.';
-  if (lobby.hostSocketId !== hostSocketId) return 'Only the host can assign teams.';
-  if (lobby.status !== 'open')             return 'Lobby has already started.';
-  if (!lobby.members.has(targetSocketId)) return 'Player not in this lobby.';
-  if (!team) {
-    lobby.teamAssignments.delete(targetSocketId);
-    return null;
-  }
-  if (!VALID_TEAMS.has(team)) return 'Invalid team color.';
-  lobby.teamAssignments.set(targetSocketId, team);
-  return null;
+  if (!lobby) return 'Not in a lobby.';
+  return 'Team assignment is no longer supported. Matches now use free-for-all survival lanes.';
 }
 
 /**
@@ -501,7 +395,7 @@ function assignTeam(hostSocketId, targetSocketId, team) {
  */
 function validateLaunch(lobby) {
   const total = lobby.members.size + lobby.botSlots.length;
-  const min   = lobby.gameType === 'survival' ? 1 : 2;
+  const min   = 1;
   if (total < min) return `Need at least ${min} player${min > 1 ? 's or bots' : ''} to launch.`;
   return null;
 }
@@ -515,8 +409,8 @@ function lobbySnapshot(lobby) {
     code:        lobby.code,
     hostSocketId: lobby.hostSocketId,
     gameType:    lobby.gameType,
-    matchFormat: lobby.matchFormat,
-    pvpMode:     lobby.pvpMode,
+    matchFormat: 'ffa',
+    pvpMode:     'ffa',
     botSlots:    lobby.botSlots.map((b, i) => ({ ...b, index: i })),
     settings:    { ...lobby.settings },
     members:     [...lobby.members.entries()].map(([sid, m]) => ({
@@ -524,7 +418,7 @@ function lobbySnapshot(lobby) {
       name:     m.name,
       isHost:   sid === lobby.hostSocketId,
       isReady:  m.isReady,
-      team:     lobby.teamAssignments.get(sid) || null,
+      team:     null,
     })),
     status:      lobby.status,
   };

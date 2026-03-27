@@ -94,9 +94,14 @@ function fireProjectile(game, lane, source, targetId, stats) {
   const path = lane.path || [];
   let toX = source.x, toY = source.y;
   const target = lane.units.find(u => u.id === targetId);
-  if (target && path.length > 0) {
-    const pos = path[Math.min(Math.floor(target.pathIdx), path.length - 1)];
-    if (pos) { toX = pos.x; toY = pos.y; }
+  if (target) {
+    if (Number.isFinite(Number(target.posX)) && Number.isFinite(Number(target.posY))) {
+      toX = Number(target.posX);
+      toY = Number(target.posY);
+    } else if (path.length > 0) {
+      const pos = path[Math.min(Math.floor(target.pathIdx), path.length - 1)];
+      if (pos) { toX = pos.x; toY = pos.y; }
+    }
   }
 
   const travelTicks = stats.travelTicks || stats.projectileTicks || 1;
@@ -139,6 +144,12 @@ function resolveProjectile(game, lane, proj) {
   const hit  = [];  // all units that received damage this projectile
 
   function getUnitPos(unit) {
+    if (unit && Number.isFinite(Number(unit.posX)) && Number.isFinite(Number(unit.posY))) {
+      return {
+        x: Number(unit.posX),
+        y: Number(unit.posY),
+      };
+    }
     if (!path.length) return null;
     return path[Math.min(Math.floor(unit.pathIdx), path.length - 1)];
   }

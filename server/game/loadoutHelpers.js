@@ -1,6 +1,20 @@
 "use strict";
 
-function createLoadoutHelpers({ db, unitTypes }) {
+const { canUseInLoadout } = require("../unitUsage");
+const {
+  getDefaultRaceId,
+  getMatchLoadoutKeysForRace,
+  normalizeRaceId,
+} = require("./raceProgressionCatalog");
+
+function createLoadoutHelpers({ db, unitTypes, log = console }) {
+  function createLoadoutResolutionError(message, details = {}) {
+    const error = new Error(message);
+    error.code = "LOADOUT_RESOLUTION_FAILED";
+    error.details = details;
+    return error;
+  }
+
   function loadoutEntry(ut) {
     return {
       id: ut.id,
@@ -29,10 +43,20 @@ function createLoadoutHelpers({ db, unitTypes }) {
     };
   }
 
-  async function resolveLoadout(_playerId, inlineUnitTypeIds) {
+  function resolveByKeys(allUnitsByKey, keys, isBuildable) {
+    return (keys || [])
+      .map((key) => allUnitsByKey[key])
+      .filter(isBuildable);
+  }
+
+  async function resolveLoadout(_playerId, inlineUnitTypeIds, raceId) {
     const all = unitTypes.getAllUnitTypes();
     const byId = {};
-    for (const ut of all) byId[ut.id] = ut;
+    const byKey = {};
+    for (const ut of all) {
+      byId[ut.id] = ut;
+      byKey[ut.key] = ut;
+    }
 
     let ids = null;
 
@@ -40,27 +64,41 @@ function createLoadoutHelpers({ db, unitTypes }) {
       ids = inlineUnitTypeIds;
     }
 
-    const isSendable = (ut) => ut && ut.enabled && Number(ut.send_cost) > 0;
-    const isBuildable = (ut) => isSendable(ut) && Number(ut.build_cost) > 0 && Number(ut.range) > 0;
+    const isBuildable = (ut) => canUseInLoadout(ut);
 
     if (ids) {
       const resolved = ids
         .map((id) => byId[id])
         .filter(isBuildable);
       if (resolved.length === 5) return resolved.map(loadoutEntry);
+
+      const message = "[loadout] inline loadout did not resolve to 5 buildable units";
+      log.error(message, {
+        inlineUnitTypeIds: ids,
+        resolvedKeys: resolved.map((entry) => entry && entry.key).filter(Boolean),
+      });
+      throw createLoadoutResolutionError(message, {
+        inlineUnitTypeIds: ids,
+        resolvedKeys: resolved.map((entry) => entry && entry.key).filter(Boolean),
+      });
     }
 
-    // Default loadout should match the current Unity-era Hero Pack roster.
-    const DEFAULT_KEYS = ["goblin", "orc", "troll", "vampire", "wyvern"];
-    const byKey = {};
-    for (const ut of all) byKey[ut.key] = ut;
-    const preferred = DEFAULT_KEYS
-      .map((k) => byKey[k])
-      .filter(isBuildable);
+    const normalizedRaceId = normalizeRaceId(raceId) || getDefaultRaceId();
+    const preferredKeys = getMatchLoadoutKeysForRace(normalizedRaceId);
+    const preferred = resolveByKeys(byKey, preferredKeys, isBuildable);
     if (preferred.length === 5) return preferred.map(loadoutEntry);
 
-    const fallback = all.filter(isBuildable).slice(0, 5);
-    return fallback.map(loadoutEntry);
+    const message = "[loadout] race-derived loadout incomplete";
+    log.error(message, {
+      raceId: normalizedRaceId,
+      preferredKeys,
+      resolvedKeys: preferred.map((entry) => entry && entry.key).filter(Boolean),
+    });
+    throw createLoadoutResolutionError(message, {
+      raceId: normalizedRaceId,
+      preferredKeys,
+      resolvedKeys: preferred.map((entry) => entry && entry.key).filter(Boolean),
+    });
   }
 
   function hasValidInlineLoadoutIds(unitTypeIds) {
@@ -68,7 +106,7 @@ function createLoadoutHelpers({ db, unitTypes }) {
     const allowedIds = new Set(
       unitTypes
         .getAllUnitTypes()
-        .filter((ut) => ut.enabled && Number(ut.send_cost) > 0 && Number(ut.build_cost) > 0 && Number(ut.range) > 0)
+        .filter((ut) => canUseInLoadout(ut))
         .map((ut) => ut.id)
     );
     return unitTypeIds.every((id) => {

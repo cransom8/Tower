@@ -1,6 +1,12 @@
 "use strict";
 
 const crypto = require("crypto");
+const {
+  getAvailableRaces,
+  getDefaultRaceId,
+  isValidRaceId,
+  normalizeRaceId,
+} = require("../game/raceProgressionCatalog");
 
 function registerSocketHandlers({
   attachTakeoverBot,
@@ -35,6 +41,7 @@ function registerSocketHandlers({
   socketByPlayerId,
   startMLGame,
   stopMLGame,
+  submitWaveReadyVote,
   validateLoadoutSelection,
   validateMlTeamSetup,
   verifyReconnectToken,
@@ -88,7 +95,7 @@ function registerSocketHandlers({
     restoredParties.forEach((partyId) => {
       const party = partiesById.get(partyId);
       if (!party) return;
-      const mode = party.queueMode || fallbackBucketKey || matchmaker.makeBucketKey("line_wars", "2v2", false);
+      const mode = party.queueMode || fallbackBucketKey || matchmaker.makeBucketKey("line_wars", "ffa", false);
       const queueSize = matchmaker.getQueuePlayerCount(mode, partiesById);
       io.to(`party:${partyId}`).emit("queue_status", {
         status: "queued",
@@ -135,6 +142,16 @@ function registerSocketHandlers({
 
   function generatePartyCode() {
     return generateCode(6);
+  }
+
+  function normalizeMatchSettingsOrReply(socket, settings, errorEvent = "error_message") {
+    try {
+      return normalizeMatchSettings(settings || {});
+    } catch (err) {
+      const message = err && err.message ? err.message : "Invalid match settings.";
+      socket.emit(errorEvent, { message });
+      return null;
+    }
   }
 
   function _leaveParty(socket, partyId) {
@@ -186,11 +203,9 @@ function registerSocketHandlers({
     log.info("[match] new-format found", { bucketKey, teams: teams.length });
 
     const allSocketIds = [];
-    const teamAssignments = [];
-    const ffaColors = ["red", "blue", "green", "orange"];
     let missingQueuedMember = false;
 
-    teams.forEach((team, teamIdx) => {
+    teams.forEach((team) => {
       team.forEach((ticket) => {
         const party = partiesById.get(ticket.partyId);
         if (!party) return;
@@ -201,13 +216,6 @@ function registerSocketHandlers({
             return;
           }
           allSocketIds.push({ sid, name: member.displayName, partyId: ticket.partyId });
-          teamAssignments.push(
-            matchFormat === "ffa"
-              ? ffaColors[teamIdx % ffaColors.length]
-              : teamIdx === 0
-                ? "red"
-                : "blue"
-          );
         });
       });
     });
@@ -229,10 +237,10 @@ function registerSocketHandlers({
         const party = partiesById.get(ticket.partyId);
         return count + (party ? party.members.length : 1);
       }, 0);
-      room.pvpMode = matchFormat === "ffa" ? "ffa" : matchFormat;
+      room.pvpMode = "ffa";
 
       sessionBySocketId.set(host.sid, { code, roomId, laneIndex: 0, mode: "multilane" });
-      room.playerTeamsBySocketId.set(host.sid, teamAssignments[0]);
+      room.playerTeamsBySocketId.set(host.sid, ffaTeamForLane(0));
       const hostSock = io.sockets.sockets.get(host.sid);
       if (hostSock) hostSock.join(roomId);
 
@@ -241,7 +249,7 @@ function registerSocketHandlers({
         room.players.push(sid);
         room.laneBySocketId.set(sid, i);
         room.playerNames.set(sid, sanitizeDisplayName(name));
-        room.playerTeamsBySocketId.set(sid, teamAssignments[i]);
+        room.playerTeamsBySocketId.set(sid, ffaTeamForLane(i));
         sessionBySocketId.set(sid, { code, roomId, laneIndex: i, mode: "multilane" });
         const sock = io.sockets.sockets.get(sid);
         if (sock) sock.join(roomId);
@@ -250,17 +258,15 @@ function registerSocketHandlers({
       io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
 
       allSocketIds.forEach(({ sid }, laneIndex) => {
-        const myTeam = allSocketIds
-          .filter((_, idx) => teamAssignments[idx] === teamAssignments[laneIndex])
-          .map((entry) => entry.name);
         const enemies = allSocketIds
-          .filter((_, idx) => teamAssignments[idx] !== teamAssignments[laneIndex])
+          .filter((_, idx) => idx !== laneIndex)
           .map((entry) => entry.name);
         io.to(sid).emit("match_found", {
           roomCode: code,
           laneIndex,
-          teammates: myTeam,
+          teammates: [allSocketIds[laneIndex].name],
           opponents: enemies,
+          matchFormat: "ffa",
         });
       });
     }
@@ -308,9 +314,10 @@ function registerSocketHandlers({
     const room = mlRoomsByCode.get(code);
     room.queueMode = mode;
     room.partyASize = partyA.members.length;
+    room.pvpMode = "ffa";
 
     sessionBySocketId.set(hostSocketId, { code, roomId, laneIndex: 0, mode: "multilane" });
-    room.playerTeamsBySocketId.set(hostSocketId, "red");
+    room.playerTeamsBySocketId.set(hostSocketId, ffaTeamForLane(0));
     const hostSocket = io.sockets.sockets.get(hostSocketId);
     if (hostSocket) hostSocket.join(roomId);
 
@@ -320,7 +327,7 @@ function registerSocketHandlers({
       room.players.push(sid);
       room.laneBySocketId.set(sid, laneIndex);
       room.playerNames.set(sid, sanitizeDisplayName(member.displayName));
-      room.playerTeamsBySocketId.set(sid, i < partyA.members.length ? "red" : "blue");
+      room.playerTeamsBySocketId.set(sid, ffaTeamForLane(laneIndex));
       sessionBySocketId.set(sid, { code, roomId, laneIndex, mode: "multilane" });
       const memberSocket = io.sockets.sockets.get(sid);
       if (memberSocket) memberSocket.join(roomId);
@@ -329,28 +336,16 @@ function registerSocketHandlers({
 
     io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
 
-    const partyANames = partyA.members.map((member) => member.displayName);
-    const partyBNames = partyB.members.map((member) => member.displayName);
+    const allNames = resolvedMembers.map(({ member }) => member.displayName);
 
-    partyA.members.forEach((member, idx) => {
-      const sid = socketByPlayerId.get(member.playerId) || member.socketId;
+    resolvedMembers.forEach(({ member, sid }, idx) => {
       if (!sid) return;
       io.to(sid).emit("match_found", {
         roomCode: code,
         laneIndex: idx,
-        teammates: partyANames,
-        opponents: partyBNames,
-      });
-    });
-
-    partyB.members.forEach((member, idx) => {
-      const sid = socketByPlayerId.get(member.playerId) || member.socketId;
-      if (!sid) return;
-      io.to(sid).emit("match_found", {
-        roomCode: code,
-        laneIndex: partyA.members.length + idx,
-        teammates: partyBNames,
-        opponents: partyANames,
+        teammates: [member.displayName],
+        opponents: allNames.filter((name, nameIdx) => nameIdx !== idx),
+        matchFormat: "ffa",
       });
     });
 
@@ -485,25 +480,28 @@ function registerSocketHandlers({
         if (!room.players.includes(socket.id)) room.players.push(socket.id);
         room.laneBySocketId.set(socket.id, laneIndex);
         if (room.playerTeamsBySocketId && !room.playerTeamsBySocketId.has(socket.id)) {
-          room.playerTeamsBySocketId.set(socket.id, pickBalancedMlTeam(room));
+          room.playerTeamsBySocketId.set(socket.id, ffaTeamForLane(laneIndex));
         }
         room.playerNames.set(socket.id, playerName);
         socket.join(roomId);
         sessionBySocketId.set(socket.id, { code, roomId, laneIndex, mode: "multilane" });
+        socket._loadoutReady = !!room.loadoutReadyByLane?.has(laneIndex);
+        socket._gameplayReady = !!room.gameplayReadyByLane?.has(laneIndex);
+        socket._contentProgress = room.contentProgressByLane?.get(laneIndex) || null;
 
         const humanPlayers = room.players.map((sid) => ({
           laneIndex: room.laneBySocketId.get(sid),
           displayName: room.playerNames.get(sid) || "Player",
           ready: true,
           isAI: false,
-          team: room.playerTeamsBySocketId?.get(sid) || "red",
+          team: room.playerTeamsBySocketId?.get(sid) || ffaTeamForLane(room.laneBySocketId.get(sid) || 0),
         }));
         const aiPlayers = (room.aiPlayers || []).map((ai) => ({
           laneIndex: ai.laneIndex,
           displayName: `CPU (${String(ai.difficulty).charAt(0).toUpperCase()}${String(ai.difficulty).slice(1)})`,
           ready: true,
           isAI: true,
-          team: ai.team || "red",
+          team: ai.team || ffaTeamForLane(ai.laneIndex || 0),
         }));
         const laneAssignments = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
 
@@ -512,6 +510,9 @@ function registerSocketHandlers({
         const reconnectConfig = simMl.createMLPublicConfig(room.settings);
         if (room.loadoutByLane && room.loadoutByLane[laneIndex]) {
           reconnectConfig.loadout = room.loadoutByLane[laneIndex];
+        }
+        if (room.raceByLane && room.raceByLane[laneIndex]) {
+          reconnectConfig.raceId = room.raceByLane[laneIndex];
         }
         socket.emit("ml_match_config", reconnectConfig);
         // Re-emit loadout phase if still active (player reconnected during selection window)
@@ -522,6 +523,9 @@ function registerSocketHandlers({
               code,
               timeoutSeconds: Math.max(1, Math.ceil(remainingMs / 1000)),
               selectionMode: (room.settings && room.settings.selectionMode) || "manual",
+              defaultRaceId: getDefaultRaceId(),
+              selectedRaceId: normalizeRaceId(socket.pendingRaceId) || getDefaultRaceId(),
+              availableRaceIds: getAvailableRaces().map((race) => race.id),
               availableUnits: buildAvailableUnits(),
             });
           }
@@ -785,7 +789,8 @@ function registerSocketHandlers({
       if (mode === "solo_td" || mode === "solo_t2t") {
         if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
         const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
-        const normalizedSettings = normalizeMatchSettings(settings);
+        const normalizedSettings = normalizeMatchSettingsOrReply(socket, settings);
+        if (!normalizedSettings) return;
         socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
         const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
         const room = mlRoomsByCode.get(code);
@@ -800,13 +805,14 @@ function registerSocketHandlers({
           const totalPlayers = room.players.length + (room.aiPlayers || []).length;
           if (totalPlayers >= 4) break;
           if (!room.aiPlayers) room.aiPlayers = [];
-          room.aiPlayers.push({ laneIndex: totalPlayers, difficulty, team: pickBalancedMlTeam(room) });
+          room.aiPlayers.push({ laneIndex: totalPlayers, difficulty, team: ffaTeamForLane(totalPlayers) });
         }
         socket.emit("match_found", {
           roomCode: code,
           laneIndex: 0,
           teammates: [playerDisplayName],
           opponents: (room.aiPlayers || []).map((ai) => `CPU (${ai.difficulty})`),
+          matchFormat: "ffa",
           autoStart: true,
         });
         startMLGame(roomId, code);
@@ -819,10 +825,11 @@ function registerSocketHandlers({
         const privateCode = typeof filters.privateCode === "string" ? filters.privateCode.trim().toUpperCase() : null;
         if (!privateCode) {
           const playerDisplayName = sanitizeDisplayName(displayName || socket.playerDisplayName || "Player");
-          const normalizedSettings = normalizeMatchSettings(settings);
+          const normalizedSettings = normalizeMatchSettingsOrReply(socket, settings);
+          if (!normalizedSettings) return;
           const { code, roomId } = createMLRoom(socket.id, playerDisplayName, normalizedSettings);
           const room = mlRoomsByCode.get(code);
-          room.pvpMode = pvpMode === "ffa" ? "ffa" : "2v2";
+          room.pvpMode = "ffa";
           socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
           sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
           socket.join(roomId);
@@ -836,7 +843,7 @@ function registerSocketHandlers({
           if (totalInRoom >= 4) return socket.emit("error_message", { message: "Room is full (max 4)." });
           if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
           const laneIndex = room.players.length;
-          const assignedTeam = room.pvpMode === "ffa" ? ffaTeamForLane(laneIndex) : pickBalancedMlTeam(room);
+          const assignedTeam = ffaTeamForLane(laneIndex);
           room.players.push(socket.id);
           room.laneBySocketId.set(socket.id, laneIndex);
           room.playerTeamsBySocketId.set(socket.id, assignedTeam);
@@ -855,13 +862,13 @@ function registerSocketHandlers({
 
       requireAuthSocket(socket, () => {
         if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
-        const validModes = new Set(["ranked_2v2", "casual_2v2"]);
+        const validModes = new Set(["ranked_2v2", "casual_2v2", "public_queue", "casual_queue"]);
         if (!validModes.has(mode)) {
           return socket.emit("error_message", { message: "This public queue mode is not available." });
         }
-        const isRanked = mode === "ranked_2v2";
-        const queueMode = matchmaker.makeBucketKey("line_wars", "2v2", isRanked);
-        const dbMode = isRanked ? "2v2_ranked" : "2v2_casual";
+        const isRanked = mode === "ranked_2v2" || mode === "public_queue";
+        const queueMode = matchmaker.makeBucketKey("line_wars", "ffa", isRanked);
+        const dbMode = isRanked ? "ffa_ranked" : "ffa_casual";
 
         let partyId = partyByPlayerId.get(socket.playerId);
         if (!partyId) {
@@ -898,11 +905,11 @@ function registerSocketHandlers({
         if (db && isRanked) {
           dataPromise = Promise.all([
             db.query(
-              "SELECT COALESCE(wins + losses, 0) AS matches FROM ratings WHERE player_id = $1 AND mode = '2v2_casual'",
+              "SELECT COALESCE(wins + losses, 0) AS matches FROM ratings WHERE player_id = $1 AND mode = 'ffa_casual'",
               [socket.playerId]
             ).then((result) => Number(result.rows[0]?.matches) || 0).catch(() => 0),
             db.query(
-              "SELECT rating, wins + losses AS matches FROM ratings WHERE player_id = $1 AND mode = '2v2_ranked'",
+              "SELECT rating, wins + losses AS matches FROM ratings WHERE player_id = $1 AND mode = 'ffa_ranked'",
               [socket.playerId]
             ).then((result) =>
               result.rows[0]
@@ -938,7 +945,7 @@ function registerSocketHandlers({
 
           matchmaker.addToQueue(partyId, {
             gameType: "line_wars",
-            matchFormat: "2v2",
+            matchFormat: "ffa",
             ranked: isRanked,
             rating,
             partySize: latestParty.members.length,
@@ -1111,14 +1118,17 @@ function registerSocketHandlers({
         }
       }
 
+      const normalizedSettings = normalizeMatchSettingsOrReply(socket, settings, "lobby_error");
+      if (!normalizedSettings) return;
       const lobby = matchmaker.createLobby({
         hostSocketId: socket.id,
         hostDisplayName: lobbyName,
         gameType: gameType || "line_wars",
-        matchFormat: matchFormat || "2v2",
-        pvpMode: pvpMode || matchFormat || "2v2",
-        settings: settings ? normalizeMatchSettings(settings) : {},
+        matchFormat: "ffa",
+        pvpMode: "ffa",
+        settings: normalizedSettings,
       });
+      if (!lobby) return;
       socket.join(`lobby:${lobby.lobbyId}`);
       socket.emit("lobby_created", { lobbyId: lobby.lobbyId, code: lobby.code, lobby: matchmaker.lobbySnapshot(lobby) });
       log.info("lobby created", { lobbyId: lobby.lobbyId, code: lobby.code });
@@ -1210,11 +1220,15 @@ function registerSocketHandlers({
     });
 
     socket.on("lobby:update", ({ gameType, matchFormat, pvpMode, settings } = {}) => {
+      const normalizedSettings = settings === undefined
+        ? undefined
+        : normalizeMatchSettingsOrReply(socket, settings, "lobby_error");
+      if (settings !== undefined && !normalizedSettings) return;
       const updateErr = matchmaker.updateLobby(socket.id, {
         gameType,
         matchFormat,
         pvpMode,
-        settings: settings ? normalizeMatchSettings(settings) : undefined,
+        settings: normalizedSettings,
       });
       if (updateErr) return socket.emit("lobby_error", { message: updateErr });
       const lobby = matchmaker.getLobbyForSocket(socket.id);
@@ -1265,14 +1279,14 @@ function registerSocketHandlers({
 
       const hostName = sanitizeDisplayName(launchLobby.members.get(socket.id)?.name || "Player");
 
-
-      const { code, roomId } = createMLRoom(socket.id, hostName, normalizeMatchSettings(launchLobby.settings));
+      const normalizedLaunchSettings = normalizeMatchSettingsOrReply(socket, launchLobby.settings, "lobby_error");
+      if (!normalizedLaunchSettings) return;
+      const { code, roomId } = createMLRoom(socket.id, hostName, normalizedLaunchSettings);
       const room = mlRoomsByCode.get(code);
-      room.pvpMode = launchLobby.pvpMode === "ffa" ? "ffa" : (launchLobby.matchFormat || "2v2");
+      room.pvpMode = "ffa";
 
       sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
-      const hostDefaultTeam = room.pvpMode === "ffa" ? "red" : pickBalancedMlTeam(room);
-      room.playerTeamsBySocketId.set(socket.id, launchLobby.teamAssignments.get(socket.id) || hostDefaultTeam);
+      room.playerTeamsBySocketId.set(socket.id, ffaTeamForLane(0));
       socket.join(roomId);
 
       let laneIndex = 1;
@@ -1281,10 +1295,7 @@ function registerSocketHandlers({
         room.players.push(memberSid);
         room.laneBySocketId.set(memberSid, laneIndex);
         room.playerNames.set(memberSid, sanitizeDisplayName(metadata.name));
-        const defaultTeam = room.pvpMode === "ffa"
-          ? ["red", "blue", "green", "orange"][laneIndex % 4]
-          : pickBalancedMlTeam(room);
-        room.playerTeamsBySocketId.set(memberSid, launchLobby.teamAssignments.get(memberSid) || defaultTeam);
+        room.playerTeamsBySocketId.set(memberSid, ffaTeamForLane(laneIndex));
         sessionBySocketId.set(memberSid, { code, roomId, laneIndex, mode: "multilane" });
         const memberSock = io.sockets.sockets.get(memberSid);
         if (memberSock) memberSock.join(roomId);
@@ -1295,20 +1306,22 @@ function registerSocketHandlers({
       for (const bot of launchLobby.botSlots) {
         const total = room.players.length + room.aiPlayers.length;
         if (total >= 4) break;
-        room.aiPlayers.push({ laneIndex: total, difficulty: bot.difficulty, team: pickBalancedMlTeam(room) });
+        room.aiPlayers.push({ laneIndex: total, difficulty: bot.difficulty, team: ffaTeamForLane(total) });
       }
 
       io.to(roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(code, room));
 
-      const allNames = [...launchLobby.members.values()].map((member) => member.name);
+      const humanNames = [...launchLobby.members.values()].map((member) => member.name);
       const botNames = launchLobby.botSlots.map((bot) => `CPU (${bot.difficulty})`);
+      const allNames = [...humanNames, ...botNames];
       let idx = 0;
-      for (const [memberSid] of launchLobby.members) {
+      for (const [memberSid, memberMeta] of launchLobby.members) {
         io.to(memberSid).emit("match_found", {
           roomCode: code,
           laneIndex: idx,
-          teammates: allNames,
-          opponents: botNames,
+          teammates: [memberMeta.name],
+          opponents: allNames.filter((name) => name !== memberMeta.name),
+          matchFormat: "ffa",
           autoStart: true,
         });
         idx += 1;
@@ -1329,13 +1342,14 @@ function registerSocketHandlers({
         return socket.emit("error_message", { message: "Too many requests. Please wait." });
       }
       if (!validateLoadoutSelection(socket, loadoutSlot, unitTypeIds)) return;
-      const normalizedSettings = normalizeMatchSettings(settings);
+      const normalizedSettings = normalizeMatchSettingsOrReply(socket, settings);
+      if (!normalizedSettings) return;
       const { code, roomId } = createMLRoom(socket.id, displayName, normalizedSettings);
       socket.pendingUnitTypeIds = Array.isArray(unitTypeIds) ? unitTypeIds : null;
       sessionBySocketId.set(socket.id, { code, roomId, laneIndex: 0, mode: "multilane" });
       socket.join(roomId);
       const room = mlRoomsByCode.get(code);
-      room.pvpMode = pvpMode === "ffa" ? "ffa" : "2v2";
+      room.pvpMode = "ffa";
       socket.emit("ml_room_created", {
         code,
         laneIndex: 0,
@@ -1359,7 +1373,7 @@ function registerSocketHandlers({
       if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
 
       const laneIndex = room.players.length;
-      const assignedTeam = room.pvpMode === "ffa" ? ffaTeamForLane(laneIndex) : pickBalancedMlTeam(room);
+      const assignedTeam = ffaTeamForLane(laneIndex);
       room.players.push(socket.id);
       room.laneBySocketId.set(socket.id, laneIndex);
       room.playerTeamsBySocketId.set(socket.id, assignedTeam);
@@ -1386,7 +1400,7 @@ function registerSocketHandlers({
       if (!teamCheck.ok) {
         return socket.emit("error_message", { message: teamCheck.reason });
       }
-      if (room.pvpMode !== "ffa" && totalPlayers >= 2 && room.readySet.size === room.players.length) {
+      if (totalPlayers >= 1 && room.readySet.size === room.players.length) {
         startMLGame(room.roomId, normalized);
       }
     });
@@ -1401,8 +1415,8 @@ function registerSocketHandlers({
         return socket.emit("error_message", { message: "Only the host can force start." });
       }
       const totalPlayers = room.players.length + (room.aiPlayers || []).length;
-      if (totalPlayers < 2) {
-        return socket.emit("error_message", { message: "Need at least 2 players (add AI or invite another)." });
+      if (totalPlayers < 1) {
+        return socket.emit("error_message", { message: "Need at least 1 player or bot to start." });
       }
       const teamCheck = validateMlTeamSetup(room);
       if (!teamCheck.ok) {
@@ -1418,7 +1432,9 @@ function registerSocketHandlers({
       if (!session || session.mode !== "multilane") return;
       const room = mlRoomsByCode.get(session.code);
       if (!room || room.hostSocketId !== socket.id || gamesByRoomId.has(room.roomId)) return;
-      room.settings = normalizeMatchSettings(settings);
+      const normalizedSettings = normalizeMatchSettingsOrReply(socket, settings);
+      if (!normalizedSettings) return;
+      room.settings = normalizedSettings;
       io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
     });
 
@@ -1438,7 +1454,7 @@ function registerSocketHandlers({
       if (totalPlayers >= 4) return socket.emit("error_message", { message: "Room is full (max 4 players)." });
       const diff = VALID_AI_DIFFICULTIES.includes(String(difficulty)) ? String(difficulty) : "easy";
       if (!room.aiPlayers) room.aiPlayers = [];
-      const aiTeam = room.pvpMode === "ffa" ? ffaTeamForLane(totalPlayers) : pickBalancedMlTeam(room);
+      const aiTeam = ffaTeamForLane(totalPlayers);
       room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: aiTeam });
       io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
     });
@@ -1502,55 +1518,7 @@ function registerSocketHandlers({
     socket.on("set_ml_team", ({ laneIndex, team } = {}) => {
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
-      const room = mlRoomsByCode.get(session.code);
-      if (!room || room.hostSocketId !== socket.id || gamesByRoomId.has(room.roomId) || room.pvpMode === "ffa") return;
-
-      const normalizedTeam = team === "blue" ? "blue" : "red";
-      const targetLane = Number(laneIndex);
-      const total = room.players.length + (room.aiPlayers || []).length;
-      if (!Number.isInteger(targetLane) || targetLane < 0 || targetLane >= total) return;
-
-      let currentTeam = null;
-      let targetSid = null;
-      let targetAi = null;
-
-      for (const sid of room.players) {
-        if (room.laneBySocketId.get(sid) === targetLane) {
-          targetSid = sid;
-          currentTeam = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
-          break;
-        }
-      }
-
-      if (!targetSid) {
-        targetAi = (room.aiPlayers || []).find((ai) => ai.laneIndex === targetLane) || null;
-        if (targetAi) currentTeam = targetAi.team === "blue" ? "blue" : "red";
-      }
-      if (!currentTeam || currentTeam === normalizedTeam) return;
-
-      const counts = { red: 0, blue: 0 };
-      for (const sid of room.players) {
-        const assigned = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
-        counts[assigned] += 1;
-      }
-      for (const ai of room.aiPlayers || []) {
-        counts[ai.team === "blue" ? "blue" : "red"] += 1;
-      }
-
-      counts[currentTeam] -= 1;
-      counts[normalizedTeam] += 1;
-      const maxTeamSize = Math.ceil(total / 2);
-      if (counts.red > maxTeamSize || counts.blue > maxTeamSize) {
-        return socket.emit("error_message", { message: `Too many players on one team (max ${maxTeamSize}).` });
-      }
-
-      if (targetSid) {
-        room.playerTeamsBySocketId.set(targetSid, normalizedTeam);
-      } else if (targetAi) {
-        targetAi.team = normalizedTeam;
-      }
-
-      io.to(room.roomId).emit("ml_lobby_update", mlLobbyUpdatePayload(session.code, room));
+      socket.emit("error_message", { message: "Team assignment is no longer supported. Matches now use free-for-all survival lanes." });
     });
 
     // ── Loadout selection phase (in-game) ─────────────────────────────────
@@ -1564,38 +1532,76 @@ function registerSocketHandlers({
         }
       }
       const unitTypeIds = Array.isArray(payload?.unitTypeIds) ? payload.unitTypeIds : null;
+      const raceId = normalizeRaceId(payload?.raceId);
       if (!checkActionRateLimit(socket.id)) return;
-      if (!hasValidInlineLoadoutIds(unitTypeIds)) {
+      const hasLegacyIds = hasValidInlineLoadoutIds(unitTypeIds);
+      const hasRaceSelection = isValidRaceId(raceId);
+      if (!hasLegacyIds && !hasRaceSelection) {
         log.warn("[loadout] invalid selection", {
           socketId: socket.id,
           playerId: socket.playerId || null,
           mode: sessionBySocketId.get(socket.id)?.mode || null,
           rawType: typeof rawPayload,
           rawPayload,
+          raceId,
           unitTypeIds,
         });
-        return socket.emit("error_message", { message: "Invalid loadout selection." });
+        return socket.emit("error_message", { message: "Invalid race selection." });
       }
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
       const room = mlRoomsByCode.get(session.code);
       if (!room) return;
-      // Store confirmed ids on the socket (resolveLoadout picks this up)
-      socket.pendingUnitTypeIds = unitTypeIds.map(Number);
+      socket.pendingRaceId = hasRaceSelection ? raceId : null;
+      socket.pendingUnitTypeIds = hasLegacyIds ? unitTypeIds.map(Number) : null;
       if (room.loadoutConfirms) {
-        room.loadoutConfirms.set(socket.id, socket.pendingUnitTypeIds);
+        room.loadoutConfirms.set(socket.id, {
+          raceId: socket.pendingRaceId,
+          unitTypeIds: socket.pendingUnitTypeIds,
+        });
       }
       // Unblock waitForLoadoutConfirms if every human has now confirmed
       if (room._loadoutPhaseResolve) {
         const allDone = room.players.every(sid => {
           const s = io.sockets.sockets.get(sid);
-          return s && Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5;
+          if (!s) return false;
+          if (isValidRaceId(s.pendingRaceId)) return true;
+          return Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5;
         });
         if (allDone) room._loadoutPhaseResolve();
       }
-      log.info("[loadout] player confirmed", { code: session.code, laneIndex: session.laneIndex });
+      log.info("[loadout] player confirmed", {
+        code: session.code,
+        laneIndex: session.laneIndex,
+        raceId: socket.pendingRaceId || null,
+      });
     });
     // ─────────────────────────────────────────────────────────────────────
+
+    socket.on("ml_start_wave_vote", () => {
+      if (!checkActionRateLimit(socket.id)) return;
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane" || !submitWaveReadyVote) return;
+
+      log.info("[WaveStart][Server] client vote received", {
+        roomId: session.roomId,
+        code: session.code,
+        laneIndex: session.laneIndex,
+        socketId: socket.id,
+      });
+
+      const result = submitWaveReadyVote(session.roomId, session.code, session.laneIndex);
+      log.info("[WaveStart][Server] vote result", {
+        roomId: session.roomId,
+        code: session.code,
+        laneIndex: session.laneIndex,
+        ok: !!(result && result.ok),
+        startedImmediately: !!(result && result.startedImmediately),
+        reason: result && result.reason ? result.reason : null,
+      });
+      if (!result.ok)
+        socket.emit("error_message", { message: result.reason || "Unable to start the next wave." });
+    });
 
     socket.on("ml_game_scene_ready", () => {
       const session = sessionBySocketId.get(socket.id);
@@ -1611,16 +1617,20 @@ function registerSocketHandlers({
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
       socket._loadoutReady = true;
+      const room = mlRoomsByCode.get(session.code);
+      if (room) {
+        if (!room.loadoutReadyByLane) room.loadoutReadyByLane = new Set();
+        room.loadoutReadyByLane.add(session.laneIndex);
+      }
       log.info("[ml-game] client loadout ready", {
         code: session.code,
         laneIndex: session.laneIndex,
         socketId: socket.id,
       });
-      const room = mlRoomsByCode.get(session.code);
       if (!room || !room._loadoutReadyResolve) return;
-      const allReady = room.players.every(sid => {
-        const s = io.sockets.sockets.get(sid);
-        return s && s._loadoutReady;
+      const allReady = room.players.every((sid) => {
+        const laneIndex = room.laneBySocketId.get(sid);
+        return Number.isInteger(laneIndex) && room.loadoutReadyByLane?.has(laneIndex);
       });
       if (allReady) room._loadoutReadyResolve();
     });
@@ -1629,16 +1639,20 @@ function registerSocketHandlers({
       const session = sessionBySocketId.get(socket.id);
       if (!session || session.mode !== "multilane") return;
       socket._gameplayReady = true;
+      const room = mlRoomsByCode.get(session.code);
+      if (room) {
+        if (!room.gameplayReadyByLane) room.gameplayReadyByLane = new Set();
+        room.gameplayReadyByLane.add(session.laneIndex);
+      }
       log.info("[ml-game] client gameplay ready", {
         code: session.code,
         laneIndex: session.laneIndex,
         socketId: socket.id,
       });
-      const room = mlRoomsByCode.get(session.code);
       if (!room || !room._gameplayReadyResolve) return;
-      const allReady = room.players.every(sid => {
-        const s = io.sockets.sockets.get(sid);
-        return s && s._gameplayReady;
+      const allReady = room.players.every((sid) => {
+        const laneIndex = room.laneBySocketId.get(sid);
+        return Number.isInteger(laneIndex) && room.gameplayReadyByLane?.has(laneIndex);
       });
       if (allReady) room._gameplayReadyResolve();
     });
@@ -1652,6 +1666,63 @@ function registerSocketHandlers({
         ? Math.max(0, Math.min(1, payload.percent)) : 0;
       const state = typeof payload?.state === "string" ? payload.state : "Preparing";
       socket._contentProgress = { percent, state };
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") return;
+      const room = mlRoomsByCode.get(session.code);
+      if (!room) return;
+      if (!room.contentProgressByLane) room.contentProgressByLane = new Map();
+      room.contentProgressByLane.set(session.laneIndex, socket._contentProgress);
+    });
+
+    socket.on("ml_chat_message", (rawPayload) => {
+      if (!checkActionRateLimit(socket.id)) {
+        socket.emit("error_message", { message: "Chat rate limit exceeded." });
+        return;
+      }
+
+      let payload = rawPayload;
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          payload = null;
+        }
+      }
+
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane") {
+        socket.emit("error_message", { message: "Cannot send chat without an active multilane session." });
+        return;
+      }
+
+      const room = mlRoomsByCode.get(session.code);
+      if (!room) {
+        socket.emit("error_message", { message: "Multilane room not found for chat broadcast." });
+        return;
+      }
+
+      const message = typeof payload?.message === "string" ? payload.message.trim() : "";
+      if (!message) {
+        socket.emit("error_message", { message: "Cannot send an empty chat message." });
+        return;
+      }
+
+      const trimmedMessage = message.slice(0, 240);
+      const chatPayload = {
+        laneIndex: session.laneIndex,
+        displayName: room.playerNames.get(socket.id) || socket.playerDisplayName || "Player",
+        message: trimmedMessage,
+        timestampUtc: new Date().toISOString(),
+        team: room.playerTeamsBySocketId?.get(socket.id) || null,
+      };
+
+      io.to(room.roomId).emit("ml_chat_message", chatPayload);
+      log.info("[ml-chat] message", {
+        code: session.code,
+        laneIndex: session.laneIndex,
+        displayName: chatPayload.displayName,
+        length: trimmedMessage.length,
+      });
     });
 
     socket.on("player_action", (rawPayload) => {
@@ -1913,6 +1984,26 @@ function registerSocketHandlers({
               if (staleRoom.playerTeamsBySocketId) staleRoom.playerTeamsBySocketId.delete(socket.id);
               staleRoom.playerNames.delete(socket.id);
               staleRoom.readySet.delete(socket.id);
+              if (Number.isInteger(laneIndex)) {
+                staleRoom.loadoutReadyByLane?.delete(laneIndex);
+                staleRoom.gameplayReadyByLane?.delete(laneIndex);
+                staleRoom.contentProgressByLane?.delete(laneIndex);
+              }
+              const remainingHumanLaneIndices = staleRoom.players
+                .map((sid) => staleRoom.laneBySocketId.get(sid))
+                .filter((value) => Number.isInteger(value));
+              if (staleRoom._loadoutReadyResolve) {
+                const allLoadoutReady = remainingHumanLaneIndices.length === 0
+                  || remainingHumanLaneIndices.every((value) => staleRoom.loadoutReadyByLane?.has(value));
+                if (allLoadoutReady)
+                  staleRoom._loadoutReadyResolve();
+              }
+              if (staleRoom._gameplayReadyResolve) {
+                const allGameplayReady = remainingHumanLaneIndices.length === 0
+                  || remainingHumanLaneIndices.every((value) => staleRoom.gameplayReadyByLane?.has(value));
+                if (allGameplayReady)
+                  staleRoom._gameplayReadyResolve();
+              }
               if (entry && attachTakeoverBot && laneIndex !== undefined) {
                 const takeover = attachTakeoverBot(staleRoom, entry, laneIndex, {
                   difficulty: DEFAULT_TAKEOVER_DIFFICULTY,
@@ -1959,6 +2050,26 @@ function registerSocketHandlers({
           if (room.playerTeamsBySocketId) room.playerTeamsBySocketId.delete(socket.id);
           room.playerNames.delete(socket.id);
           room.readySet.delete(socket.id);
+          if (Number.isInteger(laneIndex)) {
+            room.loadoutReadyByLane?.delete(laneIndex);
+            room.gameplayReadyByLane?.delete(laneIndex);
+            room.contentProgressByLane?.delete(laneIndex);
+          }
+          const remainingHumanLaneIndices = room.players
+            .map((sid) => room.laneBySocketId.get(sid))
+            .filter((value) => Number.isInteger(value));
+          if (room._loadoutReadyResolve) {
+            const allLoadoutReady = remainingHumanLaneIndices.length === 0
+              || remainingHumanLaneIndices.every((value) => room.loadoutReadyByLane?.has(value));
+            if (allLoadoutReady)
+              room._loadoutReadyResolve();
+          }
+          if (room._gameplayReadyResolve) {
+            const allGameplayReady = remainingHumanLaneIndices.length === 0
+              || remainingHumanLaneIndices.every((value) => room.gameplayReadyByLane?.has(value));
+            if (allGameplayReady)
+              room._gameplayReadyResolve();
+          }
           io.to(room.roomId).emit("player_left", { code });
           if (room.players.length === 0 && (room.aiPlayers || []).length === 0) {
             stopMLGame(room.roomId, code);

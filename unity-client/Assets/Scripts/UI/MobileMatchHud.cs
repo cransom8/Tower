@@ -1,6 +1,9 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using CastleDefender.Game;
 using CastleDefender.Net;
@@ -14,6 +17,44 @@ namespace CastleDefender.UI
     [DisallowMultipleComponent]
     public class MobileMatchHud : MonoBehaviour
     {
+        const string RuntimeBarracksButtonName = "RuntimeBuildingOverviewButton";
+        const string LegacyRuntimeBarracksButtonName = "RuntimeBarracksButton";
+        const string RuntimeBarracksPanelHostName = "RuntimeBuildingOverviewPanelHost";
+        const string LegacyRuntimeBarracksPanelHostName = "RuntimeBarracksPanelHost";
+        const string ProgressionDockWidgetName = "ProgressionDockWidget";
+        const string QuitConfirmationModalName = "QuitConfirmationModal";
+        static readonly string[] WaveTowerBuildingOrder = { "blacksmith", "archery_tower", "temple", "wizard_tower" };
+
+        sealed class TowerStatusView
+        {
+            public string buildingType;
+            public TMP_Text nameLabel;
+            public TMP_Text tierLabel;
+            public TMP_Text hpLabel;
+            public Image hpFill;
+        }
+
+        sealed class UpcomingWavePortraitView
+        {
+            public string entryKey;
+            public Button button;
+            public Image frame;
+            public RawImage portrait;
+            public TMP_Text countLabel;
+            public TMP_Text nameLabel;
+        }
+
+        sealed class UpcomingWaveQueueView
+        {
+            public int waveNumber;
+            public Button button;
+            public Image frame;
+            public RawImage portrait;
+            public TMP_Text waveLabel;
+            public TMP_Text countLabel;
+            public TMP_Text summaryLabel;
+        }
+
         [Header("Top Ribbon")]
         [SerializeField] float ribbonHeight = 66f;
         [SerializeField] Vector2 ribbonPadding = new Vector2(10f, 8f);
@@ -72,15 +113,13 @@ namespace CastleDefender.UI
         [Header("Editor Preview")]
         [SerializeField] bool previewInEditMode = true;
         [SerializeField] int previewWave = 7;
-        [SerializeField] string previewPhase = "BUILD";
+        [SerializeField] string previewPhase = "LIVE";
         [SerializeField] float previewCountdown = 14f;
         [SerializeField] float previewBuild = 148f;
         [SerializeField] float previewGold = 96f;
         [SerializeField] float previewIncome = 10f;
         [SerializeField] float previewForge = 0f;
         [SerializeField] int previewForgeWorkers = 10;
-        [SerializeField] int previewQueue = 2;
-        [SerializeField] int previewBarracksLevel = 2;
 
         RectTransform _canvasRect;
         RectTransform _ribbonRoot;
@@ -111,23 +150,59 @@ namespace CastleDefender.UI
         TMP_Text _txtBuildDeltaTop;
         Image _buildStatFill;
 
-        TMP_Text _myStatsText;
         TMP_Text _teamStatsText;
         TMP_Text _playerStatsText;
         TMP_Text _waveIntelText;
         MyStatsHudWidget _myStatsWidget;
-        WaveStatusHudWidget _waveStatusWidget;
+        DraggableHudPanel _waveOverviewWidget;
+        DraggableHudPanel _progressionDockWidget;
         FloatingSettingsPanel _settingsPanelWidget;
         TMP_Text _txtSettingsTiltValue;
         TMP_Text _txtSettingsZoomValue;
         TMP_Text _txtSettingsRotationValue;
+        TMP_Text _txtBarracksLevel;
+        TMP_Text _progressionDockStatus;
+        BarracksPanel _runtimeBarracksPanel;
+        Button _runtimeBarracksButton;
+        Button _startWaveButton;
+        TMP_Text _startWaveButtonLabel;
+        TMP_Text _waveOverviewTitle;
+        TMP_Text _waveOverviewPhase;
+        TMP_Text _waveOverviewReady;
+        TMP_Text _waveOverviewCollapsedLabel;
+        TMP_Text _waveQueueEmptyLabel;
+        RectTransform _waveQueueStrip;
+        GameObject _upcomingWavePopup;
+        TMP_Text _upcomingWavePopupTitle;
+        TMP_Text _upcomingWavePopupSubtitle;
+        TMP_Text _wavePortraitEmptyLabel;
+        RectTransform _wavePortraitStrip;
+        GameObject _waveDetailPanel;
+        RawImage _waveDetailPortrait;
+        TMP_Text _waveDetailTitle;
+        TMP_Text _waveDetailSummary;
+        TMP_Text _waveDetailStats;
+        TMP_Text _waveDetailSource;
+        GameObject _quitConfirmationModal;
+        Button _quitConfirmationConfirmButton;
+        Button _quitConfirmationCancelButton;
+        TMP_Text _quitConfirmationConfirmLabel;
+        bool _isLeavingMatch;
 
-        CollapsibleHudCard _myStatsCard;
         CollapsibleHudCard _teamStatsCard;
         CollapsibleHudCard _playerStatsCard;
         CollapsibleHudCard _waveIntelCard;
 
         readonly Dictionary<string, UnitCatalogEntry> _catalogByKey = new();
+        readonly Dictionary<string, TowerStatusView> _towerStatusViews = new(StringComparer.OrdinalIgnoreCase);
+        readonly List<UpcomingWaveQueueView> _upcomingWaveQueueViews = new();
+        readonly List<UpcomingWavePortraitView> _upcomingWavePortraitViews = new();
+        readonly HashSet<string> _missingUpcomingWavePortraitLogs = new(StringComparer.OrdinalIgnoreCase);
+        Coroutine _wavePortraitLoadCoroutine;
+        string _lastUpcomingWaveQueueSignature;
+        string _lastUpcomingWavePortraitSignature;
+        int _selectedUpcomingWaveNumber = -1;
+        string _selectedUpcomingWaveEntryKey;
 
         void Start()
         {
@@ -189,9 +264,16 @@ namespace CastleDefender.UI
             else
                 DestroyCanvasChildren("WaveStatusWidget");
             if (showSettingsPanel)
+            {
                 BuildSettingsPanel();
+                BuildQuitConfirmationModal();
+            }
             else
+            {
                 DestroyCanvasChildren("SettingsPanel");
+                DestroyCanvasChildren(QuitConfirmationModalName);
+            }
+            EnsureBarracksAccess();
             if (!myStatsOnlyMode && showLegacyRightRail)
                 BuildRightRail();
             else
@@ -240,11 +322,59 @@ namespace CastleDefender.UI
 
         void DestroyLegacyHudPanels()
         {
+            if (_wavePortraitLoadCoroutine != null)
+            {
+                StopCoroutine(_wavePortraitLoadCoroutine);
+                _wavePortraitLoadCoroutine = null;
+            }
+
             DestroyCanvasChildren("TopRightStatBar");
             DestroyCanvasChildren("RightHudRail");
             DestroyCanvasChildren("MyStatsWidget");
             DestroyCanvasChildren("WaveStatusWidget");
+            DestroyCanvasChildren(ProgressionDockWidgetName);
+            DestroyCanvasChildren(RuntimeBarracksButtonName);
+            DestroyCanvasChildren(LegacyRuntimeBarracksButtonName);
+            DestroyCanvasChildren(QuitConfirmationModalName);
+            DestroyCanvasChildren("UpcomingWavePopup");
             DestroyCanvasChildren("WaveHUD(Clone)");
+            _quitConfirmationModal = null;
+            _quitConfirmationConfirmButton = null;
+            _quitConfirmationCancelButton = null;
+            _quitConfirmationConfirmLabel = null;
+            _waveOverviewWidget = null;
+            _progressionDockWidget = null;
+            _runtimeBarracksButton = null;
+            _startWaveButton = null;
+            _startWaveButtonLabel = null;
+            _waveOverviewTitle = null;
+            _waveOverviewPhase = null;
+            _waveOverviewReady = null;
+            _waveOverviewCollapsedLabel = null;
+            _waveQueueEmptyLabel = null;
+            _waveQueueStrip = null;
+            _upcomingWavePopup = null;
+            _upcomingWavePopupTitle = null;
+            _upcomingWavePopupSubtitle = null;
+            _wavePortraitEmptyLabel = null;
+            _wavePortraitStrip = null;
+            _waveDetailPanel = null;
+            _waveDetailPortrait = null;
+            _waveDetailTitle = null;
+            _waveDetailSummary = null;
+            _waveDetailStats = null;
+            _waveDetailSource = null;
+            _progressionDockStatus = null;
+            _txtBarracksLevel = null;
+            _towerStatusViews.Clear();
+            _upcomingWaveQueueViews.Clear();
+            _upcomingWavePortraitViews.Clear();
+            _missingUpcomingWavePortraitLogs.Clear();
+            _lastUpcomingWaveQueueSignature = null;
+            _lastUpcomingWavePortraitSignature = null;
+            _selectedUpcomingWaveNumber = -1;
+            _selectedUpcomingWaveEntryKey = null;
+            _isLeavingMatch = false;
 
             var topRibbon = transform.Find("WaveModule");
             if (topRibbon != null)
@@ -314,7 +444,7 @@ namespace CastleDefender.UI
 
             var waveModule = CreateRibbonModule("WaveModule", 176f, new Color(0.09f, 0.13f, 0.22f, 0.92f), new Color(0.32f, 0.76f, 1f, 0.95f));
             _txtRound = CreateValueLabel(waveModule, "Txt_Round", "Wave 1", 22, TextAlignmentOptions.Left);
-            _txtPhase = CreateValueLabel(waveModule, "Txt_Phase", "BUILD", 16, TextAlignmentOptions.Left, new Color(0.38f, 1f, 0.55f));
+            _txtPhase = CreateValueLabel(waveModule, "Txt_Phase", "LIVE", 16, TextAlignmentOptions.Left, new Color(0.38f, 1f, 0.55f));
             _txtCountdown = CreateValueLabel(waveModule, "Txt_Countdown", "30s", 16, TextAlignmentOptions.Left, new Color(1f, 0.89f, 0.34f));
 
             var buildModule = CreateRibbonModule("RecommendedBuildModule", 212f, new Color(0.10f, 0.14f, 0.16f, 0.94f), new Color(0.78f, 0.48f, 0.18f, 0.98f));
@@ -324,9 +454,9 @@ namespace CastleDefender.UI
             _recommendedFill = CreateProgressBar(buildModule, "RecommendedBuildBar", new Color(0.34f, 0.86f, 0.48f, 1f));
 
             var statusModule = CreateRibbonModule("MatchStatusModule", 290f, new Color(0.12f, 0.12f, 0.14f, 0.94f), new Color(0.88f, 0.84f, 0.36f, 0.98f));
-            _txtTeamHpLeft = CreateValueLabel(statusModule, "Txt_TeamHpLeft", "Left Team 20", 16, TextAlignmentOptions.Left, new Color(1f, 0.90f, 0.24f));
+            _txtTeamHpLeft = CreateValueLabel(statusModule, "Txt_TeamHpLeft", "Left Side 20/20", 16, TextAlignmentOptions.Left, new Color(1f, 0.90f, 0.24f));
             _barTeamHpLeft = CreateProgressBar(statusModule, "Bar_TeamHpLeft", new Color(1f, 0.78f, 0.18f, 1f));
-            _txtTeamHpRight = CreateValueLabel(statusModule, "Txt_TeamHpRight", "Right Team 20", 16, TextAlignmentOptions.Left, new Color(0.58f, 0.86f, 1f, 1f));
+            _txtTeamHpRight = CreateValueLabel(statusModule, "Txt_TeamHpRight", "Right Side 20/20", 16, TextAlignmentOptions.Left, new Color(0.58f, 0.86f, 1f, 1f));
             _barTeamHpRight = CreateProgressBar(statusModule, "Bar_TeamHpRight", new Color(0.34f, 0.84f, 1f, 1f));
 
         }
@@ -483,8 +613,6 @@ namespace CastleDefender.UI
                 Mathf.RoundToInt(rightRailPadding.y),
                 Mathf.RoundToInt(rightRailPadding.y));
 
-            _myStatsCard = null;
-            _myStatsText = null;
             _teamStatsCard = CreateStatsCard(rail.transform, "TeamStatsCard", "Team Stats", true, 134f, new Color(0.15f, 0.13f, 0.11f, 0.95f), new Color(0.88f, 0.76f, 0.28f, 0.98f), out _teamStatsText);
             _playerStatsCard = CreateStatsCard(rail.transform, "PlayerStatsCard", "Player Stats", true, 170f, new Color(0.11f, 0.12f, 0.17f, 0.95f), new Color(0.44f, 0.68f, 1f, 0.98f), out _playerStatsText);
             _waveIntelCard = CreateStatsCard(rail.transform, "WaveIntelCard", "Wave Intel", true, 128f, new Color(0.16f, 0.14f, 0.10f, 0.95f), new Color(0.92f, 0.58f, 0.24f, 0.98f), out _waveIntelText);
@@ -654,15 +782,20 @@ namespace CastleDefender.UI
                 return;
 
             DestroyCanvasChildren("WaveStatusWidget");
+            _towerStatusViews.Clear();
+            _upcomingWaveQueueViews.Clear();
+            _upcomingWavePortraitViews.Clear();
+            _waveQueueStrip = null;
+            _waveQueueEmptyLabel = null;
 
-            var root = new GameObject("WaveStatusWidget", typeof(RectTransform), typeof(Image), typeof(WaveStatusHudWidget));
+            var root = new GameObject("WaveStatusWidget", typeof(RectTransform), typeof(Image), typeof(DraggableHudPanel));
             root.transform.SetParent(_canvasRect, false);
             var rect = root.GetComponent<RectTransform>();
             rect.anchorMin = new Vector2(0.5f, 1f);
             rect.anchorMax = new Vector2(0.5f, 1f);
             rect.pivot = new Vector2(0.5f, 1f);
-            rect.sizeDelta = new Vector2(452f, 132f);
-            rect.anchoredPosition = new Vector2(0f, -18f);
+            rect.sizeDelta = new Vector2(560f, 148f);
+            rect.anchoredPosition = new Vector2(0f, -16f);
 
             var panelImage = root.GetComponent<Image>();
             panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.94f);
@@ -674,7 +807,7 @@ namespace CastleDefender.UI
             toggleRect.anchorMin = new Vector2(1f, 1f);
             toggleRect.anchorMax = new Vector2(1f, 1f);
             toggleRect.pivot = new Vector2(1f, 1f);
-            toggleRect.sizeDelta = new Vector2(24f, 24f);
+            toggleRect.sizeDelta = new Vector2(26f, 26f);
             toggleRect.anchoredPosition = new Vector2(-6f, -6f);
             toggle.GetComponent<Image>().color = new Color(0.14f, 0.18f, 0.22f, 0.96f);
             var toggleLabel = CreateText(toggle.transform, "Label", "-", 13, TextAlignmentOptions.Center, Color.white);
@@ -691,75 +824,111 @@ namespace CastleDefender.UI
             bodyRect.offsetMin = new Vector2(8f, 8f);
             bodyRect.offsetMax = new Vector2(-8f, -8f);
 
-            var chipRow = new GameObject("ChipRow", typeof(RectTransform), typeof(HorizontalLayoutGroup));
-            chipRow.transform.SetParent(body.transform, false);
-            var chipRowRect = chipRow.GetComponent<RectTransform>();
-            chipRowRect.anchorMin = new Vector2(0.5f, 1f);
-            chipRowRect.anchorMax = new Vector2(0.5f, 1f);
-            chipRowRect.pivot = new Vector2(0.5f, 1f);
-            chipRowRect.sizeDelta = new Vector2(172f, 24f);
-            chipRowRect.anchoredPosition = new Vector2(0f, 0f);
-            var chipLayout = chipRow.GetComponent<HorizontalLayoutGroup>();
-            chipLayout.childAlignment = TextAnchor.MiddleCenter;
-            chipLayout.childControlWidth = false;
-            chipLayout.childControlHeight = true;
-            chipLayout.childForceExpandWidth = false;
-            chipLayout.childForceExpandHeight = false;
-            chipLayout.spacing = 4f;
-            chipLayout.padding = new RectOffset(0, 0, 0, 0);
+            var header = new GameObject("Header", typeof(RectTransform), typeof(Image));
+            header.transform.SetParent(body.transform, false);
+            var headerRect = header.GetComponent<RectTransform>();
+            headerRect.anchorMin = new Vector2(0f, 1f);
+            headerRect.anchorMax = new Vector2(1f, 1f);
+            headerRect.pivot = new Vector2(0.5f, 1f);
+            headerRect.sizeDelta = new Vector2(0f, 42f);
+            headerRect.anchoredPosition = Vector2.zero;
+            var headerImage = header.GetComponent<Image>();
+            headerImage.color = new Color(0.10f, 0.14f, 0.19f, 0.96f);
+            ApplyPanelFrame(header, headerImage.color, new Color(0.42f, 0.82f, 1f, 0.94f));
 
-            CreateWaveStatusChip(chipRow.transform, "GoldChip", "GLD", "96", new Color(0.94f, 0.76f, 0.28f, 0.98f));
-            CreateWaveStatusChip(chipRow.transform, "BuildChip", "BLD", "148", new Color(0.44f, 0.80f, 1f, 0.98f));
-            CreateWaveStatusChip(chipRow.transform, "QueueChip", "Q", "2", new Color(0.52f, 0.95f, 0.68f, 0.98f));
-            CreateWaveStatusChip(chipRow.transform, "IntelChip", "NXT", "7", new Color(0.98f, 0.56f, 0.28f, 0.98f));
+            _waveOverviewTitle = CreateText(header.transform, "WaveLabel", "UPCOMING WAVES", 17, TextAlignmentOptions.Left, Color.white);
+            _waveOverviewTitle.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _waveOverviewTitle.rectTransform.anchorMax = new Vector2(0.6f, 1f);
+            _waveOverviewTitle.rectTransform.pivot = new Vector2(0f, 1f);
+            _waveOverviewTitle.rectTransform.sizeDelta = new Vector2(0f, 20f);
+            _waveOverviewTitle.rectTransform.anchoredPosition = new Vector2(10f, -6f);
 
-            var barsRoot = new GameObject("BarsRoot", typeof(RectTransform));
-            barsRoot.transform.SetParent(body.transform, false);
-            var barsRect = barsRoot.GetComponent<RectTransform>();
-            barsRect.anchorMin = Vector2.zero;
-            barsRect.anchorMax = Vector2.one;
-            barsRect.offsetMin = Vector2.zero;
-            barsRect.offsetMax = new Vector2(0f, -16f);
+            _waveOverviewPhase = CreateText(header.transform, "PhaseLabel", "Wave timer -- | Send --", 10, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            _waveOverviewPhase.rectTransform.anchorMin = new Vector2(0f, 0f);
+            _waveOverviewPhase.rectTransform.anchorMax = new Vector2(0.64f, 0f);
+            _waveOverviewPhase.rectTransform.pivot = new Vector2(0f, 0f);
+            _waveOverviewPhase.rectTransform.sizeDelta = new Vector2(0f, 18f);
+            _waveOverviewPhase.rectTransform.anchoredPosition = new Vector2(10f, 5f);
 
-            var leftBar = CreateWaveSideBar(barsRoot.transform, "LeftStatusBar", true,
-                new Color(0.58f, 0.14f, 0.14f, 0.92f), new Color(0.25f, 0.95f, 0.39f, 0.98f),
-                out var leftValue, out var leftLabel);
-            var rightBar = CreateWaveSideBar(barsRoot.transform, "RightStatusBar", false,
-                new Color(0.16f, 0.24f, 0.34f, 0.92f), new Color(0.98f, 0.50f, 0.50f, 0.98f),
-                out var rightValue, out var rightLabel);
+            _startWaveButton = CreateHudActionButton(header.transform, "StartWaveButton", "Start Wave", new Color(0.18f, 0.34f, 0.22f, 0.98f), out _startWaveButtonLabel);
+            var startWaveRect = _startWaveButton.GetComponent<RectTransform>();
+            startWaveRect.anchorMin = new Vector2(1f, 0.5f);
+            startWaveRect.anchorMax = new Vector2(1f, 0.5f);
+            startWaveRect.pivot = new Vector2(1f, 0.5f);
+            startWaveRect.sizeDelta = new Vector2(122f, 28f);
+            startWaveRect.anchoredPosition = new Vector2(-10f, -4f);
+            _startWaveButton.onClick.RemoveAllListeners();
+            _startWaveButton.onClick.AddListener(OnStartWavePressed);
 
-            var centerPlate = new GameObject("CenterPlate", typeof(RectTransform), typeof(Image));
-            centerPlate.transform.SetParent(barsRoot.transform, false);
-            var centerRect = centerPlate.GetComponent<RectTransform>();
-            centerRect.anchorMin = new Vector2(0.5f, 0.5f);
-            centerRect.anchorMax = new Vector2(0.5f, 0.5f);
-            centerRect.pivot = new Vector2(0.5f, 0.5f);
-            centerRect.sizeDelta = new Vector2(144f, 92f);
-            centerRect.anchoredPosition = new Vector2(0f, 12f);
-            var centerImage = centerPlate.GetComponent<Image>();
-            centerImage.color = new Color(0.09f, 0.13f, 0.17f, 0.98f);
-            ApplyPanelFrame(centerPlate, centerImage.color, new Color(0.53f, 0.85f, 1f, 0.92f));
+            _waveOverviewReady = CreateText(header.transform, "ReadyLabel", "Ready --/--", 10, TextAlignmentOptions.Right, new Color(0.80f, 0.88f, 0.96f, 0.96f));
+            _waveOverviewReady.rectTransform.anchorMin = new Vector2(0.62f, 0f);
+            _waveOverviewReady.rectTransform.anchorMax = new Vector2(1f, 0f);
+            _waveOverviewReady.rectTransform.pivot = new Vector2(1f, 0f);
+            _waveOverviewReady.rectTransform.sizeDelta = new Vector2(-136f, 18f);
+            _waveOverviewReady.rectTransform.anchoredPosition = new Vector2(-140f, 6f);
 
-            var waveLabel = CreateText(centerPlate.transform, "WaveLabel", "WAVE 6", 24, TextAlignmentOptions.Center, Color.white);
-            waveLabel.rectTransform.anchorMin = new Vector2(0f, 0.5f);
-            waveLabel.rectTransform.anchorMax = new Vector2(1f, 0.5f);
-            waveLabel.rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            waveLabel.rectTransform.sizeDelta = new Vector2(0f, 34f);
-            waveLabel.rectTransform.anchoredPosition = new Vector2(0f, 8f);
+            var queueShelf = new GameObject("QueueShelf", typeof(RectTransform), typeof(Image));
+            queueShelf.transform.SetParent(body.transform, false);
+            var queueShelfRect = queueShelf.GetComponent<RectTransform>();
+            queueShelfRect.anchorMin = new Vector2(0f, 1f);
+            queueShelfRect.anchorMax = new Vector2(1f, 1f);
+            queueShelfRect.pivot = new Vector2(0.5f, 1f);
+            queueShelfRect.sizeDelta = new Vector2(0f, 74f);
+            queueShelfRect.anchoredPosition = new Vector2(0f, -50f);
+            var queueShelfImage = queueShelf.GetComponent<Image>();
+            queueShelfImage.color = new Color(0.09f, 0.13f, 0.17f, 0.98f);
+            ApplyPanelFrame(queueShelf, queueShelfImage.color, new Color(0.98f, 0.68f, 0.30f, 0.96f));
 
-            var phaseLabel = CreateText(centerPlate.transform, "PhaseLabel", "BUILD 14s", 11, TextAlignmentOptions.Center, new Color(0.84f, 0.90f, 0.97f, 0.94f));
-            phaseLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
-            phaseLabel.rectTransform.anchorMax = new Vector2(1f, 0f);
-            phaseLabel.rectTransform.pivot = new Vector2(0.5f, 0f);
-            phaseLabel.rectTransform.sizeDelta = new Vector2(0f, 18f);
-            phaseLabel.rectTransform.anchoredPosition = new Vector2(0f, 10f);
+            var queueHeader = CreateText(queueShelf.transform, "QueueHeader", "WAVE QUEUE", 10, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            queueHeader.rectTransform.anchorMin = new Vector2(0f, 1f);
+            queueHeader.rectTransform.anchorMax = new Vector2(1f, 1f);
+            queueHeader.rectTransform.pivot = new Vector2(0f, 1f);
+            queueHeader.rectTransform.sizeDelta = new Vector2(-16f, 16f);
+            queueHeader.rectTransform.anchoredPosition = new Vector2(10f, -6f);
 
-            var footer = CreateText(body.transform, "FooterLabel", "Wave target 158 | Build healthy", 11, TextAlignmentOptions.Center, new Color(0.86f, 0.90f, 0.96f, 0.9f));
-            footer.rectTransform.anchorMin = new Vector2(0f, 0f);
-            footer.rectTransform.anchorMax = new Vector2(1f, 0f);
-            footer.rectTransform.pivot = new Vector2(0.5f, 0f);
-            footer.rectTransform.sizeDelta = new Vector2(0f, 16f);
-            footer.rectTransform.anchoredPosition = new Vector2(0f, -2f);
+            var queueViewport = new GameObject("QueueViewport", typeof(RectTransform), typeof(Image), typeof(Mask), typeof(ScrollRect));
+            queueViewport.transform.SetParent(queueShelf.transform, false);
+            var queueViewportRect = queueViewport.GetComponent<RectTransform>();
+            queueViewportRect.anchorMin = new Vector2(0f, 0f);
+            queueViewportRect.anchorMax = new Vector2(1f, 1f);
+            queueViewportRect.offsetMin = new Vector2(8f, 8f);
+            queueViewportRect.offsetMax = new Vector2(-8f, -24f);
+            queueViewport.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.12f, 0.01f);
+            queueViewport.GetComponent<Mask>().showMaskGraphic = false;
+
+            var queueStrip = new GameObject("QueueStrip", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            queueStrip.transform.SetParent(queueViewport.transform, false);
+            _waveQueueStrip = queueStrip.GetComponent<RectTransform>();
+            _waveQueueStrip.anchorMin = new Vector2(0f, 0.5f);
+            _waveQueueStrip.anchorMax = new Vector2(0f, 0.5f);
+            _waveQueueStrip.pivot = new Vector2(0f, 0.5f);
+            _waveQueueStrip.anchoredPosition = Vector2.zero;
+            _waveQueueStrip.sizeDelta = new Vector2(0f, 48f);
+            var queueLayout = queueStrip.GetComponent<HorizontalLayoutGroup>();
+            queueLayout.childAlignment = TextAnchor.MiddleLeft;
+            queueLayout.childControlWidth = false;
+            queueLayout.childControlHeight = false;
+            queueLayout.childForceExpandWidth = false;
+            queueLayout.childForceExpandHeight = false;
+            queueLayout.spacing = 10f;
+            queueLayout.padding = new RectOffset(2, 2, 2, 2);
+            var queueFitter = queueStrip.GetComponent<ContentSizeFitter>();
+            queueFitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            queueFitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+
+            var queueScrollRect = queueViewport.GetComponent<ScrollRect>();
+            queueScrollRect.horizontal = true;
+            queueScrollRect.vertical = false;
+            queueScrollRect.viewport = queueViewportRect;
+            queueScrollRect.content = _waveQueueStrip;
+            queueScrollRect.scrollSensitivity = 20f;
+
+            _waveQueueEmptyLabel = CreateText(queueViewport.transform, "EmptyLabel", "Waiting for wave queue...", 11, TextAlignmentOptions.Center, new Color(0.74f, 0.82f, 0.90f, 0.9f));
+            _waveQueueEmptyLabel.rectTransform.anchorMin = Vector2.zero;
+            _waveQueueEmptyLabel.rectTransform.anchorMax = Vector2.one;
+            _waveQueueEmptyLabel.rectTransform.offsetMin = Vector2.zero;
+            _waveQueueEmptyLabel.rectTransform.offsetMax = Vector2.zero;
+            _waveQueueEmptyLabel.raycastTarget = false;
 
             var collapsed = new GameObject("CollapsedView", typeof(RectTransform), typeof(Image));
             collapsed.transform.SetParent(root.transform, false);
@@ -782,33 +951,1358 @@ namespace CastleDefender.UI
             var collapsedRingImage = collapsedRing.GetComponent<Image>();
             collapsedRingImage.color = new Color(0.28f, 0.74f, 0.96f, 0.98f);
 
-            var collapsedLabel = CreateText(collapsed.transform, "CollapsedLabel", "W6", 14, TextAlignmentOptions.Center, Color.white);
-            collapsedLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
-            collapsedLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
-            collapsedLabel.rectTransform.pivot = new Vector2(0.5f, 1f);
-            collapsedLabel.rectTransform.sizeDelta = new Vector2(0f, 18f);
-            collapsedLabel.rectTransform.anchoredPosition = new Vector2(0f, -2f);
+            _waveOverviewCollapsedLabel = CreateText(collapsed.transform, "CollapsedLabel", "W?", 14, TextAlignmentOptions.Center, Color.white);
+            _waveOverviewCollapsedLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _waveOverviewCollapsedLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+            _waveOverviewCollapsedLabel.rectTransform.pivot = new Vector2(0.5f, 1f);
+            _waveOverviewCollapsedLabel.rectTransform.sizeDelta = new Vector2(0f, 18f);
+            _waveOverviewCollapsedLabel.rectTransform.anchoredPosition = new Vector2(0f, -2f);
 
-            _waveStatusWidget = root.GetComponent<WaveStatusHudWidget>();
-            _waveStatusWidget.Configure(
+            _waveOverviewWidget = root.GetComponent<DraggableHudPanel>();
+            _waveOverviewWidget.Configure(
                 rect,
                 bodyRect,
                 collapsedRect,
                 toggle.GetComponent<Button>(),
                 toggleLabel,
-                waveLabel,
-                phaseLabel,
-                leftValue,
-                rightValue,
-                leftLabel,
-                rightLabel,
-                footer,
-                leftBar,
-                rightBar,
-                collapsedRingImage,
-                collapsedLabel,
+                _waveOverviewCollapsedLabel,
                 false,
-                "hud.wave_status_widget");
+                "hud.wave_overview_widget",
+                new Vector2(560f, 148f),
+                new Vector2(82f, 58f));
+        }
+
+        void OnStartWavePressed()
+        {
+            var readyState = NetworkManager.Instance != null ? NetworkManager.Instance.LastMLWaveReadyState : null;
+            Debug.Log(
+                $"[WaveStart][Client] button_click lane={NetworkManager.Instance?.MyLaneIndex ?? -1} " +
+                $"upcomingWave={readyState?.upcomingWaveNumber ?? -1} " +
+                $"remainingWaveMobs={readyState?.remainingWaveMobCount ?? -1} " +
+                $"currentWaveComplete={(readyState != null && readyState.currentWaveComplete).ToString().ToLowerInvariant()} " +
+                $"allReady={(readyState != null && readyState.allReady).ToString().ToLowerInvariant()}");
+            ActionSender.RequestStartWaveVote();
+        }
+
+        void RefreshProgressionDock(MLLaneSnap myLane)
+        {
+            if (_txtBarracksLevel != null)
+                _txtBarracksLevel.text = "Open Progression";
+
+            if (_progressionDockWidget != null)
+                _progressionDockWidget.SetCollapsedLabel("TECH");
+
+            if (_progressionDockStatus == null)
+                return;
+
+            var townCore = SnapshotApplier.Instance?.GetTownCorePad(myLane?.laneIndex ?? -1);
+            int builtTowers = CountBuiltTowerPads(myLane);
+            string townCoreText = townCore != null
+                ? $"Town Core T{Mathf.Max(1, townCore.tier)}"
+                : "Town Core --";
+            _progressionDockStatus.text = $"{townCoreText} | Towers {builtTowers}/4 | Drag or minimize";
+        }
+
+        void RefreshProgressionDockPreview()
+        {
+            if (_txtBarracksLevel != null)
+                _txtBarracksLevel.text = "Open Progression";
+            if (_progressionDockWidget != null)
+                _progressionDockWidget.SetCollapsedLabel("TECH");
+            if (_progressionDockStatus != null)
+                _progressionDockStatus.text = "Town Core T2 | Towers 4/4 | Drag or minimize";
+        }
+
+        void RefreshWaveOverview(MLLaneSnap myLane, MLSnapshot snap, float recommendedBuild, Color accentColor)
+        {
+            if (_waveOverviewWidget == null || myLane == null || snap == null)
+                return;
+
+            var readyState = NetworkManager.Instance != null ? NetworkManager.Instance.LastMLWaveReadyState : null;
+            int upcomingWaveNumber = myLane.upcomingWave != null && myLane.upcomingWave.waveNumber > 0
+                ? myLane.upcomingWave.waveNumber
+                : readyState != null && readyState.upcomingWaveNumber > 0
+                    ? readyState.upcomingWaveNumber
+                    : snap.roundNumber + 1;
+
+            if (_waveOverviewTitle != null)
+                _waveOverviewTitle.text = $"UPCOMING WAVES | START W{upcomingWaveNumber}";
+            if (_waveOverviewPhase != null)
+            {
+                int waveSeconds = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetWaveTimerSecondsRemaining() : 0;
+                int sendSeconds = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetBarracksSendSecondsRemaining(myLane.laneIndex) : 0;
+                _waveOverviewPhase.text = $"Wave {waveSeconds}s | Send {sendSeconds}s | Target {Mathf.RoundToInt(recommendedBuild)}";
+                _waveOverviewPhase.color = accentColor;
+            }
+            _waveOverviewWidget.SetCollapsedLabel($"W{upcomingWaveNumber}+");
+
+            int readyCount = readyState?.readyLaneIndices?.Length ?? 0;
+            int requiredReadyCount = Mathf.Max(readyState?.requiredReadyCount ?? 0, readyState?.eligibleLaneIndices?.Length ?? 0);
+            bool eligible = ContainsLaneIndex(readyState?.eligibleLaneIndices, myLane.laneIndex);
+            bool isReady = ContainsLaneIndex(readyState?.readyLaneIndices, myLane.laneIndex);
+            int remainingWaveMobCount = readyState != null
+                ? Mathf.Max(0, readyState.remainingWaveMobCount)
+                : CountRemainingWaveMobs(snap);
+            bool currentWaveComplete = remainingWaveMobCount <= 0;
+            bool allReady = readyState != null && readyState.allReady;
+
+            if (_waveOverviewReady != null)
+            {
+                _waveOverviewReady.text = !currentWaveComplete
+                    ? $"{remainingWaveMobCount} mobs left before the next wave can start"
+                    : requiredReadyCount > 0
+                    ? $"{readyCount}/{requiredReadyCount} lanes ready{(isReady ? " | You are ready" : eligible ? " | Awaiting your vote" : string.Empty)}"
+                    : "Wave timer is running";
+            }
+
+            if (_startWaveButton != null)
+            {
+                if (allReady)
+                {
+                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "Launching", new Color(0.26f, 0.42f, 0.58f, 0.98f), false);
+                }
+                else if (!currentWaveComplete)
+                {
+                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "In Combat", new Color(0.24f, 0.26f, 0.30f, 0.96f), false);
+                }
+                else if (!eligible)
+                {
+                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "Waiting", new Color(0.24f, 0.26f, 0.30f, 0.96f), false);
+                }
+                else if (isReady)
+                {
+                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "Ready", new Color(0.20f, 0.42f, 0.52f, 0.98f), false);
+                }
+                else
+                {
+                    string label = requiredReadyCount > 1 && readyCount == requiredReadyCount - 1
+                        ? "Start Now"
+                        : "Start Wave";
+                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, label, new Color(0.22f, 0.40f, 0.22f, 0.98f), true);
+                }
+            }
+
+            RefreshUpcomingWaveQueue(myLane);
+            RefreshUpcomingWavePopup(myLane);
+        }
+
+        void RefreshWaveOverviewPreview(float recommendedBuild, Color accentColor)
+        {
+            if (_waveOverviewWidget == null)
+                return;
+
+            int upcomingWaveNumber = previewWave + 1;
+            if (_waveOverviewTitle != null)
+                _waveOverviewTitle.text = $"UPCOMING WAVES | START W{upcomingWaveNumber}";
+            if (_waveOverviewPhase != null)
+            {
+                _waveOverviewPhase.text = $"Preview {previewCountdown:0}s | Send 10s | Target {Mathf.RoundToInt(recommendedBuild)}";
+                _waveOverviewPhase.color = accentColor;
+            }
+            if (_waveOverviewReady != null)
+                _waveOverviewReady.text = "Preview mode";
+            _waveOverviewWidget.SetCollapsedLabel($"W{upcomingWaveNumber}+");
+
+            if (_startWaveButton != null)
+                SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "Start Wave", new Color(0.22f, 0.40f, 0.22f, 0.98f), false);
+
+            if (_waveQueueEmptyLabel != null)
+            {
+                _waveQueueEmptyLabel.gameObject.SetActive(true);
+                _waveQueueEmptyLabel.text = "Wave queue loads in play mode.";
+            }
+            if (_waveQueueStrip != null)
+                ClearChildren(_waveQueueStrip);
+            _upcomingWaveQueueViews.Clear();
+            CloseUpcomingWavePopup();
+        }
+
+        void RefreshTowerStatusCards(MLLaneSnap myLane)
+        {
+            for (int i = 0; i < WaveTowerBuildingOrder.Length; i++)
+            {
+                string buildingType = WaveTowerBuildingOrder[i];
+                if (!_towerStatusViews.TryGetValue(buildingType, out var view))
+                    continue;
+
+                var pad = FindFortressPad(myLane, buildingType);
+                if (view.nameLabel != null)
+                    view.nameLabel.text = ResolveTowerDisplayName(buildingType);
+
+                if (pad == null)
+                {
+                    if (view.tierLabel != null)
+                        view.tierLabel.text = "Unavailable";
+                    if (view.hpLabel != null)
+                        view.hpLabel.text = "No pad";
+                    if (view.hpFill != null)
+                    {
+                        view.hpFill.fillAmount = 0f;
+                        view.hpFill.color = new Color(0.42f, 0.46f, 0.54f, 0.92f);
+                    }
+                    continue;
+                }
+
+                float ratio = pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : (pad.isBuilt ? 1f : 0f);
+                if (view.tierLabel != null)
+                    view.tierLabel.text = ResolveTowerTierLabel(pad);
+                if (view.hpLabel != null)
+                {
+                    view.hpLabel.text = pad.maxHp > 0f
+                        ? $"{Mathf.RoundToInt(Mathf.Max(0f, pad.hp))}/{Mathf.RoundToInt(pad.maxHp)} HP"
+                        : pad.isBuilt ? "Built" : "Not built";
+                }
+                if (view.hpFill != null)
+                {
+                    view.hpFill.fillAmount = ratio;
+                    view.hpFill.color = ResolvePadHealthColor(ratio);
+                }
+            }
+        }
+
+        void RefreshUpcomingWaveQueue(MLLaneSnap myLane)
+        {
+            if (_waveQueueStrip == null)
+                return;
+
+            var queue = GetUpcomingWaveQueue(myLane);
+            string signature = BuildUpcomingWaveQueueSignature(queue);
+            if (!string.Equals(_lastUpcomingWaveQueueSignature, signature, StringComparison.Ordinal))
+            {
+                _lastUpcomingWaveQueueSignature = signature;
+                ClearChildren(_waveQueueStrip);
+                _upcomingWaveQueueViews.Clear();
+
+                if (queue != null)
+                {
+                    for (int i = 0; i < queue.Length; i++)
+                    {
+                        var upcomingWave = queue[i];
+                        if (!HasUpcomingWaveEntries(upcomingWave))
+                            continue;
+
+                        _upcomingWaveQueueViews.Add(CreateUpcomingWaveQueueCard(_waveQueueStrip, upcomingWave));
+                    }
+                }
+
+                if (_wavePortraitLoadCoroutine != null)
+                    StopCoroutine(_wavePortraitLoadCoroutine);
+                _wavePortraitLoadCoroutine = StartUpcomingWavePortraitLoad(queue);
+            }
+            else if (_wavePortraitLoadCoroutine == null)
+            {
+                _wavePortraitLoadCoroutine = StartUpcomingWavePortraitLoad(queue);
+            }
+
+            bool hasQueue = _upcomingWaveQueueViews.Count > 0;
+            if (_waveQueueEmptyLabel != null)
+            {
+                _waveQueueEmptyLabel.gameObject.SetActive(!hasQueue);
+                if (!hasQueue)
+                    _waveQueueEmptyLabel.text = "Waiting for wave queue...";
+            }
+
+            for (int i = 0; i < _upcomingWaveQueueViews.Count; i++)
+            {
+                var view = _upcomingWaveQueueViews[i];
+                var upcomingWave = FindUpcomingWaveByNumber(queue, view.waveNumber);
+                if (view == null || !HasUpcomingWaveEntries(upcomingWave))
+                    continue;
+
+                bool selected = _upcomingWavePopup != null
+                    && _upcomingWavePopup.activeSelf
+                    && view.waveNumber == _selectedUpcomingWaveNumber;
+
+                if (view.frame != null)
+                    view.frame.color = selected
+                        ? new Color(0.28f, 0.34f, 0.46f, 0.98f)
+                        : new Color(0.15f, 0.19f, 0.25f, 0.96f);
+
+                if (view.waveLabel != null)
+                    view.waveLabel.text = $"W{upcomingWave.waveNumber}";
+                if (view.countLabel != null)
+                    view.countLabel.text = $"x{Mathf.Max(1, upcomingWave.totalUnits)}";
+                if (view.summaryLabel != null)
+                    view.summaryLabel.text = BuildUpcomingWaveCardSummary(upcomingWave);
+
+                var primaryEntry = GetPrimaryUpcomingWaveEntry(upcomingWave);
+                if (view.portrait != null && primaryEntry != null)
+                {
+                    if (TryGetUpcomingWavePortraitTexture(primaryEntry, out var texture))
+                    {
+                        view.portrait.texture = texture;
+                        view.portrait.color = Color.white;
+                    }
+                    else
+                    {
+                        view.portrait.texture = null;
+                        view.portrait.color = new Color(1f, 1f, 1f, 0f);
+                    }
+                }
+            }
+        }
+
+        UpcomingWaveQueueView CreateUpcomingWaveQueueCard(Transform parent, MLUpcomingWave upcomingWave)
+        {
+            var root = new GameObject($"Wave_{upcomingWave.waveNumber}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            root.transform.SetParent(parent, false);
+            var rect = root.GetComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(86f, 46f);
+            var image = root.GetComponent<Image>();
+            image.color = new Color(0.15f, 0.19f, 0.25f, 0.96f);
+            ApplyPanelFrame(root, image.color, new Color(0.95f, 0.76f, 0.38f, 0.84f));
+
+            var layout = root.GetComponent<LayoutElement>();
+            layout.preferredWidth = 86f;
+            layout.preferredHeight = 46f;
+
+            var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+            portraitGo.transform.SetParent(root.transform, false);
+            var portraitRect = portraitGo.GetComponent<RectTransform>();
+            portraitRect.anchorMin = new Vector2(0f, 0.5f);
+            portraitRect.anchorMax = new Vector2(0f, 0.5f);
+            portraitRect.pivot = new Vector2(0f, 0.5f);
+            portraitRect.sizeDelta = new Vector2(24f, 24f);
+            portraitRect.anchoredPosition = new Vector2(6f, -2f);
+            var portrait = portraitGo.GetComponent<RawImage>();
+            portrait.color = new Color(1f, 1f, 1f, 0f);
+            portrait.raycastTarget = false;
+            var portraitFitter = portraitGo.GetComponent<AspectRatioFitter>();
+            portraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            portraitFitter.aspectRatio = 1f;
+
+            var waveLabel = CreateText(root.transform, "WaveLabel", $"W{upcomingWave.waveNumber}", 8, TextAlignmentOptions.Left, Color.white);
+            waveLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
+            waveLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+            waveLabel.rectTransform.pivot = new Vector2(0f, 1f);
+            waveLabel.rectTransform.sizeDelta = new Vector2(-12f, 10f);
+            waveLabel.rectTransform.anchoredPosition = new Vector2(6f, -2f);
+            waveLabel.raycastTarget = false;
+
+            var countLabel = CreateText(root.transform, "CountLabel", $"x{Mathf.Max(1, upcomingWave.totalUnits)}", 8, TextAlignmentOptions.Right, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            countLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
+            countLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+            countLabel.rectTransform.pivot = new Vector2(1f, 1f);
+            countLabel.rectTransform.sizeDelta = new Vector2(-12f, 10f);
+            countLabel.rectTransform.anchoredPosition = new Vector2(-6f, -2f);
+            countLabel.raycastTarget = false;
+
+            var summaryLabel = CreateText(root.transform, "SummaryLabel", BuildUpcomingWaveCardSummary(upcomingWave), 7, TextAlignmentOptions.Left, new Color(0.90f, 0.94f, 0.98f, 0.96f));
+            summaryLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
+            summaryLabel.rectTransform.anchorMax = new Vector2(1f, 0f);
+            summaryLabel.rectTransform.pivot = new Vector2(0f, 0f);
+            summaryLabel.rectTransform.sizeDelta = new Vector2(-36f, 10f);
+            summaryLabel.rectTransform.anchoredPosition = new Vector2(34f, 3f);
+            summaryLabel.raycastTarget = false;
+
+            var button = root.GetComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.RemoveAllListeners();
+            button.onClick.AddListener(() => OpenUpcomingWavePopup(upcomingWave.waveNumber));
+
+            return new UpcomingWaveQueueView
+            {
+                waveNumber = upcomingWave.waveNumber,
+                button = button,
+                frame = image,
+                portrait = portrait,
+                waveLabel = waveLabel,
+                countLabel = countLabel,
+                summaryLabel = summaryLabel,
+            };
+        }
+
+        void OpenUpcomingWavePopup(int waveNumber)
+        {
+            var myLane = SnapshotApplier.Instance?.MyLane;
+            var upcomingWave = FindUpcomingWaveByNumber(GetUpcomingWaveQueue(myLane), waveNumber);
+            if (!HasUpcomingWaveEntries(upcomingWave))
+                return;
+
+            EnsureUpcomingWavePopup();
+            if (_upcomingWavePopup == null)
+                return;
+
+            _selectedUpcomingWaveNumber = upcomingWave.waveNumber;
+            _selectedUpcomingWaveEntryKey = null;
+            _lastUpcomingWavePortraitSignature = null;
+            _upcomingWavePopup.SetActive(true);
+            _upcomingWavePopup.transform.SetAsLastSibling();
+            RefreshUpcomingWaveQueue(myLane);
+            RefreshUpcomingWavePopup(myLane);
+        }
+
+        void CloseUpcomingWavePopup()
+        {
+            _selectedUpcomingWaveNumber = -1;
+            _selectedUpcomingWaveEntryKey = null;
+            _lastUpcomingWavePortraitSignature = null;
+
+            if (_upcomingWavePopup != null)
+                _upcomingWavePopup.SetActive(false);
+
+            if (_wavePortraitStrip != null)
+                ClearChildren(_wavePortraitStrip);
+            _upcomingWavePortraitViews.Clear();
+
+            RefreshUpcomingWaveQueue(SnapshotApplier.Instance?.MyLane);
+        }
+
+        void EnsureUpcomingWavePopup()
+        {
+            if (_canvasRect == null || _upcomingWavePopup != null)
+                return;
+
+            var overlay = new GameObject("UpcomingWavePopup", typeof(RectTransform), typeof(Image), typeof(Button));
+            overlay.transform.SetParent(_canvasRect, false);
+            overlay.transform.SetAsLastSibling();
+            var overlayRect = overlay.GetComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+            var overlayImage = overlay.GetComponent<Image>();
+            overlayImage.color = new Color(0.02f, 0.04f, 0.07f, 0.72f);
+            var overlayButton = overlay.GetComponent<Button>();
+            overlayButton.targetGraphic = overlayImage;
+            overlayButton.onClick.RemoveAllListeners();
+            overlayButton.onClick.AddListener(CloseUpcomingWavePopup);
+
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image));
+            panel.transform.SetParent(overlay.transform, false);
+            var panelRect = panel.GetComponent<RectTransform>();
+            panelRect.anchorMin = new Vector2(0.5f, 0.5f);
+            panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+            panelRect.pivot = new Vector2(0.5f, 0.5f);
+            panelRect.sizeDelta = new Vector2(420f, 246f);
+            var panelImage = panel.GetComponent<Image>();
+            panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.98f);
+            ApplyPanelFrame(panel, panelImage.color, new Color(0.34f, 0.78f, 0.98f, 0.92f));
+
+            var header = new GameObject("Header", typeof(RectTransform), typeof(Image));
+            header.transform.SetParent(panel.transform, false);
+            var headerRect = header.GetComponent<RectTransform>();
+            headerRect.anchorMin = new Vector2(0f, 1f);
+            headerRect.anchorMax = new Vector2(1f, 1f);
+            headerRect.pivot = new Vector2(0.5f, 1f);
+            headerRect.sizeDelta = new Vector2(0f, 40f);
+            headerRect.anchoredPosition = Vector2.zero;
+            var headerImage = header.GetComponent<Image>();
+            headerImage.color = new Color(0.10f, 0.14f, 0.19f, 0.98f);
+            ApplyPanelFrame(header, headerImage.color, new Color(0.42f, 0.82f, 1f, 0.92f));
+
+            _upcomingWavePopupTitle = CreateText(header.transform, "Title", "WAVE DETAILS", 16, TextAlignmentOptions.Left, Color.white);
+            _upcomingWavePopupTitle.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _upcomingWavePopupTitle.rectTransform.anchorMax = new Vector2(1f, 1f);
+            _upcomingWavePopupTitle.rectTransform.pivot = new Vector2(0f, 1f);
+            _upcomingWavePopupTitle.rectTransform.sizeDelta = new Vector2(-64f, 18f);
+            _upcomingWavePopupTitle.rectTransform.anchoredPosition = new Vector2(10f, -6f);
+
+            _upcomingWavePopupSubtitle = CreateText(header.transform, "Subtitle", "Tap an attacker for details.", 10, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            _upcomingWavePopupSubtitle.rectTransform.anchorMin = new Vector2(0f, 0f);
+            _upcomingWavePopupSubtitle.rectTransform.anchorMax = new Vector2(1f, 0f);
+            _upcomingWavePopupSubtitle.rectTransform.pivot = new Vector2(0f, 0f);
+            _upcomingWavePopupSubtitle.rectTransform.sizeDelta = new Vector2(-64f, 16f);
+            _upcomingWavePopupSubtitle.rectTransform.anchoredPosition = new Vector2(10f, 5f);
+
+            var closeButton = CreateHudActionButton(header.transform, "CloseButton", "X", new Color(0.22f, 0.28f, 0.36f, 0.98f), out var closeLabel);
+            var closeRect = closeButton.GetComponent<RectTransform>();
+            closeRect.anchorMin = new Vector2(1f, 0.5f);
+            closeRect.anchorMax = new Vector2(1f, 0.5f);
+            closeRect.pivot = new Vector2(1f, 0.5f);
+            closeRect.sizeDelta = new Vector2(28f, 24f);
+            closeRect.anchoredPosition = new Vector2(-10f, -2f);
+            closeLabel.fontSize = 10;
+            closeButton.onClick.RemoveAllListeners();
+            closeButton.onClick.AddListener(CloseUpcomingWavePopup);
+
+            var body = new GameObject("Body", typeof(RectTransform));
+            body.transform.SetParent(panel.transform, false);
+            var bodyRect = body.GetComponent<RectTransform>();
+            bodyRect.anchorMin = Vector2.zero;
+            bodyRect.anchorMax = Vector2.one;
+            bodyRect.offsetMin = new Vector2(10f, 10f);
+            bodyRect.offsetMax = new Vector2(-10f, -46f);
+
+            var portraitShelf = new GameObject("PortraitShelf", typeof(RectTransform), typeof(Image));
+            portraitShelf.transform.SetParent(body.transform, false);
+            var portraitShelfRect = portraitShelf.GetComponent<RectTransform>();
+            portraitShelfRect.anchorMin = new Vector2(0f, 1f);
+            portraitShelfRect.anchorMax = new Vector2(1f, 1f);
+            portraitShelfRect.pivot = new Vector2(0.5f, 1f);
+            portraitShelfRect.sizeDelta = new Vector2(0f, 82f);
+            portraitShelfRect.anchoredPosition = Vector2.zero;
+            var portraitShelfImage = portraitShelf.GetComponent<Image>();
+            portraitShelfImage.color = new Color(0.09f, 0.13f, 0.17f, 0.98f);
+            ApplyPanelFrame(portraitShelf, portraitShelfImage.color, new Color(0.98f, 0.68f, 0.30f, 0.96f));
+
+            var portraitHeader = CreateText(portraitShelf.transform, "PortraitHeader", "ATTACKERS", 10, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            portraitHeader.rectTransform.anchorMin = new Vector2(0f, 1f);
+            portraitHeader.rectTransform.anchorMax = new Vector2(1f, 1f);
+            portraitHeader.rectTransform.pivot = new Vector2(0f, 1f);
+            portraitHeader.rectTransform.sizeDelta = new Vector2(-16f, 16f);
+            portraitHeader.rectTransform.anchoredPosition = new Vector2(10f, -6f);
+
+            var portraitViewport = new GameObject("PortraitViewport", typeof(RectTransform), typeof(Image), typeof(Mask), typeof(ScrollRect));
+            portraitViewport.transform.SetParent(portraitShelf.transform, false);
+            var portraitViewportRect = portraitViewport.GetComponent<RectTransform>();
+            portraitViewportRect.anchorMin = new Vector2(0f, 0f);
+            portraitViewportRect.anchorMax = new Vector2(1f, 1f);
+            portraitViewportRect.offsetMin = new Vector2(8f, 8f);
+            portraitViewportRect.offsetMax = new Vector2(-8f, -24f);
+            portraitViewport.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.12f, 0.01f);
+            portraitViewport.GetComponent<Mask>().showMaskGraphic = false;
+
+            var portraitStrip = new GameObject("PortraitStrip", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            portraitStrip.transform.SetParent(portraitViewport.transform, false);
+            _wavePortraitStrip = portraitStrip.GetComponent<RectTransform>();
+            _wavePortraitStrip.anchorMin = new Vector2(0f, 0.5f);
+            _wavePortraitStrip.anchorMax = new Vector2(0f, 0.5f);
+            _wavePortraitStrip.pivot = new Vector2(0f, 0.5f);
+            _wavePortraitStrip.anchoredPosition = Vector2.zero;
+            _wavePortraitStrip.sizeDelta = new Vector2(0f, 48f);
+            var portraitLayout = portraitStrip.GetComponent<HorizontalLayoutGroup>();
+            portraitLayout.childAlignment = TextAnchor.MiddleLeft;
+            portraitLayout.childControlWidth = false;
+            portraitLayout.childControlHeight = false;
+            portraitLayout.childForceExpandWidth = false;
+            portraitLayout.childForceExpandHeight = false;
+            portraitLayout.spacing = 8f;
+            portraitLayout.padding = new RectOffset(2, 2, 2, 2);
+            var portraitFitter = portraitStrip.GetComponent<ContentSizeFitter>();
+            portraitFitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            portraitFitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+
+            var portraitScrollRect = portraitViewport.GetComponent<ScrollRect>();
+            portraitScrollRect.horizontal = true;
+            portraitScrollRect.vertical = false;
+            portraitScrollRect.viewport = portraitViewportRect;
+            portraitScrollRect.content = _wavePortraitStrip;
+            portraitScrollRect.scrollSensitivity = 20f;
+
+            _wavePortraitEmptyLabel = CreateText(portraitViewport.transform, "EmptyLabel", "Waiting for attackers...", 11, TextAlignmentOptions.Center, new Color(0.74f, 0.82f, 0.90f, 0.9f));
+            _wavePortraitEmptyLabel.rectTransform.anchorMin = Vector2.zero;
+            _wavePortraitEmptyLabel.rectTransform.anchorMax = Vector2.one;
+            _wavePortraitEmptyLabel.rectTransform.offsetMin = Vector2.zero;
+            _wavePortraitEmptyLabel.rectTransform.offsetMax = Vector2.zero;
+            _wavePortraitEmptyLabel.raycastTarget = false;
+
+            _waveDetailPanel = new GameObject("WaveDetailPanel", typeof(RectTransform), typeof(Image));
+            _waveDetailPanel.transform.SetParent(body.transform, false);
+            var waveDetailRect = _waveDetailPanel.GetComponent<RectTransform>();
+            waveDetailRect.anchorMin = new Vector2(0f, 0f);
+            waveDetailRect.anchorMax = new Vector2(1f, 0f);
+            waveDetailRect.pivot = new Vector2(0.5f, 0f);
+            waveDetailRect.sizeDelta = new Vector2(0f, 96f);
+            waveDetailRect.anchoredPosition = Vector2.zero;
+            var waveDetailImage = _waveDetailPanel.GetComponent<Image>();
+            waveDetailImage.color = new Color(0.08f, 0.11f, 0.15f, 0.98f);
+            ApplyPanelFrame(_waveDetailPanel, waveDetailImage.color, new Color(0.98f, 0.68f, 0.30f, 0.92f));
+
+            var detailPortraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image));
+            detailPortraitFrame.transform.SetParent(_waveDetailPanel.transform, false);
+            var detailPortraitFrameRect = detailPortraitFrame.GetComponent<RectTransform>();
+            detailPortraitFrameRect.anchorMin = new Vector2(0f, 0.5f);
+            detailPortraitFrameRect.anchorMax = new Vector2(0f, 0.5f);
+            detailPortraitFrameRect.pivot = new Vector2(0f, 0.5f);
+            detailPortraitFrameRect.sizeDelta = new Vector2(66f, 66f);
+            detailPortraitFrameRect.anchoredPosition = new Vector2(10f, 0f);
+            var detailPortraitFrameImage = detailPortraitFrame.GetComponent<Image>();
+            detailPortraitFrameImage.color = new Color(0.13f, 0.18f, 0.24f, 0.98f);
+            ApplyPanelFrame(detailPortraitFrame, detailPortraitFrameImage.color, new Color(0.95f, 0.76f, 0.38f, 0.92f));
+
+            var detailPortraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+            detailPortraitGo.transform.SetParent(detailPortraitFrame.transform, false);
+            var detailPortraitRect = detailPortraitGo.GetComponent<RectTransform>();
+            detailPortraitRect.anchorMin = new Vector2(0.5f, 0.5f);
+            detailPortraitRect.anchorMax = new Vector2(0.5f, 0.5f);
+            detailPortraitRect.pivot = new Vector2(0.5f, 0.5f);
+            detailPortraitRect.sizeDelta = new Vector2(54f, 54f);
+            _waveDetailPortrait = detailPortraitGo.GetComponent<RawImage>();
+            _waveDetailPortrait.color = new Color(1f, 1f, 1f, 0f);
+            var detailPortraitFitter = detailPortraitGo.GetComponent<AspectRatioFitter>();
+            detailPortraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            detailPortraitFitter.aspectRatio = 1f;
+
+            _waveDetailTitle = CreateText(_waveDetailPanel.transform, "DetailTitle", "Tap a unit portrait for details.", 13, TextAlignmentOptions.Left, Color.white);
+            _waveDetailTitle.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _waveDetailTitle.rectTransform.anchorMax = new Vector2(1f, 1f);
+            _waveDetailTitle.rectTransform.pivot = new Vector2(0f, 1f);
+            _waveDetailTitle.rectTransform.sizeDelta = new Vector2(-96f, 18f);
+            _waveDetailTitle.rectTransform.anchoredPosition = new Vector2(86f, -8f);
+
+            _waveDetailSummary = CreateText(_waveDetailPanel.transform, "DetailSummary", "Select a queued attacker to inspect its stats and modifiers.", 10, TextAlignmentOptions.Left, new Color(0.94f, 0.90f, 0.76f, 0.96f));
+            _waveDetailSummary.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _waveDetailSummary.rectTransform.anchorMax = new Vector2(1f, 1f);
+            _waveDetailSummary.rectTransform.pivot = new Vector2(0f, 1f);
+            _waveDetailSummary.rectTransform.sizeDelta = new Vector2(-96f, 16f);
+            _waveDetailSummary.rectTransform.anchoredPosition = new Vector2(86f, -28f);
+
+            _waveDetailStats = CreateText(_waveDetailPanel.transform, "DetailStats", string.Empty, 9, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            _waveDetailStats.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+            _waveDetailStats.rectTransform.anchorMax = new Vector2(1f, 0.5f);
+            _waveDetailStats.rectTransform.pivot = new Vector2(0f, 0.5f);
+            _waveDetailStats.rectTransform.sizeDelta = new Vector2(-96f, 16f);
+            _waveDetailStats.rectTransform.anchoredPosition = new Vector2(86f, -2f);
+
+            _waveDetailSource = CreateText(_waveDetailPanel.transform, "DetailSource", string.Empty, 9, TextAlignmentOptions.Left, new Color(0.74f, 0.82f, 0.90f, 0.92f));
+            _waveDetailSource.rectTransform.anchorMin = new Vector2(0f, 0f);
+            _waveDetailSource.rectTransform.anchorMax = new Vector2(1f, 0f);
+            _waveDetailSource.rectTransform.pivot = new Vector2(0f, 0f);
+            _waveDetailSource.rectTransform.sizeDelta = new Vector2(-96f, 16f);
+            _waveDetailSource.rectTransform.anchoredPosition = new Vector2(86f, 8f);
+
+            overlay.SetActive(false);
+            _upcomingWavePopup = overlay;
+        }
+
+        void RefreshUpcomingWavePopup(MLLaneSnap myLane)
+        {
+            if (_upcomingWavePopup == null || !_upcomingWavePopup.activeSelf)
+                return;
+
+            var upcomingWave = FindUpcomingWaveByNumber(GetUpcomingWaveQueue(myLane), _selectedUpcomingWaveNumber);
+            if (!HasUpcomingWaveEntries(upcomingWave))
+            {
+                CloseUpcomingWavePopup();
+                return;
+            }
+
+            if (_upcomingWavePopupTitle != null)
+                _upcomingWavePopupTitle.text = $"WAVE {upcomingWave.waveNumber}";
+            if (_upcomingWavePopupSubtitle != null)
+                _upcomingWavePopupSubtitle.text = $"{Mathf.Max(1, upcomingWave.totalUnits)} attackers queued | tap a portrait for details";
+
+            RefreshUpcomingWavePortraits(upcomingWave);
+        }
+
+        void RefreshUpcomingWavePortraits(MLUpcomingWave upcomingWave)
+        {
+            if (_wavePortraitStrip == null)
+                return;
+
+            string signature = BuildUpcomingWaveSignature(upcomingWave);
+            if (!string.Equals(_lastUpcomingWavePortraitSignature, signature, StringComparison.Ordinal))
+            {
+                _lastUpcomingWavePortraitSignature = signature;
+                ClearChildren(_wavePortraitStrip);
+                _upcomingWavePortraitViews.Clear();
+
+                if (upcomingWave?.entries != null)
+                {
+                    for (int i = 0; i < upcomingWave.entries.Length; i++)
+                    {
+                        var entry = upcomingWave.entries[i];
+                        if (entry == null)
+                            continue;
+
+                        _upcomingWavePortraitViews.Add(CreateUpcomingWavePortrait(_wavePortraitStrip, entry));
+                    }
+                }
+
+            }
+
+            bool hasEntries = _upcomingWavePortraitViews.Count > 0;
+            if (_wavePortraitEmptyLabel != null)
+            {
+                _wavePortraitEmptyLabel.gameObject.SetActive(!hasEntries);
+                if (!hasEntries)
+                    _wavePortraitEmptyLabel.text = "Waiting for queued attackers...";
+            }
+
+            if (!hasEntries)
+            {
+                _selectedUpcomingWaveEntryKey = null;
+                RefreshUpcomingWaveDetail(null);
+                return;
+            }
+
+            if (FindUpcomingWaveEntryByKey(upcomingWave, _selectedUpcomingWaveEntryKey) == null)
+                _selectedUpcomingWaveEntryKey = BuildUpcomingWaveEntryKey(GetPrimaryUpcomingWaveEntry(upcomingWave));
+
+            for (int i = 0; i < _upcomingWavePortraitViews.Count; i++)
+            {
+                var view = _upcomingWavePortraitViews[i];
+                var entry = FindUpcomingWaveEntryByKey(upcomingWave, view.entryKey);
+                if (view == null || view.button == null)
+                    continue;
+
+                bool selected = string.Equals(view.entryKey, _selectedUpcomingWaveEntryKey, StringComparison.Ordinal);
+                if (view.frame != null)
+                    view.frame.color = selected ? new Color(0.98f, 0.76f, 0.36f, 1f) : new Color(0.16f, 0.22f, 0.30f, 0.96f);
+
+                if (entry != null)
+                {
+                    if (view.countLabel != null)
+                        view.countLabel.text = $"x{Mathf.Max(1, entry.count)}";
+                    if (view.nameLabel != null)
+                        view.nameLabel.text = AbbreviateLabel(ResolveUpcomingWaveEntryDisplayName(entry), 5);
+                    if (view.portrait != null)
+                    {
+                        if (TryGetUpcomingWavePortraitTexture(entry, out var texture))
+                        {
+                            view.portrait.texture = texture;
+                            view.portrait.color = Color.white;
+                        }
+                        else
+                        {
+                            view.portrait.texture = null;
+                            view.portrait.color = new Color(1f, 1f, 1f, 0f);
+                        }
+                    }
+                }
+            }
+
+            RefreshUpcomingWaveDetail(FindUpcomingWaveEntryByKey(upcomingWave, _selectedUpcomingWaveEntryKey));
+        }
+
+        UpcomingWavePortraitView CreateUpcomingWavePortrait(Transform parent, MLUpcomingWaveEntry entry)
+        {
+            string entryKey = BuildUpcomingWaveEntryKey(entry);
+            var root = new GameObject($"Upcoming_{entryKey}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            root.transform.SetParent(parent, false);
+            var rect = root.GetComponent<RectTransform>();
+            rect.sizeDelta = new Vector2(58f, 52f);
+            var image = root.GetComponent<Image>();
+            image.color = new Color(0.16f, 0.22f, 0.30f, 0.96f);
+            ApplyPanelFrame(root, image.color, new Color(0.98f, 0.76f, 0.36f, 0.86f));
+            var layout = root.GetComponent<LayoutElement>();
+            layout.preferredWidth = 58f;
+            layout.preferredHeight = 52f;
+
+            var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+            portraitGo.transform.SetParent(root.transform, false);
+            var portraitRect = portraitGo.GetComponent<RectTransform>();
+            portraitRect.anchorMin = new Vector2(0.5f, 0.5f);
+            portraitRect.anchorMax = new Vector2(0.5f, 0.5f);
+            portraitRect.pivot = new Vector2(0.5f, 0.5f);
+            portraitRect.sizeDelta = new Vector2(36f, 36f);
+            portraitRect.anchoredPosition = new Vector2(0f, -2f);
+            var portrait = portraitGo.GetComponent<RawImage>();
+            portrait.color = new Color(1f, 1f, 1f, 0f);
+            portrait.raycastTarget = false;
+            var portraitFitter = portraitGo.GetComponent<AspectRatioFitter>();
+            portraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            portraitFitter.aspectRatio = 1f;
+
+            var countLabel = CreateText(root.transform, "Count", $"x{Mathf.Max(1, entry.count)}", 8, TextAlignmentOptions.Center, Color.white);
+            countLabel.rectTransform.anchorMin = new Vector2(1f, 1f);
+            countLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+            countLabel.rectTransform.pivot = new Vector2(1f, 1f);
+            countLabel.rectTransform.sizeDelta = new Vector2(24f, 12f);
+            countLabel.rectTransform.anchoredPosition = new Vector2(-2f, -2f);
+            countLabel.raycastTarget = false;
+
+            var nameLabel = CreateText(root.transform, "Name", AbbreviateLabel(ResolveUpcomingWaveEntryDisplayName(entry), 5), 7, TextAlignmentOptions.Center, new Color(0.92f, 0.95f, 0.98f, 0.98f));
+            nameLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
+            nameLabel.rectTransform.anchorMax = new Vector2(1f, 0f);
+            nameLabel.rectTransform.pivot = new Vector2(0.5f, 0f);
+            nameLabel.rectTransform.sizeDelta = new Vector2(0f, 10f);
+            nameLabel.rectTransform.anchoredPosition = new Vector2(0f, 1f);
+            nameLabel.raycastTarget = false;
+
+            var button = root.GetComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.RemoveAllListeners();
+            button.onClick.AddListener(() => HandleUpcomingWavePortraitSelected(entryKey));
+
+            return new UpcomingWavePortraitView
+            {
+                entryKey = entryKey,
+                button = button,
+                frame = image,
+                portrait = portrait,
+                countLabel = countLabel,
+                nameLabel = nameLabel,
+            };
+        }
+
+        void HandleUpcomingWavePortraitSelected(string entryKey)
+        {
+            _selectedUpcomingWaveEntryKey = entryKey;
+            RefreshUpcomingWavePopup(SnapshotApplier.Instance?.MyLane);
+        }
+
+        void RefreshUpcomingWaveDetail(MLUpcomingWaveEntry entry)
+        {
+            if (_waveDetailTitle == null || _waveDetailSummary == null || _waveDetailStats == null || _waveDetailSource == null)
+                return;
+
+            if (entry == null)
+            {
+                _waveDetailTitle.text = "Tap a queued attacker for details.";
+                _waveDetailSummary.text = "Select a wave entry to inspect its stats and modifiers.";
+                _waveDetailStats.text = string.Empty;
+                _waveDetailSource.text = string.Empty;
+                if (_waveDetailPortrait != null)
+                {
+                    _waveDetailPortrait.texture = null;
+                    _waveDetailPortrait.color = new Color(1f, 1f, 1f, 0f);
+                }
+                return;
+            }
+
+            TryGetUnitCatalogEntry(entry.unitType, out var catalogEntry);
+            _waveDetailTitle.text = $"{ResolveUpcomingWaveEntryDisplayName(entry)} x{Mathf.Max(1, entry.count)}";
+            _waveDetailSummary.text = !string.IsNullOrWhiteSpace(catalogEntry?.description)
+                ? catalogEntry.description
+                : "Snapshot-driven upcoming wave entry.";
+            _waveDetailStats.text = FormatUpcomingWaveStats(entry, catalogEntry);
+            _waveDetailSource.text = ResolveUpcomingWaveSourceText(entry);
+
+            if (_waveDetailPortrait != null)
+            {
+                if (TryGetUpcomingWavePortraitTexture(entry, out var texture))
+                {
+                    _waveDetailPortrait.texture = texture;
+                    _waveDetailPortrait.color = Color.white;
+                }
+                else
+                {
+                    _waveDetailPortrait.texture = null;
+                    _waveDetailPortrait.color = new Color(1f, 1f, 1f, 0f);
+                }
+            }
+        }
+
+        Coroutine StartUpcomingWavePortraitLoad(MLUpcomingWave upcomingWave)
+        {
+            return StartUpcomingWavePortraitLoad(upcomingWave != null ? new[] { upcomingWave } : null);
+        }
+
+        Coroutine StartUpcomingWavePortraitLoad(IEnumerable<MLUpcomingWave> upcomingWaves)
+        {
+            var remoteContent = RemoteContentManager.Instance;
+            if (remoteContent == null || upcomingWaves == null)
+                return null;
+
+            var unitKeys = CollectUpcomingWavePortraitKeys(upcomingWaves);
+
+            if (unitKeys.Count == 0 || remoteContent.ArePortraitsReady(unitKeys))
+                return null;
+
+            return StartCoroutine(LoadUpcomingWavePortraits(remoteContent, unitKeys));
+        }
+
+        static List<string> CollectUpcomingWavePortraitKeys(IEnumerable<MLUpcomingWave> upcomingWaves)
+        {
+            var unitKeys = new List<string>();
+            if (upcomingWaves == null)
+                return unitKeys;
+
+            foreach (var upcomingWave in upcomingWaves)
+            {
+                if (upcomingWave?.entries == null)
+                    continue;
+
+                for (int i = 0; i < upcomingWave.entries.Length; i++)
+                {
+                    string unitKey = ResolveUpcomingWavePortraitLookupKey(upcomingWave.entries[i]);
+                    if (!string.IsNullOrWhiteSpace(unitKey) && !unitKeys.Contains(unitKey))
+                        unitKeys.Add(unitKey);
+                }
+            }
+
+            return unitKeys;
+        }
+
+        void CreateTowerStatusCard(Transform parent, string buildingType)
+        {
+            var card = new GameObject($"{buildingType}_Status", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            card.transform.SetParent(parent, false);
+            var image = card.GetComponent<Image>();
+            image.color = new Color(0.13f, 0.17f, 0.22f, 0.98f);
+            ApplyPanelFrame(card, image.color, ResolveTowerAccentColor(buildingType));
+
+            var layout = card.GetComponent<LayoutElement>();
+            layout.preferredWidth = 126f;
+            layout.preferredHeight = 48f;
+
+            var nameLabel = CreateText(card.transform, "Title", ResolveTowerDisplayName(buildingType), 11, TextAlignmentOptions.Left, Color.white);
+            nameLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
+            nameLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+            nameLabel.rectTransform.pivot = new Vector2(0f, 1f);
+            nameLabel.rectTransform.sizeDelta = new Vector2(-16f, 14f);
+            nameLabel.rectTransform.anchoredPosition = new Vector2(8f, -6f);
+
+            var tierLabel = CreateText(card.transform, "Tier", "Tier --", 9, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            tierLabel.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+            tierLabel.rectTransform.anchorMax = new Vector2(1f, 0.5f);
+            tierLabel.rectTransform.pivot = new Vector2(0f, 0.5f);
+            tierLabel.rectTransform.sizeDelta = new Vector2(-16f, 12f);
+            tierLabel.rectTransform.anchoredPosition = new Vector2(8f, -2f);
+
+            var hpTrack = new GameObject("HpTrack", typeof(RectTransform), typeof(Image));
+            hpTrack.transform.SetParent(card.transform, false);
+            var hpTrackRect = hpTrack.GetComponent<RectTransform>();
+            hpTrackRect.anchorMin = new Vector2(0f, 0f);
+            hpTrackRect.anchorMax = new Vector2(1f, 0f);
+            hpTrackRect.pivot = new Vector2(0.5f, 0f);
+            hpTrackRect.sizeDelta = new Vector2(-16f, 8f);
+            hpTrackRect.anchoredPosition = new Vector2(0f, 6f);
+            var hpTrackImage = hpTrack.GetComponent<Image>();
+            hpTrackImage.color = new Color(0.18f, 0.21f, 0.27f, 0.96f);
+
+            var hpFill = new GameObject("HpFill", typeof(RectTransform), typeof(Image));
+            hpFill.transform.SetParent(hpTrack.transform, false);
+            var hpFillRect = hpFill.GetComponent<RectTransform>();
+            hpFillRect.anchorMin = Vector2.zero;
+            hpFillRect.anchorMax = Vector2.one;
+            hpFillRect.offsetMin = Vector2.zero;
+            hpFillRect.offsetMax = Vector2.zero;
+            var hpFillImage = hpFill.GetComponent<Image>();
+            hpFillImage.type = Image.Type.Filled;
+            hpFillImage.fillMethod = Image.FillMethod.Horizontal;
+            hpFillImage.fillAmount = 1f;
+            hpFillImage.color = new Color(0.36f, 0.86f, 0.48f, 0.96f);
+
+            var hpLabel = CreateText(card.transform, "HpLabel", "0/0 HP", 8, TextAlignmentOptions.Right, new Color(0.92f, 0.95f, 0.98f, 0.96f));
+            hpLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
+            hpLabel.rectTransform.anchorMax = new Vector2(1f, 0f);
+            hpLabel.rectTransform.pivot = new Vector2(1f, 0f);
+            hpLabel.rectTransform.sizeDelta = new Vector2(-16f, 10f);
+            hpLabel.rectTransform.anchoredPosition = new Vector2(-8f, 16f);
+
+            _towerStatusViews[buildingType] = new TowerStatusView
+            {
+                buildingType = buildingType,
+                nameLabel = nameLabel,
+                tierLabel = tierLabel,
+                hpLabel = hpLabel,
+                hpFill = hpFillImage,
+            };
+        }
+
+        Button CreateHudActionButton(Transform parent, string name, string label, Color backgroundColor, out TMP_Text labelText)
+        {
+            var buttonGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+            buttonGo.transform.SetParent(parent, false);
+            var image = buttonGo.GetComponent<Image>();
+            image.color = backgroundColor;
+            ApplyPanelFrame(buttonGo, backgroundColor, new Color(0.92f, 0.95f, 0.98f, 0.86f));
+
+            labelText = CreateText(buttonGo.transform, "Label", label, 11, TextAlignmentOptions.Center, Color.white);
+            labelText.rectTransform.anchorMin = Vector2.zero;
+            labelText.rectTransform.anchorMax = Vector2.one;
+            labelText.rectTransform.offsetMin = Vector2.zero;
+            labelText.rectTransform.offsetMax = Vector2.zero;
+            labelText.alignment = TextAlignmentOptions.Center;
+            return buttonGo.GetComponent<Button>();
+        }
+
+        void SetHudButtonVisual(Button button, TMP_Text label, string text, Color backgroundColor, bool interactable)
+        {
+            if (button == null)
+                return;
+
+            button.interactable = interactable;
+            var image = button.GetComponent<Image>();
+            if (image != null)
+                image.color = backgroundColor;
+            if (label != null)
+            {
+                label.text = text;
+                label.color = interactable ? Color.white : new Color(0.88f, 0.91f, 0.96f, 0.96f);
+            }
+        }
+
+        static bool ContainsLaneIndex(int[] laneIndices, int laneIndex)
+        {
+            if (laneIndices == null)
+                return false;
+
+            for (int i = 0; i < laneIndices.Length; i++)
+            {
+                if (laneIndices[i] == laneIndex)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static int CountBuiltTowerPads(MLLaneSnap lane)
+        {
+            int count = 0;
+            if (lane?.fortressPads == null)
+                return count;
+
+            for (int i = 0; i < WaveTowerBuildingOrder.Length; i++)
+            {
+                var pad = FindFortressPad(lane, WaveTowerBuildingOrder[i]);
+                if (pad != null && pad.isBuilt)
+                    count++;
+            }
+
+            return count;
+        }
+
+        static MLFortressPad FindFortressPad(MLLaneSnap lane, string buildingType)
+        {
+            if (lane?.fortressPads == null || string.IsNullOrWhiteSpace(buildingType))
+                return null;
+
+            for (int i = 0; i < lane.fortressPads.Length; i++)
+            {
+                var pad = lane.fortressPads[i];
+                if (pad != null && string.Equals(pad.buildingType, buildingType, StringComparison.OrdinalIgnoreCase))
+                    return pad;
+            }
+
+            return null;
+        }
+
+        bool TryGetUnitCatalogEntry(string unitKey, out UnitCatalogEntry entry)
+        {
+            entry = null;
+            if (string.IsNullOrWhiteSpace(unitKey))
+                return false;
+
+            if (_catalogByKey.TryGetValue(unitKey, out entry) && entry != null)
+                return true;
+
+            if (CatalogLoader.UnitByKey.TryGetValue(unitKey, out entry) && entry != null)
+            {
+                _catalogByKey[unitKey] = entry;
+                return true;
+            }
+
+            return false;
+        }
+
+        bool TryGetUpcomingWavePortraitTexture(MLUpcomingWaveEntry entry, out Texture2D texture)
+        {
+            texture = null;
+            var remoteContent = RemoteContentManager.Instance;
+            if (entry == null)
+                return false;
+
+            string lookupKey = ResolveUpcomingWavePortraitLookupKey(entry);
+            if (string.IsNullOrWhiteSpace(lookupKey))
+            {
+                LogMissingUpcomingWavePortrait(entry, "Wave entry did not provide a portrait lookup key.");
+                return false;
+            }
+
+            if (remoteContent == null)
+            {
+                LogMissingUpcomingWavePortrait(entry, $"Remote content manager is unavailable for portrait key '{lookupKey}'.");
+                return false;
+            }
+
+            return remoteContent.TryGetLoadedPortraitTexture(lookupKey, out texture)
+                && texture != null;
+        }
+
+        static string BuildUpcomingWaveEntryKey(MLUpcomingWaveEntry entry)
+        {
+            if (entry == null)
+                return string.Empty;
+
+            return string.Join("|",
+                entry.source ?? string.Empty,
+                entry.unitType ?? string.Empty,
+                entry.skinKey ?? string.Empty,
+                entry.isHero ? "hero" : "unit",
+                entry.hpMult.ToString("0.###"),
+                entry.dmgMult.ToString("0.###"),
+                entry.speedMult.ToString("0.###"),
+                entry.sourceLaneIndex.ToString(),
+                entry.sourceBarracksId ?? string.Empty,
+                entry.heroKey ?? string.Empty);
+        }
+
+        static string BuildUpcomingWaveSignature(MLUpcomingWave upcomingWave)
+        {
+            if (upcomingWave?.entries == null || upcomingWave.entries.Length == 0)
+                return string.Empty;
+
+            var parts = new string[upcomingWave.entries.Length];
+            for (int i = 0; i < upcomingWave.entries.Length; i++)
+            {
+                var entry = upcomingWave.entries[i];
+                parts[i] = entry == null
+                    ? "null"
+                    : $"{BuildUpcomingWaveEntryKey(entry)}:{entry.count}:{entry.hpMult:0.###}:{entry.dmgMult:0.###}:{entry.speedMult:0.###}";
+            }
+
+            return string.Join(";", parts);
+        }
+
+        static string BuildUpcomingWaveQueueSignature(MLUpcomingWave[] queue)
+        {
+            if (queue == null || queue.Length == 0)
+                return string.Empty;
+
+            var parts = new List<string>(queue.Length);
+            for (int i = 0; i < queue.Length; i++)
+            {
+                var upcomingWave = queue[i];
+                if (!HasUpcomingWaveEntries(upcomingWave))
+                    continue;
+
+                parts.Add($"W{upcomingWave.waveNumber}:{BuildUpcomingWaveSignature(upcomingWave)}");
+            }
+
+            return string.Join("||", parts);
+        }
+
+        static MLUpcomingWave[] GetUpcomingWaveQueue(MLLaneSnap lane)
+        {
+            if (lane?.upcomingWaveQueue != null && lane.upcomingWaveQueue.Length > 0)
+                return lane.upcomingWaveQueue;
+
+            return HasUpcomingWaveEntries(lane?.upcomingWave)
+                ? new[] { lane.upcomingWave }
+                : Array.Empty<MLUpcomingWave>();
+        }
+
+        static MLUpcomingWave FindUpcomingWaveByNumber(MLUpcomingWave[] queue, int waveNumber)
+        {
+            if (queue == null || waveNumber <= 0)
+                return null;
+
+            for (int i = 0; i < queue.Length; i++)
+            {
+                var upcomingWave = queue[i];
+                if (upcomingWave != null && upcomingWave.waveNumber == waveNumber)
+                    return upcomingWave;
+            }
+
+            return null;
+        }
+
+        static bool HasUpcomingWaveEntries(MLUpcomingWave upcomingWave)
+        {
+            return upcomingWave?.entries != null && upcomingWave.entries.Length > 0;
+        }
+
+        static MLUpcomingWaveEntry GetPrimaryUpcomingWaveEntry(MLUpcomingWave upcomingWave)
+        {
+            if (upcomingWave?.entries == null)
+                return null;
+
+            for (int i = 0; i < upcomingWave.entries.Length; i++)
+            {
+                if (upcomingWave.entries[i] != null)
+                    return upcomingWave.entries[i];
+            }
+
+            return null;
+        }
+
+        string BuildUpcomingWaveCardSummary(MLUpcomingWave upcomingWave)
+        {
+            if (!HasUpcomingWaveEntries(upcomingWave))
+                return "Empty";
+
+            int entryCount = 0;
+            for (int i = 0; i < upcomingWave.entries.Length; i++)
+            {
+                if (upcomingWave.entries[i] != null)
+                    entryCount++;
+            }
+
+            if (entryCount <= 1)
+                return AbbreviateLabel(ResolveUpcomingWaveEntryDisplayName(GetPrimaryUpcomingWaveEntry(upcomingWave)), 10);
+
+            return $"{entryCount} types";
+        }
+
+        static MLUpcomingWaveEntry FindUpcomingWaveEntryByKey(MLUpcomingWave upcomingWave, string entryKey)
+        {
+            if (upcomingWave?.entries == null || string.IsNullOrWhiteSpace(entryKey))
+                return null;
+
+            for (int i = 0; i < upcomingWave.entries.Length; i++)
+            {
+                var entry = upcomingWave.entries[i];
+                if (entry != null && string.Equals(BuildUpcomingWaveEntryKey(entry), entryKey, StringComparison.Ordinal))
+                    return entry;
+            }
+
+            return null;
+        }
+
+        string ResolveUpcomingWaveEntryDisplayName(MLUpcomingWaveEntry entry)
+        {
+            if (entry == null)
+                return "Wave Entry";
+            if (!string.IsNullOrWhiteSpace(entry.heroKey))
+                return HumanizeIdentifier(entry.heroKey);
+            if (!string.IsNullOrWhiteSpace(entry.skinKey))
+            {
+                string displayKey = entry.skinKey.StartsWith("tt_", StringComparison.OrdinalIgnoreCase)
+                    ? entry.skinKey.Substring(3)
+                    : entry.skinKey;
+                return HumanizeIdentifier(displayKey);
+            }
+            if (TryGetUnitCatalogEntry(entry.unitType, out var catalog) && !string.IsNullOrWhiteSpace(catalog?.name))
+                return catalog.name;
+            return HumanizeIdentifier(!string.IsNullOrWhiteSpace(entry.unitType) ? entry.unitType : entry.skinKey);
+        }
+
+        string FormatUpcomingWaveStats(MLUpcomingWaveEntry entry, UnitCatalogEntry catalogEntry)
+        {
+            if (entry == null)
+                return string.Empty;
+
+            float hp = catalogEntry != null ? catalogEntry.hp * Mathf.Max(0.01f, entry.hpMult) : 0f;
+            float damage = catalogEntry != null ? catalogEntry.attack_damage * Mathf.Max(0.01f, entry.dmgMult) : 0f;
+            float speed = BarracksSpawnCombatProfileResolver.ResolveUpcomingWaveServerPathSpeed(
+                entry,
+                SnapshotApplier.Instance?.LatestMLMatchConfig?.movementTuning);
+            float range = catalogEntry != null ? catalogEntry.range : 0f;
+
+            if (catalogEntry == null)
+                return $"Count {Mathf.Max(1, entry.count)} | HP x{entry.hpMult:0.##} | DMG x{entry.dmgMult:0.##} | SPD x{entry.speedMult:0.##}";
+
+            return $"HP {Mathf.RoundToInt(hp)} | DMG {damage:0.#} | SPD {speed:0.##} | RNG {range:0.#}";
+        }
+
+        string ResolveUpcomingWaveSourceText(MLUpcomingWaveEntry entry)
+        {
+            if (entry == null)
+                return string.Empty;
+
+            string source = string.IsNullOrWhiteSpace(entry.source)
+                ? "Wave script"
+                : HumanizeIdentifier(entry.source);
+            if (entry.isHero && !string.IsNullOrWhiteSpace(entry.heroKey))
+                source = $"Hero deployment | {HumanizeIdentifier(entry.heroKey)}";
+            else if (!string.IsNullOrWhiteSpace(entry.sourceBarracksId))
+                source = $"{source} | {HumanizeIdentifier(entry.sourceBarracksId)}";
+
+            if (entry.sourceLaneIndex >= 0)
+                source += $" | Lane {entry.sourceLaneIndex + 1}";
+
+            return source;
+        }
+
+        IEnumerator LoadUpcomingWavePortraits(RemoteContentManager remoteContent, List<string> unitKeys)
+        {
+            yield return remoteContent.EnsurePortraitsReady(unitKeys, requester: "MobileMatchHud.WaveOverview");
+
+            if (!remoteContent.ArePortraitsReady(unitKeys))
+            {
+                string reason = string.IsNullOrWhiteSpace(remoteContent.LastError)
+                    ? "Portrait request finished without loading the requested upcoming-wave portraits."
+                    : remoteContent.LastError;
+                LogMissingUpcomingWavePortrait($"batch:{string.Join(",", unitKeys)}", reason);
+            }
+
+            _wavePortraitLoadCoroutine = null;
+        }
+
+        static string ResolveUpcomingWavePortraitLookupKey(MLUpcomingWaveEntry entry)
+        {
+            if (entry == null)
+                return null;
+
+            return !string.IsNullOrWhiteSpace(entry.skinKey)
+                ? entry.skinKey.Trim()
+                : entry.unitType?.Trim();
+        }
+
+        void LogMissingUpcomingWavePortrait(MLUpcomingWaveEntry entry, string reason)
+        {
+            if (entry == null)
+                return;
+
+            LogMissingUpcomingWavePortrait(
+                $"{BuildUpcomingWaveEntryKey(entry)}:{ResolveUpcomingWavePortraitLookupKey(entry)}",
+                reason);
+        }
+
+        void LogMissingUpcomingWavePortrait(string key, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(key) || !_missingUpcomingWavePortraitLogs.Add(key))
+                return;
+
+            Debug.LogWarning($"[MobileMatchHud] Missing upcoming-wave portrait for '{key}'. {reason}");
+        }
+
+        static string ResolveTowerDisplayName(string buildingType)
+        {
+            return buildingType switch
+            {
+                "blacksmith" => "Blacksmith",
+                "archery_tower" => "Archery Tower",
+                "temple" => "Temple",
+                "wizard_tower" => "Wizard Tower",
+                _ => HumanizeIdentifier(buildingType),
+            };
+        }
+
+        static string ResolveTowerTierLabel(MLFortressPad pad)
+        {
+            if (pad == null)
+                return "Unavailable";
+
+            if (!pad.isBuilt)
+            {
+                if (pad.canBuild)
+                    return $"Build {pad.buildCost}g";
+                if (!string.IsNullOrWhiteSpace(pad.lockedReason))
+                    return pad.lockedReason;
+                return "Not built";
+            }
+
+            if (!string.IsNullOrWhiteSpace(pad.currentTierName))
+                return pad.currentTierName;
+
+            return $"Tier {Mathf.Max(1, pad.tier)}";
+        }
+
+        static Color ResolveTowerAccentColor(string buildingType)
+        {
+            return buildingType switch
+            {
+                "blacksmith" => new Color(0.86f, 0.54f, 0.34f, 0.96f),
+                "archery_tower" => new Color(0.48f, 0.86f, 0.46f, 0.96f),
+                "temple" => new Color(0.48f, 0.82f, 0.96f, 0.96f),
+                "wizard_tower" => new Color(0.78f, 0.58f, 0.98f, 0.96f),
+                _ => new Color(0.72f, 0.78f, 0.86f, 0.96f),
+            };
+        }
+
+        static Color ResolvePadHealthColor(float ratio)
+        {
+            if (ratio >= 0.7f)
+                return new Color(0.36f, 0.86f, 0.48f, 0.96f);
+            if (ratio >= 0.35f)
+                return new Color(0.94f, 0.74f, 0.28f, 0.96f);
+            return new Color(0.95f, 0.38f, 0.34f, 0.96f);
+        }
+
+        static string AbbreviateLabel(string value, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "--";
+
+            string compact = value.Trim();
+            return compact.Length <= maxChars
+                ? compact.ToUpperInvariant()
+                : compact.Substring(0, maxChars).ToUpperInvariant();
+        }
+
+        static string HumanizeIdentifier(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "--";
+
+            string[] parts = value.Replace('_', ' ').Replace('-', ' ').Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string part = parts[i];
+                if (part.Length == 0)
+                    continue;
+
+                parts[i] = part.Length == 1
+                    ? part.ToUpperInvariant()
+                    : char.ToUpperInvariant(part[0]) + part.Substring(1).ToLowerInvariant();
+            }
+
+            return string.Join(" ", parts);
         }
 
         void BuildSettingsPanel()
@@ -849,7 +2343,7 @@ namespace CastleDefender.UI
             panelLayout.spacing = 6f;
             panelLayout.padding = new RectOffset(10, 10, 10, 10);
 
-            var title = CreateText(panel.transform, "Title", "Camera", 12, TextAlignmentOptions.Center, new Color(0.90f, 0.93f, 0.97f, 0.94f));
+            var title = CreateText(panel.transform, "Title", "Settings", 12, TextAlignmentOptions.Center, new Color(0.90f, 0.93f, 0.97f, 0.94f));
             title.fontStyle = FontStyles.SmallCaps;
             var titleLayout = title.gameObject.AddComponent<LayoutElement>();
             titleLayout.preferredHeight = 16f;
@@ -908,6 +2402,11 @@ namespace CastleDefender.UI
                 new Color(0.28f, 0.20f, 0.16f, 0.98f),
                 out var rotateRightButton);
 
+            var quitButton = CreateSettingsActionButton(rows.transform, "QuitButton", "Quit", new Color(0.42f, 0.17f, 0.17f, 0.98f));
+            var quitLayout = quitButton.GetComponent<LayoutElement>();
+            if (quitLayout != null)
+                quitLayout.preferredHeight = 40f;
+
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
             var gearRect = gear.GetComponent<RectTransform>();
@@ -921,7 +2420,7 @@ namespace CastleDefender.UI
             gearImage.color = new Color(0.11f, 0.15f, 0.19f, 0.98f);
             ApplyPanelFrame(gear, gearImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
 
-            var gearLabel = CreateText(gear.transform, "Label", "\u2699", 22, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            var gearLabel = CreateText(gear.transform, "Label", "Menu", 16, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
             gearLabel.rectTransform.anchorMin = Vector2.zero;
             gearLabel.rectTransform.anchorMax = Vector2.one;
             gearLabel.rectTransform.offsetMin = Vector2.zero;
@@ -937,6 +2436,7 @@ namespace CastleDefender.UI
                 gear.GetComponent<Button>(),
                 false,
                 "hud.settings_panel",
+                false,
                 expandedPosition,
                 collapsedPosition);
 
@@ -946,6 +2446,73 @@ namespace CastleDefender.UI
             zoomOutButton.onClick.AddListener(() => AdjustCameraZoom(settingsZoomStep));
             rotateLeftButton.onClick.AddListener(() => AdjustCameraRotation(-settingsRotateStep));
             rotateRightButton.onClick.AddListener(() => AdjustCameraRotation(settingsRotateStep));
+            quitButton.onClick.AddListener(OnQuitPressed);
+        }
+
+        void BuildQuitConfirmationModal()
+        {
+            if (_canvasRect == null)
+                return;
+
+            DestroyCanvasChildren(QuitConfirmationModalName);
+
+            var overlay = new GameObject(QuitConfirmationModalName, typeof(RectTransform), typeof(Image));
+            overlay.transform.SetParent(_canvasRect, false);
+            overlay.transform.SetAsLastSibling();
+            var overlayRect = overlay.GetComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+            overlay.GetComponent<Image>().color = new Color(0.02f, 0.04f, 0.07f, 0.84f);
+
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
+            panel.transform.SetParent(overlay.transform, false);
+            var panelRect = panel.GetComponent<RectTransform>();
+            panelRect.anchorMin = new Vector2(0.5f, 0.5f);
+            panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+            panelRect.pivot = new Vector2(0.5f, 0.5f);
+            panelRect.sizeDelta = new Vector2(320f, 184f);
+
+            var panelImage = panel.GetComponent<Image>();
+            panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.98f);
+            ApplyPanelFrame(panel, panelImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
+
+            var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
+            panelLayout.childAlignment = TextAnchor.UpperCenter;
+            panelLayout.childControlWidth = true;
+            panelLayout.childControlHeight = false;
+            panelLayout.childForceExpandWidth = true;
+            panelLayout.childForceExpandHeight = false;
+            panelLayout.spacing = 10f;
+            panelLayout.padding = new RectOffset(18, 18, 18, 18);
+
+            var title = CreateText(panel.transform, "Title", "Quit Game?", 20, TextAlignmentOptions.Center, Color.white);
+            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 30f;
+
+            var body = CreateText(panel.transform, "Body", "Are you sure you want to quit?", 13, TextAlignmentOptions.Center, new Color(0.88f, 0.91f, 0.96f, 0.96f));
+            body.fontStyle = FontStyles.Normal;
+            body.textWrappingMode = TextWrappingModes.Normal;
+            body.gameObject.AddComponent<LayoutElement>().preferredHeight = 54f;
+
+            var buttons = new GameObject("Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            buttons.transform.SetParent(panel.transform, false);
+            var buttonsLayout = buttons.GetComponent<HorizontalLayoutGroup>();
+            buttonsLayout.childAlignment = TextAnchor.MiddleCenter;
+            buttonsLayout.childControlWidth = true;
+            buttonsLayout.childControlHeight = true;
+            buttonsLayout.childForceExpandWidth = true;
+            buttonsLayout.childForceExpandHeight = false;
+            buttonsLayout.spacing = 12f;
+            buttons.GetComponent<LayoutElement>().preferredHeight = 44f;
+
+            _quitConfirmationCancelButton = CreateQuitConfirmationButton(buttons.transform, "CancelButton", "Cancel", new Color(0.18f, 0.24f, 0.30f, 0.98f), out _);
+            _quitConfirmationConfirmButton = CreateQuitConfirmationButton(buttons.transform, "ConfirmButton", "Confirm", new Color(0.42f, 0.17f, 0.17f, 0.98f), out _quitConfirmationConfirmLabel);
+            _quitConfirmationCancelButton.onClick.AddListener(CancelQuit);
+            _quitConfirmationConfirmButton.onClick.AddListener(ConfirmQuit);
+
+            _quitConfirmationModal = overlay;
+            HideQuitConfirmation();
         }
 
         void CreateSettingsActionRow(
@@ -999,6 +2566,23 @@ namespace CastleDefender.UI
             labelText.rectTransform.offsetMax = new Vector2(-4f, -2f);
 
             return buttonGo.GetComponent<Button>();
+        }
+
+        Button CreateQuitConfirmationButton(Transform parent, string name, string label, Color backgroundColor, out TMP_Text labelText)
+        {
+            var button = CreateSettingsActionButton(parent, name, label, backgroundColor);
+            var layout = button.GetComponent<LayoutElement>();
+            if (layout != null)
+            {
+                layout.preferredHeight = 44f;
+                layout.flexibleHeight = 0f;
+            }
+
+            labelText = button.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
+            if (labelText != null)
+                labelText.fontSize = Mathf.RoundToInt(12f * GetFontScale());
+
+            return button;
         }
 
         TMP_Text CreateSettingsValueDisplay(Transform parent, string name)
@@ -1075,6 +2659,83 @@ namespace CastleDefender.UI
                 return Mathf.RoundToInt(roundedValue).ToString();
 
             return roundedValue.ToString("0.#");
+        }
+
+        void OnQuitPressed()
+        {
+            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+            ShowQuitConfirmation();
+        }
+
+        void ShowQuitConfirmation()
+        {
+            if (_quitConfirmationModal == null)
+                BuildQuitConfirmationModal();
+
+            if (_quitConfirmationModal == null)
+                return;
+
+            _isLeavingMatch = false;
+            if (_quitConfirmationConfirmLabel != null)
+                _quitConfirmationConfirmLabel.text = "Confirm";
+            if (_quitConfirmationConfirmButton != null)
+                _quitConfirmationConfirmButton.interactable = true;
+            if (_quitConfirmationCancelButton != null)
+                _quitConfirmationCancelButton.interactable = true;
+            _quitConfirmationModal.SetActive(true);
+            _quitConfirmationModal.transform.SetAsLastSibling();
+        }
+
+        void HideQuitConfirmation()
+        {
+            if (_quitConfirmationModal != null)
+                _quitConfirmationModal.SetActive(false);
+
+            _isLeavingMatch = false;
+            if (_quitConfirmationConfirmLabel != null)
+                _quitConfirmationConfirmLabel.text = "Confirm";
+            if (_quitConfirmationConfirmButton != null)
+                _quitConfirmationConfirmButton.interactable = true;
+            if (_quitConfirmationCancelButton != null)
+                _quitConfirmationCancelButton.interactable = true;
+        }
+
+        void ConfirmQuit()
+        {
+            if (_isLeavingMatch)
+                return;
+
+            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+            _isLeavingMatch = true;
+            if (_quitConfirmationConfirmLabel != null)
+                _quitConfirmationConfirmLabel.text = "Leaving...";
+            if (_quitConfirmationConfirmButton != null)
+                _quitConfirmationConfirmButton.interactable = false;
+            if (_quitConfirmationCancelButton != null)
+                _quitConfirmationCancelButton.interactable = false;
+
+            ClearReconnectPrefs();
+            NetworkManager.Instance?.Emit("leave_game", null);
+            Debug.Log("[MobileMatchHud] Quit confirmed. Returning to Lobby.");
+            LoadingScreen.LoadScene("Lobby");
+        }
+
+        void CancelQuit()
+        {
+            if (_isLeavingMatch)
+                return;
+
+            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+            HideQuitConfirmation();
+        }
+
+        static void ClearReconnectPrefs()
+        {
+            PlayerPrefs.DeleteKey("reconnect_token");
+            PlayerPrefs.DeleteKey("reconnect_code");
+            PlayerPrefs.DeleteKey("reconnect_lane");
+            PlayerPrefs.DeleteKey("reconnect_gametype");
+            PlayerPrefs.Save();
         }
 
         void CreateWaveStatusChip(Transform parent, string name, string tag, string value, Color accentColor)
@@ -1457,7 +3118,7 @@ namespace CastleDefender.UI
 
             var leftTag = CreateText(leftGroup.transform, "LeftTag", leftLabel, 9, TextAlignmentOptions.Left, leftColor);
             leftTag.fontStyle = FontStyles.SmallCaps;
-            leftTag.enableWordWrapping = false;
+            leftTag.textWrappingMode = TextWrappingModes.NoWrap;
             leftTag.overflowMode = TextOverflowModes.Overflow;
             leftTag.rectTransform.sizeDelta = new Vector2(22f, 14f);
 
@@ -1493,7 +3154,7 @@ namespace CastleDefender.UI
 
             var rightTag = CreateText(rightGroup.transform, "RightTag", rightLabel, 9, TextAlignmentOptions.Left, rightColor);
             rightTag.fontStyle = FontStyles.SmallCaps;
-            rightTag.enableWordWrapping = false;
+            rightTag.textWrappingMode = TextWrappingModes.NoWrap;
             rightTag.overflowMode = TextOverflowModes.Overflow;
             rightTag.rectTransform.sizeDelta = new Vector2(22f, 14f);
 
@@ -1564,7 +3225,9 @@ namespace CastleDefender.UI
             rect.pivot = new Vector2(0.5f, 1f);
             rect.sizeDelta = new Vector2(0f, 3f);
             rect.anchoredPosition = Vector2.zero;
-            accent.GetComponent<Image>().color = accentColor;
+            var accentImage = accent.GetComponent<Image>();
+            accentImage.color = accentColor;
+            accentImage.raycastTarget = false;
         }
 
         void BindLegacyHudRefs()
@@ -1584,6 +3247,9 @@ namespace CastleDefender.UI
             var infoBar = GetComponent<InfoBar>();
             if (infoBar != null)
             {
+                infoBar.BtnBarracks = _runtimeBarracksButton;
+                infoBar.BarracksPanel = _runtimeBarracksPanel;
+                infoBar.TxtBarracksLv = _txtBarracksLevel;
                 infoBar.TxtWave = _txtRound;
                 infoBar.TxtPhase = _txtPhase;
                 infoBar.TxtCountdown = _txtCountdown;
@@ -1604,6 +3270,20 @@ namespace CastleDefender.UI
             var myLane = sa.MyLane;
             if (myLane == null)
                 return;
+
+            int configuredCoreHp = sa.LatestMLMatchConfig != null
+                ? Mathf.Max(0, sa.LatestMLMatchConfig.teamHpStart)
+                : 0;
+            int myCoreHp = Mathf.Max(0, myLane.lives);
+            int myCoreHpMax = Mathf.Max(myCoreHp, configuredCoreHp);
+            if (!sa.TryGetTownCoreHp(myLane.laneIndex, out myCoreHp, out myCoreHpMax))
+                myCoreHpMax = Mathf.Max(myCoreHp, myCoreHpMax, configuredCoreHp);
+
+            int sideHpMax = snap.teamHpMax > 0
+                ? snap.teamHpMax
+                : Mathf.Max(snap.teamHp?.left ?? 0, snap.teamHp?.right ?? 0, myCoreHpMax, 20);
+            int leftSideHp = snap.teamHp?.left ?? 0;
+            int rightSideHp = snap.teamHp?.right ?? 0;
 
             float myBuild = CalculateLaneBuildValue(myLane);
             float recommendedBuild = EstimateRecommendedBuild(snap.roundNumber);
@@ -1654,27 +3334,8 @@ namespace CastleDefender.UI
                     buildColor);
             }
 
-            if (_waveStatusWidget != null)
-            {
-                int teamHpMax = snap.teamHpMax > 0 ? snap.teamHpMax : 20;
-                int leftHp = snap.teamHp?.left ?? 0;
-                int rightHp = snap.teamHp?.right ?? 0;
-                float leftRatio = teamHpMax > 0 ? (float)leftHp / teamHpMax : 0f;
-                float rightRatio = teamHpMax > 0 ? (float)rightHp / teamHpMax : 0f;
-                string phase = $"{(snap.roundState ?? "build").ToUpperInvariant()} {Mathf.Max(0, snap.roundStateTicks)}s";
-                string footer = $"Wave target {Mathf.RoundToInt(recommendedBuild)} | {BuildWavePreviewSummary(myLane)}";
-                _waveStatusWidget.SetStatus(
-                    $"WAVE {snap.roundNumber}",
-                    phase,
-                    $"{Mathf.RoundToInt(leftRatio * 100f)}%",
-                    $"{Mathf.RoundToInt(rightRatio * 100f)}%",
-                    "LEFT",
-                    "RIGHT",
-                    footer,
-                    leftRatio,
-                    rightRatio,
-                    buildColor);
-            }
+            RefreshProgressionDock(myLane);
+            RefreshWaveOverview(myLane, snap, recommendedBuild, buildColor);
 
             if (_teamStatsText != null)
             {
@@ -1739,13 +3400,17 @@ namespace CastleDefender.UI
 
             if (_waveIntelText != null)
             {
-                int teamHpMax = snap.teamHpMax > 0 ? snap.teamHpMax : 20;
                 int waveUnits = CountWaveUnits(myLane);
+                int waveSeconds = sa != null ? sa.GetWaveTimerSecondsRemaining() : 0;
+                int sendSeconds = sa != null ? sa.GetBarracksSendSecondsRemaining(myLane.laneIndex) : 0;
+                string coreChipValue = myCoreHpMax > 0 ? $"{myCoreHp}/{myCoreHpMax}" : myCoreHp.ToString();
+                string leftSideChipValue = sideHpMax > 0 ? $"{leftSideHp}/{sideHpMax}" : leftSideHp.ToString();
+                string rightSideChipValue = sideHpMax > 0 ? $"{rightSideHp}/{sideHpMax}" : rightSideHp.ToString();
                 _waveIntelText.text =
                     $"{FormatStatChip("N", snap.roundNumber.ToString(), "#F2C35A")}  {FormatStatChip("X", nextWave.ToString(), "#F29C52")}\n" +
-                    $"{FormatStatChip("P", (snap.roundState ?? "-").ToUpperInvariant(), "#63E08A")}\n" +
+                    $"{FormatStatChip("WT", waveSeconds.ToString(), "#63E08A")}  {FormatStatChip("ST", sendSeconds.ToString(), "#5AD8F2")}\n" +
                     $"{FormatStatChip("W", waveUnits.ToString(), "#C4C9D4")}  {FormatStatChip("T", Mathf.RoundToInt(recommendedBuild).ToString(), "#5AD8F2")}\n" +
-                    $"{FormatStatChip("L", $"{snap.teamHp?.left ?? 0}/{teamHpMax}", "#F2C35A")}  {FormatStatChip("R", $"{snap.teamHp?.right ?? 0}/{teamHpMax}", "#63C2FF")}";
+                    $"{FormatStatChip("C", coreChipValue, "#63E08A")}  {FormatStatChip("SL", leftSideChipValue, "#F2C35A")}  {FormatStatChip("SR", rightSideChipValue, "#63C2FF")}";
             }
 
             if (_txtWavePreview != null)
@@ -1753,6 +3418,247 @@ namespace CastleDefender.UI
                 string summary = BuildWavePreviewSummary(myLane);
                 _txtWavePreview.text = $"NOW  {summary} | NXT  W{nextWave}  TGT {Mathf.RoundToInt(recommendedBuild)}";
             }
+        }
+
+        void EnsureBarracksAccess()
+        {
+            var canvas = _canvasRect != null ? _canvasRect.GetComponentInParent<Canvas>() : GetComponentInParent<Canvas>();
+            if (canvas == null)
+                canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+                return;
+
+            EnsureHudInputInfrastructure(canvas);
+            _runtimeBarracksPanel = EnsureBarracksPanel(canvas);
+            _runtimeBarracksButton = EnsureBarracksButton(canvas);
+
+            var infoBar = GetComponent<InfoBar>();
+            if (infoBar != null)
+            {
+                infoBar.BtnBarracks = _runtimeBarracksButton;
+                infoBar.BarracksPanel = _runtimeBarracksPanel;
+                infoBar.TxtBarracksLv = _txtBarracksLevel;
+            }
+        }
+
+        BarracksPanel EnsureBarracksPanel(Canvas canvas)
+        {
+            var existing = canvas.transform.Find(RuntimeBarracksPanelHostName) ?? canvas.transform.Find(LegacyRuntimeBarracksPanelHostName);
+            GameObject host;
+            if (existing != null)
+            {
+                host = existing.gameObject;
+            }
+            else
+            {
+                host = new GameObject(RuntimeBarracksPanelHostName, typeof(RectTransform));
+                host.transform.SetParent(canvas.transform, false);
+                var rect = host.GetComponent<RectTransform>();
+                rect.anchorMin = new Vector2(0.5f, 0.5f);
+                rect.anchorMax = new Vector2(0.5f, 0.5f);
+                rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.sizeDelta = Vector2.zero;
+                rect.anchoredPosition = Vector2.zero;
+            }
+            host.name = RuntimeBarracksPanelHostName;
+
+            var panel = host.GetComponent<BarracksPanel>();
+            if (panel == null)
+                panel = host.AddComponent<BarracksPanel>();
+            return panel;
+        }
+
+        Button EnsureBarracksButton(Canvas canvas)
+        {
+            DestroyCanvasChildren(RuntimeBarracksButtonName);
+            DestroyCanvasChildren(LegacyRuntimeBarracksButtonName);
+
+            Transform existing = canvas.transform.Find(ProgressionDockWidgetName);
+            GameObject root;
+            if (existing != null)
+            {
+                root = existing.gameObject;
+            }
+            else
+            {
+                root = new GameObject(ProgressionDockWidgetName, typeof(RectTransform), typeof(Image), typeof(DraggableHudPanel));
+                root.transform.SetParent(canvas.transform, false);
+            }
+
+            var rootRect = root.GetComponent<RectTransform>();
+            rootRect.anchorMin = new Vector2(1f, 1f);
+            rootRect.anchorMax = new Vector2(1f, 1f);
+            rootRect.pivot = new Vector2(1f, 1f);
+            rootRect.sizeDelta = new Vector2(232f, 124f);
+            rootRect.anchoredPosition = new Vector2(-20f, -248f);
+
+            var rootImage = root.GetComponent<Image>();
+            rootImage.color = new Color(0.09f, 0.12f, 0.16f, 0.96f);
+            ApplyPanelFrame(root, rootImage.color, new Color(0.82f, 0.64f, 0.30f, 0.96f));
+
+            var toggle = root.transform.Find("Toggle");
+            if (toggle == null)
+            {
+                var toggleGo = new GameObject("Toggle", typeof(RectTransform), typeof(Image), typeof(Button));
+                toggleGo.transform.SetParent(root.transform, false);
+                toggle = toggleGo.transform;
+            }
+
+            var toggleRect = toggle.GetComponent<RectTransform>();
+            toggleRect.anchorMin = new Vector2(1f, 1f);
+            toggleRect.anchorMax = new Vector2(1f, 1f);
+            toggleRect.pivot = new Vector2(1f, 1f);
+            toggleRect.sizeDelta = new Vector2(24f, 24f);
+            toggleRect.anchoredPosition = new Vector2(-6f, -6f);
+            toggle.GetComponent<Image>().color = new Color(0.18f, 0.22f, 0.28f, 0.96f);
+            var toggleLabel = toggle.Find("Label")?.GetComponent<TextMeshProUGUI>() ?? CreateText(toggle, "Label", "-", 13, TextAlignmentOptions.Center, Color.white);
+            toggleLabel.rectTransform.anchorMin = Vector2.zero;
+            toggleLabel.rectTransform.anchorMax = Vector2.one;
+            toggleLabel.rectTransform.offsetMin = Vector2.zero;
+            toggleLabel.rectTransform.offsetMax = Vector2.zero;
+
+            var body = root.transform.Find("Body")?.GetComponent<RectTransform>();
+            if (body == null)
+            {
+                var bodyGo = new GameObject("Body", typeof(RectTransform));
+                bodyGo.transform.SetParent(root.transform, false);
+                body = bodyGo.GetComponent<RectTransform>();
+            }
+
+            body.anchorMin = Vector2.zero;
+            body.anchorMax = Vector2.one;
+            body.offsetMin = new Vector2(8f, 8f);
+            body.offsetMax = new Vector2(-8f, -8f);
+            ClearChildren(body);
+
+            var title = CreateText(body, "Title", "TECH TREE", 15, TextAlignmentOptions.Left, Color.white);
+            title.rectTransform.anchorMin = new Vector2(0f, 1f);
+            title.rectTransform.anchorMax = new Vector2(1f, 1f);
+            title.rectTransform.pivot = new Vector2(0f, 1f);
+            title.rectTransform.sizeDelta = new Vector2(-16f, 18f);
+            title.rectTransform.anchoredPosition = new Vector2(8f, -6f);
+
+            _progressionDockStatus = CreateText(body, "Status", "Town Core -- | Drag or minimize", 10, TextAlignmentOptions.Left, new Color(0.86f, 0.90f, 0.95f, 0.94f));
+            _progressionDockStatus.rectTransform.anchorMin = new Vector2(0f, 1f);
+            _progressionDockStatus.rectTransform.anchorMax = new Vector2(1f, 1f);
+            _progressionDockStatus.rectTransform.pivot = new Vector2(0f, 1f);
+            _progressionDockStatus.rectTransform.sizeDelta = new Vector2(-16f, 30f);
+            _progressionDockStatus.rectTransform.anchoredPosition = new Vector2(8f, -28f);
+            _progressionDockStatus.textWrappingMode = TextWrappingModes.Normal;
+
+            var openButton = CreateHudActionButton(body, RuntimeBarracksButtonName, "Open Progression", new Color(0.22f, 0.34f, 0.22f, 0.98f), out _txtBarracksLevel);
+            var openButtonRect = openButton.GetComponent<RectTransform>();
+            openButtonRect.anchorMin = new Vector2(0f, 0f);
+            openButtonRect.anchorMax = new Vector2(1f, 0f);
+            openButtonRect.pivot = new Vector2(0.5f, 0f);
+            openButtonRect.sizeDelta = new Vector2(0f, 34f);
+            openButtonRect.anchoredPosition = new Vector2(0f, 2f);
+            _txtBarracksLevel.alignment = TextAlignmentOptions.Center;
+            _txtBarracksLevel.fontSize = Mathf.RoundToInt(13f * GetFontScale());
+            openButton.onClick.RemoveAllListeners();
+            openButton.onClick.AddListener(OnTechButtonClicked);
+
+            var collapsed = root.transform.Find("CollapsedView")?.GetComponent<RectTransform>();
+            if (collapsed == null)
+            {
+                var collapsedGo = new GameObject("CollapsedView", typeof(RectTransform), typeof(Image));
+                collapsedGo.transform.SetParent(root.transform, false);
+                collapsed = collapsedGo.GetComponent<RectTransform>();
+            }
+
+            collapsed.anchorMin = Vector2.zero;
+            collapsed.anchorMax = Vector2.one;
+            collapsed.offsetMin = new Vector2(8f, 8f);
+            collapsed.offsetMax = new Vector2(-8f, -8f);
+            var collapsedImage = collapsed.GetComponent<Image>();
+            collapsedImage.color = new Color(0.11f, 0.16f, 0.19f, 1f);
+            var collapsedButton = collapsed.GetComponent<Button>() ?? collapsed.gameObject.AddComponent<Button>();
+            collapsedButton.targetGraphic = collapsedImage;
+            collapsedButton.onClick.RemoveAllListeners();
+            collapsedButton.onClick.AddListener(OnTechButtonClicked);
+            ClearChildren(collapsed);
+            var collapsedLabel = CreateText(collapsed, "CollapsedLabel", "TECH", 13, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            collapsedLabel.rectTransform.anchorMin = Vector2.zero;
+            collapsedLabel.rectTransform.anchorMax = Vector2.one;
+            collapsedLabel.rectTransform.offsetMin = Vector2.zero;
+            collapsedLabel.rectTransform.offsetMax = Vector2.zero;
+            collapsedLabel.raycastTarget = false;
+
+            _progressionDockWidget = root.GetComponent<DraggableHudPanel>();
+            _progressionDockWidget.Configure(
+                rootRect,
+                body,
+                collapsed,
+                toggle.GetComponent<Button>(),
+                toggleLabel,
+                collapsedLabel,
+                false,
+                "hud.progression_dock_widget.right_v2",
+                new Vector2(232f, 124f),
+                new Vector2(90f, 54f));
+
+            toggle.SetAsLastSibling();
+            root.name = ProgressionDockWidgetName;
+            root.transform.SetAsLastSibling();
+            return openButton;
+        }
+
+        void OnRuntimeBarracksPressed()
+        {
+            OnTechButtonClicked();
+        }
+
+        void OnTechButtonClicked()
+        {
+            Debug.Log("TECH button clicked");
+            if (_runtimeBarracksPanel == null)
+            {
+                Debug.LogError("Tech panel is NULL");
+                return;
+            }
+
+            _runtimeBarracksPanel.ToggleProgression();
+        }
+
+        static void EnsureHudInputInfrastructure(Canvas canvas)
+        {
+            if (canvas == null)
+                return;
+
+            if (canvas.GetComponent<GraphicRaycaster>() == null)
+            {
+                canvas.gameObject.AddComponent<GraphicRaycaster>();
+                Debug.Log("[MobileMatchHud] Added missing GraphicRaycaster to the gameplay canvas.");
+            }
+
+            var existing = EventSystem.current;
+            if (existing == null)
+                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
+
+            if (existing == null)
+            {
+                var go = new GameObject("GameplayEventSystem");
+                existing = go.AddComponent<EventSystem>();
+                go.AddComponent<StandaloneInputModule>();
+                go.AddComponent<SingleEventSystem>();
+                Debug.Log("[MobileMatchHud] Created fallback EventSystem for TECH input.");
+                return;
+            }
+
+            if (!existing.gameObject.activeSelf)
+            {
+                existing.gameObject.SetActive(true);
+                Debug.Log("[MobileMatchHud] Reactivated the gameplay EventSystem for TECH input.");
+            }
+
+            if (existing.GetComponent<BaseInputModule>() == null)
+            {
+                existing.gameObject.AddComponent<StandaloneInputModule>();
+                Debug.Log("[MobileMatchHud] Added missing StandaloneInputModule to the gameplay EventSystem.");
+            }
+
+            if (existing.GetComponent<SingleEventSystem>() == null)
+                existing.gameObject.AddComponent<SingleEventSystem>();
         }
 
         void RefreshPreviewHud()
@@ -1806,9 +3712,9 @@ namespace CastleDefender.UI
                 buildColor);
 
             if (_txtTeamHpLeft != null)
-                _txtTeamHpLeft.text = "Left Team 20";
+                _txtTeamHpLeft.text = "Left Side 20/20";
             if (_txtTeamHpRight != null)
-                _txtTeamHpRight.text = "Right Team 17";
+                _txtTeamHpRight.text = "Right Side 17/20";
             if (_barTeamHpLeft != null)
                 _barTeamHpLeft.fillAmount = 1f;
             if (_barTeamHpRight != null)
@@ -1827,20 +3733,8 @@ namespace CastleDefender.UI
                     buildColor);
             }
 
-            if (_waveStatusWidget != null)
-            {
-                _waveStatusWidget.SetStatus(
-                    $"WAVE {previewWave}",
-                    $"{previewPhase.ToUpperInvariant()} {previewCountdown:0}s",
-                    "96%",
-                    "94%",
-                    "LEFT",
-                    "RIGHT",
-                    $"Wave target {Mathf.RoundToInt(recommendedBuild)} | Next {previewWave + 1}",
-                    0.96f,
-                    0.94f,
-                    buildColor);
-            }
+            RefreshProgressionDockPreview();
+            RefreshWaveOverviewPreview(recommendedBuild, buildColor);
 
             if (_teamStatsText != null)
             {
@@ -1868,7 +3762,7 @@ namespace CastleDefender.UI
                     $"{FormatStatChip("N", previewWave.ToString(), "#F2C35A")}  {FormatStatChip("X", (previewWave + 1).ToString(), "#F29C52")}\n" +
                     $"{FormatStatChip("P", previewPhase.ToUpperInvariant(), "#63E08A")}\n" +
                     $"{FormatStatChip("W", "18", "#C4C9D4")}  {FormatStatChip("T", Mathf.RoundToInt(recommendedBuild).ToString(), "#5AD8F2")}\n" +
-                    $"{FormatStatChip("L", "20/20", "#F2C35A")}  {FormatStatChip("R", "17/20", "#63C2FF")}";
+                    $"{FormatStatChip("C", "20/20", "#63E08A")}  {FormatStatChip("SL", "20/20", "#F2C35A")}  {FormatStatChip("SR", "17/20", "#63C2FF")}";
             }
 
             if (_txtWavePreview != null)
@@ -1912,17 +3806,57 @@ namespace CastleDefender.UI
 
         int CountWaveUnits(MLLaneSnap lane)
         {
-            if (lane?.units == null)
+            return CountScheduledWaveUnits(lane?.units);
+        }
+
+        int CountRemainingWaveMobs(MLSnapshot snap)
+        {
+            if (snap?.lanes == null)
+                return 0;
+
+            int total = 0;
+            for (int i = 0; i < snap.lanes.Length; i++)
+            {
+                var lane = snap.lanes[i];
+                if (lane == null || lane.eliminated)
+                    continue;
+
+                total += CountWaveUnits(lane);
+                total += CountScheduledWaveUnits(lane.spawnQueueUnits);
+            }
+
+            return total;
+        }
+
+        static int CountScheduledWaveUnits(MLUnit[] units)
+        {
+            if (units == null)
                 return 0;
 
             int count = 0;
-            for (int i = 0; i < lane.units.Length; i++)
+            for (int i = 0; i < units.Length; i++)
             {
-                var unit = lane.units[i];
-                if (unit != null && unit.isWaveUnit)
+                if (IsScheduledWaveUnit(units[i]))
                     count++;
             }
             return count;
+        }
+
+        static bool IsScheduledWaveUnit(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(unit.spawnSourceType))
+            {
+                return string.Equals(unit.spawnSourceType, "dungeon_wave", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(unit.spawnSourceType, "scheduled_wave", StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (!string.IsNullOrWhiteSpace(unit.allegianceKey))
+                return string.Equals(unit.allegianceKey, "dungeon", StringComparison.OrdinalIgnoreCase);
+
+            return unit.isWaveUnit;
         }
 
         float EstimateRecommendedBuild(int roundNumber)
@@ -1940,7 +3874,7 @@ namespace CastleDefender.UI
             for (int i = 0; i < lane.units.Length; i++)
             {
                 var unit = lane.units[i];
-                if (unit == null || !unit.isWaveUnit || string.IsNullOrWhiteSpace(unit.type))
+                if (!IsScheduledWaveUnit(unit) || string.IsNullOrWhiteSpace(unit.type))
                     continue;
 
                 if (!counts.ContainsKey(unit.type))

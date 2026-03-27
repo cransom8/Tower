@@ -14,6 +14,8 @@ async function _reload() {
     SELECT u.*,
       pd.behavior       AS proj_behavior,
       pd.behavior_params AS proj_behavior_params,
+      sc.skin_key       AS canonical_skin_key,
+      sc.unit_type      AS canonical_unit_type,
       CASE
         WHEN ucm.id IS NULL THEN NULL
         ELSE json_build_object(
@@ -39,8 +41,9 @@ async function _reload() {
     FROM unit_types u
     LEFT JOIN projectile_definitions pd ON pd.id = u.projectile_def_id
     LEFT JOIN unit_content_metadata ucm ON ucm.unit_type_id = u.id
+    LEFT JOIN skin_catalog sc ON sc.skin_key = u.key
     LEFT JOIN unit_type_ability_assignments a ON a.unit_type_id = u.id
-    GROUP BY u.id, pd.behavior, pd.behavior_params, ucm.id
+    GROUP BY u.id, pd.behavior, pd.behavior_params, ucm.id, sc.skin_key, sc.unit_type
     ORDER BY u.id
   `);
   _unitTypes = res.rows;

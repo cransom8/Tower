@@ -22,7 +22,7 @@ function makeUnit(id, key, overrides = {}) {
   };
 }
 
-test("resolveLoadout falls back when inline selection includes send-only units", async () => {
+test("resolveLoadout throws when inline selection includes non-buildable units", async () => {
   const units = [
     makeUnit(1, "goblin"),
     makeUnit(2, "orc"),
@@ -36,11 +36,9 @@ test("resolveLoadout falls back when inline selection includes send-only units",
     unitTypes: { getAllUnitTypes: () => units },
   });
 
-  const loadout = await helpers.resolveLoadout(null, null, [1, 2, 3, 4, 6]);
-
-  assert.deepEqual(
-    loadout.map((entry) => entry.key),
-    ["goblin", "orc", "troll", "vampire", "wyvern"]
+  await assert.rejects(
+    () => helpers.resolveLoadout(null, [1, 2, 3, 4, 6], null),
+    /inline loadout did not resolve to 5 buildable units/
   );
 });
 
@@ -60,4 +58,26 @@ test("hasValidInlineLoadoutIds rejects non-buildable unit ids", () => {
 
   assert.equal(helpers.hasValidInlineLoadoutIds([1, 2, 3, 4, 5]), true);
   assert.equal(helpers.hasValidInlineLoadoutIds([1, 2, 3, 4, 6]), false);
+});
+
+test("resolveLoadout derives a fixed humans roster from race selection", async () => {
+  const units = [
+    makeUnit(1, "tt_peasant"),
+    makeUnit(2, "tt_spearman"),
+    makeUnit(3, "tt_archer"),
+    makeUnit(4, "tt_priest"),
+    makeUnit(5, "tt_light_infantry"),
+    makeUnit(6, "tt_halberdier"),
+  ];
+  const helpers = createLoadoutHelpers({
+    db: null,
+    unitTypes: { getAllUnitTypes: () => units },
+  });
+
+  const loadout = await helpers.resolveLoadout(null, null, "humans");
+
+  assert.deepEqual(
+    loadout.map((entry) => entry.key),
+    ["tt_peasant", "tt_spearman", "tt_archer", "tt_priest", "tt_light_infantry"]
+  );
 });

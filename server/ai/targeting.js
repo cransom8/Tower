@@ -12,16 +12,6 @@ function getOpponents(game, laneIndex) {
   });
 }
 
-function getTeammates(game, laneIndex) {
-  const self = game && game.lanes && game.lanes[laneIndex];
-  if (!self) return [];
-  return (game.lanes || []).filter((lane) => {
-    if (!lane || lane.eliminated) return false;
-    if (lane.laneIndex === laneIndex) return false;
-    return lane.team === self.team;
-  });
-}
-
 function getRecentLeaks(runtime, laneIndex, waves) {
   const arr = runtime && runtime.laneLeakHistory && runtime.laneLeakHistory[laneIndex];
   if (!Array.isArray(arr) || arr.length === 0) return 0;
@@ -103,66 +93,9 @@ function isLaneOverDefended(game, laneIndex) {
   return defense > Math.max(8, threat * 2.2);
 }
 
-function buildTeamPlanKey(game, laneIndex) {
-  const lane = game && game.lanes && game.lanes[laneIndex];
-  if (!lane) return `lane:${laneIndex}`;
-  const teammates = getTeammates(game, laneIndex)
-    .map((l) => l.laneIndex)
-    .concat([laneIndex])
-    .sort((a, b) => a - b);
-  return `team:${teammates.join("-")}`;
-}
-
-function planTeamSpike(game, laneIndex, runtime, rng, preferredTargetLane) {
-  const teammates = getTeammates(game, laneIndex);
-  if (teammates.length === 0) return null;
-  if (!runtime.teamPlans) runtime.teamPlans = {};
-  const key = buildTeamPlanKey(game, laneIndex);
-  const nowTick = Number(game.tick) || 0;
-  const existing = runtime.teamPlans[key];
-  if (existing && existing.spikeTick >= nowTick - 2) return existing;
-
-  const opponents = getOpponents(game, laneIndex);
-  let targetLaneIndex = preferredTargetLane;
-  if (!Number.isInteger(targetLaneIndex) || !opponents.some((o) => o.laneIndex === targetLaneIndex)) {
-    targetLaneIndex = opponents.length > 0 ? opponents[0].laneIndex : null;
-  }
-
-  const delay = rng ? rng.nextInt(26, 48) : 36;
-  const bucketChoices = [3, 5, 10];
-  const bucket = rng ? bucketChoices[rng.nextInt(0, bucketChoices.length - 1)] : 5;
-  const plan = {
-    targetLaneIndex,
-    spikeTick: nowTick + delay,
-    countBucket: bucket,
-    createdByLane: laneIndex,
-  };
-  runtime.teamPlans[key] = plan;
-  return plan;
-}
-
-function getSpikePlanForLane(game, laneIndex, runtime) {
-  if (!runtime || !runtime.teamPlans) return null;
-  return runtime.teamPlans[buildTeamPlanKey(game, laneIndex)] || null;
-}
-
-function shouldSyncSpikeNow(game, laneIndex, runtime, horizonTicks) {
-  const plan = getSpikePlanForLane(game, laneIndex, runtime);
-  if (!plan || !Number.isInteger(plan.spikeTick)) return null;
-  const tick = Number(game && game.tick) || 0;
-  const h = Math.max(1, Number(horizonTicks) || 4);
-  if (Math.abs(plan.spikeTick - tick) <= h) return plan;
-  return null;
-}
-
 module.exports = {
   getOpponents,
-  getTeammates,
   scoreOpponent,
   chooseTargetOpponent,
   isLaneOverDefended,
-  planTeamSpike,
-  getSpikePlanForLane,
-  shouldSyncSpikeNow,
 };
-

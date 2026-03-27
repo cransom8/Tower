@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
@@ -25,19 +27,28 @@ namespace CastleDefender.Net
             AssetLoad,
         }
 
+        enum ManifestPreloadPhase
+        {
+            Loadout,
+            WaveGameplay,
+        }
+
         public static RemoteContentManager Instance { get; private set; }
         public const string GameMlEnvironmentAddress = "environment/game_ml";
+        public const string GameMlEnvironmentDressingAddress = "environment/game_ml_dressing";
 
         public ContentManifestResponse Manifest { get; private set; }
         public bool HasManifest => Manifest != null;
         public bool HasCompletedLobbyEntryPreparation { get; private set; }
-        public bool HasCompletedCriticalPreload { get; private set; }
+        public bool HasCompletedLoadoutPreload { get; private set; }
+        public bool HasCompletedWavePreload { get; private set; }
+        public bool HasCompletedCriticalPreload => HasCompletedWavePreload;
         public bool AreAddressablesInitialized => _addressablesReady;
         public string LastError { get; private set; }
         public float LastProgress { get; private set; }
         public string LastStatus { get; private set; } = "";
         public CriticalPreloadFailureStage LastFailureStage { get; private set; }
-        public bool HasRetryableFailure => LastFailureStage != CriticalPreloadFailureStage.None && !HasCompletedCriticalPreload;
+        public bool HasRetryableFailure => LastFailureStage != CriticalPreloadFailureStage.None;
         public string LastAddressablesCallError { get; private set; }
 
         readonly HashSet<string> _preloadedContentKeys = new(StringComparer.OrdinalIgnoreCase);
@@ -54,7 +65,8 @@ namespace CastleDefender.Net
         AsyncOperationHandle _initializationHandle;
         bool _hasInitializationHandle;
         bool _lobbyEntryPreparationRunning;
-        bool _criticalPreloadRunning;
+        bool _loadoutPreloadRunning;
+        bool _wavePreloadRunning;
 
         public static RemoteContentManager EnsureInstance()
         {
@@ -206,30 +218,67 @@ namespace CastleDefender.Net
             }
         }
 
+        public IEnumerator PreloadLoadoutContentForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
+        {
+            yield return PreloadManifestPhaseContentForSession(ManifestPreloadPhase.Loadout, onProgress, forceRefreshManifest, requester);
+        }
+
+        public IEnumerator PreloadWaveContentForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
+        {
+            yield return PreloadManifestPhaseContentForSession(ManifestPreloadPhase.WaveGameplay, onProgress, forceRefreshManifest, requester);
+        }
+
         public IEnumerator PreloadCriticalContentForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
         {
-            RemoteContentVerification.RecordOwnerRequest("t1.gameplay", requester, _criticalPreloadRunning);
-            if (HasCompletedCriticalPreload && !forceRefreshManifest)
+            yield return PreloadWaveContentForSession(onProgress, forceRefreshManifest, requester);
+        }
+
+        IEnumerator PreloadManifestPhaseContentForSession(
+            ManifestPreloadPhase phase,
+            Action<float, string> onProgress = null,
+            bool forceRefreshManifest = false,
+            string requester = null)
+        {
+            string verificationKey = phase == ManifestPreloadPhase.Loadout ? "loadout.content" : "wave.content";
+            bool alreadyReady = phase == ManifestPreloadPhase.Loadout ? HasCompletedLoadoutPreload : HasCompletedWavePreload;
+            bool isRunning = phase == ManifestPreloadPhase.Loadout ? _loadoutPreloadRunning : _wavePreloadRunning;
+            string readyMessage = phase == ManifestPreloadPhase.Loadout
+                ? "All loadout-critical content already ready."
+                : "All wave-critical content already ready.";
+            string emptyMessage = phase == ManifestPreloadPhase.Loadout
+                ? "No loadout-critical content required."
+                : "No wave-critical content required.";
+            string preparingMessage = phase == ManifestPreloadPhase.Loadout
+                ? "Preparing loadout content..."
+                : "Preparing gameplay content...";
+
+            RemoteContentVerification.RecordOwnerRequest(verificationKey, requester, isRunning);
+            if (alreadyReady && !forceRefreshManifest)
             {
-                RemoteContentVerification.RecordReuse("t1.gameplay", "source=already_ready");
-                ReportProgress(1f, "All critical content already ready.", onProgress);
+                RemoteContentVerification.RecordReuse(verificationKey, "source=already_ready");
+                ReportProgress(1f, readyMessage, onProgress);
                 yield break;
             }
 
-            if (_criticalPreloadRunning)
+            if (isRunning)
             {
-                while (_criticalPreloadRunning)
+                while (phase == ManifestPreloadPhase.Loadout ? _loadoutPreloadRunning : _wavePreloadRunning)
                     yield return null;
                 yield break;
             }
 
-            _criticalPreloadRunning = true;
+            if (phase == ManifestPreloadPhase.Loadout) _loadoutPreloadRunning = true;
+            else _wavePreloadRunning = true;
+
             LastError = null;
             LastFailureStage = CriticalPreloadFailureStage.None;
             LastAddressablesCallError = null;
+            if (phase == ManifestPreloadPhase.Loadout) HasCompletedLoadoutPreload = false;
+            else HasCompletedWavePreload = false;
+
             try
             {
-                ReportProgress(0f, "Preparing content...", onProgress);
+                ReportProgress(0f, preparingMessage, onProgress);
 
                 if (forceRefreshManifest || Manifest == null)
                 {
@@ -244,12 +293,15 @@ namespace CastleDefender.Net
                     }
                 }
 
-                var critical = GetT1GameplayContentEntries();
+                var critical = phase == ManifestPreloadPhase.Loadout
+                    ? GetLoadoutCriticalContentEntries()
+                    : GetWaveCriticalContentEntries();
                 if (critical.Length == 0)
                 {
-                    RemoteContentVerification.RecordReuse("t1.gameplay", "source=no_t1_gameplay_entries");
-                    ReportProgress(1f, "No T1 gameplay content required.", onProgress);
-                    HasCompletedCriticalPreload = true;
+                    RemoteContentVerification.RecordReuse(verificationKey, "source=no_required_entries");
+                    ReportProgress(1f, emptyMessage, onProgress);
+                    if (phase == ManifestPreloadPhase.Loadout) HasCompletedLoadoutPreload = true;
+                    else HasCompletedWavePreload = true;
                     yield break;
                 }
 
@@ -273,252 +325,257 @@ namespace CastleDefender.Net
 
                 if (requests.Count == 0)
                 {
-                    RemoteContentVerification.RecordReuse("t1.gameplay", "source=cached_all");
-                    ReportProgress(1f, "All critical content already cached.", onProgress);
-                    HasCompletedCriticalPreload = true;
+                    RemoteContentVerification.RecordReuse(verificationKey, "source=cached_all");
+                    ReportProgress(1f, "All required content already cached.", onProgress);
+                    if (phase == ManifestPreloadPhase.Loadout) HasCompletedLoadoutPreload = true;
+                    else HasCompletedWavePreload = true;
                     yield break;
                 }
 
-                if (RemoteContentVerification.ConsumeFailure(
+                if (phase == ManifestPreloadPhase.WaveGameplay
+                    && RemoteContentVerification.ConsumeFailure(
                         RemoteContentVerification.FaultKind.T1GameplayDownload,
-                        "PreloadCriticalContentForSession",
-                        out string forcedT1Failure))
+                        "PreloadWaveContentForSession",
+                        out string forcedWaveFailure))
                 {
                     LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    LastError = forcedT1Failure;
+                    LastError = forcedWaveFailure;
                     ReportProgress(1f, "Required content could not be prepared.", onProgress);
                     yield break;
                 }
 
 #if UNITY_WEBGL && !UNITY_EDITOR
-            yield return LoadCriticalAssetsDirectly(requests, failures, onProgress);
-            if (failures.Count > 0)
-            {
-                if (LastFailureStage == CriticalPreloadFailureStage.None)
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                LastError = string.Join("\n", failures);
-                ReportProgress(1f, "Required content is missing.", onProgress);
-                yield break;
-            }
+                yield return LoadCriticalAssetsDirectly(requests, failures, onProgress);
+                if (failures.Count > 0)
+                {
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                    LastError = string.Join("\n", failures);
+                    ReportProgress(1f, "Required content is missing.", onProgress);
+                    yield break;
+                }
 
-            HasCompletedCriticalPreload = true;
-            ReportProgress(1f, $"Prepared {_preloadedContentKeys.Count} content packs.", onProgress);
-            yield break;
+                if (phase == ManifestPreloadPhase.Loadout) HasCompletedLoadoutPreload = true;
+                else HasCompletedWavePreload = true;
+                ReportProgress(1f, $"Prepared {_preloadedContentKeys.Count} content packs.", onProgress);
+                yield break;
 #endif
 
-            long totalDownloadBytes = 0L;
-            for (int i = 0; i < requests.Count; i++)
-            {
-                AsyncOperationHandle<long> sizeHandle;
-                try
+                long totalDownloadBytes = 0L;
+                for (int i = 0; i < requests.Count; i++)
                 {
-                    sizeHandle = Addressables.GetDownloadSizeAsync(requests[i].DownloadKey);
-                }
-                catch (Exception ex)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
-                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}': {ex.Message}");
-                    continue;
-                }
-
-                if (!sizeHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
-                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because Addressables returned an invalid handle.");
-                    continue;
-                }
-
-                yield return sizeHandle;
-                if (!sizeHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
-                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because the Addressables handle became invalid.");
-                    continue;
-                }
-
-                if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
-                    failures.Add(BuildHandleFailureMessage(
-                        $"Could not estimate download size for '{requests[i].DisplayKey}'.",
-                        sizeHandle));
-                }
-                else
-                {
-                    requests[i].DownloadSizeBytes = Math.Max(0L, sizeHandle.Result);
-                    totalDownloadBytes += requests[i].DownloadSizeBytes;
-                }
-                if (sizeHandle.IsValid())
-                    Addressables.Release(sizeHandle);
-            }
-
-            if (failures.Count > 0)
-            {
-                if (LastFailureStage == CriticalPreloadFailureStage.None)
-                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
-                LastError = string.Join("\n", failures);
-                ReportProgress(1f, "Required content could not be prepared.", onProgress);
-                yield break;
-            }
-
-            long downloadedBytes = 0L;
-            for (int i = 0; i < requests.Count; i++)
-            {
-                var request = requests[i];
-                string label = $"Downloading {request.Kind} {i + 1}/{requests.Count}: {request.DisplayKey}";
-                float baseProgress = totalDownloadBytes > 0L
-                    ? Mathf.Clamp01((float)downloadedBytes / totalDownloadBytes)
-                    : Mathf.Clamp01((float)i / requests.Count);
-
-                ReportProgress(Mathf.Max(0.2f, Mathf.Lerp(0.2f, 0.95f, baseProgress)), label, onProgress);
-
-                if (request.DownloadSizeBytes <= 0L)
-                {
-                    downloadedBytes += request.DownloadSizeBytes;
-                    _preloadedContentKeys.Add(request.ContentKey);
-                    continue;
-                }
-
-                AsyncOperationHandle downloadHandle;
-                try
-                {
-                    downloadHandle = Addressables.DownloadDependenciesAsync(request.DownloadKey, false);
-                }
-                catch (Exception ex)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}': {ex.Message}");
-                    continue;
-                }
-
-                if (!downloadHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}' because Addressables returned an invalid handle.");
-                    continue;
-                }
-
-                while (downloadHandle.IsValid() && !downloadHandle.IsDone)
-                {
-                    float currentPortion = Mathf.Clamp01(downloadHandle.PercentComplete);
-                    float aggregate = totalDownloadBytes > 0L
-                        ? (downloadedBytes + (long)(request.DownloadSizeBytes * currentPortion)) / (float)totalDownloadBytes
-                        : Mathf.Clamp01((i + currentPortion) / requests.Count);
-                    ReportProgress(Mathf.Lerp(0.2f, 0.95f, aggregate), label, onProgress);
-                    yield return null;
-                }
-
-                if (!downloadHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    failures.Add($"Failed to download required {request.Kind} content '{request.DisplayKey}' because the Addressables handle became invalid.");
-                    continue;
-                }
-
-                if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    failures.Add(BuildHandleFailureMessage(
-                        $"Failed to download required {request.Kind} content '{request.DisplayKey}'.",
-                        downloadHandle));
-                }
-                else
-                {
-                    downloadedBytes += request.DownloadSizeBytes;
-                    _preloadedContentKeys.Add(request.ContentKey);
-                    foreach (var dependencyKey in request.DependencyKeys)
+                    AsyncOperationHandle<long> sizeHandle;
+                    try
                     {
-                        if (!string.IsNullOrWhiteSpace(dependencyKey))
-                            _preloadedContentKeys.Add(dependencyKey);
+                        sizeHandle = Addressables.GetDownloadSizeAsync(requests[i].DownloadKey);
                     }
+                    catch (Exception ex)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                        failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}': {ex.Message}");
+                        continue;
+                    }
+
+                    if (!sizeHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                        failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because Addressables returned an invalid handle.");
+                        continue;
+                    }
+
+                    yield return sizeHandle;
+                    if (!sizeHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                        failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because the Addressables handle became invalid.");
+                        continue;
+                    }
+
+                    if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                        failures.Add(BuildHandleFailureMessage(
+                            $"Could not estimate download size for '{requests[i].DisplayKey}'.",
+                            sizeHandle));
+                    }
+                    else
+                    {
+                        requests[i].DownloadSizeBytes = Math.Max(0L, sizeHandle.Result);
+                        totalDownloadBytes += requests[i].DownloadSizeBytes;
+                    }
+                    if (sizeHandle.IsValid())
+                        Addressables.Release(sizeHandle);
                 }
 
-                if (downloadHandle.IsValid())
-                    Addressables.Release(downloadHandle);
-            }
-
-            for (int i = 0; i < requests.Count; i++)
-            {
-                var request = requests[i];
-                if (request.IsDependencyOnly || string.IsNullOrWhiteSpace(request.AssetKey))
-                    continue;
-
-                if (_loadedPrefabsByContentKey.ContainsKey(request.ContentKey))
-                    continue;
-
-                string label = $"Loading prefab {i + 1}/{requests.Count}: {request.DisplayKey}";
-                AsyncOperationHandle<GameObject> loadHandle;
-                try
+                if (failures.Count > 0)
                 {
-                    loadHandle = Addressables.LoadAssetAsync<GameObject>(request.AssetKey);
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    LastError = string.Join("\n", failures);
+                    ReportProgress(1f, "Required content could not be prepared.", onProgress);
+                    yield break;
                 }
-                catch (Exception ex)
+
+                long downloadedBytes = 0L;
+                for (int i = 0; i < requests.Count; i++)
                 {
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                    failures.Add($"Failed to start prefab load for '{request.DisplayKey}': {ex.Message}");
-                    continue;
+                    var request = requests[i];
+                    string label = $"Downloading {request.Kind} {i + 1}/{requests.Count}: {request.DisplayKey}";
+                    float baseProgress = totalDownloadBytes > 0L
+                        ? Mathf.Clamp01((float)downloadedBytes / totalDownloadBytes)
+                        : Mathf.Clamp01((float)i / requests.Count);
+
+                    ReportProgress(Mathf.Max(0.2f, Mathf.Lerp(0.2f, 0.95f, baseProgress)), label, onProgress);
+
+                    if (request.DownloadSizeBytes <= 0L)
+                    {
+                        downloadedBytes += request.DownloadSizeBytes;
+                        _preloadedContentKeys.Add(request.ContentKey);
+                        continue;
+                    }
+
+                    AsyncOperationHandle downloadHandle;
+                    try
+                    {
+                        downloadHandle = Addressables.DownloadDependenciesAsync(request.DownloadKey, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}': {ex.Message}");
+                        continue;
+                    }
+
+                    if (!downloadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}' because Addressables returned an invalid handle.");
+                        continue;
+                    }
+
+                    while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                    {
+                        float currentPortion = Mathf.Clamp01(downloadHandle.PercentComplete);
+                        float aggregate = totalDownloadBytes > 0L
+                            ? (downloadedBytes + (long)(request.DownloadSizeBytes * currentPortion)) / (float)totalDownloadBytes
+                            : Mathf.Clamp01((i + currentPortion) / requests.Count);
+                        ReportProgress(Mathf.Lerp(0.2f, 0.95f, aggregate), label, onProgress);
+                        yield return null;
+                    }
+
+                    if (!downloadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        failures.Add($"Failed to download required {request.Kind} content '{request.DisplayKey}' because the Addressables handle became invalid.");
+                        continue;
+                    }
+
+                    if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        failures.Add(BuildHandleFailureMessage(
+                            $"Failed to download required {request.Kind} content '{request.DisplayKey}'.",
+                            downloadHandle));
+                    }
+                    else
+                    {
+                        downloadedBytes += request.DownloadSizeBytes;
+                        _preloadedContentKeys.Add(request.ContentKey);
+                        foreach (var dependencyKey in request.DependencyKeys)
+                        {
+                            if (!string.IsNullOrWhiteSpace(dependencyKey))
+                                _preloadedContentKeys.Add(dependencyKey);
+                        }
+                    }
+
+                    if (downloadHandle.IsValid())
+                        Addressables.Release(downloadHandle);
                 }
 
-                if (!loadHandle.IsValid())
+                for (int i = 0; i < requests.Count; i++)
                 {
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                    failures.Add($"Failed to start prefab load for '{request.DisplayKey}' because Addressables returned an invalid handle.");
-                    continue;
+                    var request = requests[i];
+                    if (request.IsDependencyOnly || string.IsNullOrWhiteSpace(request.AssetKey))
+                        continue;
+
+                    if (_loadedPrefabsByContentKey.ContainsKey(request.ContentKey))
+                        continue;
+
+                    string label = $"Loading prefab {i + 1}/{requests.Count}: {request.DisplayKey}";
+                    AsyncOperationHandle<GameObject> loadHandle;
+                    try
+                    {
+                        loadHandle = Addressables.LoadAssetAsync<GameObject>(request.AssetKey);
+                    }
+                    catch (Exception ex)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                        failures.Add($"Failed to start prefab load for '{request.DisplayKey}': {ex.Message}");
+                        continue;
+                    }
+
+                    if (!loadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                        failures.Add($"Failed to start prefab load for '{request.DisplayKey}' because Addressables returned an invalid handle.");
+                        continue;
+                    }
+
+                    while (loadHandle.IsValid() && !loadHandle.IsDone)
+                    {
+                        ReportProgress(0.95f, label, onProgress);
+                        yield return null;
+                    }
+
+                    if (!loadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                        failures.Add($"Failed to load required prefab '{request.DisplayKey}' because the Addressables handle became invalid.");
+                        continue;
+                    }
+
+                    if (loadHandle.Status != AsyncOperationStatus.Succeeded)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                        failures.Add(BuildHandleFailureMessage(
+                            $"Failed to load required prefab '{request.DisplayKey}'.",
+                            loadHandle));
+                        if (loadHandle.IsValid())
+                            Addressables.Release(loadHandle);
+                        continue;
+                    }
+
+                    GameObject prefab = loadHandle.Result;
+                    if (prefab == null)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                        failures.Add($"Remote prefab '{request.DisplayKey}' was not a GameObject.");
+                        if (loadHandle.IsValid())
+                            Addressables.Release(loadHandle);
+                        continue;
+                    }
+
+                    _loadedPrefabsByContentKey[request.ContentKey] = prefab;
+                    _assetHandlesByContentKey[request.ContentKey] = loadHandle;
                 }
 
-                while (loadHandle.IsValid() && !loadHandle.IsDone)
+                if (failures.Count > 0)
                 {
-                    ReportProgress(0.95f, label, onProgress);
-                    yield return null;
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                    LastError = string.Join("\n", failures);
+                    ReportProgress(1f, "Required content is missing.", onProgress);
+                    yield break;
                 }
 
-                if (!loadHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                    failures.Add($"Failed to load required prefab '{request.DisplayKey}' because the Addressables handle became invalid.");
-                    continue;
-                }
-
-                if (loadHandle.Status != AsyncOperationStatus.Succeeded)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                    failures.Add(BuildHandleFailureMessage(
-                        $"Failed to load required prefab '{request.DisplayKey}'.",
-                        loadHandle));
-                    if (loadHandle.IsValid())
-                        Addressables.Release(loadHandle);
-                    continue;
-                }
-
-                GameObject prefab = loadHandle.Result;
-                if (prefab == null)
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                    failures.Add($"Remote prefab '{request.DisplayKey}' was not a GameObject.");
-                    if (loadHandle.IsValid())
-                        Addressables.Release(loadHandle);
-                    continue;
-                }
-
-                _loadedPrefabsByContentKey[request.ContentKey] = prefab;
-                _assetHandlesByContentKey[request.ContentKey] = loadHandle;
-            }
-
-            if (failures.Count > 0)
-            {
-                if (LastFailureStage == CriticalPreloadFailureStage.None)
-                    LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                LastError = string.Join("\n", failures);
-                ReportProgress(1f, "Required content is missing.", onProgress);
-                yield break;
-            }
-
-                HasCompletedCriticalPreload = true;
+                if (phase == ManifestPreloadPhase.Loadout) HasCompletedLoadoutPreload = true;
+                else HasCompletedWavePreload = true;
                 ReportProgress(1f, $"Prepared {_preloadedContentKeys.Count} content packs.", onProgress);
             }
             finally
             {
-                _criticalPreloadRunning = false;
+                if (phase == ManifestPreloadPhase.Loadout) _loadoutPreloadRunning = false;
+                else _wavePreloadRunning = false;
             }
         }
 
@@ -560,9 +617,9 @@ namespace CastleDefender.Net
 
         public string BuildCriticalContentRequirementMessage(int previewCount = 5)
         {
-            var critical = GetT1GameplayContentEntries();
+            var critical = GetWaveCriticalContentEntries();
             if (critical.Length == 0)
-                return "No required T1 gameplay packs are needed before the first match.";
+                return "No wave-critical packs are needed before gameplay begins.";
 
             int unitCount = 0;
             int skinCount = 0;
@@ -581,7 +638,7 @@ namespace CastleDefender.Net
                     preview.Add(entry.key.Trim());
             }
 
-            string summary = $"Required before the first match: {critical.Length} T1 gameplay pack";
+            string summary = $"Required before gameplay: {critical.Length} wave-critical pack";
             if (critical.Length != 1) summary += "s";
             summary += $" ({unitCount} unit";
             if (unitCount != 1) summary += "s";
@@ -595,7 +652,7 @@ namespace CastleDefender.Net
             if (preview.Count > 0)
                 summary += $" Required content includes: {string.Join(", ", preview)}.";
 
-            summary += " This T1 download is required to render and run gameplay safely.";
+            summary += " This gameplay download is required to render and run wave spawning safely.";
             return summary;
         }
 
@@ -624,14 +681,25 @@ namespace CastleDefender.Net
         public bool TryGetLoadedPrefabForSkin(string skinKey, out GameObject prefab)
         {
             prefab = null;
-            if (string.IsNullOrWhiteSpace(skinKey) || Manifest?.skins == null) return false;
+            if (string.IsNullOrWhiteSpace(skinKey) || Manifest == null) return false;
 
-            foreach (var skin in Manifest.skins)
+            foreach (var skin in Manifest.skins ?? Array.Empty<ContentManifestSkinEntry>())
             {
                 if (skin == null || !string.Equals(skin.skin_key, skinKey, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 return TryGetLoadedPrefabForRemote(skin.remote_content, out prefab);
+            }
+
+            foreach (var unit in Manifest.units ?? Array.Empty<ContentManifestEntry>())
+            {
+                if (unit == null || !string.Equals(unit.key, skinKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!LooksLikeLoadoutSkin(unit))
+                    continue;
+
+                return TryGetLoadedPrefabForRemote(unit.remote_content, out prefab);
             }
 
             return false;
@@ -640,10 +708,17 @@ namespace CastleDefender.Net
         public bool TryGetLoadedPortraitTexture(string unitKey, out Texture2D texture)
         {
             texture = null;
-            if (string.IsNullOrWhiteSpace(unitKey))
+            if (!TryResolvePortraitKey(unitKey, out string portraitKey, out _))
                 return false;
 
-            return _loadedPortraitsByKey.TryGetValue(unitKey.Trim(), out texture) && texture != null;
+            return _loadedPortraitsByKey.TryGetValue(portraitKey, out texture) && texture != null;
+        }
+
+        public string ResolvePortraitLookupKey(string unitKey)
+        {
+            return TryResolvePortraitKey(unitKey, out string portraitKey, out _)
+                ? portraitKey
+                : unitKey?.Trim();
         }
 
         public bool ArePortraitsReady(IEnumerable<string> unitKeys)
@@ -669,7 +744,11 @@ namespace CastleDefender.Net
             return TryGetLoadedEnvironmentPrefab(address, out _);
         }
 
-        public IEnumerator EnsureEnvironmentReady(string address = null, Action<float, string> onProgress = null, string requester = null)
+        public IEnumerator EnsureEnvironmentReady(
+            string address = null,
+            Action<float, string> onProgress = null,
+            string requester = null,
+            bool suppressCatalogWarnings = false)
         {
             string normalizedAddress = NormalizeAddress(address, GameMlEnvironmentAddress);
             bool waitedOnExistingWork = _environmentAddressesInFlight.Contains(normalizedAddress);
@@ -725,7 +804,7 @@ namespace CastleDefender.Net
             _environmentAddressesInFlight.Add(normalizedAddress);
             try
             {
-                yield return ValidateEnvironmentAddress(normalizedAddress, onProgress);
+                yield return ValidateEnvironmentAddress(normalizedAddress, onProgress, suppressCatalogWarnings);
                 if (!string.IsNullOrWhiteSpace(LastError))
                     yield break;
 
@@ -854,11 +933,17 @@ namespace CastleDefender.Net
 
         public IEnumerator EnsurePortraitsReady(IEnumerable<string> unitKeys, Action<float, string> onProgress = null, string requester = null)
         {
-            var normalizedKeys = NormalizeUniqueKeys(unitKeys);
-            bool waitedOnExistingWork = false;
-            for (int i = 0; i < normalizedKeys.Count; i++)
+            var portraitRequests = BuildPortraitRequests(unitKeys);
+            void RecordPortraitFailure(CriticalPreloadFailureStage stage, string error)
             {
-                if (_portraitKeysInFlight.Contains(normalizedKeys[i]))
+                LastFailureStage = stage;
+                LastError = error;
+            }
+
+            bool waitedOnExistingWork = false;
+            for (int i = 0; i < portraitRequests.Count; i++)
+            {
+                if (_portraitKeysInFlight.Contains(portraitRequests[i].PortraitKey))
                 {
                     waitedOnExistingWork = true;
                     break;
@@ -866,7 +951,7 @@ namespace CastleDefender.Net
             }
 
             RemoteContentVerification.RecordOwnerRequest("t1.portraits", requester, waitedOnExistingWork);
-            string portraitSummary = DescribeKeys(normalizedKeys);
+            string portraitSummary = DescribePortraitRequests(portraitRequests);
             Debug.Log($"[RemoteContent] Portrait gate requested by '{requester ?? "unknown"}' for keys: {portraitSummary}");
             RemoteContentVerification.RecordEvent(
                 "portrait_request",
@@ -875,7 +960,7 @@ namespace CastleDefender.Net
             LastFailureStage = CriticalPreloadFailureStage.None;
             LastAddressablesCallError = null;
 
-            if (normalizedKeys.Count == 0)
+            if (portraitRequests.Count == 0)
             {
                 RemoteContentVerification.RecordReuse("t1.portraits", "source=empty_request");
                 ReportProgress(1f, "Portraits ready.", onProgress);
@@ -895,9 +980,11 @@ namespace CastleDefender.Net
             }
 
             int completed = 0;
-            for (int i = 0; i < normalizedKeys.Count; i++)
+            for (int i = 0; i < portraitRequests.Count; i++)
             {
-                string key = normalizedKeys[i];
+                var request = portraitRequests[i];
+                string requestedKey = request.RequestedKey;
+                string key = request.PortraitKey;
                 bool waitedOnInFlight = false;
                 while (_portraitKeysInFlight.Contains(key))
                 {
@@ -912,30 +999,46 @@ namespace CastleDefender.Net
                     RemoteContentVerification.RecordReuse(
                         "t1.portraits",
                         waitedOnInFlight
-                            ? $"key={key} source=inflight_wait"
-                            : $"key={key} source=cache");
+                            ? $"key={requestedKey}->{key} source=inflight_wait"
+                            : $"key={requestedKey}->{key} source=cache");
                     completed++;
                     continue;
                 }
 
                 string address = $"portraits/{key}";
-                string label = $"Preparing portrait {completed + 1}/{normalizedKeys.Count}: {key}";
-                ReportProgress(Mathf.Lerp(0.15f, 0.85f, Mathf.Clamp01((float)completed / normalizedKeys.Count)), label, onProgress);
+                string label = $"Preparing portrait {completed + 1}/{portraitRequests.Count}: {requestedKey}";
+                ReportProgress(Mathf.Lerp(0.15f, 0.85f, Mathf.Clamp01((float)completed / portraitRequests.Count)), label, onProgress);
                 _portraitKeysInFlight.Add(key);
 
                 try
                 {
-                    yield return ValidatePortraitAddress(address, key, normalizedKeys, onProgress);
-                    if (!string.IsNullOrWhiteSpace(LastError))
+                    string portraitValidationError = null;
+                    CriticalPreloadFailureStage portraitValidationStage = CriticalPreloadFailureStage.None;
+                    Debug.Log($"[RemoteContent] Portrait resolve request='{requestedKey}' resolved='{key}' address='{address}'");
+                    yield return ValidatePortraitAddress(
+                        address,
+                        requestedKey,
+                        key,
+                        portraitRequests,
+                        onProgress,
+                        (stage, error) =>
+                        {
+                            portraitValidationStage = stage;
+                            portraitValidationError = error;
+                            RecordPortraitFailure(stage, error);
+                        });
+                    if (!string.IsNullOrWhiteSpace(portraitValidationError))
+                    {
+                        RecordPortraitFailure(portraitValidationStage, portraitValidationError);
                         yield break;
+                    }
 
                     if (RemoteContentVerification.ConsumeFailure(
                             RemoteContentVerification.FaultKind.PortraitDownload,
                             $"EnsurePortraitsReady:{key}",
                             out string forcedPortraitFailure))
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                        LastError = forcedPortraitFailure;
+                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, forcedPortraitFailure);
                         ReportProgress(1f, "Portrait download failed.", onProgress);
                         yield break;
                     }
@@ -947,41 +1050,37 @@ namespace CastleDefender.Net
                     }
                     catch (Exception ex)
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                        LastError = $"Failed to queue portrait content '{key}': {ex.Message}";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}': {ex.Message}");
                         ReportProgress(1f, "Portrait download failed.", onProgress);
                         yield break;
                     }
 
                     if (!downloadHandle.IsValid())
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                        LastError = $"Failed to queue portrait content '{key}' because Addressables returned an invalid handle.";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}' because Addressables returned an invalid handle.");
                         ReportProgress(1f, "Portrait download failed.", onProgress);
                         yield break;
                     }
 
                     while (downloadHandle.IsValid() && !downloadHandle.IsDone)
                     {
-                        float aggregateProgress = (completed + Mathf.Clamp01(downloadHandle.PercentComplete)) / normalizedKeys.Count;
+                        float aggregateProgress = (completed + Mathf.Clamp01(downloadHandle.PercentComplete)) / portraitRequests.Count;
                         ReportProgress(Mathf.Lerp(0.15f, 0.85f, aggregateProgress), label, onProgress);
                         yield return null;
                     }
 
                     if (!downloadHandle.IsValid())
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                        LastError = $"Failed to download portrait content '{key}' because the Addressables handle became invalid.";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to download portrait content '{key}' because the Addressables handle became invalid.");
                         ReportProgress(1f, "Portrait download failed.", onProgress);
                         yield break;
                     }
 
                     if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                        LastError = BuildHandleFailureMessage(
+                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, BuildHandleFailureMessage(
                             $"Failed to download portrait content '{key}'.",
-                            downloadHandle);
+                            downloadHandle));
                         if (downloadHandle.IsValid())
                             Addressables.Release(downloadHandle);
                         ReportProgress(1f, "Portrait download failed.", onProgress);
@@ -998,41 +1097,37 @@ namespace CastleDefender.Net
                     }
                     catch (Exception ex)
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                        LastError = $"Failed to start portrait asset load for '{key}': {ex.Message}";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.AssetLoad, $"Failed to start portrait asset load for '{key}': {ex.Message}");
                         ReportProgress(1f, "Portrait load failed.", onProgress);
                         yield break;
                     }
 
                     if (!loadHandle.IsValid())
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                        LastError = $"Failed to start portrait asset load for '{key}' because Addressables returned an invalid handle.";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.AssetLoad, $"Failed to start portrait asset load for '{key}' because Addressables returned an invalid handle.");
                         ReportProgress(1f, "Portrait load failed.", onProgress);
                         yield break;
                     }
 
                     while (loadHandle.IsValid() && !loadHandle.IsDone)
                     {
-                        float aggregateProgress = (completed + Mathf.Clamp01(loadHandle.PercentComplete)) / normalizedKeys.Count;
+                        float aggregateProgress = (completed + Mathf.Clamp01(loadHandle.PercentComplete)) / portraitRequests.Count;
                         ReportProgress(Mathf.Lerp(0.85f, 0.98f, aggregateProgress), label, onProgress);
                         yield return null;
                     }
 
                     if (!loadHandle.IsValid())
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                        LastError = $"Failed to load portrait asset '{key}' because the Addressables handle became invalid.";
+                        RecordPortraitFailure(CriticalPreloadFailureStage.AssetLoad, $"Failed to load portrait asset '{key}' because the Addressables handle became invalid.");
                         ReportProgress(1f, "Portrait load failed.", onProgress);
                         yield break;
                     }
 
                     if (loadHandle.Status != AsyncOperationStatus.Succeeded || loadHandle.Result == null)
                     {
-                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
-                        LastError = BuildHandleFailureMessage(
+                        RecordPortraitFailure(CriticalPreloadFailureStage.AssetLoad, BuildHandleFailureMessage(
                             $"Failed to load portrait asset '{key}'.",
-                            loadHandle);
+                            loadHandle));
                         if (loadHandle.IsValid())
                             Addressables.Release(loadHandle);
                         ReportProgress(1f, "Portrait load failed.", onProgress);
@@ -1044,6 +1139,7 @@ namespace CastleDefender.Net
 
                     _portraitHandlesByKey[key] = loadHandle;
                     _loadedPortraitsByKey[key] = loadHandle.Result;
+                    Debug.Log($"[RemoteContent] Portrait loaded request='{requestedKey}' resolved='{key}' address='{address}' size={loadHandle.Result.width}x{loadHandle.Result.height}");
                 }
                 finally
                 {
@@ -1056,8 +1152,17 @@ namespace CastleDefender.Net
             ReportProgress(1f, "Portraits ready.", onProgress);
         }
 
-        IEnumerator ValidatePortraitAddress(string address, string key, List<string> requestedKeys, Action<float, string> onProgress)
+        IEnumerator ValidatePortraitAddress(
+            string address,
+            string requestedKey,
+            string resolvedKey,
+            List<PortraitRequest> requests,
+            Action<float, string> onProgress,
+            Action<CriticalPreloadFailureStage, string> onFailure)
         {
+            Debug.Log(
+                $"[RemoteContent] Validating portrait request='{requestedKey}' resolved='{resolvedKey}' address='{address}' " +
+                $"catalogState=({DescribeActiveCatalogState()})");
             AsyncOperationHandle<IList<IResourceLocation>> locationsHandle;
             try
             {
@@ -1065,16 +1170,18 @@ namespace CastleDefender.Net
             }
             catch (Exception ex)
             {
-                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
-                LastError = $"Failed to resolve portrait address '{address}' for key '{key}': {ex.Message}";
+                onFailure?.Invoke(
+                    CriticalPreloadFailureStage.ManifestValidation,
+                    $"Failed to resolve portrait address '{address}' for key '{requestedKey}' (resolved '{resolvedKey}'): {ex.Message}");
                 ReportProgress(1f, "Portrait catalog lookup failed.", onProgress);
                 yield break;
             }
 
             if (!locationsHandle.IsValid())
             {
-                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
-                LastError = $"Addressables returned an invalid lookup handle for portrait address '{address}' (key '{key}').";
+                onFailure?.Invoke(
+                    CriticalPreloadFailureStage.ManifestValidation,
+                    $"Addressables returned an invalid lookup handle for portrait address '{address}' (key '{requestedKey}', resolved '{resolvedKey}').");
                 ReportProgress(1f, "Portrait catalog lookup failed.", onProgress);
                 yield break;
             }
@@ -1084,8 +1191,9 @@ namespace CastleDefender.Net
 
             if (!locationsHandle.IsValid())
             {
-                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
-                LastError = $"Portrait address lookup for '{address}' became invalid before completion.";
+                onFailure?.Invoke(
+                    CriticalPreloadFailureStage.ManifestValidation,
+                    $"Portrait address lookup for '{address}' became invalid before completion.");
                 ReportProgress(1f, "Portrait catalog lookup failed.", onProgress);
                 yield break;
             }
@@ -1094,18 +1202,23 @@ namespace CastleDefender.Net
                 && locationsHandle.Result != null
                 && locationsHandle.Result.Count > 0;
 
+            Debug.Log(
+                $"[RemoteContent] Portrait catalog lookup request='{requestedKey}' resolved='{resolvedKey}' address='{address}' " +
+                $"found={hasLocations} locations={(locationsHandle.Result?.Count ?? 0)} catalogState=({DescribeActiveCatalogState()})");
+
             if (!hasLocations)
             {
-                string requestedSummary = DescribeKeys(requestedKeys);
-                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
-                LastError =
-                    $"Portrait address '{address}' for key '{key}' is missing from the active Addressables catalog. " +
-                    $"Requested portrait keys this pass: {requestedSummary}. " +
+                string requestedSummary = DescribePortraitRequests(requests);
+                string error =
+                    $"Portrait address '{address}' for key '{requestedKey}' (resolved '{resolvedKey}') is missing from the active Addressables catalog. " +
+                    $"Requested portrait mappings this pass: {requestedSummary}. " +
+                    $"Active catalog state: {DescribeActiveCatalogState()}. " +
                     "Rebuild Addressables, clear the catalog/cache, and confirm the active player is loading the latest remote catalog.";
+                onFailure?.Invoke(CriticalPreloadFailureStage.ManifestValidation, error);
                 RemoteContentVerification.RecordEvent(
                     "portrait_catalog_miss",
-                    $"address={address} key={key} requested={requestedSummary}");
-                Debug.LogWarning($"[RemoteContent] {LastError}");
+                    $"address={address} key={requestedKey} resolved={resolvedKey} requested={requestedSummary}");
+                Debug.LogWarning($"[RemoteContent] {error}");
                 if (locationsHandle.IsValid())
                     Addressables.Release(locationsHandle);
                 ReportProgress(1f, "Portrait catalog lookup failed.", onProgress);
@@ -1116,7 +1229,7 @@ namespace CastleDefender.Net
                 Addressables.Release(locationsHandle);
         }
 
-        IEnumerator ValidateEnvironmentAddress(string address, Action<float, string> onProgress)
+        IEnumerator ValidateEnvironmentAddress(string address, Action<float, string> onProgress, bool suppressCatalogWarnings)
         {
             AsyncOperationHandle<IList<IResourceLocation>> locationsHandle;
             try
@@ -1163,7 +1276,8 @@ namespace CastleDefender.Net
                 RemoteContentVerification.RecordEvent(
                     "environment_catalog_miss",
                     $"address={address}");
-                Debug.LogWarning($"[RemoteContent] {LastError}");
+                if (!suppressCatalogWarnings)
+                    Debug.LogWarning($"[RemoteContent] {LastError}");
                 if (locationsHandle.IsValid())
                     Addressables.Release(locationsHandle);
                 ReportProgress(1f, "Environment catalog lookup failed.", onProgress);
@@ -1368,6 +1482,8 @@ namespace CastleDefender.Net
                 Debug.Log(
                     $"[RemoteContent] Manifest ready — {(Manifest.units?.Length ?? 0)} units, {(Manifest.skins?.Length ?? 0)} skins, " +
                     $"{(Manifest.t0_content?.Length ?? 0)} T0 entries, {(Manifest.t1_content?.Length ?? 0)} T1 entries, " +
+                    $"{(Manifest.loadout_critical_content?.Length ?? 0)} loadout-critical entries, " +
+                    $"{(Manifest.wave_critical_content?.Length ?? 0)} wave-critical entries, " +
                     $"{(Manifest.critical_content?.Length ?? 0)} legacy critical entries");
                 ReportProgress(0.2f, "Content manifest ready.", onProgress);
             }
@@ -1439,6 +1555,7 @@ namespace CastleDefender.Net
             _addressablesReady = true;
             _initializationHandle = initHandle;
             _hasInitializationHandle = initHandle.IsValid();
+            Debug.Log($"[RemoteContent] Addressables initialized. {DescribeActiveCatalogState()}");
         }
 
         void ConfigureAddressablesRuntimeProperties()
@@ -1589,6 +1706,21 @@ namespace CastleDefender.Net
         RemoteContentEntry ResolveRemoteContent(CriticalContentEntry critical)
         {
             if (Manifest == null || critical == null) return null;
+
+            if (string.Equals(critical.kind, "environment", StringComparison.OrdinalIgnoreCase))
+            {
+                string address = critical.address?.Trim();
+                return new RemoteContentEntry
+                {
+                    content_key = critical.content_key?.Trim(),
+                    addressables_label = address,
+                    prefab_address = address,
+                    dependency_keys = Array.Empty<string>(),
+                    enabled = true,
+                    tier = critical.tier?.Trim(),
+                    preload_reason = critical.reason?.Trim(),
+                };
+            }
 
             if (string.Equals(critical.kind, "skin", StringComparison.OrdinalIgnoreCase))
             {
@@ -1879,6 +2011,218 @@ namespace CastleDefender.Net
             return normalized;
         }
 
+        bool TryResolvePortraitKey(string unitKey, out string portraitKey, out string resolutionSource)
+        {
+            portraitKey = null;
+            resolutionSource = null;
+
+            string normalizedKey = unitKey?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedKey))
+                return false;
+
+            var units = Manifest?.units ?? Array.Empty<ContentManifestEntry>();
+            for (int i = 0; i < units.Length; i++)
+            {
+                var unit = units[i];
+                if (unit == null || !string.Equals(unit.key, normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                portraitKey = normalizedKey;
+                resolutionSource = "unit.key.direct";
+                break;
+            }
+
+            var skins = Manifest?.skins ?? Array.Empty<ContentManifestSkinEntry>();
+            for (int i = 0; i < skins.Length; i++)
+            {
+                var skin = skins[i];
+                if (skin == null || !string.Equals(skin.skin_key, normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(skin.unit_type))
+                {
+                    portraitKey = skin.unit_type.Trim();
+                    resolutionSource = string.Equals(portraitKey, normalizedKey, StringComparison.OrdinalIgnoreCase)
+                        ? "skin.direct"
+                        : "skin.unit_type";
+                }
+
+                if ((string.IsNullOrWhiteSpace(portraitKey) || string.Equals(portraitKey, normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    && TryResolveUnitTypeForSkinFromLoadedRegistry(normalizedKey, out string registryUnitType)
+                    && !string.IsNullOrWhiteSpace(registryUnitType))
+                {
+                    portraitKey = registryUnitType.Trim();
+                    resolutionSource = "skin.unit_registry";
+                }
+
+                return true;
+            }
+
+            portraitKey = normalizedKey;
+            resolutionSource = "direct";
+
+            if (IsKnownUnitKeyInLoadedRegistry(normalizedKey))
+            {
+                resolutionSource = "registry.unit_key.direct";
+                return true;
+            }
+
+            if (TryResolveUnitTypeForSkinFromLoadedRegistry(normalizedKey, out string fallbackUnitType)
+                && !string.IsNullOrWhiteSpace(fallbackUnitType))
+            {
+                portraitKey = fallbackUnitType.Trim();
+                resolutionSource = "legacy.registry_fallback";
+                return true;
+            }
+
+            return true;
+        }
+
+        static bool IsKnownUnitKeyInLoadedRegistry(string unitKey)
+        {
+            if (string.IsNullOrWhiteSpace(unitKey))
+                return false;
+
+            var registries = Resources.FindObjectsOfTypeAll<ScriptableObject>();
+            for (int i = 0; i < registries.Length; i++)
+            {
+                var registry = registries[i];
+                if (registry == null)
+                    continue;
+
+                Type registryType = registry.GetType();
+                if (!string.Equals(registryType.FullName, "CastleDefender.Game.UnitPrefabRegistry", StringComparison.Ordinal))
+                    continue;
+
+                Type entryType = registryType.GetNestedType("Entry", BindingFlags.Public | BindingFlags.NonPublic);
+                if (entryType == null)
+                    continue;
+
+                MethodInfo method = registryType.GetMethod(
+                    "TryGet",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new[] { typeof(string), entryType.MakeByRefType() },
+                    null);
+
+                if (method == null)
+                    continue;
+
+                object entry = Activator.CreateInstance(entryType);
+                object[] args = { unitKey, entry };
+                if (method.Invoke(registry, args) is bool success && success)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool TryResolveUnitTypeForSkinFromLoadedRegistry(string skinKey, out string unitType)
+        {
+            unitType = null;
+            if (string.IsNullOrWhiteSpace(skinKey))
+                return false;
+
+            var registries = Resources.FindObjectsOfTypeAll<ScriptableObject>();
+            for (int i = 0; i < registries.Length; i++)
+            {
+                var registry = registries[i];
+                if (registry == null)
+                    continue;
+
+                Type registryType = registry.GetType();
+                if (!string.Equals(registryType.FullName, "CastleDefender.Game.UnitPrefabRegistry", StringComparison.Ordinal))
+                    continue;
+
+                MethodInfo method = registryType.GetMethod(
+                    "TryGetUnitTypeForSkin",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new[] { typeof(string), typeof(string).MakeByRefType() },
+                    null);
+
+                if (method == null)
+                    continue;
+
+                object[] args = { skinKey, null };
+                if (method.Invoke(registry, args) is bool success && success)
+                {
+                    unitType = args[1] as string;
+                    if (!string.IsNullOrWhiteSpace(unitType))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool LooksLikeLoadoutSkin(ContentManifestEntry unit)
+        {
+            if (unit == null || unit.remote_content == null)
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(unit.unit_type))
+                return true;
+
+            return string.Equals(unit.content_kind?.Trim(), "skin_variant", StringComparison.OrdinalIgnoreCase);
+        }
+
+        List<PortraitRequest> BuildPortraitRequests(IEnumerable<string> unitKeys)
+        {
+            var requests = new List<PortraitRequest>();
+            var seenPortraitKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string requestedKey in NormalizeUniqueKeys(unitKeys))
+            {
+                if (!TryResolvePortraitKey(requestedKey, out string portraitKey, out string resolutionSource))
+                    continue;
+
+                if (!seenPortraitKeys.Add(portraitKey))
+                    continue;
+
+                requests.Add(new PortraitRequest
+                {
+                    RequestedKey = requestedKey,
+                    PortraitKey = portraitKey,
+                    ResolutionSource = resolutionSource,
+                });
+            }
+
+            return requests;
+        }
+
+        static string DescribePortraitRequests(List<PortraitRequest> requests)
+        {
+            if (requests == null || requests.Count == 0)
+                return "<none>";
+
+            var parts = new string[requests.Count];
+            for (int i = 0; i < requests.Count; i++)
+            {
+                var request = requests[i];
+                parts[i] = string.Equals(request.RequestedKey, request.PortraitKey, StringComparison.OrdinalIgnoreCase)
+                    ? request.RequestedKey
+                    : $"{request.RequestedKey}->{request.PortraitKey}";
+            }
+
+            return string.Join(", ", parts);
+        }
+
+        string DescribeActiveCatalogState()
+        {
+            string manifestTimestamp = Manifest?.generated_at ?? "<manifest-unavailable>";
+            var locatorIds = Addressables.ResourceLocators?
+                .Select(locator => locator?.LocatorId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? Array.Empty<string>();
+
+            string locatorSummary = locatorIds.Length > 0
+                ? string.Join(", ", locatorIds)
+                : "<no-locators>";
+
+            return $"manifest_generated_at={manifestTimestamp}; locator_count={locatorIds.Length}; locators={locatorSummary}";
+        }
+
         static string DescribeKeys(IEnumerable<string> keys)
         {
             if (keys == null)
@@ -1913,28 +2257,91 @@ namespace CastleDefender.Net
             return Manifest?.critical_content ?? Array.Empty<CriticalContentEntry>();
         }
 
+        CriticalContentEntry[] GetLoadoutCriticalContentEntries()
+        {
+            if (Manifest?.loadout_critical_content != null && Manifest.loadout_critical_content.Length > 0)
+                return Manifest.loadout_critical_content;
+
+            return BuildManifestEntriesFromCatalog(scope => scope == "loadout_only" || scope == "both");
+        }
+
+        CriticalContentEntry[] GetWaveCriticalContentEntries()
+        {
+            if (Manifest?.wave_critical_content != null && Manifest.wave_critical_content.Length > 0)
+                return Manifest.wave_critical_content;
+
+            return BuildManifestEntriesFromCatalog(scope => scope == "wave_only" || scope == "both");
+        }
+
         CriticalContentEntry[] GetT1GameplayContentEntries()
         {
-            var source = GetT1ContentEntries();
-            if (source.Length == 0)
-                return source;
+            return GetWaveCriticalContentEntries();
+        }
 
-            var filtered = new List<CriticalContentEntry>(source.Length);
-            for (int i = 0; i < source.Length; i++)
+        CriticalContentEntry[] BuildManifestEntriesFromCatalog(Func<string, bool> scopePredicate)
+        {
+            if (Manifest == null || scopePredicate == null)
+                return Array.Empty<CriticalContentEntry>();
+
+            var entries = new List<CriticalContentEntry>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var unit in Manifest.units ?? Array.Empty<ContentManifestEntry>())
             {
-                var entry = source[i];
-                if (entry == null) continue;
-                if (string.Equals(entry.kind, "unit", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(entry.kind, "skin", StringComparison.OrdinalIgnoreCase))
-                    filtered.Add(entry);
+                if (unit == null || unit.remote_content == null || !scopePredicate(unit.usage_scope))
+                    continue;
+
+                AddDerivedCriticalEntry(entries, seen, "unit", unit.key, unit.remote_content);
             }
 
-            return filtered.Count == 0 ? Array.Empty<CriticalContentEntry>() : filtered.ToArray();
+            foreach (var skin in Manifest.skins ?? Array.Empty<ContentManifestSkinEntry>())
+            {
+                if (skin == null || skin.remote_content == null || !scopePredicate(skin.usage_scope))
+                    continue;
+
+                AddDerivedCriticalEntry(entries, seen, "skin", skin.skin_key, skin.remote_content);
+            }
+
+            return entries.Count == 0 ? Array.Empty<CriticalContentEntry>() : entries.ToArray();
+        }
+
+        static void AddDerivedCriticalEntry(
+            List<CriticalContentEntry> entries,
+            HashSet<string> seen,
+            string kind,
+            string key,
+            RemoteContentEntry remote)
+        {
+            string contentKey = remote?.content_key?.Trim();
+            if (entries == null || seen == null || string.IsNullOrWhiteSpace(contentKey))
+                return;
+
+            string dedupeKey = $"{kind}:{contentKey}";
+            if (!seen.Add(dedupeKey))
+                return;
+
+            string address = !string.IsNullOrWhiteSpace(remote.prefab_address)
+                ? remote.prefab_address.Trim()
+                : !string.IsNullOrWhiteSpace(remote.addressables_label)
+                    ? remote.addressables_label.Trim()
+                    : !string.IsNullOrWhiteSpace(remote.content_url)
+                        ? remote.content_url.Trim()
+                        : remote.catalog_url?.Trim();
+
+            entries.Add(new CriticalContentEntry
+            {
+                kind = kind,
+                key = key,
+                content_key = contentKey,
+                tier = remote.tier,
+                address = address,
+                reason = remote.preload_reason,
+            });
         }
 
         string ResolveEnvironmentAddressFromManifest()
         {
-            var entries = GetT1ContentEntries();
+            var entries = GetWaveCriticalContentEntries();
             for (int i = 0; i < entries.Length; i++)
             {
                 var entry = entries[i];
@@ -1967,6 +2374,13 @@ namespace CastleDefender.Net
             public string[] DependencyKeys;
             public long DownloadSizeBytes;
             public bool IsDependencyOnly;
+        }
+
+        sealed class PortraitRequest
+        {
+            public string RequestedKey;
+            public string PortraitKey;
+            public string ResolutionSource;
         }
     }
 }

@@ -140,46 +140,60 @@ function sanitizeDisplayName(raw) {
 
 const gameConfig = require("../gameConfig");
 
+function hasExplicitValue(src, key) {
+  return Object.prototype.hasOwnProperty.call(src, key)
+    && src[key] !== undefined
+    && src[key] !== null
+    && src[key] !== "";
+}
+
+function normalizeNumericMatchSetting(src, key, defaultValue, { min, max, integer = false } = {}) {
+  if (!hasExplicitValue(src, key))
+    return defaultValue;
+
+  const value = Number(src[key]);
+  if (!Number.isFinite(value)) {
+    throw new Error(`[multilane-config] Invalid match setting '${key}'; expected a finite number.`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`[multilane-config] Invalid match setting '${key}'; expected ${min}-${max}.`);
+  }
+  if (integer && !Number.isInteger(value)) {
+    throw new Error(`[multilane-config] Invalid match setting '${key}'; expected a whole number.`);
+  }
+
+  return value;
+}
+
 function getDefaultMatchSettings() {
-  const active = gameConfig.getActiveConfig("multilane");
-  const gp = active && active.globalParams ? active.globalParams : {};
+  const active = gameConfig.getRequiredActiveConfig("multilane");
+  const gp = active.globalParams;
   return {
-    startGold: Number(gp.startGold) || 70,
-    startIncome: Number(gp.startIncome) || 10,
-    livesStart: Number(gp.livesStart) || 20,
-    teamHpStart: Number(gp.teamHpStart) || 20,
-    buildPhaseTicks: Number(gp.buildPhaseTicks) || 600,
-    transitionPhaseTicks: Number(gp.transitionPhaseTicks) || 200,
+    startGold: gp.startGold,
+    startIncome: gp.startIncome,
+    livesStart: gp.livesStart,
+    teamHpStart: gp.teamHpStart,
+    buildPhaseTicks: gp.buildPhaseTicks,
+    transitionPhaseTicks: gp.transitionPhaseTicks,
   };
 }
 
 function normalizeMatchSettings(settings) {
   const src = settings && typeof settings === "object" ? settings : {};
   const defaults = getDefaultMatchSettings();
-  const rawGold = Number(src.startGold);
-  const rawIncome = Number(src.startIncome);
-  const rawLives = Number(src.livesStart);
-  const rawTeamHp = Number(src.teamHpStart);
-  const rawBuildPhaseTicks = Number(src.buildPhaseTicks);
-  const rawTransitionPhaseTicks = Number(src.transitionPhaseTicks);
-  const startGold = Number.isFinite(rawGold)
-    ? Math.max(0, Math.min(10000, Math.floor(rawGold)))
-    : defaults.startGold;
-  const startIncome = Number.isFinite(rawIncome)
-    ? Math.max(0, Math.min(1000, rawIncome))
-    : defaults.startIncome;
-  const livesStart = Number.isFinite(rawLives)
-    ? Math.max(1, Math.min(1000, Math.floor(rawLives)))
-    : defaults.livesStart;
-  const teamHpStart = Number.isFinite(rawTeamHp)
-    ? Math.max(1, Math.min(1000, Math.floor(rawTeamHp)))
-    : defaults.teamHpStart;
-  const buildPhaseTicks = Number.isFinite(rawBuildPhaseTicks)
-    ? Math.max(20, Math.min(7200, Math.floor(rawBuildPhaseTicks)))
-    : defaults.buildPhaseTicks;
-  const transitionPhaseTicks = Number.isFinite(rawTransitionPhaseTicks)
-    ? Math.max(20, Math.min(7200, Math.floor(rawTransitionPhaseTicks)))
-    : defaults.transitionPhaseTicks;
+  const startGold = normalizeNumericMatchSetting(src, "startGold", defaults.startGold, { min: 0, max: 10000, integer: true });
+  const startIncome = normalizeNumericMatchSetting(src, "startIncome", defaults.startIncome, { min: 0, max: 1000 });
+  const livesStart = normalizeNumericMatchSetting(src, "livesStart", defaults.livesStart, { min: 1, max: 1000, integer: true });
+  const teamHpStart = normalizeNumericMatchSetting(src, "teamHpStart", defaults.teamHpStart, { min: 1, max: 1000, integer: true });
+  const buildPhaseTicks = normalizeNumericMatchSetting(src, "buildPhaseTicks", defaults.buildPhaseTicks, { min: 20, max: 7200, integer: true });
+  const transitionPhaseTicks = normalizeNumericMatchSetting(src, "transitionPhaseTicks", defaults.transitionPhaseTicks, { min: 20, max: 7200, integer: true });
+
+  if (hasExplicitValue(src, "selectionMode")
+    && src.selectionMode !== "manual"
+    && src.selectionMode !== "random") {
+    throw new Error("[multilane-config] Invalid match setting 'selectionMode'; expected 'manual' or 'random'.");
+  }
+
   const selectionMode = src.selectionMode === "random" ? "random" : "manual";
   return {
     startGold,

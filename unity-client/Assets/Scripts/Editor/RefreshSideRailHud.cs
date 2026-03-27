@@ -253,7 +253,7 @@ public static class RefreshSideRailHud
         var label = btn.GetComponentInChildren<TMP_Text>(true);
         if (label != null)
         {
-            label.text = "Barracks";
+            label.text = "Building Overview";
             label.fontSize = 14f;
             label.fontStyle = FontStyles.Bold;
             label.alignment = TextAlignmentOptions.Center;

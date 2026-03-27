@@ -63,17 +63,11 @@ function normalizeAction(action) {
       towerId: String(action.towerId || ""),
     };
   }
-  return {
-    type,
-    unitType: String(action.unitType || "").toLowerCase(),
-    laneId: Number.isInteger(action.laneId) ? action.laneId : null,
-    countBucket: clampCountBucket(Number(action.countBucket) || 1),
-  };
+  return createDoNothingAction();
 }
 
 function validateActionShape(action, defs) {
   const normalized = normalizeAction(action);
-  const unitDefs = (defs && defs.unitDefs) || simMl.getMovingUnitDefMap();
 
   if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
     const towerResolved = simMl.resolveTowerDef(normalized.towerType);
@@ -89,47 +83,14 @@ function validateActionShape(action, defs) {
       return { ok: false, reason: "Invalid towerId", normalized };
     }
   }
-  if (normalized.type === AI_ACTION_TYPE.SEND_UNITS) {
-    if (!unitDefs[normalized.unitType]) {
-      return { ok: false, reason: "Unknown unit type", normalized };
-    }
-    if (!COUNT_BUCKET_SET.has(normalized.countBucket)) {
-      return { ok: false, reason: "Invalid countBucket", normalized };
-    }
-    if (normalized.laneId !== null && !Number.isInteger(normalized.laneId)) {
-      return { ok: false, reason: "Invalid laneId", normalized };
-    }
-  }
 
   return { ok: true, normalized };
-}
-
-function getUnitCostMultiplierForLane(lane) {
-  const br = lane && lane.barracks ? lane.barracks : {};
-  if (Number.isFinite(br.unitCostMult)) return Math.max(0, Number(br.unitCostMult));
-  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
-  return 1;
-}
-
-function getUnitCostForLane(lane, unitType, unitDefs) {
-  const def = unitDefs[unitType];
-  if (!def) return Infinity;
-  return Math.ceil(def.cost * getUnitCostMultiplierForLane(lane));
 }
 
 function getTowerUpgradeCost(towerType, nextLevel) {
   const def = simMl.resolveTowerDef(towerType);
   if (!def) return Infinity;
   return Math.ceil(def.cost * (0.75 + 0.25 * nextLevel));
-}
-
-function isOpponentLane(game, laneIndex, targetLaneIndex) {
-  const src = game && game.lanes && game.lanes[laneIndex];
-  const target = game && game.lanes && game.lanes[targetLaneIndex];
-  if (!src || !target) return false;
-  if (laneIndex === targetLaneIndex) return false;
-  if (target.eliminated) return false;
-  return src.team !== target.team;
 }
 
 function validateActionAgainstGame(game, laneIndex, action, defs) {
@@ -140,7 +101,6 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
   if (!game || game.phase !== "playing") return { ok: false, reason: "Game not active", normalized };
   const lane = game.lanes && game.lanes[laneIndex];
   if (!lane || lane.eliminated) return { ok: false, reason: "Lane inactive", normalized };
-  const unitDefs = (defs && defs.unitDefs) || simMl.getMovingUnitDefMap();
 
   if (normalized.type === AI_ACTION_TYPE.DO_NOTHING) return { ok: true, normalized };
 
@@ -186,11 +146,6 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
     return { ok: true, normalized };
   }
 
-  const unitCost = getUnitCostForLane(lane, normalized.unitType, unitDefs);
-  if (lane.gold < unitCost) return { ok: false, reason: "Not enough gold", normalized };
-  if (normalized.laneId !== null && !isOpponentLane(game, laneIndex, normalized.laneId)) {
-    return { ok: false, reason: "Invalid target lane", normalized };
-  }
   return { ok: true, normalized };
 }
 
@@ -229,13 +184,7 @@ function translateActionToCommands(game, laneIndex, action, defs) {
     };
   }
 
-  const commands = [];
-  for (let i = 0; i < normalized.countBucket; i++) {
-    const data = { unitType: normalized.unitType };
-    if (Number.isInteger(normalized.laneId)) data.targetLaneIndex = normalized.laneId;
-    commands.push({ type: "spawn_unit", data });
-  }
-  return { ok: true, commands, normalized };
+  return { ok: true, commands: [], normalized };
 }
 
 module.exports = {
@@ -250,7 +199,4 @@ module.exports = {
   translateActionToCommands,
   createDoNothingAction,
   clampCountBucket,
-  isOpponentLane,
-  getUnitCostForLane,
 };
-

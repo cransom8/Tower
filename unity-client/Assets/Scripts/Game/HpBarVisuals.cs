@@ -5,6 +5,7 @@ namespace CastleDefender.Game
 {
     static class HpBarVisuals
     {
+        public const float UnitBillboardScaleFactor = 0.12f;
         static readonly Color FillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
         static readonly Color FrameColor = new(0.88f, 0.96f, 1f, 0.72f);
         const string FillVisualRootName = "FillVisual";
@@ -12,6 +13,9 @@ namespace CastleDefender.Game
         public static void EnsureStyled(Transform barRoot)
         {
             if (barRoot == null) return;
+
+            if (barRoot.GetComponent<CastleDefender.FX.BillboardY>() == null)
+                barRoot.gameObject.AddComponent<CastleDefender.FX.BillboardY>();
 
             var background = FindChildRecursive(barRoot, "Background");
             if (background != null)
@@ -24,6 +28,16 @@ namespace CastleDefender.Game
             if (fill != null) EnsureFillVisual(fill);
 
             EnsureFrame(barRoot);
+        }
+
+        public static void ConfigureUnitBar(Transform barRoot)
+        {
+            if (barRoot == null)
+                return;
+
+            var billboard = barRoot.GetComponent<CastleDefender.FX.BillboardY>();
+            if (billboard != null)
+                billboard.ScaleFactor = UnitBillboardScaleFactor;
         }
 
         public static void ApplyFill(Transform fill, Image image, float hp01)

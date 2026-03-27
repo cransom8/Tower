@@ -45,6 +45,53 @@ namespace CastleDefender.Editor
 
         // ── Heroic Fantasy Creatures Full Pack Vol 1 ──────────────────────────
         public const string HFC_ROOT = "Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1";
+
+        public const string TT_RTS_ROOT = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard";
+        public const string TT_BUILDINGS_ROOT = TT_RTS_ROOT + "/models/buildings";
+        public const string TT_EXTRAS_ROOT = TT_RTS_ROOT + "/models/extras";
+        public const string TT_BANNERS_ROOT = TT_RTS_ROOT + "/prefabs/banners";
+        public const string TT_BUILDING_MATERIAL = TT_RTS_ROOT + "/models/materials/TT_RTS_Buildings.mat";
+        public const string TT_BUILDING_WHITE_MATERIAL = TT_RTS_ROOT + "/models/materials/color/Buildings/TT_RTS_buildings_white.mat";
+
+        public const string TT_BUILDING_HOUSE = TT_BUILDINGS_ROOT + "/House.FBX";
+        public const string TT_BUILDING_TOWN_HALL = TT_BUILDINGS_ROOT + "/TownHall.FBX";
+        public const string TT_BUILDING_KEEP = TT_BUILDINGS_ROOT + "/Keep.FBX";
+        public const string TT_BUILDING_CASTLE = TT_BUILDINGS_ROOT + "/Castle.FBX";
+        public const string TT_BUILDING_BARRACKS = TT_BUILDINGS_ROOT + "/Barracks.FBX";
+        public const string TT_BUILDING_BLACKSMITH = TT_BUILDINGS_ROOT + "/Blacksmith.FBX";
+        public const string TT_BUILDING_TEMPLE = TT_BUILDINGS_ROOT + "/Temple.FBX";
+        public const string TT_BUILDING_WIZARD_TOWER = TT_BUILDINGS_ROOT + "/MageTower.FBX";
+        public const string TT_BUILDING_ARCHERY = TT_BUILDINGS_ROOT + "/Archery.FBX";
+        public const string TT_BUILDING_STABLE = TT_BUILDINGS_ROOT + "/Stables.FBX";
+        public const string TT_BUILDING_WORKSHOP = TT_BUILDINGS_ROOT + "/Workshop.FBX";
+        public const string TT_BUILDING_LIBRARY = TT_BUILDINGS_ROOT + "/Library.FBX";
+        public const string TT_BUILDING_MARKET = TT_BUILDINGS_ROOT + "/Market.FBX";
+        public const string TT_BUILDING_LUMBER_MILL = TT_BUILDINGS_ROOT + "/LumberMill.FBX";
+        public const string TT_BUILDING_WALL_A = TT_BUILDINGS_ROOT + "/Wall_A_wall.FBX";
+        public const string TT_BUILDING_WALL_B = TT_BUILDINGS_ROOT + "/Wall_B_wall.FBX";
+        public const string TT_BUILDING_GATE_A = TT_BUILDINGS_ROOT + "/Wall_A_gate.FBX";
+        public const string TT_BUILDING_GATE_B = TT_BUILDINGS_ROOT + "/Wall_B_gate.FBX";
+        public const string TT_BUILDING_CORNER_A = TT_BUILDINGS_ROOT + "/Wall_A_corner.FBX";
+        public const string TT_BUILDING_CORNER_B = TT_BUILDINGS_ROOT + "/Wall_B_corner.FBX";
+        public const string TT_BUILDING_TOWER_A = TT_BUILDINGS_ROOT + "/Tower_A.FBX";
+        public const string TT_BUILDING_TOWER_B = TT_BUILDINGS_ROOT + "/Tower_B.FBX";
+        public const string TT_BUILDING_TOWER_C = TT_BUILDINGS_ROOT + "/Tower_C.FBX";
+
+        public const string TT_BANNER_BLUE = TT_BANNERS_ROOT + "/TT_Banner_Blue_A.prefab";
+        public const string TT_BANNER_RED = TT_BANNERS_ROOT + "/TT_Banner_Red.prefab";
+        public const string TT_BANNER_YELLOW = TT_BANNERS_ROOT + "/TT_Banner_Yellow.prefab";
+        public const string TT_BANNER_GREEN = TT_BANNERS_ROOT + "/TT_Banner_Green_A.prefab";
+        public const string TT_BANNER_MATERIAL_BLUE = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_blue_A.mat";
+        public const string TT_BANNER_MATERIAL_RED = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_red.mat";
+        public const string TT_BANNER_MATERIAL_YELLOW = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_yellow.mat";
+        public const string TT_BANNER_MATERIAL_GREEN = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_green_A.mat";
+        public const string TT_SHIELD = TT_EXTRAS_ROOT + "/weapons/shield_20.FBX";
+
+        public const string GENERATED_BUILDING_PREFABS_ROOT = "Assets/Prefabs/Buildings/Generated";
+        public const string GENERATED_BUILDING_MATERIALS_ROOT = "Assets/Materials/TT/Generated";
+        public const string GENERATED_BUILDING_PORTRAITS_ROOT = "Assets/Resources/TechTree/Buildings";
+        public const string GENERATED_BUILDING_CATALOG_ASSET = "Assets/Resources/Generated/BuildingVisualCatalog.asset";
+        public const string GAME_ENVIRONMENT_PREFAB = "Assets/AddressableContent/Environment/GameEnvironment.prefab";
     }
 }
 #endif

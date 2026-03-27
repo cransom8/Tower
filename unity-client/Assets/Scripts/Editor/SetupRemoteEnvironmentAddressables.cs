@@ -25,6 +25,12 @@ namespace CastleDefender.Editor
         const string ReportRelativePath = "projects/Game_ML Environment Extraction.md";
         const string RemoteBuildPathProfileId = "165fb4a3ad8d19e4aa002d6fc764a7ce";
         const string RemoteLoadPathProfileId = "247226ff3fd294f46b8dfca266320b8c";
+        const string FloorTilePrefabPath = EditorPaths.TILE_FLOOR;
+        const string WallTilePrefabPath = EditorPaths.TILE_WALL;
+        const string CastleTilePrefabPath = EditorPaths.TILE_CASTLE;
+        const string FloorTileAddress = "tiles/floor";
+        const string WallTileAddress = "tiles/wall";
+        const string CastleTileAddress = "tiles/castle";
 
         static readonly HashSet<Type> AllowedVisualComponentTypes = new()
         {
@@ -149,6 +155,41 @@ namespace CastleDefender.Editor
                 Debug.Log(
                     $"[SetupRemoteEnvironmentAddressables] Extracted {removedNames.Count} branches to '{EnvironmentPrefabPath}' " +
                     $"and registered address '{RemoteContentManager.GameMlEnvironmentAddress}'.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        [MenuItem("Castle Defender/Remote Content/Sync Winter Tile Prefabs To Addressables")]
+        static void SyncWinterTilePrefabsToAddressables()
+        {
+            try
+            {
+                var tileEntries = new (string assetPath, string address)[]
+                {
+                    (FloorTilePrefabPath, FloorTileAddress),
+                    (WallTilePrefabPath, WallTileAddress),
+                    (CastleTilePrefabPath, CastleTileAddress),
+                };
+
+                int synced = 0;
+                foreach (var tileEntry in tileEntries)
+                {
+                    if (!File.Exists(tileEntry.assetPath))
+                    {
+                        Debug.LogWarning($"[SetupRemoteEnvironmentAddressables] Tile prefab missing: {tileEntry.assetPath}");
+                        continue;
+                    }
+
+                    if (EnsureAddressablesEntry(tileEntry.assetPath, tileEntry.address))
+                        synced++;
+                }
+
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+                Debug.Log($"[SetupRemoteEnvironmentAddressables] Synced {synced}/{tileEntries.Length} winter tile prefabs to '{GroupName}'.");
             }
             catch (Exception ex)
             {

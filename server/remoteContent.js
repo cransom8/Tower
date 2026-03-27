@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeUnitUsageScope } = require('./unitUsage');
+
 function normalizeString(value) {
   if (value === undefined || value === null) return null;
   const trimmed = String(value).trim();
@@ -155,7 +157,7 @@ function buildManifestContentEntry(kind, key, remoteContent, extra = {}) {
   const address = deriveManifestAddress(kind, remoteContent, extra);
   const reason = deriveManifestReason(kind, key, tier, remoteContent, extra);
 
-  if ((tier === 't0' || tier === 't1') && !address) {
+  if ((tier === 't0' || tier === 't1') && kind === 'environment' && !address) {
     return null;
   }
 
@@ -170,29 +172,74 @@ function buildManifestContentEntry(kind, key, remoteContent, extra = {}) {
 }
 
 function buildContentManifest({ unitTypes = [], skins = [] } = {}) {
+  const unitUsageByKey = new Map();
+  const allSkinEntries = skins
+    .map((skin) => formatPublicSkin(skin))
+    .filter(Boolean);
+
+  const portraitKeyByUnitKey = new Map();
+  for (const skin of allSkinEntries) {
+    const skinKey = normalizeString(skin.skin_key);
+    const unitType = normalizeString(skin.unit_type);
+    if (!skinKey || !unitType) continue;
+    portraitKeyByUnitKey.set(skinKey, unitType);
+  }
+
   const units = unitTypes
     .map((unitType) => formatPublicUnitType(unitType))
     .filter(Boolean)
-    .map((unitType) => ({
-      key: unitType.key,
-      name: unitType.name,
-      enabled: !!unitType.enabled,
-      remote_content: unitType.remote_content,
-    }));
+    .map((unitType) => {
+      const usageScope = normalizeUnitUsageScope(unitType.usage_scope);
+      const canonicalUnitType = normalizeString(unitType.canonical_unit_type);
+      const portraitKey =
+        normalizeString(unitType.portrait_key)
+        ?? canonicalUnitType
+        ?? portraitKeyByUnitKey.get(unitType.key)
+        ?? null;
+      const normalized = {
+        key: unitType.key,
+        name: unitType.name,
+        enabled: !!unitType.enabled,
+        usage_scope: usageScope,
+        unit_type: canonicalUnitType,
+        portrait_key: portraitKey,
+        prefab_key: normalizeString(unitType.key),
+        content_kind: canonicalUnitType ? 'skin_variant' : 'unit',
+        remote_content: unitType.remote_content,
+      };
+      unitUsageByKey.set(normalized.key, normalized);
+      return normalized;
+    });
 
-  const skinEntries = skins
-    .map((skin) => formatPublicSkin(skin))
-    .filter(Boolean)
-    .map((skin) => ({
-      skin_key: skin.skin_key,
-      unit_type: skin.unit_type,
-      name: skin.name,
-      remote_content: skin.remote_content,
-    }));
+  const skinEntries = allSkinEntries
+    .filter((skin) => skin.enabled)
+    .map((skin) => {
+      const canonicalUnit = unitUsageByKey.get(skin.skin_key) || unitUsageByKey.get(skin.unit_type) || null;
+      return {
+        skin_key: skin.skin_key,
+        unit_type: skin.unit_type,
+        name: skin.name,
+        usage_scope: canonicalUnit ? normalizeUnitUsageScope(canonicalUnit.usage_scope) : 'disabled',
+        remote_content: skin.remote_content,
+      };
+    });
 
   const t0Content = [];
   const t1Content = [];
   const criticalContent = [];
+  const loadoutCriticalContent = [];
+  const waveCriticalContent = [];
+  const pushUniqueEntry = (target, seen, entry) => {
+    if (!entry) return;
+    const dedupeKey = `${entry.kind}:${entry.content_key || entry.key || ''}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    target.push(entry);
+  };
+  const t1Seen = new Set();
+  const criticalSeen = new Set();
+  const loadoutSeen = new Set();
+  const waveSeen = new Set();
 
   const sharedT1Content = [
     {
@@ -210,9 +257,17 @@ function buildContentManifest({ unitTypes = [], skins = [] } = {}) {
     if (!entry) continue;
 
     if (entry.tier === 't0') t0Content.push(entry);
-    if (entry.tier === 't1') {
-      t1Content.push(entry);
-      criticalContent.push(entry);
+    if (unit.enabled && (unit.usage_scope === 'loadout_only' || unit.usage_scope === 'both')) {
+      pushUniqueEntry(loadoutCriticalContent, loadoutSeen, {
+        ...entry,
+        reason: `Required before loadout because ${unit.key} is eligible for player loadouts.`,
+      });
+    }
+    if (unit.enabled && (unit.usage_scope === 'wave_only' || unit.usage_scope === 'both')) {
+      pushUniqueEntry(waveCriticalContent, waveSeen, {
+        ...entry,
+        reason: `Required before gameplay because ${unit.key} is eligible for wave spawning.`,
+      });
     }
   }
 
@@ -221,22 +276,41 @@ function buildContentManifest({ unitTypes = [], skins = [] } = {}) {
     if (!entry) continue;
 
     if (entry.tier === 't0') t0Content.push(entry);
-    if (entry.tier === 't1') {
-      t1Content.push(entry);
-      criticalContent.push(entry);
+    if (skin.usage_scope === 'loadout_only' || skin.usage_scope === 'both') {
+      pushUniqueEntry(loadoutCriticalContent, loadoutSeen, {
+        ...entry,
+        reason: `Required before loadout because ${skin.skin_key} belongs to a loadout-eligible unit.`,
+      });
+    }
+    if (skin.usage_scope === 'wave_only' || skin.usage_scope === 'both') {
+      pushUniqueEntry(waveCriticalContent, waveSeen, {
+        ...entry,
+        reason: `Required before gameplay because ${skin.skin_key} belongs to a wave-eligible unit.`,
+      });
     }
   }
 
-  t1Content.push(...sharedT1Content);
+  loadoutCriticalContent.forEach((entry) => pushUniqueEntry(t1Content, t1Seen, entry));
+  waveCriticalContent.forEach((entry) => {
+    pushUniqueEntry(t1Content, t1Seen, entry);
+    pushUniqueEntry(criticalContent, criticalSeen, entry);
+  });
+  sharedT1Content.forEach((entry) => {
+    pushUniqueEntry(waveCriticalContent, waveSeen, entry);
+    pushUniqueEntry(t1Content, t1Seen, entry);
+    pushUniqueEntry(criticalContent, criticalSeen, entry);
+  });
 
   return {
-    manifest_version: 2,
+    manifest_version: 3,
     generated_at: new Date().toISOString(),
     units,
     skins: skinEntries,
     t0_content: t0Content,
     t1_content: t1Content,
     critical_content: criticalContent,
+    loadout_critical_content: loadoutCriticalContent,
+    wave_critical_content: waveCriticalContent,
   };
 }
 

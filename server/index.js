@@ -19,6 +19,7 @@ const matchmaker = require("./services/matchQueueManager");
 const simMl = require("./sim-multilane");
 const { buildContentManifest, formatPublicUnitType } = require("./remoteContent");
 const unitTypes = require("./unitTypes");
+const { publicUnitRole } = require("./unitUsage");
 const { stringToSeed } = require("./sim-core");
 const { createLoadoutHelpers } = require("./game/loadoutHelpers");
 const { createMatchPersistence } = require("./game/matchPersistence");
@@ -93,7 +94,7 @@ const featureFlagCache = createFeatureFlagCache(db);
 
 if (db) {
   gameConfig.loadActiveConfigs(db).catch((err) =>
-    log.warn("game config load failed, using hardcoded defaults", {
+    log.error("game config load failed; multilane matches will fail loudly until the active config is fixed", {
       err: err && (err.stack || err.message || String(err)),
       code: err?.code || null,
       name: err?.name || null,
@@ -238,6 +239,55 @@ app.get("/api/unit-types", async (_req, res) => {
   res.json({ unitTypes: all, displayFields });
 });
 
+// ── Lobby Unit Compendium — player-safe, whitelist-filtered ──────────────────
+// Intentionally separate from /api/unit-types which includes remote_content
+// and internal fields required by the Unity client.
+const LOBBY_UNIT_PLAYER_FIELDS = new Set([
+  "name", "description",
+  "hp", "attack_damage", "attack_speed", "range", "path_speed",
+  "damage_type", "armor_type",
+  "send_cost", "build_cost",
+  "icon_url", "sprite_url",
+]);
+
+app.get("/api/lobby/units", (req, res) => {
+  const { q, role, damage_type, armor_type } = req.query;
+
+  let units = unitTypes
+    .getAllUnitTypes()
+    .filter((ut) => ut.enabled && ut.display_to_players !== false);
+
+  if (q) {
+    const lq = String(q).toLowerCase();
+    units = units.filter(
+      (ut) =>
+        (ut.name || "").toLowerCase().includes(lq) ||
+        (ut.description || "").toLowerCase().includes(lq)
+    );
+  }
+
+  const result = units.map((ut) => {
+    const safe = { key: ut.key };
+    for (const f of LOBBY_UNIT_PLAYER_FIELDS) {
+      if (ut[f] !== undefined) safe[f] = ut[f];
+    }
+    safe.usage_scope = ut.usage_scope || "both";
+    safe.role = publicUnitRole(ut);
+    return safe;
+  });
+
+  const filtered = result
+    .filter((u) => !role || u.role === role)
+    .filter(
+      (u) => !damage_type || u.damage_type === String(damage_type).toUpperCase()
+    )
+    .filter(
+      (u) => !armor_type || u.armor_type === String(armor_type).toUpperCase()
+    );
+
+  res.json({ units: filtered, total: result.length });
+});
+
 app.get("/api/content-manifest", async (_req, res) => {
   const allUnitTypes = unitTypes
     .getAllUnitTypes()
@@ -268,7 +318,6 @@ app.get("/api/content-manifest", async (_req, res) => {
                 END AS remote_content
            FROM skin_catalog s
            LEFT JOIN skin_content_metadata scm ON scm.skin_catalog_id = s.id
-          WHERE s.enabled = true
           ORDER BY s.unit_type, s.name`
       );
       skins = result.rows;
@@ -437,7 +486,7 @@ const runtimeState = createRuntimeState(app);
 const generateCode = createCodeGenerator();
 const { checkLobbyRateLimit, checkActionRateLimit } = createRateLimiters(runtimeState);
 const { issueReconnectToken, verifyReconnectToken } = createReconnectTokenHelpers(process.env.JWT_SECRET);
-const { resolveLoadout, validateLoadoutSelection, hasValidInlineLoadoutIds } = createLoadoutHelpers({ db, unitTypes });
+const { resolveLoadout, validateLoadoutSelection, hasValidInlineLoadoutIds } = createLoadoutHelpers({ db, unitTypes, log });
 const { logMatchStart, logMatchEnd } = createMatchPersistence({ db, log });
 
 installSocketAuth(io, {
@@ -501,6 +550,7 @@ const { onMatchFound } = registerSocketHandlers({
   buildRematchStatus: multilaneRuntime.buildRematchStatus,
   handlePostWinDecision: multilaneRuntime.handlePostWinDecision,
   hasValidInlineLoadoutIds,
+  submitWaveReadyVote: multilaneRuntime.submitWaveReadyVote,
   startMLGame: multilaneRuntime.startMLGame,
   stopMLGame: multilaneRuntime.stopMLGame,
   validateLoadoutSelection,
@@ -548,6 +598,9 @@ app.get("/", (_req, res) => {
   res.setHeader("Content-Type", "text/html");
   res.send(html);
 });
+app.get("/compendium", (_req, res) =>
+  res.sendFile(path.join(__dirname, "compendium.html"))
+);
 app.get("/admin", (_req, res) => sendAdminClientFile(res, "admin.html"));
 app.get("/admin.html", (_req, res) => sendAdminClientFile(res, "admin.html"));
 app.get("/admin.css", (_req, res) => sendAdminClientFile(res, "admin.css"));

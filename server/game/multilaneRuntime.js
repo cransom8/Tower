@@ -1,18 +1,27 @@
 "use strict";
 
+const { canUseInLoadout } = require("../unitUsage");
+const {
+  getAvailableRaces,
+  getDefaultRaceId,
+  isValidRaceId,
+} = require("./raceProgressionCatalog");
+const { getLockedWavePlan } = require("../waveDefenseSpec");
+
 async function loadDefaultWaveConfig(db) {
-  if (!db) return [];
+  const fallbackPlan = getLockedWavePlan();
+  if (!db) return fallbackPlan;
   try {
     const cr = await db.query(`SELECT id FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`);
-    if (!cr.rows[0]) return [];
+    if (!cr.rows[0]) return fallbackPlan;
     const wr = await db.query(
       `SELECT wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult
        FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`,
       [cr.rows[0].id]
     );
-    return wr.rows;
+    return wr.rows.length > 0 ? wr.rows : fallbackPlan;
   } catch {
-    return [];
+    return fallbackPlan;
   }
 }
 
@@ -50,7 +59,7 @@ function createMultilaneRuntime({
       roomId,
       players: [hostSocketId],
       laneBySocketId: new Map([[hostSocketId, 0]]),
-      playerTeamsBySocketId: new Map([[hostSocketId, "red"]]),
+      playerTeamsBySocketId: new Map([[hostSocketId, ffaTeamForLane(0)]]),
       readySet: new Set(),
       playerNames: new Map([[hostSocketId, sanitizeDisplayName(displayName)]]),
       createdAt: Date.now(),
@@ -58,43 +67,37 @@ function createMultilaneRuntime({
       hostSocketId,
       aiPlayers: [],
       settings: normalizeMatchSettings(settings),
+      pvpMode: "ffa",
     };
     mlRoomsByCode.set(code, room);
     return { code, roomId };
   }
 
   function countMlTeams(room) {
-    const counts = { red: 0, blue: 0 };
+    const counts = {};
     for (const sid of room.players || []) {
-      const team = room.playerTeamsBySocketId?.get(sid) === "blue" ? "blue" : "red";
-      counts[team] += 1;
+      const team = room.playerTeamsBySocketId?.get(sid) || ffaTeamForLane(room.laneBySocketId.get(sid) || 0);
+      counts[team] = (counts[team] || 0) + 1;
     }
     for (const ai of room.aiPlayers || []) {
-      const team = ai.team === "blue" ? "blue" : "red";
-      counts[team] += 1;
+      const team = ai.team || ffaTeamForLane(ai.laneIndex || 0);
+      counts[team] = (counts[team] || 0) + 1;
     }
     return counts;
   }
 
   function pickBalancedMlTeam(room) {
-    const counts = countMlTeams(room);
-    return counts.red <= counts.blue ? "red" : "blue";
+    const nextLaneIndex = (room.players?.length || 0) + (room.aiPlayers?.length || 0);
+    return ffaTeamForLane(nextLaneIndex);
   }
 
-  const FFA_TEAMS = ["red", "blue", "green", "purple"];
+  const FFA_TEAMS = ["red", "yellow", "blue", "green"];
 
   function ffaTeamForLane(laneIndex) {
     return FFA_TEAMS[laneIndex] || `p${laneIndex}`;
   }
 
   function validateMlTeamSetup(room) {
-    if (room.pvpMode === "ffa") return { ok: true };
-    const total = (room.players?.length || 0) + (room.aiPlayers?.length || 0);
-    if (total !== 4) return { ok: true };
-    const counts = countMlTeams(room);
-    if (counts.red !== 2 || counts.blue !== 2) {
-      return { ok: false, reason: "For 4-player matches, assign exactly 2 Red and 2 Blue before starting." };
-    }
     return { ok: true };
   }
 
@@ -128,7 +131,7 @@ function createMultilaneRuntime({
       displayName: room.playerNames.get(sid) || "Player",
       ready: room.readySet.has(sid),
       isAI: false,
-      team: room.playerTeamsBySocketId?.get(sid) || "red",
+      team: room.playerTeamsBySocketId?.get(sid) || ffaTeamForLane(room.laneBySocketId.get(sid) || 0),
     }));
     const aiPlayers = (room.aiPlayers || []).map((ai) => ({
       laneIndex: ai.laneIndex,
@@ -136,7 +139,7 @@ function createMultilaneRuntime({
       ready: true,
       isAI: true,
       difficulty: ai.difficulty,
-      team: ai.team || "red",
+      team: ai.team || ffaTeamForLane(ai.laneIndex || 0),
       takeover: !!ai.takeover,
     }));
     const players = [...humanPlayers, ...aiPlayers].sort((a, b) => a.laneIndex - b.laneIndex);
@@ -145,7 +148,7 @@ function createMultilaneRuntime({
       players,
       hostLaneIndex: 0,
       settings: normalizeMatchSettings(room.settings),
-      pvpMode: room.pvpMode || "2v2",
+      pvpMode: "ffa",
     };
   }
 
@@ -161,21 +164,6 @@ function createMultilaneRuntime({
     const config = simMl.createMLPublicConfig({ playerCount, laneTeams });
     const defs = config && Array.isArray(config.slotDefinitions) ? config.slotDefinitions : [];
     return defs.find((slot) => Number(slot.laneIndex) === Number(laneIndex)) || null;
-  }
-
-  function resolveDefaultMultilaneTarget(game, sourceLaneIndex) {
-    if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1) return null;
-    const sourceLane = game.lanes[sourceLaneIndex];
-    if (!sourceLane) return null;
-    const total = Math.min(Number(game.playerCount) || game.lanes.length, game.lanes.length);
-    for (let step = 1; step < total; step += 1) {
-      const idx = (sourceLaneIndex + step) % total;
-      const lane = game.lanes[idx];
-      if (!lane || lane.eliminated) continue;
-      if (lane.team === sourceLane.team) continue;
-      return idx;
-    }
-    return null;
   }
 
   function getLaneDisplayName(room, laneIndex) {
@@ -204,53 +192,53 @@ function createMultilaneRuntime({
       wavesLeaked: lane.wavesLeaked || 0,
       longestHoldStreak: lane.longestHoldStreak || 0,
       lives: lane.lives,
-      teamHp: game.teamHp[lane.side],
+      teamHp: lane.lives,
       eliminated: lane.eliminated,
     }));
   }
 
   function buildOutcomePayload(room, entry) {
     const game = entry.game;
-    const winnerLane = Number.isInteger(game.officialWinnerLane) ? game.officialWinnerLane : game.winner;
-    const pvpDurationSec = Number.isInteger(game.pvpResolvedAtTick)
-      ? Math.round(game.pvpResolvedAtTick / (simMl.TICK_HZ || 20))
+    const winnerLane = Number.isInteger(game.officialWinnerLane)
+      ? game.officialWinnerLane
+      : (Number.isInteger(game.winner) ? game.winner : null);
+    const totalDurationSec = Number.isInteger(game.tick)
+      ? Math.round(game.tick / (simMl.TICK_HZ || 20))
       : Math.round((Date.now() - (game.startedAt || Date.now())) / 1000);
-    const survivalDurationSec = game.continuedIntoSurvival && Number.isInteger(game.survivalStartedAtTick)
+    const survivalDurationSec = Number.isInteger(game.survivalStartedAtTick)
       ? Math.max(0, Math.round((game.tick - game.survivalStartedAtTick) / (simMl.TICK_HZ || 20)))
-      : 0;
-    const survivalExtraRounds = game.continuedIntoSurvival && Number.isInteger(game.survivalStartRound)
+      : totalDurationSec;
+    const survivalExtraRounds = Number.isInteger(game.survivalStartRound)
       ? Math.max(0, game.roundNumber - game.survivalStartRound)
-      : 0;
+      : Math.max(0, game.roundNumber - 1);
 
     return {
-      winnerLaneIndex: winnerLane,
-      winnerName: winnerLane !== null && winnerLane !== undefined ? getLaneDisplayName(room, winnerLane) : "Unknown",
-      winningTeam: game.officialWinningTeam || null,
-      winningSide: game.officialWinningSide || null,
-      losingTeam: game.losingTeam || null,
-      losingSide: game.losingSide || null,
+      winnerLaneIndex: winnerLane ?? -1,
+      winnerName: winnerLane !== null && winnerLane !== undefined ? getLaneDisplayName(room, winnerLane) : "",
+      winningTeam: winnerLane !== null && winnerLane !== undefined ? (game.lanes[winnerLane]?.team || null) : null,
+      winningSide: winnerLane !== null && winnerLane !== undefined ? (game.lanes[winnerLane]?.side || null) : null,
+      losingTeam: null,
+      losingSide: null,
       finalRound: game.roundNumber,
-      gameDuration: pvpDurationSec,
-      causeLoss: game.losingSide ? `Lives reduced to 0 on Wave ${game.roundNumber}` : "Lives reduced to 0",
+      gameDuration: totalDurationSec,
+      causeLoss: `Survival ended on Wave ${game.roundNumber}`,
       finalStats: buildFinalStats(room, game),
       waveSnapshots: game.roundSnapshots,
-      matchState: game.matchState || (game.phase === "ended" ? "final_game_over" : "active_pvp"),
-      continuedIntoSurvival: !!game.continuedIntoSurvival,
+      matchState: game.matchState || (game.phase === "ended" ? "final_game_over" : "active_survival"),
+      continuedIntoSurvival: game.continuedIntoSurvival !== false,
       survivalDuration: survivalDurationSec,
       survivalExtraRounds,
-      pvpWinnerLaneIndex: winnerLane,
+      pvpWinnerLaneIndex: winnerLane ?? -1,
+      finalGameOverReason: game.finalGameOverReason || null,
+      finalGameOverDebug: game.finalGameOverDebug || null,
     };
   }
 
   function getWinningHumanLaneIndices(room, game) {
-    if (!room || !game || !game.officialWinningTeam) return [];
+    if (!room || !game || !Number.isInteger(game.officialWinnerLane)) return [];
     return room.players
       .map((sid) => room.laneBySocketId.get(sid))
-      .filter((laneIndex) => {
-        if (!Number.isInteger(laneIndex)) return false;
-        const lane = game.lanes[laneIndex];
-        return !!lane && !lane.eliminated && lane.team === game.officialWinningTeam;
-      });
+      .filter((laneIndex) => laneIndex === game.officialWinnerLane);
   }
 
   function handlePostWinDecision(roomId, code, decision, sid) {
@@ -258,51 +246,42 @@ function createMultilaneRuntime({
     const entry = gamesByRoomId.get(roomId);
     if (!room || !entry || !entry.game) return { ok: false, reason: "Game not active" };
     const game = entry.game;
-    if (game.matchState !== "pvp_resolved" || !game.awaitingPostWinDecision) {
-      return { ok: false, reason: "No pending post-win decision" };
-    }
     const laneIndex = room.laneBySocketId.get(sid);
     const lane = Number.isInteger(laneIndex) ? game.lanes[laneIndex] : null;
-    if (!lane || lane.eliminated || lane.team !== game.officialWinningTeam) {
-      return { ok: false, reason: "Only active winners can decide" };
-    }
+    if (!lane || lane.eliminated)
+      return { ok: false, reason: "You have been eliminated." };
 
     if (decision === "continue") {
       game.awaitingPostWinDecision = false;
-      game.matchState = "survival_continuation";
+      game.matchState = "active_survival";
       game.continuedIntoSurvival = true;
-      game.survivalStartedAtTick = game.tick;
-      game.survivalStartRound = game.roundNumber;
-      log.info("[ml-game] survival continuation selected", {
+      if (!Number.isInteger(game.survivalStartedAtTick))
+        game.survivalStartedAtTick = 0;
+      if (!Number.isInteger(game.survivalStartRound))
+        game.survivalStartRound = 1;
+
+      const currentWaveComplete = simMl && typeof simMl.countRemainingWaveMobs === "function"
+        ? simMl.countRemainingWaveMobs(game) <= 0
+        : !(simMl && typeof simMl.isCurrentWaveComplete === "function") || simMl.isCurrentWaveComplete(game);
+      const startedImmediately = currentWaveComplete
+        && !!(simMl && typeof simMl.startNextWaveNow === "function" && simMl.startNextWaveNow(game));
+      log.info("[ml-game] survival continue acknowledged", {
         roomId,
         code,
-        decisionByLane: laneIndex,
-        officialWinnerLane: game.officialWinnerLane,
-        winningTeam: game.officialWinningTeam,
+        laneIndex,
+        startedImmediately,
         round: game.roundNumber,
       });
       io.to(roomId).emit("ml_survival_continuation_started", {
-        winnerLaneIndex: game.officialWinnerLane,
-        winningTeam: game.officialWinningTeam,
-        winningSide: game.officialWinningSide,
+        winnerLaneIndex: -1,
+        winningTeam: null,
+        winningSide: null,
       });
-      return { ok: true };
+      return { ok: true, startedImmediately };
     }
 
     if (decision === "end_now") {
-      game.awaitingPostWinDecision = false;
-      game.phase = "ended";
-      game.matchState = "final_game_over";
-      game.winner = game.officialWinnerLane;
-      log.info("[ml-game] winners ended match immediately", {
-        roomId,
-        code,
-        decisionByLane: laneIndex,
-        officialWinnerLane: game.officialWinnerLane,
-        winningTeam: game.officialWinningTeam,
-        round: game.roundNumber,
-      });
-      return { ok: true };
+      return { ok: false, reason: "Manual end-now flow is no longer supported in free-for-all survival." };
     }
 
     return { ok: false, reason: "Unknown post-win decision" };
@@ -311,24 +290,8 @@ function createMultilaneRuntime({
   function applyMultilaneAction(entry, laneIndex, action) {
     const result = simMl.applyMLAction(entry.game, laneIndex, action);
     const tracker = entry.botController && entry.botController.runtimeTracker;
-    if (tracker) {
-      if (!result.ok) {
-        tracker.recordInvalidAction(laneIndex);
-      } else if (action && action.type === "spawn_unit") {
-        const requestedTarget = Number(action.data && action.data.targetLaneIndex);
-        const targetLaneIndex = Number.isInteger(requestedTarget)
-          ? requestedTarget
-          : resolveDefaultMultilaneTarget(entry.game, laneIndex);
-        tracker.recordSendEvent(
-          laneIndex,
-          targetLaneIndex,
-          action.data && action.data.unitType,
-          1,
-          1,
-          entry.game.tick
-        );
-      }
-    }
+    if (tracker && !result.ok)
+      tracker.recordInvalidAction(laneIndex);
     return result;
   }
 
@@ -395,16 +358,15 @@ function createMultilaneRuntime({
   }
 
   function _bucketToDbMode(queueMode) {
-    if (!queueMode) return 'multilane';
-    if (queueMode === 'ranked_2v2') return '2v2_ranked'; // legacy
+    if (!queueMode) return "multilane";
+    if (queueMode === "ranked_2v2") return "ffa_ranked";
     const parts = queueMode.split(':');
-    if (parts.length !== 3 || parts[0] !== 'line_wars') return 'multilane';
+    if (parts.length !== 3 || parts[0] !== "line_wars") return "multilane";
     const [, matchFormat, rankedFlag] = parts;
-    const isRanked = rankedFlag === '1';
-    if (matchFormat === '2v2') return isRanked ? '2v2_ranked' : '2v2_casual';
-    if (matchFormat === '1v1') return isRanked ? '1v1_ranked' : '1v1_casual';
-    if (matchFormat === 'ffa') return isRanked ? 'ffa_ranked' : 'ffa_casual';
-    return 'multilane';
+    const isRanked = rankedFlag === "1";
+    if (matchFormat === "1v1" || matchFormat === "2v2" || matchFormat === "ffa")
+      return isRanked ? "ffa_ranked" : "ffa_casual";
+    return "multilane";
   }
 
   // ── Loadout-phase helpers ────────────────────────────────────────────────
@@ -412,13 +374,7 @@ function createMultilaneRuntime({
   // Returns the buildable loadout catalog used by ml_loadout_confirm validation.
   function buildAvailableUnits() {
     return getAllUnitTypes()
-      .filter(ut =>
-        ut &&
-        ut.enabled &&
-        Number(ut.send_cost) > 0 &&
-        Number(ut.build_cost) > 0 &&
-        Number(ut.range) > 0
-      )
+      .filter((ut) => canUseInLoadout(ut))
       .map(ut => ({
         id:            ut.id,
         key:           ut.key,
@@ -433,7 +389,21 @@ function createMultilaneRuntime({
         income:        Number(ut.income)        || 0,
         damage_type:   ut.damage_type  || "NORMAL",
         armor_type:    ut.armor_type   || "UNARMORED",
+        usage_scope:   ut.usage_scope  || "both",
       }));
+  }
+
+  function getHumanLaneIndices(room) {
+    return (room?.players || [])
+      .map((sid) => room.laneBySocketId.get(sid))
+      .filter((laneIndex) => Number.isInteger(laneIndex))
+      .sort((a, b) => a - b);
+  }
+
+  function areAllHumanLanesReady(room, readyByLane) {
+    const humanLaneIndices = getHumanLaneIndices(room);
+    if (humanLaneIndices.length === 0) return false;
+    return humanLaneIndices.every((laneIndex) => readyByLane && readyByLane.has(laneIndex));
   }
 
   // Waits for all human players to emit ml_loadout_confirm, or until timeoutMs.
@@ -445,6 +415,12 @@ function createMultilaneRuntime({
       .map(sid => io.sockets.sockets.get(sid))
       .filter(Boolean);
     if (humanSockets.length === 0) return Promise.resolve();
+
+    const hasConfirmedSelection = (sock) => {
+      if (!sock) return false;
+      if (isValidRaceId(sock.pendingRaceId)) return true;
+      return Array.isArray(sock.pendingUnitTypeIds) && sock.pendingUnitTypeIds.length === 5;
+    };
 
     return new Promise(resolve => {
       let resolved = false;
@@ -468,20 +444,174 @@ function createMultilaneRuntime({
       room._loadoutPhaseDeadline = Date.now() + timeoutMs;
 
       for (const sock of humanSockets) {
-        const fn = (data) => {
-          const ids = Array.isArray(data && data.unitTypeIds) ? data.unitTypeIds : null;
-          if (!ids || ids.length !== 5) return;
-          sock.pendingUnitTypeIds = ids.map(Number);
-          // Check if every human has now confirmed
-          const allDone = humanSockets.every(s => Array.isArray(s.pendingUnitTypeIds) && s.pendingUnitTypeIds.length === 5);
+        const fn = () => {
+          if (!hasConfirmedSelection(sock)) return;
+          const allDone = humanSockets.every(hasConfirmedSelection);
           if (allDone) done("all_confirmed");
         };
         handlers.set(sock, fn);
         sock.on("ml_loadout_confirm", fn);
       }
 
+      if (humanSockets.every(hasConfirmedSelection))
+        done("all_confirmed");
+
       const timeoutHandle = setTimeout(() => done("timeout"), timeoutMs);
     });
+  }
+
+  function getUpcomingWaveNumber(game) {
+    if (simMl && typeof simMl.getUpcomingWaveNumber === "function")
+      return simMl.getUpcomingWaveNumber(game);
+
+    const currentRound = Math.max(1, Math.floor(Number(game && game.roundNumber) || 1));
+    return game && game.hasSpawnedWave
+      ? currentRound + 1
+      : currentRound;
+  }
+
+  function getEligibleWaveReadyLaneIndices(room, game) {
+    if (!room || !game) return [];
+    return room.players
+      .map((sid) => room.laneBySocketId.get(sid))
+      .filter((laneIndex) => {
+        if (!Number.isInteger(laneIndex)) return false;
+        const lane = game.lanes[laneIndex];
+        return !!lane && !lane.eliminated;
+      })
+      .sort((a, b) => a - b);
+  }
+
+  function buildWaveReadyState(room, game, waveReadyVotes) {
+    const eligibleLaneIndices = getEligibleWaveReadyLaneIndices(room, game);
+    const readyLaneIndices = eligibleLaneIndices
+      .filter((laneIndex) => waveReadyVotes && waveReadyVotes.has(laneIndex))
+      .sort((a, b) => a - b);
+    const remainingWaveMobCount = !!(simMl && typeof simMl.countRemainingWaveMobs === "function")
+      ? simMl.countRemainingWaveMobs(game)
+      : 0;
+
+    return {
+      upcomingWaveNumber: getUpcomingWaveNumber(game),
+      requiredReadyCount: eligibleLaneIndices.length,
+      eligibleLaneIndices,
+      readyLaneIndices,
+      remainingWaveMobCount,
+      currentWaveComplete: remainingWaveMobCount <= 0,
+      allReady: eligibleLaneIndices.length > 0 && readyLaneIndices.length >= eligibleLaneIndices.length,
+    };
+  }
+
+  function emitWaveReadyState(roomId, room, entry) {
+    if (!roomId || !room || !entry || !entry.game)
+      return;
+
+    io.to(roomId).emit("ml_wave_ready_state", buildWaveReadyState(room, entry.game, entry.waveReadyVotes));
+  }
+
+  function resetWaveReadyState(roomId, room, entry) {
+    if (!entry)
+      return;
+
+    entry.waveReadyVotes = new Set();
+    entry.waveReadyWaveNumber = getUpcomingWaveNumber(entry.game);
+    emitWaveReadyState(roomId, room, entry);
+  }
+
+  function submitWaveReadyVote(roomId, code, laneIndex) {
+    const room = mlRoomsByCode.get(code);
+    const entry = gamesByRoomId.get(roomId);
+    if (!room || !entry || !entry.game) {
+      log.warn("[WaveStart][Server] rejected", {
+        roomId,
+        code,
+        laneIndex,
+        reason: "Game not active",
+      });
+      return { ok: false, reason: "Game not active" };
+    }
+
+    const game = entry.game;
+    if (game.phase !== "playing") {
+      log.warn("[WaveStart][Server] rejected", {
+        roomId,
+        code,
+        laneIndex,
+        reason: "Game not active",
+        phase: game.phase,
+      });
+      return { ok: false, reason: "Game not active" };
+    }
+
+    const lane = game.lanes[laneIndex];
+    if (!lane || lane.eliminated) {
+      log.warn("[WaveStart][Server] rejected", {
+        roomId,
+        code,
+        laneIndex,
+        reason: "You have been eliminated.",
+      });
+      return { ok: false, reason: "You have been eliminated." };
+    }
+
+    const readyStateBeforeVote = buildWaveReadyState(room, game, entry.waveReadyVotes);
+    if (!readyStateBeforeVote.currentWaveComplete) {
+      log.warn("[WaveStart][Server] blocked", {
+        roomId,
+        code,
+        laneIndex,
+        reason: "Finish the current wave before starting the next one.",
+        remainingWaveMobCount: readyStateBeforeVote.remainingWaveMobCount,
+        upcomingWaveNumber: readyStateBeforeVote.upcomingWaveNumber,
+      });
+      return { ok: false, reason: "Finish the current wave before starting the next one.", readyState: readyStateBeforeVote };
+    }
+
+    const upcomingWaveNumber = getUpcomingWaveNumber(game);
+    if (entry.waveReadyWaveNumber !== upcomingWaveNumber) {
+      entry.waveReadyVotes = new Set();
+      entry.waveReadyWaveNumber = upcomingWaveNumber;
+    }
+
+    if (!entry.waveReadyVotes)
+      entry.waveReadyVotes = new Set();
+
+    entry.waveReadyVotes.add(laneIndex);
+    log.info("[WaveStart][Server] vote recorded", {
+      roomId,
+      code,
+      laneIndex,
+      upcomingWaveNumber,
+      readyVotes: Array.from(entry.waveReadyVotes.values()).sort((a, b) => a - b),
+    });
+    emitWaveReadyState(roomId, room, entry);
+
+    const readyState = buildWaveReadyState(room, game, entry.waveReadyVotes);
+    if (!readyState.allReady)
+      return { ok: true, startedImmediately: false, readyState };
+
+    const startedImmediately = !!(simMl && typeof simMl.startNextWaveNow === "function" && simMl.startNextWaveNow(game));
+    if (!startedImmediately) {
+      log.warn("[WaveStart][Server] blocked", {
+        roomId,
+        code,
+        laneIndex,
+        reason: "Unable to start the next wave yet.",
+        upcomingWaveNumber,
+      });
+      emitWaveReadyState(roomId, room, entry);
+      return { ok: false, reason: "Unable to start the next wave yet." };
+    }
+
+    log.info("[WaveStart][Server] started", {
+      roomId,
+      code,
+      laneIndex,
+      upcomingWaveNumber,
+      roundNumber: game.roundNumber,
+    });
+    resetWaveReadyState(roomId, room, entry);
+    return { ok: true, startedImmediately: true };
   }
 
   function waitForGameplaySceneReady(room, roomId, timeoutMs) {
@@ -523,13 +653,15 @@ function createMultilaneRuntime({
   function broadcastPreparationState(room, roomId) {
     const humanPlayers = room.players.map(sid => {
       const sock = io.sockets.sockets.get(sid);
+      const laneIndex = room.laneBySocketId.get(sid);
+      const progress = room.contentProgressByLane?.get(laneIndex) || sock?._contentProgress || null;
       return {
-        laneIndex:      room.laneBySocketId.get(sid),
+        laneIndex,
         displayName:    room.playerNames?.get(sid) || "Player",
-        loadoutReady:   !!(sock && sock._loadoutReady),
-        gameplayReady:  !!(sock && sock._gameplayReady),
-        contentPercent: (sock && sock._contentProgress?.percent) || 0,
-        contentState:   (sock && sock._contentProgress?.state)   || "Preparing",
+        loadoutReady:   !!(room.loadoutReadyByLane?.has(laneIndex) || (sock && sock._loadoutReady)),
+        gameplayReady:  !!(room.gameplayReadyByLane?.has(laneIndex) || (sock && sock._gameplayReady)),
+        contentPercent: progress?.percent || 0,
+        contentState:   progress?.state || "Preparing",
       };
     });
     // AI players simulate a brief 3-second "load" so their bars animate in real-time.
@@ -569,13 +701,11 @@ function createMultilaneRuntime({
   // which also calls room._loadoutReadyResolve() when all players are ready.
   // Resolves with { reason: "all_ready" | "no_players" | "timeout" }.
   function waitForLoadoutReady(room, roomId, timeoutMs) {
-    const humanSockets = room.players
-      .map(sid => io.sockets.sockets.get(sid))
-      .filter(Boolean);
-    if (humanSockets.length === 0) return Promise.resolve({ reason: "no_players" });
+    const humanLaneIndices = getHumanLaneIndices(room);
+    if (humanLaneIndices.length === 0) return Promise.resolve({ reason: "no_players" });
 
     // Fast path: all already signalled before we started waiting
-    if (humanSockets.every(s => s._loadoutReady)) {
+    if (areAllHumanLanesReady(room, room.loadoutReadyByLane)) {
       broadcastPreparationState(room, roomId);
       return Promise.resolve({ reason: "all_ready" });
     }
@@ -604,13 +734,11 @@ function createMultilaneRuntime({
   // which also calls room._gameplayReadyResolve() when all players are ready.
   // Resolves with { reason: "all_ready" | "no_players" | "timeout" }.
   function waitForGameplayReady(room, roomId, timeoutMs) {
-    const humanSockets = room.players
-      .map(sid => io.sockets.sockets.get(sid))
-      .filter(Boolean);
-    if (humanSockets.length === 0) return Promise.resolve({ reason: "no_players" });
+    const humanLaneIndices = getHumanLaneIndices(room);
+    if (humanLaneIndices.length === 0) return Promise.resolve({ reason: "no_players" });
 
     // Fast path: all already signalled before we started waiting
-    if (humanSockets.every(s => s._gameplayReady)) {
+    if (areAllHumanLanesReady(room, room.gameplayReadyByLane)) {
       broadcastPreparationState(room, roomId);
       return Promise.resolve({ reason: "all_ready" });
     }
@@ -647,26 +775,31 @@ function createMultilaneRuntime({
         laneIndex: room.laneBySocketId.get(sid),
         displayName: room.playerNames.get(sid) || "Player",
         isAI: false,
-        team: room.playerTeamsBySocketId?.get(sid) || "red",
+        team: ffaTeamForLane(room.laneBySocketId.get(sid) || 0),
       })),
       ...aiList.map((ai) => ({
         laneIndex: ai.laneIndex,
         displayName: ai.displayName || `CPU (${capFirst(ai.difficulty)})`,
         isAI: true,
-        team: ai.team || "red",
+        team: ffaTeamForLane(ai.laneIndex || 0),
       })),
     ];
 
-    const laneTeams = new Array(playerCount).fill("red");
+    const laneTeams = new Array(playerCount).fill(null);
     for (const assignment of laneAssignments) {
       if (
         Number.isInteger(assignment.laneIndex) &&
         assignment.laneIndex >= 0 &&
         assignment.laneIndex < playerCount
       ) {
-        laneTeams[assignment.laneIndex] = assignment.team || "red";
+        laneTeams[assignment.laneIndex] = assignment.team || ffaTeamForLane(assignment.laneIndex);
       }
     }
+
+    for (const sid of room.players)
+      room.playerTeamsBySocketId.set(sid, ffaTeamForLane(room.laneBySocketId.get(sid) || 0));
+    for (const ai of aiList)
+      ai.team = ffaTeamForLane(ai.laneIndex || 0);
 
     for (const assignment of laneAssignments) {
       const slot = getSlotDefinition(simMl, playerCount, assignment.laneIndex, laneTeams);
@@ -688,13 +821,35 @@ function createMultilaneRuntime({
       matchSeed: matchSeedNum,
     });
 
-    // Load wave config from DB (async; game starts with empty config then gets populated)
-    loadDefaultWaveConfig(db).then(waves => {
+    try {
+      const waves = await loadDefaultWaveConfig(db);
       game.waveConfig = waves;
-      log.info(`[ml-game] wave config loaded: ${waves.length} waves`, { roomId });
-    }).catch(err => {
-      log.error('[ml-game] failed to load wave config', { err: err.message });
-    });
+      const usingLockedWaveFallback = Array.isArray(waves) && waves.length > 0 && Object.prototype.hasOwnProperty.call(waves[0], "note");
+      log.info(`[ml-game] wave config loaded: ${waves.length} waves`, {
+        roomId,
+        source: usingLockedWaveFallback ? "locked_fallback" : "database",
+      });
+    } catch (err) {
+      game.waveConfig = [];
+      log.error("[ml-game] failed to load wave config", { err: err.message });
+    }
+
+    room.loadoutReadyByLane = new Set();
+    room.gameplayReadyByLane = new Set();
+    room.contentProgressByLane = new Map();
+
+    // Reset readiness before notifying clients so an immediate ml_loadout_ready
+    // from the lobby is not erased by a later stale-state clear.
+    for (const sid of room.players) {
+      const sock = io.sockets.sockets.get(sid);
+      if (sock) {
+        sock._loadoutReady = false;
+        sock._gameplayReady = false;
+        sock.pendingUnitTypeIds = null;
+        sock.pendingRaceId = null;
+        sock._contentProgress = null;
+      }
+    }
 
     io.to(roomId).emit("ml_match_ready", {
       code,
@@ -726,7 +881,8 @@ function createMultilaneRuntime({
       playerSnapshot,
       dbMode,
       partyASize: room.partyASize || 1,
-      pvpResolvedEmitted: false,
+      waveReadyVotes: new Set(),
+      waveReadyWaveNumber: getUpcomingWaveNumber(game),
     };
     gamesByRoomId.set(roomId, gameEntry);
     for (const sid of room.players) {
@@ -743,29 +899,28 @@ function createMultilaneRuntime({
     const loadoutTimeoutMs = 60_000;
     room.loadoutConfirms = new Map();
     if (!room.loadoutByLane) room.loadoutByLane = [];
-    await Promise.all(
-      aiList.map(async (ai) => {
-        const loadout = await resolveLoadout(null, null, null);
-        const laneIdx = ai.laneIndex;
-        room.loadoutByLane[laneIdx] = loadout;
-        if (game.lanes[laneIdx]) {
-          const keys = loadout.map((ut) => ut.key);
-          game.lanes[laneIdx].autosend.loadoutKeys = keys;
-          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map((k) => [k, false]));
-        }
-      })
-    ).catch((err) => log.error("[loadout] ai pre-resolve error", { err: err.message }));
+    if (!room.raceByLane) room.raceByLane = [];
+    try {
+      await Promise.all(
+        aiList.map(async (ai) => {
+          const raceId = getDefaultRaceId();
+          const loadout = await resolveLoadout(null, null, raceId);
+          const laneIdx = ai.laneIndex;
+          room.loadoutByLane[laneIdx] = loadout;
+          room.raceByLane[laneIdx] = raceId;
+          if (game.lanes[laneIdx]) {
+            const keys = loadout.map((ut) => ut.key);
+            game.lanes[laneIdx].loadoutKeys = keys;
+          }
+        })
+      );
+    } catch (err) {
+      log.error("[loadout] ai pre-resolve error", { err: err.message, details: err.details || null });
+      cancelMatch(roomId, code, "ai_loadout_resolution_failed");
+      return;
+    }
 
     // ── Clear per-match socket state to prevent stale flags from prior matches ──
-    for (const sid of room.players) {
-      const sock = io.sockets.sockets.get(sid);
-      if (sock) {
-        sock._loadoutReady      = false;
-        sock._gameplayReady     = false;
-        sock.pendingUnitTypeIds = null;
-        sock._contentProgress   = null;
-      }
-    }
     // ─────────────────────────────────────────────────────────────────────
 
     // ── BARRIER 1: All players must have loadout-critical assets before loadout starts ──
@@ -782,6 +937,9 @@ function createMultilaneRuntime({
       code,
       timeoutSeconds: Math.ceil(loadoutTimeoutMs / 1000),
       selectionMode,
+      defaultRaceId: getDefaultRaceId(),
+      selectedRaceId: getDefaultRaceId(),
+      availableRaceIds: getAvailableRaces().map((race) => race.id),
       availableUnits: buildAvailableUnits(),
     });
 
@@ -804,40 +962,50 @@ function createMultilaneRuntime({
     // (clients begin downloading gameplay content as soon as they receive ml_match_config).
     const gameplayReadyPromise = waitForGameplayReady(room, roomId, 300_000);
 
-    await Promise.all([
-      ...room.players.map(async (sid) => {
-        const sock = io.sockets.sockets.get(sid);
-        if (!sock) return;
-        const laneIdx = room.laneBySocketId.get(sid);
-        const loadout = await resolveLoadout(sock.playerId || null, sock.pendingUnitTypeIds);
-        sock.pendingUnitTypeIds = null;
-        room.loadoutByLane[laneIdx] = loadout;
-        if (game.lanes[laneIdx]) {
-          const keys = loadout.map((ut) => ut.key);
-          game.lanes[laneIdx].autosend.loadoutKeys = keys;
-          game.lanes[laneIdx].autosend.enabledUnits = Object.fromEntries(keys.map(k => [k, false]));
-          // Load equipped skins for this player
-          if (db && sock.playerId) {
-            try {
-              const skinRows = await db.query(
-                `SELECT pse.unit_type, pse.skin_key
-                   FROM player_skin_equip pse
-                   JOIN skin_catalog s ON s.skin_key = pse.skin_key
-                  WHERE pse.player_id = $1
-                    AND s.enabled = true`,
-                [sock.playerId]
-              );
-              game.lanes[laneIdx].equippedSkins = Object.fromEntries(
-                skinRows.rows.map(r => [r.unit_type, r.skin_key])
-              );
-            } catch (err) {
-              log.error('[skins] failed to load equipped skins', { err: err.message });
+    try {
+      await Promise.all([
+        ...room.players.map(async (sid) => {
+          const sock = io.sockets.sockets.get(sid);
+          if (!sock) return;
+          const laneIdx = room.laneBySocketId.get(sid);
+          const raceId = isValidRaceId(sock.pendingRaceId)
+            ? sock.pendingRaceId
+            : getDefaultRaceId();
+          const loadout = await resolveLoadout(sock.playerId || null, sock.pendingUnitTypeIds, raceId);
+          sock.pendingUnitTypeIds = null;
+          sock.pendingRaceId = null;
+          room.loadoutByLane[laneIdx] = loadout;
+          room.raceByLane[laneIdx] = raceId;
+          if (game.lanes[laneIdx]) {
+            const keys = loadout.map((ut) => ut.key);
+            game.lanes[laneIdx].loadoutKeys = keys;
+            // Load equipped skins for this player
+            if (db && sock.playerId) {
+              try {
+                const skinRows = await db.query(
+                  `SELECT pse.unit_type, pse.skin_key
+                     FROM player_skin_equip pse
+                     JOIN skin_catalog s ON s.skin_key = pse.skin_key
+                    WHERE pse.player_id = $1
+                      AND s.enabled = true`,
+                  [sock.playerId]
+                );
+                game.lanes[laneIdx].equippedSkins = Object.fromEntries(
+                  skinRows.rows.map(r => [r.unit_type, r.skin_key])
+                );
+              } catch (err) {
+                log.error('[skins] failed to load equipped skins', { err: err.message });
+              }
             }
           }
-        }
-        sock.emit("ml_match_config", { loadout });
-      }),
-    ]).catch((err) => log.error("[loadout] resolve error", { err: err.message }));
+          sock.emit("ml_match_config", { loadout, raceId });
+        }),
+      ]);
+    } catch (err) {
+      log.error("[loadout] resolve error", { err: err.message, details: err.details || null });
+      cancelMatch(roomId, code, "loadout_resolution_failed");
+      return;
+    }
 
     const gameplayReadyResult = await gameplayReadyPromise;
     log.info("[ml-game] gameplay ready wait complete", {
@@ -886,6 +1054,7 @@ function createMultilaneRuntime({
     const tickHandle = setInterval(() => {
       const entry = gamesByRoomId.get(roomId);
       if (!entry) return;
+      let eliminationStateChanged = false;
 
       const prevLite = entry.botController ? aiRuntime.captureStateLite(entry.game) : null;
       if (entry.botController) entry.botController.onBeforeSimTick(entry.game);
@@ -895,30 +1064,20 @@ function createMultilaneRuntime({
         entry.botController.onAfterSimTick(prevLite, nextLite);
       }
 
-      localTick += 1;
-
-      if (entry.game.matchState === "pvp_resolved" && !entry.pvpResolvedEmitted) {
-        entry.pvpResolvedEmitted = true;
-        log.info("[ml-game] pvp resolved", {
-          roomId,
-          code,
-          officialWinnerLane: entry.game.officialWinnerLane,
-          winningTeam: entry.game.officialWinningTeam,
-          winningSide: entry.game.officialWinningSide,
-          losingTeam: entry.game.losingTeam,
-          losingSide: entry.game.losingSide,
-          round: entry.game.roundNumber,
-          winnerHumanLanes: getWinningHumanLaneIndices(room, entry.game),
-        });
-        io.to(roomId).emit("ml_pvp_resolved", {
-          ...buildOutcomePayload(room, entry),
-          winnerLaneIndices: getWinningHumanLaneIndices(room, entry.game),
-          waitingForDecision: true,
-        });
+      const queuedReadyState = entry.waveReadyVotes && entry.waveReadyVotes.size > 0
+        ? buildWaveReadyState(room, entry.game, entry.waveReadyVotes)
+        : null;
+      if (queuedReadyState && queuedReadyState.currentWaveComplete && queuedReadyState.allReady) {
+        const startedFromQueuedReady = !!(simMl && typeof simMl.startNextWaveNow === "function" && simMl.startNextWaveNow(entry.game));
+        if (startedFromQueuedReady)
+          resetWaveReadyState(roomId, room, entry);
       }
+
+      localTick += 1;
 
       for (const lane of entry.game.lanes) {
         if (lane.eliminated && !entry.eliminatedNotified.has(lane.laneIndex)) {
+          eliminationStateChanged = true;
           entry.eliminatedNotified.add(lane.laneIndex);
           const eliminatedSid = room.players.find((sid) => room.laneBySocketId.get(sid) === lane.laneIndex);
           const aiEntry = (room.aiPlayers || []).find((ai) => ai.laneIndex === lane.laneIndex);
@@ -940,6 +1099,9 @@ function createMultilaneRuntime({
       for (const evt of pendingEvents) {
         io.to(roomId).emit(evt.type, evt);
       }
+      const waveStarted = pendingEvents.some((evt) => evt && evt.type === "ml_wave_start");
+      if (waveStarted || eliminationStateChanged)
+        resetWaveReadyState(roomId, room, entry);
 
       // Drain combat log events (buffered by combatLog.js when COMBAT_LOG=true)
       if (entry.game._combatLog && entry.game._combatLog.length > 0) {
@@ -958,21 +1120,19 @@ function createMultilaneRuntime({
           roomId,
           code,
           winnerLaneIndex: finalPayload.winnerLaneIndex,
-          winningTeam: finalPayload.winningTeam,
           matchState: finalPayload.matchState,
           continuedIntoSurvival: finalPayload.continuedIntoSurvival,
           finalRound: finalPayload.finalRound,
           survivalDuration: finalPayload.survivalDuration,
+          finalGameOverReason: finalPayload.finalGameOverReason,
+          finalGameOverDebug: finalPayload.finalGameOverDebug,
         });
         io.to(roomId).emit("ml_game_over", finalPayload);
         const winnerLane = finalPayload.winnerLaneIndex;
+        const hasWinnerLane = Number.isInteger(winnerLane) && winnerLane >= 0;
         const snapshots = entry.playerSnapshot.map((player) => ({
           ...player,
-          result: winnerLane === null
-            ? "draw"
-            : entry.game.lanes[player.laneIndex]?.team === entry.game.lanes[winnerLane]?.team
-              ? "win"
-              : "loss",
+          result: hasWinnerLane && player.laneIndex === winnerLane ? "win" : "loss",
         }));
 
         const endPromise = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
@@ -1032,6 +1192,7 @@ function createMultilaneRuntime({
     }, simMl.TICK_MS);
 
     gameEntry.tickHandle = tickHandle;
+    emitWaveReadyState(roomId, room, gameEntry);
     log.info(`[ml-game] started ${roomId}`);
   }
 
@@ -1068,6 +1229,7 @@ function createMultilaneRuntime({
     handlePostWinDecision,
     mlLobbyUpdatePayload,
     pickBalancedMlTeam,
+    submitWaveReadyVote,
     startMLGame,
     stopMLGame,
     validateMlTeamSetup,

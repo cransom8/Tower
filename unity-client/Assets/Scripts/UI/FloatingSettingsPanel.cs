@@ -13,6 +13,7 @@ namespace CastleDefender.UI
         [SerializeField] Button toggleButton;
         [SerializeField] bool startExpanded;
         [SerializeField] string prefsKey = "hud.settings_panel";
+        [SerializeField] bool rememberExpandedState;
         [SerializeField] float animationDuration = 0.18f;
         [SerializeField] Vector2 expandedAnchoredPosition = new Vector2(-62f, 0f);
         [SerializeField] Vector2 collapsedAnchoredPosition = new Vector2(-42f, 0f);
@@ -30,6 +31,7 @@ namespace CastleDefender.UI
             Button toggle,
             bool expandedByDefault,
             string persistentKey,
+            bool persistExpandedState,
             Vector2 expandedPosition,
             Vector2 collapsedPosition)
         {
@@ -39,8 +41,10 @@ namespace CastleDefender.UI
             toggleButton = toggle;
             startExpanded = expandedByDefault;
             prefsKey = persistentKey;
+            rememberExpandedState = persistExpandedState;
             expandedAnchoredPosition = expandedPosition;
             collapsedAnchoredPosition = collapsedPosition;
+            _loadedState = false;
 
             BindToggle();
             LoadStateIfNeeded();
@@ -138,11 +142,17 @@ namespace CastleDefender.UI
                 return;
 
             _loadedState = true;
-            _isExpanded = PlayerPrefs.GetInt($"{prefsKey}.expanded", startExpanded ? 1 : 0) == 1;
+            if (rememberExpandedState && !string.IsNullOrWhiteSpace(prefsKey))
+                _isExpanded = PlayerPrefs.GetInt($"{prefsKey}.expanded", startExpanded ? 1 : 0) == 1;
+            else
+                _isExpanded = startExpanded;
         }
 
         void SaveState()
         {
+            if (!rememberExpandedState || string.IsNullOrWhiteSpace(prefsKey))
+                return;
+
             PlayerPrefs.SetInt($"{prefsKey}.expanded", _isExpanded ? 1 : 0);
             PlayerPrefs.Save();
         }

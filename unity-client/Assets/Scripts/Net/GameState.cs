@@ -99,11 +99,32 @@ namespace CastleDefender.Net
         public int          transitionPhaseTicks;
         public int          gridW;
         public int          gridH;
+        public string       raceId;
         public LoadoutEntry[] loadout;       // 5 unit types for this match
         public string       reconnectToken;  // Phase U8 — store for disconnect recovery
         public bool         ranked;
         public MLBattlefieldTopology battlefieldTopology;
         public MLSlotDefinition[] slotDefinitions;
+        public MLFortressBuildingConfig[] fortressBuildingConfigs;
+        public MLFortressPadConfig[] fortressPadConfigs;
+        public MLBarracksSiteConfig[] barracksSiteConfigs;
+        public MLBarracksRosterConfig[] barracksRosterConfigs;
+        public MLHeroRosterConfig[] heroRosterConfigs;
+        public MLMarketRosterConfig[] marketRosterConfigs;
+        public int          barracksRosterRefundPct;
+        public int          barracksSendTimerTicks;
+        public int          waveTimerTicks;
+        public MLMovementTuning movementTuning;
+    }
+
+    [Serializable]
+    public class MLMovementTuning
+    {
+        public float baseCombatPathSpeed;
+        public float barracksLevelOneSpeedMultiplier;
+        public float barracksSpeedUpgradeStep;
+        public float waveSpeedUpgradeStep;
+        public float serverPathSpeedToUnityMoveSpeedScale;
     }
 
     [Serializable]
@@ -128,6 +149,9 @@ namespace CastleDefender.Net
         public string         code;
         public int            timeoutSeconds;   // countdown (25)
         public string         selectionMode;    // "manual" | "random"
+        public string         defaultRaceId;
+        public string         selectedRaceId;
+        public string[]       availableRaceIds;
         public LoadoutEntry[] availableUnits;   // full sendable catalog
     }
 
@@ -136,6 +160,24 @@ namespace CastleDefender.Net
     {
         public string code;
         public string reason;   // "all_confirmed" | "timeout"
+    }
+
+    [Serializable]
+    public class MLWaveReadyStatePayload
+    {
+        public int   upcomingWaveNumber;
+        public int   requiredReadyCount;
+        public int[] eligibleLaneIndices;
+        public int[] readyLaneIndices;
+        public int   remainingWaveMobCount;
+        public bool  currentWaveComplete;
+        public bool  allReady;
+    }
+
+    [Serializable]
+    public class MLWaveStartPayload
+    {
+        public int roundNumber;
     }
 
     [Serializable]
@@ -188,19 +230,136 @@ namespace CastleDefender.Net
         public bool   buildable;
     }
 
-    // ─── Queue Update ─────────────────────────────────────────────────────────
-    // Server emits "queue_update" each tick when send queue changes (Phase D).
-    // queues is a dynamic { key: count } dict matching whatever unit keys are in
-    // the current match (HF creatures, etc.) — not hardcoded classic unit names.
+    [Serializable]
+    public class MLFortressBuildingConfig
+    {
+        public string buildingType;
+        public string displayName;
+        public string branchKey;
+        public string branchLabel;
+        public string progressionCategory;
+        public int    maxTier;
+        public string[] tierDisplayNames;
+        public bool   startsBuilt;
+        public int    requiredTownCoreTier;
+        public bool   requiresLumberMill;
+        public bool   requiresTurretTier3;
+        public int    baseMaxHp;
+        public int    buildCost;
+    }
 
     [Serializable]
-    public class QueueUpdatePayload
+    public class MLFortressPadConfig
     {
-        public Dictionary<string, int> queues;   // key → count in send queue
-        public float                   drainProgress;
-        public int                     totalQueued;
-        public int                     queueCap;
+        public string padId;
+        public string buildingType;
+        public string displayName;
+        public string branchKey;
+        public string branchLabel;
+        public int    gridX;
+        public int    gridY;
     }
+
+    [Serializable]
+    public class MLBarracksRosterConfig
+    {
+        public string rosterKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string unitTypeKey;
+        public string catalogUnitKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public string productionBuildingType;
+        public string productionBuildingName;
+        public int    tier;
+        public int    buyCost;
+        public int    sellRefund;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public string lockedReason;
+    }
+
+    [Serializable]
+    public class MLHeroRosterConfig
+    {
+        public string heroKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string unitTypeKey;
+        public string catalogUnitKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public string summonSourceBuildingType;
+        public string summonSourceBuildingName;
+        public int    summonCost;
+        public int    cooldownTicks;
+        public int    activeLimit;
+        public string heroVisualStyleKey;
+        public string lockedReason;
+    }
+
+    [Serializable]
+    public class MLMarketRosterConfig
+    {
+        public string unitKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public string productionBuildingType;
+        public string productionBuildingName;
+        public int    tier;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public int    economyLapGold;
+        public string routeStartBuildingType;
+        public string routeStartBuildingName;
+        public string routeEndBuildingType;
+        public string routeEndBuildingName;
+        public string nextUnitKey;
+        public string description;
+    }
+
+    [Serializable]
+    public class MLBarracksSiteConfig
+    {
+        public string barracksId;
+        public string displayName;
+        public string slot;
+        public int    sortIndex;
+        public int    requiredBarracksTier;
+        public bool   startsBuilt;
+        public int    buildCost;
+        public int    maxLevel;
+    }
+
 
     [Serializable]
     public class ClassicMatchReadyPayload
@@ -224,17 +383,19 @@ namespace CastleDefender.Net
         public int          tick;
         public string       phase;                  // "playing"|"ended"
         public int          winner;                 // lane index when ended; 0 when null (check phase)
-        public string       matchState;             // "active_pvp"|"pvp_resolved"|"survival_continuation"|"final_game_over"
+        public string       matchState;             // "active_survival"|"final_game_over"
         public int          officialWinnerLane;
         public bool         continuedIntoSurvival;
         public int          survivalDurationTicks;
         public int          incomeTicksRemaining;   // global, shared by all lanes
         // ── Forge Wars wave defense ──────────────────────────────────────────
-        public string       roundState;             // "build"|"combat"|"transition"
+        public string       roundState;             // legacy compatibility only
         public int          roundNumber;
         public int          roundStateTicks;
         public int          buildPhaseTotal;
         public int          transitionPhaseTotal;
+        public int          waveTimerTicksRemaining;
+        public int          waveTimerTotalTicks;
         public MLTeamHp     teamHp;                 // { left, right }
         public int          teamHpMax;
         // ─────────────────────────────────────────────────────────────────────
@@ -247,6 +408,7 @@ namespace CastleDefender.Net
     {
         public int            laneIndex;
         public string         team;
+        public string         allegianceKey;
         public string         side;
         public string         slotKey;
         public string         slotColor;
@@ -256,15 +418,183 @@ namespace CastleDefender.Net
         public bool           eliminated;
         public float          gold;
         public float          income;
-        public int            lives;
+        public int            lives; // legacy field; mirrors current Town Core HP
         public int            barracksLevel;
+        public MLFortressPad[] fortressPads;
+        public MLBarracksSite[] barracksSites;
+        public MLBarracksRosterEntry[] barracksRoster;
+        public MLHeroRosterEntry[] heroRoster;
+        public MLUpcomingWave upcomingWave;
+        public MLUpcomingWave[] upcomingWaveQueue;
+        public int            barracksSendTimerTicksRemaining;
+        public int            barracksSendTimerTotalTicks;
         public MLTowerCell[]  towerCells;      // active defender tiles
         public MLTowerCell[]  mobilizedCells;  // mobilized during combat — render as floor but selectable for upgrade/sell
         public MLDeadCell[]   deadCells;       // dead defender tiles (inactive until next build phase)
         public MLGridPos[]    path;            // wave path as [{x,y}] array
+        public int            fullPathLength;
         public MLUnit[]       units;
+        public MLUnit[]       spawnQueueUnits;
         public int            spawnQueueLength;
         public MLProjectile[] projectiles;
+    }
+
+    [Serializable]
+    public class MLUpcomingWave
+    {
+        public int waveNumber;
+        public int totalUnits;
+        public MLUpcomingWaveEntry[] entries;
+    }
+
+    [Serializable]
+    public class MLUpcomingWaveEntry
+    {
+        public string source;
+        public string unitType;
+        public string archetypeKey;
+        public string presentationKey;
+        public string skinKey;
+        public int    count;
+        public float  hpMult;
+        public float  dmgMult;
+        public float  speedMult;
+        public int    sourceLaneIndex;
+        public string sourceBarracksId;
+        public bool   isHero;
+        public string heroKey;
+        public string heroVisualStyleKey;
+    }
+
+    [Serializable]
+    public class MLFortressPad
+    {
+        public string padId;
+        public string allegianceKey;
+        public int    ownerLaneIndex;
+        public int    gridX;
+        public int    gridY;
+        public string buildingType;
+        public string buildingName;
+        public string displayName;
+        public string branchKey;
+        public string branchLabel;
+        public string buildState;
+        public int    tier;
+        public int    maxTier;
+        public string currentTierName;
+        public int    nextTier;
+        public string nextTierName;
+        public bool   isBuilt;
+        public bool   canBuild;
+        public bool   canUpgrade;
+        public int    buildCost;
+        public int    upgradeCost;
+        public int    requiredTownCoreTier;
+        public string requiredTownCoreTierName;
+        public float  hp;
+        public float  maxHp;
+        public string lockedReason;
+    }
+
+    [Serializable]
+    public class MLBarracksRosterEntry
+    {
+        public string rosterKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string unitTypeKey;
+        public string catalogUnitKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public string productionBuildingType;
+        public string productionBuildingName;
+        public int    tier;
+        public int    ownedCount;
+        public int    buyCost;
+        public int    sellRefund;
+        public bool   unlocked;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public string unlockPadId;
+        public string barracksId;
+        public string lockedReason;
+    }
+
+    [Serializable]
+    public class MLBarracksSite
+    {
+        public string barracksId;
+        public string allegianceKey;
+        public int    ownerLaneIndex;
+        public string displayName;
+        public string slot;
+        public int    sortIndex;
+        public int    requiredBarracksTier;
+        public bool   available;
+        public bool   isBuilt;
+        public int    level;
+        public int    maxLevel;
+        public string buildState;
+        public bool   canBuild;
+        public bool   canUpgrade;
+        public int    buildCost;
+        public int    upgradeCost;
+        public int    requiredTownCoreTier;
+        public string requiredTownCoreTierName;
+        public int    sendIntervalTicks;
+        public int    sendTimerTicksRemaining;
+        public int    sendTimerTotalTicks;
+        public string lockedReason;
+        public float  hp;
+        public float  maxHp;
+        public MLBarracksRosterEntry[] roster;
+    }
+
+    [Serializable]
+    public class MLHeroRosterEntry
+    {
+        public string heroKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string unitTypeKey;
+        public string catalogUnitKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public bool   isHero;
+        public bool   unlocked;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public string summonSourceBuildingType;
+        public string summonSourceBuildingName;
+        public int    summonCost;
+        public int    cooldownTicks;
+        public int    cooldownReadyTick;
+        public int    cooldownTicksRemaining;
+        public int    activeLimit;
+        public int    activeCount;
+        public int    builtBarracksCount;
+        public string state;
+        public bool   canSummon;
+        public string heroVisualStyleKey;
+        public string lockedReason;
+        public string disabledReason;
     }
 
     [Serializable]
@@ -322,26 +652,66 @@ namespace CastleDefender.Net
     [Serializable]
     public class MLGridPos
     {
-        public int x;
-        public int y;
+        public float x;
+        public float y;
+
+        public int XRounded => Mathf.RoundToInt(x);
+        public int YRounded => Mathf.RoundToInt(y);
     }
 
     [Serializable]
     public class MLUnit
     {
         public string id;
+        public string unitId;
+        public int    laneId;
+        public int    ownerLaneIndex;
+        public int    targetLaneIndex;
+        public string unitTypeKey;
+        public string allegianceKey;
+        public string pathContractType;
         public int    ownerLane;    // -1 for wave enemies
+        public int    sourceLaneIndex; // -1 when this unit came from the ambient wave instead of a player lane
+        public string sourceTeam;
+        public string barracksId;
+        public string sourceBarracksKey;
+        public string sourceBarracksId;
+        public string spawnSourceType;
         public string type;         // unit type key
+        public string archetypeKey;
+        public string presentationKey;
+        public string catalogUnitKey;
         public string skinKey;      // null = default skin; otherwise overrides prefab lookup
+        public bool   isHero;
+        public string heroKey;
+        public string heroVisualStyleKey;
         public float  pathIdx;
         public float  gridX;        // float: 2D tile X for defenders; path-derived for wave units
         public float  gridY;        // float: 2D tile Y for defenders; path-derived for wave units
         public float  normProgress; // 0..1 along wave path
+        public string routeType;
+        public string routeStartNode;
+        public string routeTargetNode;
+        public string pathId;
+        public int    currentWaypointIndex;
+        public string nextWaypoint;
+        public string currentSegment;
+        public float  segmentProgress;
+        public string stance;
+        public string movementState;
+        public string state;
+        public bool   blockedByStructure;
+        public string blockedByStructureId;
+        public float  routeWorldX;
+        public float  routeWorldY;
         public float  hp;
         public float  maxHp;
+        public float  moveSpeed;    // authoritative server path speed for combat visuals
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
         public bool   isDefender;   // true = mobile defender unit
         public bool   isAttacking;  // true when unit has a combat target (stops advancing)
+        public string combatTargetId; // unit id or fortress pad id
+        public int    attackPulse;  // increments on each real strike in the sim
         public int    level;        // barracks level (1–4 for player units, 1 for wave units)
     }
 
@@ -436,7 +806,7 @@ namespace CastleDefender.Net
         public int    wavesHeld;
         public int    wavesLeaked;
         public int    longestHoldStreak;
-        public int    lives;
+        public int    lives; // legacy field; mirrors current Town Core HP
         public int    teamHp;
         public bool   eliminated;
     }
@@ -453,7 +823,7 @@ namespace CastleDefender.Net
         public float sendSpend;
         public int   sendCount;
         public float buildSpend;
-        public int   lives;
+        public int   lives; // legacy field; mirrors current Town Core HP
         public int   teamHp;
         public bool  eliminated;
         public string holdResult;
@@ -471,7 +841,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class MLGameOverPayload
     {
-        public int    winnerLaneIndex;
+        public int    winnerLaneIndex;       // -1 when survival ends without an explicit winner
         public string winnerName;
         public string winningTeam;
         public string winningSide;
@@ -593,6 +963,16 @@ namespace CastleDefender.Net
     // ─── Queue & Lobby System (Phase U5) ─────────────────────────────────────
 
     [Serializable]
+    public class MLAllChatMessagePayload
+    {
+        public int laneIndex;
+        public string displayName;
+        public string message;
+        public string timestampUtc;
+        public string team;
+    }
+
+    [Serializable]
     public class QueueStatusPayload
     {
         public string status;       // "queued" | "idle"
@@ -612,7 +992,7 @@ namespace CastleDefender.Net
         public string[] opponents;
         public string   reconnectToken;     // Phase U8 — store for disconnect recovery
         public bool     ranked;
-        public string   matchFormat;
+        public string   matchFormat;         // "ffa"
     }
 
     [Serializable]
@@ -622,7 +1002,7 @@ namespace CastleDefender.Net
         public string name;
         public bool   isHost;
         public bool   isReady;
-        public string team;         // team color or null
+        public string team;         // lane color / identity or null
     }
 
     [Serializable]
@@ -639,8 +1019,8 @@ namespace CastleDefender.Net
         public string         code;
         public string         hostSocketId;
         public string         gameType;       // "line_wars" (Forge Wars)
-        public string         matchFormat;    // "1v1" | "2v2" | "ffa"
-        public string         pvpMode;        // "teams" | "ffa"
+        public string         matchFormat;    // "ffa"
+        public string         pvpMode;        // "ffa"
         public LobbyMember[]  members;
         public LobbyBotSlot[] botSlots;
         public string         status;         // "open" | "starting"
@@ -688,10 +1068,18 @@ namespace CastleDefender.Net
         public int    id;           // DB primary key — used for inline loadout selection
         public string key;          // "goblin"|"orc"|etc.
         public string name;         // display name
+        public string description;
         public int    send_cost;
         public int    build_cost;   // gold cost to place as a fixed defender / tower
+        public float  income;
         public float  hp;
+        public float  attack_damage;
+        public float  attack_speed;
+        public float  range;
         public float  path_speed;
+        public string damage_type;
+        public string armor_type;
+        public float  damage_reduction_pct;
         public bool   enabled;
         public RemoteContentEntry remote_content;
     }
@@ -721,6 +1109,11 @@ namespace CastleDefender.Net
         public string             key;
         public string             name;
         public bool               enabled;
+        public string             usage_scope;
+        public string             unit_type;
+        public string             portrait_key;
+        public string             prefab_key;
+        public string             content_kind;
         public RemoteContentEntry remote_content;
     }
 
@@ -730,6 +1123,7 @@ namespace CastleDefender.Net
         public string             skin_key;
         public string             unit_type;
         public string             name;
+        public string             usage_scope;
         public RemoteContentEntry remote_content;
     }
 
@@ -754,6 +1148,8 @@ namespace CastleDefender.Net
         public CriticalContentEntry[]     t0_content;
         public CriticalContentEntry[]     t1_content;
         public CriticalContentEntry[]     critical_content;
+        public CriticalContentEntry[]     loadout_critical_content;
+        public CriticalContentEntry[]     wave_critical_content;
     }
 
     [Serializable]
