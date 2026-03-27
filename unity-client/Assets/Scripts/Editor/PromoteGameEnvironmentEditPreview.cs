@@ -54,6 +54,10 @@ namespace CastleDefender.Editor
                 int removedOptionalCount = RemoveLegacyOptionalBranches(previewRoot);
                 Debug.Log($"[PromoteGameEnvironmentEditPreview] Removed {removedOptionalCount} legacy optional branch(es) from the preview root.");
 
+                EnvironmentPrefabSafety.AssertValidCriticalEnvironmentRoot(
+                    previewRoot.gameObject,
+                    $"preview root '{PreviewRootName}'");
+
                 PrefabUtility.ApplyPrefabInstance(previewRoot.gameObject, InteractionMode.AutomatedAction);
                 RenameCriticalPrefabRoot();
                 RemoveLegacyOptionalBranchesFromCriticalPrefab();

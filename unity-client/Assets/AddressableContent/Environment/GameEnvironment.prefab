@@ -9,7 +9,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2847705252982436205}
-  - component: {fileID: 1949766137740888402}
   m_Layer: 0
   m_Name: Yellow_LanePath
   m_TagString: Untagged
@@ -37,29 +36,6 @@ Transform:
   - {fileID: 6201934931364662554}
   m_Father: {fileID: 1510486113027368433}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1949766137740888402
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 35117917148352707}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6605be825e6ce714a99d4ed8be220c9a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.LanePathMarkers
-  LaneIndex: 2
-  CenterMarker: {fileID: 311257137833053682}
-  PathKey: 
-  MarkerTransforms:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  DrawGizmos: 1
-  GizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
 --- !u!1 &39010492988778443
 GameObject:
   m_ObjectHideFlags: 0
@@ -20015,7 +19991,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 8443962473367739123}
-  - component: {fileID: 6719862193726865324}
   m_Layer: 0
   m_Name: Red_LanePath
   m_TagString: Untagged
@@ -20043,29 +20018,6 @@ Transform:
   - {fileID: 2622590570854217819}
   m_Father: {fileID: 6974521871420002672}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &6719862193726865324
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2165471743100680546}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6605be825e6ce714a99d4ed8be220c9a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.LanePathMarkers
-  LaneIndex: 0
-  CenterMarker: {fileID: 311257137833053682}
-  PathKey: 
-  MarkerTransforms:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  DrawGizmos: 1
-  GizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
 --- !u!1 &2171463276588009472
 GameObject:
   m_ObjectHideFlags: 0
@@ -26787,7 +26739,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 8734975502505549895}
-  - component: {fileID: 2733824282886423738}
   m_Layer: 0
   m_Name: Blue_LanePath
   m_TagString: Untagged
@@ -26815,29 +26766,6 @@ Transform:
   - {fileID: 8479482057491871519}
   m_Father: {fileID: 5151203463344728294}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &2733824282886423738
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3788560714871976191}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6605be825e6ce714a99d4ed8be220c9a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.LanePathMarkers
-  LaneIndex: 1
-  CenterMarker: {fileID: 311257137833053682}
-  PathKey: 
-  MarkerTransforms:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  DrawGizmos: 1
-  GizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
 --- !u!1 &3789996869728766669
 GameObject:
   m_ObjectHideFlags: 0
@@ -31056,7 +30984,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7986061338241875721}
-  - component: {fileID: 8895441278165050810}
   m_Layer: 0
   m_Name: Green_LanePath
   m_TagString: Untagged
@@ -31084,29 +31011,6 @@ Transform:
   - {fileID: 4743783414915098960}
   m_Father: {fileID: 3734057799640304074}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8895441278165050810
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4846860158136574427}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6605be825e6ce714a99d4ed8be220c9a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.LanePathMarkers
-  LaneIndex: 3
-  CenterMarker: {fileID: 311257137833053682}
-  PathKey: 
-  MarkerTransforms:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  DrawGizmos: 1
-  GizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
 --- !u!1 &4855399429731189586
 GameObject:
   m_ObjectHideFlags: 0
@@ -75441,3 +75345,4 @@ MeshCollider:
   m_Convex: 0
   m_CookingOptions: 30
   m_Mesh: {fileID: 0}
+

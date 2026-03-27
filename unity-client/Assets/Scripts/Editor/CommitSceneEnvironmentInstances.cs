@@ -41,6 +41,13 @@ namespace CastleDefender.Editor
             if (!PrefabUtility.IsPartOfPrefabInstance(sceneObject))
                 throw new InvalidOperationException($"'{name}' is not a prefab instance, so it cannot be applied safely.");
 
+            if (string.Equals(name, "GameEnvironment", StringComparison.Ordinal))
+            {
+                EnvironmentPrefabSafety.AssertValidCriticalEnvironmentRoot(
+                    sceneObject,
+                    "scene instance 'GameEnvironment'");
+            }
+
             PrefabUtility.ApplyPrefabInstance(sceneObject, InteractionMode.AutomatedAction);
         }
     }
