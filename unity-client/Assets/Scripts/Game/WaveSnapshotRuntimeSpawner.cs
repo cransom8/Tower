@@ -16,8 +16,10 @@ namespace CastleDefender.Game
         const float GroundClearance = 0.04f;
         const float GroundNormalThreshold = 0.35f;
         const float PerimeterRouteControlScale = 0.28f;
-        const float LaneRouteCoreMidpointT = 0.5f;
         const float FrontGateForwardOffset = 10.2f;
+        const float CombatProjectionForwardSlack = 4.5f;
+        const float CombatProjectionRearSlack = 8f;
+        const float CombatProjectionLateralLimit = 10f;
         const float WaveSpawnDistance = 25f;
         const string RouteMineNode = "M";
         const string RouteWaveNodeA = "WA";
@@ -1026,23 +1028,14 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (_battlefieldMineAnchor == null)
+            if (_battlefieldTownCoreByLaneKey.TryGetValue(normalizedLaneKey, out Vector3 townCoreWorld))
             {
-                failureReason = "WaveSpawnAnchor(mine_center) is missing.";
-                return false;
+                worldPos = townCoreWorld;
+                return true;
             }
 
-            if (!_battlefieldFrontGateByLaneKey.TryGetValue(normalizedLaneKey, out Vector3 frontGateWorld))
-            {
-                string gateObjectName = ResolveFrontGateObjectNameForLaneKey(normalizedLaneKey);
-                failureReason = $"Front gate object '{gateObjectName}' is missing for lane '{normalizedLaneKey}'.";
-                return false;
-            }
-
-            // Route core nodes remain the pre-gate rally/hold location.
-            // Live combat near the fortress uses the server combat-space projection path below.
-            worldPos = Vector3.Lerp(frontGateWorld, _battlefieldMineAnchor.position, LaneRouteCoreMidpointT);
-            return true;
+            failureReason = $"Town-core anchor is missing for lane '{normalizedLaneKey}'.";
+            return false;
         }
 
         bool TryResolveLiveCombatWorldPosition(
@@ -1075,6 +1068,34 @@ namespace CastleDefender.Game
             if (string.IsNullOrWhiteSpace(laneKey))
                 return false;
 
+            return TryResolveLaneCombatSimWorldPosition(
+                unit.gridX,
+                unit.gridY,
+                targetLaneIndex,
+                laneKey,
+                out worldPos,
+                out routeForward,
+                out resolvedRouteSource);
+        }
+
+        bool TryResolveLaneCombatSimWorldPosition(
+            float simX,
+            float simY,
+            int targetLaneIndex,
+            string laneKey,
+            out Vector3 worldPos,
+            out Vector3 routeForward,
+            out string resolvedRouteSource)
+        {
+            worldPos = default;
+            routeForward = Vector3.forward;
+            resolvedRouteSource = null;
+
+            if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
+                return false;
+            laneKey = NormalizeBattlefieldLaneKey(laneKey);
+            if (string.IsNullOrWhiteSpace(laneKey))
+                return false;
             if (!_battlefieldTownCoreByLaneKey.TryGetValue(laneKey, out Vector3 townCoreWorld))
                 return false;
             if (!_battlefieldFrontGateByLaneKey.TryGetValue(laneKey, out Vector3 frontGateWorld))
@@ -1092,11 +1113,13 @@ namespace CastleDefender.Game
             if (targetLaneIndex == 1 || targetLaneIndex == 2)
                 lateralWorldDir *= -1f;
 
-            Vector2 simDelta = new(unit.gridX, unit.gridY);
+            Vector2 simDelta = new(simX, simY);
             simDelta -= LaneCombatCoreSimPositions[targetLaneIndex];
 
             float lateralOffset = Vector2.Dot(simDelta, LaneCombatLateralSimAxes[targetLaneIndex]);
             float forwardOffset = Vector2.Dot(simDelta, LaneCombatForwardSimAxes[targetLaneIndex]);
+            if (!IsWithinCombatProjectionEnvelope(forwardOffset, lateralOffset))
+                return false;
 
             worldPos = townCoreWorld
                 + (lateralWorldDir * (lateralOffset * worldUnitsPerSimUnit))
@@ -1107,8 +1130,26 @@ namespace CastleDefender.Game
             routeForward = faceTowardCore.sqrMagnitude > 0.0001f
                 ? faceTowardCore.normalized
                 : -forwardWorldDir;
-            resolvedRouteSource = $"combat_space:{routeTargetNode}:lane={laneKey}";
+            resolvedRouteSource = $"combat_space:lane={laneKey}";
             return true;
+        }
+
+        static bool IsWithinCombatProjectionEnvelope(float forwardOffset, float lateralOffset)
+        {
+            if (!float.IsFinite(forwardOffset) || !float.IsFinite(lateralOffset))
+                return false;
+
+            if (forwardOffset > FrontGateForwardOffset + CombatProjectionForwardSlack)
+                return false;
+            if (forwardOffset < -CombatProjectionRearSlack)
+                return false;
+
+            return Mathf.Abs(lateralOffset) <= CombatProjectionLateralLimit;
+        }
+
+        static bool LooksLikeFortressTileCoordinates(float gridX, float gridY)
+        {
+            return gridX >= -4f && gridX <= 12f && gridY >= -2f && gridY <= 34f;
         }
 
         static bool IsCombatSnapshotUnit(MLUnit unit)
@@ -1221,6 +1262,15 @@ namespace CastleDefender.Game
                 return true;
             }
 
+            if (TryResolveDefenderCombatWorldPosition(unit, lane, out worldPos, out _, out string defenderResolvedSource))
+            {
+                LogPathMode("BattlefieldRoutes", nameof(TryResolveSnapshotWorldPosition), unit, lane, spatialLane, defenderResolvedSource);
+                RuntimeFailureMarker.Clear(transform, $"wave_failure_{laneFailureKey}");
+                worldPos = ProjectToVisibleGround(worldPos);
+                failureReason = "resolved_via_defender_combat_space";
+                return true;
+            }
+
             if (TryResolveBattlefieldRouteWorldPosition(
                 unit,
                 lane,
@@ -1272,8 +1322,45 @@ namespace CastleDefender.Game
             if (!IsDefenderLike(unit))
                 return false;
 
+            if (!LooksLikeFortressTileCoordinates(unit.gridX, unit.gridY))
+                return false;
+
             worldPos = TileGrid.TileToWorld(spatialLane, unit.gridX, unit.gridY);
             return true;
+        }
+
+        bool TryResolveDefenderCombatWorldPosition(
+            MLUnit unit,
+            MLLaneSnap lane,
+            out Vector3 worldPos,
+            out Vector3 routeForward,
+            out string resolvedRouteSource)
+        {
+            worldPos = default;
+            routeForward = Vector3.forward;
+            resolvedRouteSource = null;
+
+            if (!IsDefenderLike(unit) || lane == null)
+                return false;
+            if (!float.IsFinite(unit.gridX) || !float.IsFinite(unit.gridY))
+                return false;
+            if (LooksLikeFortressTileCoordinates(unit.gridX, unit.gridY))
+                return false;
+
+            string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
+            if (string.IsNullOrWhiteSpace(laneKey))
+                laneKey = ResolveFixedLaneKeyForLaneIndex(lane.laneIndex);
+            if (string.IsNullOrWhiteSpace(laneKey))
+                return false;
+
+            return TryResolveLaneCombatSimWorldPosition(
+                unit.gridX,
+                unit.gridY,
+                lane.laneIndex,
+                laneKey,
+                out worldPos,
+                out routeForward,
+                out resolvedRouteSource);
         }
 
         static Vector3 ApplyWaveLateralOffset(Vector3 worldPos, float lateralOffset, int spatialLane)

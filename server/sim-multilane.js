@@ -1159,6 +1159,113 @@ function sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset =
   return sampleRoutePosition(routeSegments, routeSegments.length - 1, 1, lateralOffset);
 }
 
+function projectPointOntoPolyline(points, targetPoint) {
+  if (!Array.isArray(points) || points.length < 2 || !targetPoint)
+    return null;
+
+  const totalLength = Math.max(0.0001, getPolylineLength(points));
+  let walkedLength = 0;
+  let best = null;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    const segVec = {
+      x: Number(to.x) - Number(from.x),
+      y: Number(to.y) - Number(from.y),
+    };
+    const segLenSq = (segVec.x * segVec.x) + (segVec.y * segVec.y);
+    const segLen = Math.sqrt(segLenSq);
+    if (segLen <= 0.0001)
+      continue;
+
+    const toTarget = {
+      x: Number(targetPoint.x) - Number(from.x),
+      y: Number(targetPoint.y) - Number(from.y),
+    };
+    const localT = Math.max(0, Math.min(1, dot2D(toTarget, segVec) / segLenSq));
+    const point = {
+      x: lerp(Number(from.x), Number(to.x), localT),
+      y: lerp(Number(from.y), Number(to.y), localT),
+    };
+    const delta = {
+      x: Number(targetPoint.x) - point.x,
+      y: Number(targetPoint.y) - point.y,
+    };
+    const distanceSq = (delta.x * delta.x) + (delta.y * delta.y);
+    const candidate = {
+      point,
+      tangent: normalize2D(segVec),
+      distanceSq,
+      progress: (walkedLength + (segLen * localT)) / totalLength,
+    };
+
+    if (!best || candidate.distanceSq < best.distanceSq)
+      best = candidate;
+
+    walkedLength += segLen;
+  }
+
+  return best;
+}
+
+function syncUnitRouteStateToWorldPosition(unit, worldPosition = null) {
+  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
+    return false;
+
+  const targetPoint = worldPosition
+    && Number.isFinite(Number(worldPosition.x))
+    && Number.isFinite(Number(worldPosition.y))
+    ? { x: Number(worldPosition.x), y: Number(worldPosition.y) }
+    : (Number.isFinite(Number(unit.posX)) && Number.isFinite(Number(unit.posY))
+      ? { x: Number(unit.posX), y: Number(unit.posY) }
+      : null);
+  if (!targetPoint)
+    return false;
+
+  let best = null;
+  for (let i = 0; i < unit.routeSegments.length; i++) {
+    const segmentId = unit.routeSegments[i];
+    const points = ROUTE_SEGMENT_POLYLINES[segmentId];
+    const projection = projectPointOntoPolyline(points, targetPoint);
+    if (!projection)
+      continue;
+
+    const candidate = {
+      segmentIndex: i,
+      segmentId,
+      point: projection.point,
+      tangent: projection.tangent,
+      segmentProgress: projection.progress,
+      distanceSq: projection.distanceSq,
+    };
+    if (!best || candidate.distanceSq < best.distanceSq)
+      best = candidate;
+  }
+
+  if (!best)
+    return false;
+
+  const tangent = normalize2D(best.tangent);
+  const lateral = perpendicular2D(tangent);
+  const delta = {
+    x: targetPoint.x - best.point.x,
+    y: targetPoint.y - best.point.y,
+  };
+
+  unit.routeSegmentIndex = best.segmentIndex;
+  unit.segmentProgress = Math.max(0, Math.min(1, Number(best.segmentProgress) || 0));
+  unit.currentSegment = best.segmentId;
+  unit.routeLongitudinalOffset = dot2D(delta, tangent);
+  unit.routeLateralOffset = dot2D(delta, lateral);
+  unit.posX = targetPoint.x;
+  unit.posY = targetPoint.y;
+  unit.pathIdx = computeUnitRoutePathIndex(unit);
+  unit.routeWorldX = targetPoint.x;
+  unit.routeWorldY = targetPoint.y;
+  return true;
+}
+
 // Warlock debuff constants (3-second window at 20 hz)
 const WARLOCK_DEBUFF_CD    = 60;  // ticks between debuff attempts
 const WARLOCK_DEBUFF_TICKS = 60;  // debuff duration in ticks
@@ -6005,6 +6112,8 @@ function mlTick(game) {
         break;
       if (u.hp <= 0) continue;
       if (u.isDefender) continue;  // defenders handled above
+      const startedTickWithCombatTarget = !!(u.combatTarget && u.combatTarget.unitId);
+      const startedTickInCombat = u.combatState === WAVE_UNIT_STATES.COMBAT || u.routeState === WAVE_UNIT_STATES.COMBAT;
       u.combatState = WAVE_UNIT_STATES.IDLE;
       u.routeState = WAVE_UNIT_STATES.IDLE;
       u.blockedByStructure = false;
@@ -6199,6 +6308,8 @@ function mlTick(game) {
             });
           }
         } else {
+          if (startedTickWithCombatTarget || startedTickInCombat)
+            syncUnitRouteStateToWorldPosition(u);
           advanceRouteState(u, u.baseSpeed || 0.18);
           setUnitRouteSnapshotState(u);
           u._missingRouteLogged = false;

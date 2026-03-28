@@ -132,6 +132,16 @@ function createWaveUnit(typeKey, overrides = {}) {
     isWaveUnit: true,
     isDefender: false,
     combatState: overrides.combatState ?? "IDLE",
+    routeState: overrides.routeState ?? "MOVING",
+    routeType: overrides.routeType ?? null,
+    routeStartNode: overrides.routeStartNode ?? null,
+    routeTargetNode: overrides.routeTargetNode ?? null,
+    routeSegments: overrides.routeSegments ?? null,
+    routeSegmentIndex: overrides.routeSegmentIndex ?? 0,
+    segmentProgress: overrides.segmentProgress ?? 0,
+    currentSegment: overrides.currentSegment ?? null,
+    routeWorldX: overrides.routeWorldX ?? overrides.posX ?? 5,
+    routeWorldY: overrides.routeWorldY ?? overrides.posY ?? 27,
     combatTarget: null,
     hasBreachedTownCore: false,
     spawnIndex: overrides.spawnIndex ?? 0,
@@ -273,6 +283,111 @@ test("destroying one Town Core eliminates that lane without ending the FFA survi
   assert.equal(game.officialWinnerLane, null, "surviving lanes should not auto-win when one fortress falls");
   assert.equal(game.matchState, "active_survival", "fatal core destruction should not move the match into PvP resolution");
   assert.equal(game.awaitingPostWinDecision, false, "post-win flow should not start from Town Core destruction");
+});
+
+test("defenders near the town core do not pull wave units into combat from mid-lane", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const coreApproach = getCoreApproachPosition(lane, 1);
+  const farRoutePoint = getCoreApproachPosition(lane, 18);
+  const defender = createDefender("guardian", {
+    id: "midlane_aggro_guard",
+    posX: coreApproach.posX - 0.8,
+    posY: coreApproach.posY - 0.8,
+    pathIdx: coreApproach.pathIdx - 0.8,
+    guardAnchorX: coreApproach.posX - 0.8,
+    guardAnchorY: coreApproach.posY - 0.8,
+    homeTx: 4,
+    homeTy: 24,
+  });
+  const attacker = createWaveUnit("raider", {
+    id: "midlane_aggro_wave",
+    posX: farRoutePoint.posX,
+    posY: farRoutePoint.posY,
+    pathIdx: farRoutePoint.pathIdx,
+    routeType: simMl.ROUTE_TYPES.WAVE_LANE,
+    routeStartNode: "WA",
+    routeTargetNode: "A",
+    routeSegments: ["WA_A"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.25,
+    currentSegment: "WA_A",
+    routeWorldX: farRoutePoint.posX,
+    routeWorldY: farRoutePoint.posY,
+  });
+
+  lane.units.push(defender, attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget, null, "mid-lane waves should not acquire a fortress defender from the full-lane leash");
+  assert.notEqual(attacker.combatState, "COMBAT");
+});
+
+test("wave units resume from their live combat position instead of snapping back to stale route progress", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  for (const pad of lane.fortressPads || []) {
+    if (!pad)
+      continue;
+    pad.hp = 0;
+    pad.maxHp = 0;
+    pad.tier = 0;
+  }
+
+  const coreApproach = getCoreApproachPosition(lane, 2);
+  const farRoutePoint = getCoreApproachPosition(lane, 18);
+  const defender = createDefender("guardian", {
+    id: "resume_anchor_guard",
+    hp: 1,
+    maxHp: 1,
+    baseDmg: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    posX: coreApproach.posX - 0.5,
+    posY: coreApproach.posY - 0.5,
+    pathIdx: coreApproach.pathIdx - 0.5,
+    guardAnchorX: coreApproach.posX - 0.5,
+    guardAnchorY: coreApproach.posY - 0.5,
+    homeTx: 4,
+    homeTy: 24,
+  });
+  const attacker = createWaveUnit("raider", {
+    id: "resume_anchor_wave",
+    hp: 24,
+    maxHp: 24,
+    baseDmg: 4,
+    atkCd: 0,
+    posX: coreApproach.posX,
+    posY: coreApproach.posY,
+    pathIdx: farRoutePoint.pathIdx,
+    routeType: simMl.ROUTE_TYPES.WAVE_LANE,
+    routeStartNode: "WA",
+    routeTargetNode: "A",
+    routeSegments: ["WA_A"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.25,
+    currentSegment: "WA_A",
+    routeWorldX: farRoutePoint.posX,
+    routeWorldY: farRoutePoint.posY,
+  });
+
+  lane.units.push(defender, attacker);
+
+  tick(game, 1);
+
+  assert.equal(lane.units.some((unit) => unit.id === defender.id), false, "the low-health defender should die on first contact");
+  const postCombatPosition = { x: attacker.posX, y: attacker.posY };
+
+  tick(game, 1);
+
+  const travelDistance = Math.sqrt(
+    Math.pow(attacker.posX - postCombatPosition.x, 2) +
+    Math.pow(attacker.posY - postCombatPosition.y, 2)
+  );
+
+  assert.ok(travelDistance < 2, "route resumption should continue from the live combat position instead of jumping back to stale path progress");
+  assert.equal(attacker.currentSegment, "WA_A");
 });
 
 test("defenders can kill attackers before the Town Core is destroyed", () => {
