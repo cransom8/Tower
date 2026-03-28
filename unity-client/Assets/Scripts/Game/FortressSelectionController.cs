@@ -116,7 +116,8 @@ namespace CastleDefender.Game
             int hitCount = Physics.RaycastNonAlloc(ray, s_hitBuffer, 512f, ~0, QueryTriggerInteraction.Collide);
             if (hitCount <= 0)
             {
-                Debug.LogError("[FortressSelection] Selection failed: raycast hit nothing in fortress mode. Legacy tile menu remains blocked.");
+                if (verboseDebugLogs)
+                    Debug.Log("[FortressSelection] Click did not hit any fortress-interactive collider.");
                 return false;
             }
 
@@ -170,7 +171,12 @@ namespace CastleDefender.Game
                 return SelectPad(bestPad, lane);
             }
 
-            Debug.LogError("[FortressSelection] Selection failed: hit colliders had no selectable fortress component for the active lane. Legacy tile menu remains blocked.");
+            if (verboseDebugLogs)
+            {
+                Debug.Log(
+                    "[FortressSelection] Click hit world geometry, but none of the colliders belonged to a selectable " +
+                    "fortress pad or barracks site for the active lane.");
+            }
             return false;
         }
 

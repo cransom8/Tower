@@ -232,7 +232,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             catch (Exception ex)
             {
                 string errorMsg = "Connection failed. Check that the server URL is correct, the server is running, and your API key (if required) is valid.";
-                McpLog.Error($"[WebSocket] {errorMsg} (Detail: {ex.Message})");
+                McpLog.Warn($"[WebSocket] {errorMsg} (Detail: {ex.Message})");
                 _state = TransportState.Disconnected(TransportDisplayName, errorMsg);
                 return false;
             }
@@ -329,13 +329,13 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 }
                 catch (WebSocketException wse)
                 {
-                    McpLog.Warn($"[WebSocket] Receive loop error: {wse.Message}");
+                    LogSocketClosure("Receive loop error", wse.Message);
                     await HandleSocketClosureAsync(wse.Message).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex)
                 {
-                    McpLog.Warn($"[WebSocket] Unexpected receive error: {ex.Message}");
+                    LogSocketClosure("Unexpected receive error", ex.Message);
                     await HandleSocketClosureAsync(ex.Message).ConfigureAwait(false);
                     break;
                 }
@@ -669,7 +669,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
             _isConnected = false;
             _state = _state.WithError(reason ?? "Connection closed");
-            McpLog.Warn($"[WebSocket] Connection closed: {reason}");
+            LogSocketClosure("Connection closed", reason);
 
             await StopConnectionLoopsAsync(awaitTasks: false).ConfigureAwait(false);
 
@@ -710,6 +710,31 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
 
             _state = TransportState.Disconnected(TransportDisplayName, "Failed to reconnect");
+        }
+
+        private static void LogSocketClosure(string prefix, string reason)
+        {
+            string message = $"[WebSocket] {prefix}: {reason}";
+            if (IsExpectedSocketClosureReason(reason))
+            {
+                McpLog.Info(message, false);
+                return;
+            }
+
+            McpLog.Warn(message);
+        }
+
+        private static bool IsExpectedSocketClosureReason(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                return false;
+            }
+
+            string normalized = reason.Trim();
+            return normalized.IndexOf("closed the WebSocket connection without completing the close handshake", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalized.IndexOf("server closed connection", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalized.IndexOf("unable to connect to the remote server", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static Uri BuildWebSocketUri(string baseUrl)

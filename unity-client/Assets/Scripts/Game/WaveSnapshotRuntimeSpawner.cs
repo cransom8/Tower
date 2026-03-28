@@ -644,7 +644,7 @@ namespace CastleDefender.Game
             var renderers = go.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < renderers.Length; i++)
                 UpgradeLegacyRendererMaterials(renderers[i]);
-            ApplySnapshotUnitTint(unit, renderers, ownerTeamKey);
+            ApplySnapshotUnitTint(go, unit, renderers, ownerTeamKey);
 
             var animators = go.GetComponentsInChildren<Animator>(true);
             for (int i = 0; i < animators.Length; i++)
@@ -2312,7 +2312,7 @@ namespace CastleDefender.Game
             }
         }
 
-        static void ApplySnapshotUnitTint(MLUnit unit, Renderer[] renderers, string ownerTeamKey)
+        static void ApplySnapshotUnitTint(GameObject root, MLUnit unit, Renderer[] renderers, string ownerTeamKey)
         {
             if (renderers == null)
                 return;
@@ -2503,3 +2503,25 @@ namespace CastleDefender.Game
         }
     }
 }
+                if (ApplyTeamMaterialProfiles(root, team))
+                    return;
+
+        static bool ApplyTeamMaterialProfiles(GameObject root, BattleTeam team)
+        {
+            if (root == null)
+                return false;
+
+            bool appliedAny = false;
+            var profiles = root.GetComponentsInChildren<TeamColorMaterialProfile>(true);
+            for (int i = 0; i < profiles.Length; i++)
+            {
+                var profile = profiles[i];
+                if (profile == null)
+                    continue;
+
+                appliedAny |= profile.Apply(team);
+            }
+
+            return appliedAny;
+        }
+

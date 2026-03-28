@@ -950,11 +950,8 @@ namespace CastleDefender.UI
 
         static void EnsureEventSystem()
         {
-            var existing = EventSystem.current;
-            if (existing == null)
-            {
-                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
-            }
+            var lobbyUi = FindFirstObjectByType<LobbyUI>(FindObjectsInactive.Include);
+            var existing = SceneEventSystemUtility.FindBest(lobbyUi);
 
             if (existing == null)
             {

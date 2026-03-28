@@ -3631,9 +3631,8 @@ namespace CastleDefender.UI
                 Debug.Log("[MobileMatchHud] Added missing GraphicRaycaster to the gameplay canvas.");
             }
 
-            var existing = EventSystem.current;
-            if (existing == null)
-                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
+            var hud = FindFirstObjectByType<MobileMatchHud>(FindObjectsInactive.Include);
+            var existing = SceneEventSystemUtility.FindBest(hud);
 
             if (existing == null)
             {

@@ -538,37 +538,51 @@ namespace CastleDefender.UI
         IEnumerator ValidateEventSystemNextFrame()
         {
             yield return null;
+            yield return null;
             ValidateEventSystem();
         }
 
         void ValidateEventSystem()
         {
             var allEventSystems = FindObjectsByType<EventSystem>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            if (allEventSystems == null || allEventSystems.Length == 0)
+            if (TryRemoveStaleRuntimeDiagnosticsEventSystem(allEventSystems))
+                allEventSystems = FindObjectsByType<EventSystem>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+            int totalCount = allEventSystems != null ? allEventSystems.Length : 0;
+            if (totalCount == 0)
             {
                 ReportEventSystemIssue(
-                    "[RuntimeChatDebugPanel] No EventSystem exists in the active scene. " +
+                    "[RuntimeChatDebugPanel] No EventSystem exists in the loaded scenes. " +
                     "The chat/debug panel will render, but interaction is disabled until the scene provides one.");
                 return;
             }
 
-            if (TryRemoveStaleRuntimeDiagnosticsEventSystem(allEventSystems))
-                allEventSystems = FindObjectsByType<EventSystem>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            EventSystem existing = null;
+            int activeCount = 0;
+            for (int i = 0; i < totalCount; i++)
+            {
+                var candidate = allEventSystems[i];
+                if (candidate == null || !candidate.gameObject.activeInHierarchy)
+                    continue;
 
-            if (allEventSystems.Length > 1)
+                activeCount++;
+                if (existing == null)
+                    existing = candidate;
+            }
+
+            if (activeCount == 0)
             {
                 ReportEventSystemIssue(
-                    $"[RuntimeChatDebugPanel] Detected {allEventSystems.Length} EventSystem instances in scene '{gameObject.scene.name}'. " +
-                    "The panel will not create or replace EventSystems at runtime.");
+                    $"[RuntimeChatDebugPanel] Found {totalCount} EventSystem object(s), but none are active in loaded scenes. " +
+                    "Panel interaction is disabled until the scene enables it.");
                 return;
             }
 
-            var existing = allEventSystems[0];
-            if (!existing.gameObject.activeInHierarchy)
+            if (activeCount > 1)
             {
                 ReportEventSystemIssue(
-                    $"[RuntimeChatDebugPanel] EventSystem '{existing.name}' exists but is inactive in scene '{gameObject.scene.name}'. " +
-                    "Panel interaction is disabled until the scene enables it.");
+                    $"[RuntimeChatDebugPanel] Detected {activeCount} active EventSystem instances across loaded scenes. " +
+                    "The panel will not create or replace EventSystems at runtime.");
                 return;
             }
 

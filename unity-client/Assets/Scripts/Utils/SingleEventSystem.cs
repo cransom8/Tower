@@ -1,45 +1,59 @@
 // SingleEventSystem.cs
-// Attach ONLY to the EventSystem in the LOBBY scene (the first scene).
-// Do NOT add an EventSystem to Game_ML or Game_Classic at all —
-// this one persists across scene loads via DontDestroyOnLoad.
-//
-// Unity 6 UI Toolkit creates a second EventSystem after scene load via its
-// interop bridge. Update() catches and destroys it every frame until it stops.
+// Keeps accidental duplicate EventSystems from surviving scene boot,
+// but no longer persists the EventSystem across scene loads.
 
 using UnityEngine;
 using UnityEngine.EventSystems;
 
+[DisallowMultipleComponent]
 public class SingleEventSystem : MonoBehaviour
 {
     static SingleEventSystem _instance;
 
     void Awake()
     {
+        if (_instance == null || !_instance)
+        {
+            _instance = this;
+            return;
+        }
+
         if (_instance != null && _instance != this)
         {
-            Debug.Log($"[SingleEventSystem] Duplicate found on '{gameObject.name}' — destroying it.");
-            DestroyImmediate(gameObject);
+            if (ShouldReplaceExistingInstance(_instance))
+            {
+                Debug.Log($"[SingleEventSystem] Replacing stale EventSystem '{_instance.gameObject.name}' with '{gameObject.name}'.");
+                Destroy(_instance.gameObject);
+                _instance = this;
+                return;
+            }
+
+            Debug.Log($"[SingleEventSystem] Duplicate found on '{gameObject.name}' - destroying it.");
+            Destroy(gameObject);
             return;
         }
 
         _instance = this;
-        DontDestroyOnLoad(gameObject);
-        Debug.Log("[SingleEventSystem] Persisting Lobby EventSystem across scenes.");
     }
 
-    void Update()
+    void OnDestroy()
     {
-        // Destroy any EventSystem that isn't us — catches Unity 6 UI Toolkit's
-        // late-created interop EventSystem which bypasses Awake-time detection.
-        var all = FindObjectsByType<EventSystem>(FindObjectsSortMode.None);
-        if (all.Length <= 1) return;
-        foreach (var es in all)
-        {
-            if (es.gameObject != gameObject)
-            {
-                Debug.Log($"[SingleEventSystem] Late duplicate destroyed: '{es.gameObject.name}'");
-                Destroy(es.gameObject);
-            }
-        }
+        if (_instance == this)
+            _instance = null;
+    }
+
+    bool ShouldReplaceExistingInstance(SingleEventSystem existing)
+    {
+        if (existing == null || !existing)
+            return true;
+
+        var existingGameObject = existing.gameObject;
+        if (existingGameObject == null)
+            return true;
+
+        if (!existingGameObject.activeInHierarchy)
+            return true;
+
+        return existingGameObject.scene != gameObject.scene;
     }
 }

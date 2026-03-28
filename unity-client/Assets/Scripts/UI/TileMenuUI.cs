@@ -217,11 +217,8 @@ namespace CastleDefender.UI
 
         static void EnsureEventSystem()
         {
-            var existing = EventSystem.current;
-            if (existing == null)
-            {
-                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
-            }
+            var tileMenu = FindFirstObjectByType<TileMenuUI>(FindObjectsInactive.Include);
+            var existing = SceneEventSystemUtility.FindBest(tileMenu);
 
             if (existing == null)
             {

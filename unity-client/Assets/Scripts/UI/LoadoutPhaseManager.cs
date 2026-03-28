@@ -2949,7 +2949,7 @@ namespace CastleDefender.UI
                 return artSprite;
             }
 
-            return GetBuildingIcon(GetBuildingTypeForUnit(unit));
+            return null;
         }
 
         Sprite GetBuildingIcon(string buildingType)
@@ -3108,9 +3108,8 @@ namespace CastleDefender.UI
 
         static void EnsureEventSystem()
         {
-            var existing = EventSystem.current;
-            if (existing == null)
-                existing = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
+            var manager = FindFirstObjectByType<LoadoutPhaseManager>(FindObjectsInactive.Include);
+            var existing = SceneEventSystemUtility.FindBest(manager);
 
             if (existing == null)
             {
@@ -3463,19 +3462,25 @@ namespace CastleDefender.UI
             PortraitCam = null;
         }
 
+        UnitPrefabRegistry ResolvePortraitRegistry()
+        {
+            return RuntimePortraitStudio.ResolveRegistry(PortraitRegistry);
+        }
+
         bool ShouldUseRuntimeSkinPortrait(string key)
         {
             string normalizedKey = key?.Trim();
-            if (PortraitRegistry == null || string.IsNullOrWhiteSpace(normalizedKey))
+            var registry = ResolvePortraitRegistry();
+            if (registry == null || string.IsNullOrWhiteSpace(normalizedKey))
                 return false;
 
             if (normalizedKey.StartsWith("tt_", StringComparison.OrdinalIgnoreCase)
-                && PortraitRegistry.TryGet(normalizedKey, out _))
+                && registry.TryGet(normalizedKey, out _))
             {
                 return true;
             }
 
-            return PortraitRegistry.TryGetUnitTypeForSkin(normalizedKey, out _);
+            return registry.TryGetUnitTypeForSkin(normalizedKey, out _);
         }
 
         string ResolvePortraitLookupKey(string key)
@@ -3484,9 +3489,10 @@ namespace CastleDefender.UI
             if (string.IsNullOrWhiteSpace(normalizedKey))
                 return normalizedKey;
 
-            if (PortraitRegistry != null
+            var registry = ResolvePortraitRegistry();
+            if (registry != null
                 && normalizedKey.StartsWith("tt_", StringComparison.OrdinalIgnoreCase)
-                && PortraitRegistry.TryGet(normalizedKey, out _))
+                && registry.TryGet(normalizedKey, out _))
             {
                 return normalizedKey;
             }
@@ -3499,7 +3505,7 @@ namespace CastleDefender.UI
                 return manifestResolvedKey;
             }
 
-            if (PortraitRegistry != null && PortraitRegistry.TryGetUnitTypeForSkin(normalizedKey, out string unitType))
+            if (registry != null && registry.TryGetUnitTypeForSkin(normalizedKey, out string unitType))
                 return unitType;
 
             return normalizedKey;
