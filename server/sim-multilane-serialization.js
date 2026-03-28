@@ -195,6 +195,7 @@ function createMLSnapshot(game, deps) {
           allegianceKey: canonicalAllegianceKey,
           ownerLaneIndex: canonicalOwnerLaneIndex,
           targetLaneIndex: canonicalTargetLaneIndex,
+          objectiveLaneIndex: Number.isInteger(u.objectiveLaneIndex) ? u.objectiveLaneIndex : canonicalTargetLaneIndex,
           pathContractType: canonicalPathContractType,
           ownerLane: canonicalOwnerLaneIndex,
           sourceLaneIndex: Number.isInteger(u.sourceLaneIndex) ? u.sourceLaneIndex : -1,
@@ -224,12 +225,20 @@ function createMLSnapshot(game, deps) {
           currentSegment: u.currentSegment || null,
           segmentProgress: Number.isFinite(Number(u.segmentProgress)) ? Number(u.segmentProgress) : 0,
           stance: canonicalStance,
+          commandState: u.commandState || null,
+          movementMode: u.movementMode || null,
           movementState: u.routeState || u.combatState || null,
           state: u.routeState || u.combatState || null,
           blockedByStructure: !!u.blockedByStructure,
           blockedByStructureId: u.blockedByStructureId || null,
           routeWorldX: Number.isFinite(Number(u.routeWorldX)) ? Number(u.routeWorldX) : gx,
           routeWorldY: Number.isFinite(Number(u.routeWorldY)) ? Number(u.routeWorldY) : gy,
+          currentSlotIndex: Number.isInteger(u.currentSlotIndex) ? u.currentSlotIndex : -1,
+          anchorTargetX: Number.isFinite(Number(u.anchorTargetX)) ? Number(u.anchorTargetX) : null,
+          anchorTargetY: Number.isFinite(Number(u.anchorTargetY)) ? Number(u.anchorTargetY) : null,
+          anchorTargetProgress: Number.isFinite(Number(u.anchorTargetProgress)) ? Number(u.anchorTargetProgress) : null,
+          combatLeashRadius: Number.isFinite(Number(u.combatLeashRadius)) ? Number(u.combatLeashRadius) : null,
+          canEngage: !!u.canEngage,
           hp: u.hp,
           maxHp: u.maxHp,
           moveSpeed: Number(u.baseSpeed) || 0,
@@ -254,6 +263,32 @@ function createMLSnapshot(game, deps) {
         branchLabel: lane.branchLabel || null,
         castleSide: lane.castleSide || null,
         eliminated: lane.eliminated,
+        commandState: lane.commandState || null,
+        commandTargetLaneIndex: Number.isInteger(lane.commandTargetLaneIndex) ? lane.commandTargetLaneIndex : lane.laneIndex,
+        commandAnchorProgress: Number.isFinite(Number(lane.commandAnchorProgress)) ? Number(lane.commandAnchorProgress) : 0,
+        formationAnchor: lane.formationAnchor
+          ? {
+              x: Number(lane.formationAnchor.x) || 0,
+              y: Number(lane.formationAnchor.y) || 0,
+            }
+          : null,
+        formationFacing: lane.formationFacing
+          ? {
+              x: Number(lane.formationFacing.x) || 0,
+              y: Number(lane.formationFacing.y) || 0,
+            }
+          : null,
+        formationSlots: Array.isArray(lane.formationSlots)
+          ? lane.formationSlots.map((slot) => ({
+              slotIndex: Number.isInteger(slot && slot.slotIndex) ? slot.slotIndex : -1,
+              unitId: slot && slot.unitId ? slot.unitId : null,
+              x: Number(slot && slot.x) || 0,
+              y: Number(slot && slot.y) || 0,
+            }))
+          : [],
+        assignedUnits: Array.isArray(lane.assignedUnits) ? lane.assignedUnits.slice() : [],
+        engagementRadius: Number.isFinite(Number(lane.engagementRadius)) ? Number(lane.engagementRadius) : 0,
+        combatEnabled: !!lane.combatEnabled,
         gold: lane.gold,
         income: lane.income,
         lives: lane.lives,

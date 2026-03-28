@@ -108,6 +108,24 @@ namespace CastleDefender.Game
             SendAction("deploy_barracks_hero", new { heroKey, barracksId });
         }
 
+        public static void SetLaneAttack()
+            => SendAction("set_lane_attack");
+
+        public static void SetLaneDefend()
+            => SendAction("set_lane_defend");
+
+        public static void SetLaneDefendProgress(float progress)
+            => SendAction("set_lane_defend_point", new { progress });
+
+        public static void SetLaneDefendAt(float worldX, float worldY)
+            => SendAction("set_lane_defend_point", new { worldX, worldY });
+
+        public static void SetLaneRetreat()
+            => SendAction("set_lane_retreat");
+
+        public static void SetLaneRetreatProgress(float progress)
+            => SendAction("set_lane_retreat", new { progress });
+
         public static void ClassicSpawnUnit(string unitType)
             => SendAction("spawn_unit", new { unitType });
 

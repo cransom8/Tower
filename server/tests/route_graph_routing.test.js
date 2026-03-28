@@ -136,19 +136,30 @@ function tick(game, count = 1) {
     simMl.mlTick(game);
 }
 
+function issueLaneCommand(game, laneIndex, type, data = {}) {
+  const result = simMl.applyMLAction(game, laneIndex, { type, data });
+  assert.equal(result.ok, true, `expected ${type} on lane ${laneIndex} to succeed`);
+  return result;
+}
+
 function getTownCoreTargetPosition(lane) {
   const target = simMl.getLaneTownCoreCombatTarget(lane);
   assert.ok(target, `expected lane ${lane && lane.laneIndex} to expose a Town Core combat target`);
   return target;
 }
 
-test("barracks target selection differentiates outer loop and center cross routes", () => {
+test("lane command state controls barracks destinations regardless of barracks site", () => {
   const game = createGame();
 
-  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 2);
-  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 2);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 0);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 0);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 1);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "center"), 0);
+
+  issueLaneCommand(game, 1, "set_lane_retreat", { progress: 0 });
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "center"), 1);
 });
 
 test("two-player seating uses red and yellow as the only live bases", () => {
@@ -202,25 +213,17 @@ test("legacy gold lane input normalizes to canonical yellow allegiance", () => {
   assert.equal(snapUnit.ownerLaneIndex, 1);
 });
 
-test("barracks sends hold on the home gate when no enemy lane remains", () => {
+test("attack lanes keep their forward objective after the target lane falls until the player changes orders", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   game.lanes[1].eliminated = true;
 
-  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 0);
-  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "left"), 0);
-  assert.deepEqual(
-    simMl.buildRouteSegments(simMl.ROUTE_TYPES.CENTER_CROSS, "ACTR", "A"),
-    ["ACTR_A"]
-  );
-  assert.deepEqual(
-    simMl.buildRouteSegments(simMl.ROUTE_TYPES.OUTER_LOOP, "ALFT", "A"),
-    ["ALFT_A"]
-  );
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "left"), 1);
 });
 
-test("same-lane hold formations stack forward toward the gate instead of backward into the base", () => {
+test("defend mode stages same-lane formations into spaced slots around the home anchor", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
-  game.lanes[1].eliminated = true;
+  issueLaneCommand(game, 0, "set_lane_defend_point", { progress: 0 });
 
   const firstRow = createAttacker({
     id: "hold_row_0",
@@ -242,15 +245,17 @@ test("same-lane hold formations stack forward toward the gate instead of backwar
   assert.equal(simMl.initializeMovingUnitRouteState(game, game.lanes[0], firstRow, { x: 5, y: 0 }).ok, true);
   assert.equal(simMl.initializeMovingUnitRouteState(game, game.lanes[0], secondRow, { x: 5, y: 1 }).ok, true);
 
-  assert.deepEqual(firstRow.routeSegments, ["ACTR_A"]);
-  assert.deepEqual(secondRow.routeSegments, ["ACTR_A"]);
+  assert.deepEqual(firstRow.routeSegments, ["ACTR_A", "A_M", "M_B"]);
+  assert.deepEqual(secondRow.routeSegments, ["ACTR_A", "A_M", "M_B"]);
   assert.equal(firstRow.stance, "HOLD");
   assert.equal(secondRow.stance, "HOLD");
-  assert.ok(secondRow.routeLongitudinalOffset > firstRow.routeLongitudinalOffset);
-  assert.ok(secondRow.posY > firstRow.posY, "the second hold row should stage farther out toward the gate.");
+  assert.equal(firstRow.pathContractType, "guard_anchor");
+  assert.equal(secondRow.pathContractType, "guard_anchor");
+  assert.ok(secondRow.routeLongitudinalOffset < firstRow.routeLongitudinalOffset);
+  assert.ok(secondRow.posY < firstRow.posY, "the second hold row should stage deeper in the home-side hold formation.");
 });
 
-test("route initialization assigns deterministic segment state", () => {
+test("route initialization uses the modal lane-command route contract for every barracks site", () => {
   const game = createGame();
   const targetLane = game.lanes[2];
 
@@ -260,12 +265,13 @@ test("route initialization assigns deterministic segment state", () => {
     sourceBarracksId: "left",
   });
   simMl.initializeMovingUnitRouteState(game, targetLane, outerUnit, { x: 5, y: 0 });
-  assert.equal(outerUnit.routeType, simMl.ROUTE_TYPES.OUTER_LOOP);
-  assert.equal(outerUnit.pathContractType, "barracks_loop");
+  assert.equal(outerUnit.routeType, simMl.ROUTE_TYPES.CENTER_CROSS);
+  assert.equal(outerUnit.pathContractType, "barracks_cross");
   assert.equal(outerUnit.stance, "ATTACK");
   assert.equal(outerUnit.routeStartNode, "ALFT");
-  assert.equal(outerUnit.routeTargetNode, "C");
+  assert.equal(outerUnit.routeTargetNode, "B");
   assert.equal(outerUnit.currentSegment, "ALFT_A");
+  assert.deepEqual(outerUnit.routeSegments, ["ALFT_A", "A_M", "M_B"]);
 
   const centerUnit = createAttacker({
     id: "center_unit",
@@ -333,6 +339,10 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
   const snapLane = snapshot.lanes.find((lane) => lane && lane.laneIndex === 1);
   const snapUnit = snapLane.units.find((entry) => entry && entry.id === "center_contract_unit");
 
+  assert.equal(snapLane.commandState, "ATTACK");
+  assert.equal(snapLane.commandTargetLaneIndex, 0);
+  assert.equal(snapLane.combatEnabled, true);
+  assert.ok(Array.isArray(snapLane.formationSlots));
   assert.equal(snapUnit.sourceBarracksKey, "center");
   assert.equal(snapUnit.sourceBarracksId, "center");
   assert.equal(snapUnit.barracksId, "center");
@@ -341,9 +351,12 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
   assert.equal(snapUnit.allegianceKey, "red");
   assert.equal(snapUnit.ownerLaneIndex, 0);
   assert.equal(snapUnit.targetLaneIndex, 1);
+  assert.equal(snapUnit.objectiveLaneIndex, 1);
   assert.equal(snapUnit.spawnSourceType, "barracks_roster");
   assert.equal(snapUnit.pathContractType, "barracks_cross");
   assert.equal(snapUnit.stance, "ATTACK");
+  assert.equal(snapUnit.movementMode, "LaneTravel");
+  assert.equal(snapUnit.canEngage, true);
   assert.equal(snapUnit.laneId, 1);
   assert.equal(snapUnit.routeType, simMl.ROUTE_TYPES.CENTER_CROSS);
   assert.equal(snapUnit.routeStartNode, "ACTR");
@@ -542,6 +555,7 @@ test("red center barracks units intercept center-spawn waves before they reach t
 test("same-lane hold units do not aggro their own defenders while staging at the gate", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const def = simMl.resolveUnitDef("raider");
   const stagingUnit = createAttacker({
     id: "staging_center_unit",
@@ -581,16 +595,16 @@ test("same-lane hold units do not aggro their own defenders while staging at the
 
   tick(game, 1);
 
-  assert.deepEqual(stagingUnit.routeSegments, ["ACTR_A"]);
+  assert.deepEqual(stagingUnit.routeSegments, ["ACTR_A", "A_M", "M_B"]);
   assert.equal(stagingUnit.stance, "HOLD");
-  assert.equal(stagingUnit.pathContractType, "barracks_cross");
+  assert.equal(stagingUnit.pathContractType, "guard_anchor");
   assert.equal(defender.combatTarget, null);
   assert.equal(stagingUnit.combatTarget, null);
   assert.equal(defender.hp, def.hp);
   assert.equal(stagingUnit.hp, def.hp);
 });
 
-test("active barracks attackers retreat to the surviving home gate when their target fortress falls", () => {
+test("attackers stay on the destroyed forward objective until the player explicitly recalls them", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const sourceLane = game.lanes[0];
   const defeatedLane = game.lanes[1];
@@ -636,18 +650,20 @@ test("active barracks attackers retreat to the surviving home gate when their ta
   }
 
   assert.equal(defeatedLane.eliminated, true, "fatal Town Core damage should eliminate the target lane");
-  assert.equal(defeatedLane.units.length, 0, "the defeated lane should clear out after elimination");
-  assert.ok(sourceLane.units.includes(attacker), "the attacker should be rescued onto the surviving home lane");
-  assert.equal(attacker.targetLaneIndex, sourceLane.laneIndex);
-  assert.equal(attacker.laneId, sourceLane.laneIndex);
-  assert.equal(attacker.stance, "HOLD");
-  assert.equal(attacker.pathContractType, "barracks_cross");
-  assert.equal(attacker.routeStartNode, "B");
-  assert.equal(attacker.routeTargetNode, "A");
-  assert.deepEqual(attacker.routeSegments, ["B_M", "M_A"]);
+  assert.ok(defeatedLane.units.includes(attacker), "the attacker should remain on the captured forward objective");
+  assert.equal(sourceLane.units.includes(attacker), false, "attackers should not auto-rescue back home after destroying the objective");
+  assert.equal(attacker.targetLaneIndex, defeatedLane.laneIndex);
+  assert.equal(attacker.laneId, defeatedLane.laneIndex);
+  assert.equal(attacker.stance, "ATTACK");
   assert.equal(attacker.combatTarget, null);
 
-  const startX = attacker.posX;
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_retreat", { progress: 0 });
   tick(game, 1);
-  assert.ok(attacker.posX < startX, "the rescued unit should travel back toward the surviving home gate instead of despawning");
+  assert.ok(sourceLane.units.includes(attacker), "the player recall order should bring the attacker back onto its home lane");
+  assert.equal(defeatedLane.units.includes(attacker), false, "the captured lane should release the attacker once the retreat order is issued");
+  assert.equal(attacker.targetLaneIndex, sourceLane.laneIndex);
+  assert.equal(attacker.laneId, sourceLane.laneIndex);
+  assert.equal(attacker.stance, "RETREAT");
+  assert.equal(attacker.pathContractType, "retreat_anchor");
+  assert.equal(attacker.combatTarget, null);
 });

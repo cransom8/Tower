@@ -203,6 +203,12 @@ function tick(game, count = 1) {
     simMl.mlTick(game);
 }
 
+function issueLaneCommand(game, laneIndex, type, data = {}) {
+  const result = simMl.applyMLAction(game, laneIndex, { type, data });
+  assert.equal(result.ok, true, `expected ${type} on lane ${laneIndex} to succeed`);
+  return result;
+}
+
 test("reaching the Town Core only acquires a combat target and does not auto-damage on arrival", () => {
   const game = createGame(12);
   const lane = game.lanes[0];
@@ -424,17 +430,20 @@ test("defenders can kill attackers before the Town Core is destroyed", () => {
   assert.equal(lane.eliminated, false, "the game should continue while the Town Core still has HP");
 });
 
-test("DEFEND stance barracks units intercept dungeon waves without relying on the legacy defender flag", () => {
+test("DEFEND lane commands let barracks units intercept dungeon waves without using the legacy defender flag", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
   const corePad = getTownCorePad(lane);
   const coreApproach = getCoreApproachPosition(lane, 1);
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const defender = createDefender("guardian", {
     id: "stance_guard_test",
     isDefender: false,
     sourceTeam: "red",
     sourceBarracksId: "center",
     sourceBarracksKey: "center",
+    stance: null,
+    pathContractType: null,
     posX: coreApproach.posX - 0.8,
     posY: coreApproach.posY - 0.8,
     pathIdx: coreApproach.pathIdx - 0.8,
@@ -463,7 +472,8 @@ test("DEFEND stance barracks units intercept dungeon waves without relying on th
 
   assert.ok(serverDefender, "the DEFEND stance barracks unit should remain alive during interception");
   assert.ok(serverAttacker, "the wave unit should still be alive during initial interception");
-  assert.equal(serverDefender.isDefender, true, "canonical DEFEND stance should mirror into the legacy defender flag");
+  assert.equal(serverDefender.isDefender, false, "lane-command defenders should stay as barracks units instead of becoming legacy defender entities");
+  assert.equal(serverDefender.stance, "HOLD", "defend-mode barracks units should publish HOLD stance");
   assert.equal(serverDefender.pathContractType, "intercept", "engaged DEFEND units should publish the intercept path contract");
   assert.equal(serverDefender.combatTarget?.unitId, attacker.id, "the DEFEND stance unit should acquire the incoming wave");
   assert.equal(serverAttacker.combatTarget?.unitId, defender.id, "the wave unit should retaliate against the intercepting defender");

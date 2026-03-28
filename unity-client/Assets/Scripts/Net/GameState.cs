@@ -416,6 +416,15 @@ namespace CastleDefender.Net
         public string         branchLabel;
         public string         castleSide;
         public bool           eliminated;
+        public string         commandState;
+        public int            commandTargetLaneIndex;
+        public float          commandAnchorProgress;
+        public MLGridPos      formationAnchor;
+        public MLGridPos      formationFacing;
+        public MLLaneFormationSlot[] formationSlots;
+        public string[]       assignedUnits;
+        public float          engagementRadius;
+        public bool           combatEnabled;
         public float          gold;
         public float          income;
         public int            lives; // legacy field; mirrors current Town Core HP
@@ -437,6 +446,15 @@ namespace CastleDefender.Net
         public MLUnit[]       spawnQueueUnits;
         public int            spawnQueueLength;
         public MLProjectile[] projectiles;
+    }
+
+    [Serializable]
+    public class MLLaneFormationSlot
+    {
+        public int    slotIndex;
+        public string unitId;
+        public float  x;
+        public float  y;
     }
 
     [Serializable]
@@ -667,6 +685,7 @@ namespace CastleDefender.Net
         public int    laneId;
         public int    ownerLaneIndex;
         public int    targetLaneIndex;
+        public int    objectiveLaneIndex;
         public string unitTypeKey;
         public string allegianceKey;
         public string pathContractType;
@@ -698,12 +717,20 @@ namespace CastleDefender.Net
         public string currentSegment;
         public float  segmentProgress;
         public string stance;
+        public string commandState;
+        public string movementMode;
         public string movementState;
         public string state;
         public bool   blockedByStructure;
         public string blockedByStructureId;
         public float  routeWorldX;
         public float  routeWorldY;
+        public int    currentSlotIndex;
+        public float  anchorTargetX;
+        public float  anchorTargetY;
+        public float  anchorTargetProgress;
+        public float  combatLeashRadius;
+        public bool   canEngage;
         public float  hp;
         public float  maxHp;
         public float  moveSpeed;    // authoritative server path speed for combat visuals

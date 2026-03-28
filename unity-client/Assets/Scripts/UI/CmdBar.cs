@@ -55,6 +55,9 @@ namespace CastleDefender.UI
 
         const float MissingLoadoutErrorDelaySeconds = 1.5f;
         static readonly string[] BarracksOrder = { "center", "left", "right" };
+        static readonly Color CommandButtonActive = new(0.18f, 0.55f, 0.46f, 0.98f);
+        static readonly Color CommandButtonInactive = new(0.14f, 0.20f, 0.27f, 0.98f);
+        static readonly Color CommandButtonDisabled = new(0.18f, 0.18f, 0.20f, 0.72f);
 
         readonly Dictionary<string, Texture2D> _portraitCache = new(StringComparer.OrdinalIgnoreCase);
         readonly HashSet<string> _capturePending = new(StringComparer.OrdinalIgnoreCase);
@@ -225,6 +228,30 @@ namespace CastleDefender.UI
 
             var header = EnsureText(root, "Header", BarracksActivityUtility.GetBarracksHeader(id), 16f, FontStyles.Bold);
             header.alignment = TextAlignmentOptions.Left;
+
+            var ordersLabel = EnsureText(root, "OrdersLabel", "Formation Orders", 11f, FontStyles.Normal);
+            ordersLabel.alignment = TextAlignmentOptions.Left;
+            ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
+
+            var controls = EnsureChildRect(root, "Controls");
+            var controlsLayout = controls.gameObject.GetComponent<HorizontalLayoutGroup>() ?? controls.gameObject.AddComponent<HorizontalLayoutGroup>();
+            controlsLayout.spacing = 6f;
+            controlsLayout.childAlignment = TextAnchor.MiddleLeft;
+            controlsLayout.childForceExpandWidth = true;
+            controlsLayout.childForceExpandHeight = false;
+            controlsLayout.childControlWidth = true;
+            controlsLayout.childControlHeight = true;
+            var controlsFitter = controls.gameObject.GetComponent<ContentSizeFitter>() ?? controls.gameObject.AddComponent<ContentSizeFitter>();
+            controlsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var attackButton = EnsureCommandButton(controls, "AttackButton", "Attack");
+            var defendButton = EnsureCommandButton(controls, "DefendButton", "Defend");
+            var retreatButton = EnsureCommandButton(controls, "RetreatButton", "Retreat");
+
+            var troopsLabel = EnsureText(root, "TroopsLabel", "Active Troops", 11f, FontStyles.Normal);
+            troopsLabel.alignment = TextAlignmentOptions.Left;
+            troopsLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
+
             var rows = EnsureChildRect(root, "Rows");
             var rowsLayout = rows.gameObject.GetComponent<VerticalLayoutGroup>() ?? rows.gameObject.AddComponent<VerticalLayoutGroup>();
             rowsLayout.spacing = 4f;
@@ -236,7 +263,7 @@ namespace CastleDefender.UI
             var rowsFitter = rows.gameObject.GetComponent<ContentSizeFitter>() ?? rows.gameObject.AddComponent<ContentSizeFitter>();
             rowsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            var section = new BarracksSectionView(id, root, header, rows);
+            var section = new BarracksSectionView(id, root, header, ordersLabel, attackButton, defendButton, retreatButton, troopsLabel, rows);
             _sections[id] = section;
             return section;
         }
@@ -248,19 +275,45 @@ namespace CastleDefender.UI
             var applier = SnapshotApplier.Instance;
             var snapshot = applier != null ? applier.LatestML : null;
             int ownerLaneIndex = applier != null ? applier.MyLaneIndex : -1;
+            var ownerLane = FindLane(snapshot, ownerLaneIndex);
             var buckets = BarracksActivityUtility.CollectAllBarracksActivity(snapshot, ownerLaneIndex);
-            string signature = BuildActivitySignature(snapshot, ownerLaneIndex, buckets);
-            if (!force && string.Equals(signature, _lastActivitySignature, StringComparison.Ordinal)) return;
-
-            _lastActivitySignature = signature;
             bool anyRows = false;
             for (int i = 0; i < buckets.Count; i++)
             {
                 var bucket = buckets[i];
                 var section = EnsureSection(bucket.BarracksId);
                 section.Header.text = bucket.DisplayName;
-                SetSectionRows(section, bucket, ownerLaneIndex);
+                UpdateSectionControls(section, ownerLaneIndex, ownerLane);
                 anyRows |= bucket.Rows.Count > 0;
+            }
+
+            string signature = BuildActivitySignature(snapshot, ownerLaneIndex, ownerLane, buckets);
+            if (!force && string.Equals(signature, _lastActivitySignature, StringComparison.Ordinal))
+            {
+                if (_emptyStateLabel == null) return;
+                if (snapshot == null || ownerLaneIndex < 0)
+                {
+                    _emptyStateLabel.text = "Waiting for match snapshot...";
+                    _emptyStateLabel.gameObject.SetActive(true);
+                }
+                else if (!anyRows)
+                {
+                    _emptyStateLabel.text = "No active barracks deployments.";
+                    _emptyStateLabel.gameObject.SetActive(true);
+                }
+                else
+                {
+                    _emptyStateLabel.gameObject.SetActive(false);
+                }
+                return;
+            }
+
+            _lastActivitySignature = signature;
+            for (int i = 0; i < buckets.Count; i++)
+            {
+                var bucket = buckets[i];
+                var section = EnsureSection(bucket.BarracksId);
+                SetSectionRows(section, bucket, ownerLaneIndex);
             }
 
             if (_emptyStateLabel == null) return;
@@ -280,10 +333,13 @@ namespace CastleDefender.UI
             }
         }
 
-        string BuildActivitySignature(MLSnapshot snapshot, int ownerLaneIndex, List<BarracksActivityBucket> buckets)
+        string BuildActivitySignature(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane, List<BarracksActivityBucket> buckets)
         {
             if (snapshot == null || ownerLaneIndex < 0) return "no-snapshot";
-            var parts = new List<string>(16) { ownerLaneIndex.ToString() };
+            var parts = new List<string>(20) { ownerLaneIndex.ToString() };
+            parts.Add(ownerLane != null ? ownerLane.commandState ?? string.Empty : string.Empty);
+            parts.Add(ownerLane != null ? ownerLane.commandAnchorProgress.ToString("F3") : string.Empty);
+            parts.Add(ownerLane != null && ownerLane.eliminated ? "eliminated" : "active");
             for (int i = 0; i < buckets.Count; i++)
             {
                 var bucket = buckets[i];
@@ -305,6 +361,70 @@ namespace CastleDefender.UI
 
             for (int i = 0; i < bucket.Rows.Count; i++)
                 section.RowViews.Add(CreateActivityRow(section.RowsRoot, bucket.Rows[i], ownerLaneIndex, bucket.BarracksId));
+        }
+
+        void UpdateSectionControls(BarracksSectionView section, int ownerLaneIndex, MLLaneSnap ownerLane)
+        {
+            if (section == null) return;
+
+            bool canIssueOrders = ownerLane != null && ownerLaneIndex >= 0 && !ownerLane.eliminated;
+            string commandState = ownerLane != null && !string.IsNullOrWhiteSpace(ownerLane.commandState)
+                ? ownerLane.commandState.Trim().ToUpperInvariant()
+                : "ATTACK";
+            var latestSnapshot = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.LatestML : null;
+            float defendProgress = EstimateLaneHoldProgress(latestSnapshot, ownerLaneIndex, ownerLane);
+            bool hasDefendWorldAnchor = TryEstimateLaneHoldWorldPosition(latestSnapshot, ownerLaneIndex, ownerLane, out var defendWorldAnchor);
+
+            if (section.OrdersLabel != null)
+                section.OrdersLabel.text = canIssueOrders ? "Lane Formation Orders" : "Formation Orders Unavailable";
+            if (section.TroopsLabel != null)
+                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Formation Troops" : "Active Troops";
+
+            ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, ActionSender.SetLaneAttack);
+            ConfigureCommandButton(
+                section.DefendButton,
+                "Defend",
+                commandState == "DEFEND",
+                canIssueOrders,
+                () =>
+                {
+                    if (hasDefendWorldAnchor)
+                    {
+                        ActionSender.SetLaneDefendAt(defendWorldAnchor.x, defendWorldAnchor.y);
+                        return;
+                    }
+
+                    ActionSender.SetLaneDefendProgress(defendProgress);
+                });
+            ConfigureCommandButton(section.RetreatButton, "Retreat", commandState == "RETREAT", canIssueOrders, () => ActionSender.SetLaneRetreatProgress(0f));
+        }
+
+        void ConfigureCommandButton(BarracksCommandButtonView buttonView, string label, bool isActive, bool interactable, Action onClick)
+        {
+            if (buttonView?.Button == null) return;
+
+            if (buttonView.Label != null)
+                buttonView.Label.text = label;
+
+            buttonView.Button.onClick.RemoveAllListeners();
+            if (interactable && onClick != null)
+                buttonView.Button.onClick.AddListener(() => onClick());
+            buttonView.Button.interactable = interactable;
+
+            Color baseColor = interactable
+                ? (isActive ? CommandButtonActive : CommandButtonInactive)
+                : CommandButtonDisabled;
+            var image = buttonView.Button.targetGraphic as Image;
+            if (image != null)
+                image.color = baseColor;
+
+            var colors = buttonView.Button.colors;
+            colors.normalColor = baseColor;
+            colors.highlightedColor = interactable ? Color.Lerp(baseColor, Color.white, 0.10f) : baseColor;
+            colors.pressedColor = interactable ? Color.Lerp(baseColor, Color.black, 0.14f) : baseColor;
+            colors.selectedColor = colors.highlightedColor;
+            colors.disabledColor = CommandButtonDisabled;
+            buttonView.Button.colors = colors;
         }
 
         BarracksActivityRowView CreateActivityRow(Transform parent, BarracksActivityRow row, int ownerLaneIndex, string barracksId)
@@ -366,7 +486,7 @@ namespace CastleDefender.UI
             var name = EnsureText(textRoot, "Name", row.DisplayName, 14f, FontStyles.Bold);
             name.alignment = TextAlignmentOptions.Left;
             name.color = new Color(0.96f, 0.98f, 1f, 1f);
-            var subtitle = EnsureText(textRoot, "Subtitle", row.IsHero ? "Hero deployment" : "Active output", 11f, FontStyles.Normal);
+            var subtitle = EnsureText(textRoot, "Subtitle", row.IsHero ? "Hero in formation" : "Active in formation", 11f, FontStyles.Normal);
             subtitle.alignment = TextAlignmentOptions.Left;
             subtitle.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
 
@@ -606,14 +726,227 @@ namespace CastleDefender.UI
             if (TMP_Settings.defaultFontAsset != null) text.font = TMP_Settings.defaultFontAsset;
             return text;
         }
+
+        static BarracksCommandButtonView EnsureCommandButton(Transform parent, string name, string label)
+        {
+            var existingButton = parent.Find(name)?.GetComponent<Button>();
+            if (existingButton != null)
+            {
+                var existingLabel = existingButton.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
+                if (existingLabel != null)
+                    existingLabel.text = label;
+                return new BarracksCommandButtonView(existingButton, existingLabel);
+            }
+
+            var root = EnsureChildRect(parent, name);
+            var image = root.gameObject.GetComponent<Image>() ?? root.gameObject.AddComponent<Image>();
+            image.color = CommandButtonInactive;
+            var button = root.gameObject.GetComponent<Button>() ?? root.gameObject.AddComponent<Button>();
+            button.transition = Selectable.Transition.ColorTint;
+            button.targetGraphic = image;
+
+            var layout = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
+            layout.minHeight = 28f;
+            layout.preferredHeight = 28f;
+            layout.minWidth = 52f;
+            layout.flexibleWidth = 1f;
+
+            var text = EnsureText(root, "Label", label, 11f, FontStyles.Bold);
+            text.alignment = TextAlignmentOptions.Center;
+            text.color = new Color(0.96f, 0.98f, 1f, 1f);
+            Stretch(text.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f));
+
+            return new BarracksCommandButtonView(button, text);
+        }
+
+        static MLLaneSnap FindLane(MLSnapshot snapshot, int laneIndex)
+        {
+            if (snapshot?.lanes == null || laneIndex < 0)
+                return null;
+
+            for (int i = 0; i < snapshot.lanes.Length; i++)
+            {
+                var lane = snapshot.lanes[i];
+                if (lane != null && lane.laneIndex == laneIndex)
+                    return lane;
+            }
+
+            return null;
+        }
+
+        static string HumanizeLaneCommand(string commandState) => string.Equals(commandState, "RETREAT", StringComparison.OrdinalIgnoreCase)
+            ? "Retreat"
+            : string.Equals(commandState, "DEFEND", StringComparison.OrdinalIgnoreCase)
+                ? "Defend"
+                : "Attack";
+
+        static float EstimateLaneHoldProgress(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane)
+        {
+            if (snapshot?.lanes == null || ownerLaneIndex < 0)
+                return ownerLane != null ? Mathf.Clamp01(ownerLane.commandAnchorProgress) : 0f;
+
+            var progressSamples = new List<float>(16);
+            for (int laneIndex = 0; laneIndex < snapshot.lanes.Length; laneIndex++)
+            {
+                var lane = snapshot.lanes[laneIndex];
+                if (lane?.units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                {
+                    var unit = lane.units[unitIndex];
+                    if (unit == null || unit.ownerLaneIndex != ownerLaneIndex)
+                        continue;
+                    if (!string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    progressSamples.Add(Mathf.Clamp01(unit.pathIdx));
+                }
+            }
+
+            if (progressSamples.Count > 0)
+            {
+                progressSamples.Sort();
+                int middleIndex = progressSamples.Count / 2;
+                if (progressSamples.Count % 2 == 1)
+                    return progressSamples[middleIndex];
+
+                return (progressSamples[middleIndex - 1] + progressSamples[middleIndex]) * 0.5f;
+            }
+            if (ownerLane != null)
+                return Mathf.Clamp01(ownerLane.commandAnchorProgress);
+            return 0f;
+        }
+
+        static bool TryEstimateLaneHoldWorldPosition(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane, out Vector2 worldPosition)
+        {
+            worldPosition = Vector2.zero;
+            if (snapshot?.lanes == null || ownerLaneIndex < 0)
+                return false;
+
+            var assignedUnitIds = BuildAssignedUnitIdSet(ownerLane);
+            var positionSamples = new List<MLUnit>(16);
+            for (int laneIndex = 0; laneIndex < snapshot.lanes.Length; laneIndex++)
+            {
+                var lane = snapshot.lanes[laneIndex];
+                if (lane?.units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                {
+                    var unit = lane.units[unitIndex];
+                    if (unit == null || unit.ownerLaneIndex != ownerLaneIndex)
+                        continue;
+                    if (!string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    if (assignedUnitIds != null && assignedUnitIds.Count > 0)
+                    {
+                        string unitId = !string.IsNullOrWhiteSpace(unit.id) ? unit.id : unit.unitId;
+                        if (string.IsNullOrWhiteSpace(unitId) || !assignedUnitIds.Contains(unitId))
+                            continue;
+                    }
+                    if (!IsFinite(unit.gridX) || !IsFinite(unit.gridY))
+                        continue;
+
+                    positionSamples.Add(unit);
+                }
+            }
+
+            if (positionSamples.Count <= 0)
+                return false;
+
+            if (ownerLane?.formationAnchor != null && IsFinite(ownerLane.formationAnchor.x) && IsFinite(ownerLane.formationAnchor.y))
+            {
+                var anchor = new Vector2(ownerLane.formationAnchor.x, ownerLane.formationAnchor.y);
+                positionSamples.Sort((left, right) =>
+                {
+                    float leftDistance = (new Vector2(left.gridX, left.gridY) - anchor).sqrMagnitude;
+                    float rightDistance = (new Vector2(right.gridX, right.gridY) - anchor).sqrMagnitude;
+                    return leftDistance.CompareTo(rightDistance);
+                });
+
+                int clusterCount = Mathf.Clamp(Mathf.CeilToInt(positionSamples.Count * 0.4f), 1, positionSamples.Count);
+                var centroid = Vector2.zero;
+                for (int i = 0; i < clusterCount; i++)
+                    centroid += new Vector2(positionSamples[i].gridX, positionSamples[i].gridY);
+
+                worldPosition = centroid / clusterCount;
+                return true;
+            }
+
+            float sumX = 0f;
+            float sumY = 0f;
+            for (int i = 0; i < positionSamples.Count; i++)
+            {
+                sumX += positionSamples[i].gridX;
+                sumY += positionSamples[i].gridY;
+            }
+            worldPosition = new Vector2(sumX / positionSamples.Count, sumY / positionSamples.Count);
+            return true;
+        }
+
+        static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
+        {
+            if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
+                return null;
+
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lane.assignedUnits.Length; i++)
+            {
+                var id = lane.assignedUnits[i];
+                if (!string.IsNullOrWhiteSpace(id))
+                    ids.Add(id);
+            }
+            return ids;
+        }
+    }
+
+    internal sealed class BarracksCommandButtonView
+    {
+        public BarracksCommandButtonView(Button button, TMP_Text label) { Button = button; Label = label; }
+        public Button Button { get; }
+        public TMP_Text Label { get; }
     }
 
     internal sealed class BarracksSectionView
     {
-        public BarracksSectionView(string barracksId, RectTransform root, TMP_Text header, RectTransform rowsRoot) { BarracksId = barracksId; Root = root; Header = header; RowsRoot = rowsRoot; }
+        public BarracksSectionView(
+            string barracksId,
+            RectTransform root,
+            TMP_Text header,
+            TMP_Text ordersLabel,
+            BarracksCommandButtonView attackButton,
+            BarracksCommandButtonView defendButton,
+            BarracksCommandButtonView retreatButton,
+            TMP_Text troopsLabel,
+            RectTransform rowsRoot)
+        {
+            BarracksId = barracksId;
+            Root = root;
+            Header = header;
+            OrdersLabel = ordersLabel;
+            AttackButton = attackButton;
+            DefendButton = defendButton;
+            RetreatButton = retreatButton;
+            TroopsLabel = troopsLabel;
+            RowsRoot = rowsRoot;
+        }
         public string BarracksId { get; }
         public RectTransform Root { get; }
         public TMP_Text Header { get; }
+        public TMP_Text OrdersLabel { get; }
+        public BarracksCommandButtonView AttackButton { get; }
+        public BarracksCommandButtonView DefendButton { get; }
+        public BarracksCommandButtonView RetreatButton { get; }
+        public TMP_Text TroopsLabel { get; }
         public RectTransform RowsRoot { get; }
         public List<BarracksActivityRowView> RowViews { get; } = new();
     }
@@ -674,13 +1007,13 @@ namespace CastleDefender.UI
             if (ownerLane == null) return bucket;
             var site = FindBarracksSite(ownerLane, id);
             var rowsByKey = new Dictionary<string, BarracksActivityRow>(StringComparer.OrdinalIgnoreCase);
+            var assignedUnitIds = BuildAssignedUnitIdSet(ownerLane);
 
             for (int i = 0; i < snapshot.lanes.Length; i++)
             {
                 var lane = snapshot.lanes[i];
                 if (lane == null) continue;
-                CollectUnits(lane.units, ownerLaneIndex, id, site, ownerLane, rowsByKey);
-                CollectUnits(lane.spawnQueueUnits, ownerLaneIndex, id, site, ownerLane, rowsByKey);
+                CollectUnits(lane.units, ownerLaneIndex, id, site, ownerLane, assignedUnitIds, rowsByKey);
             }
 
             var rows = new List<BarracksActivityRow>(rowsByKey.Values);
@@ -721,7 +1054,7 @@ namespace CastleDefender.UI
             return string.Join("   |   ", parts);
         }
 
-        static void CollectUnits(MLUnit[] units, int ownerLaneIndex, string barracksId, MLBarracksSite site, MLLaneSnap ownerLane, Dictionary<string, BarracksActivityRow> rowsByKey)
+        static void CollectUnits(MLUnit[] units, int ownerLaneIndex, string barracksId, MLBarracksSite site, MLLaneSnap ownerLane, HashSet<string> assignedUnitIds, Dictionary<string, BarracksActivityRow> rowsByKey)
         {
             if (units == null) return;
             for (int i = 0; i < units.Length; i++)
@@ -736,12 +1069,33 @@ namespace CastleDefender.UI
                 {
                     continue;
                 }
+                if (assignedUnitIds != null && assignedUnitIds.Count > 0)
+                {
+                    string unitId = !string.IsNullOrWhiteSpace(unit.id) ? unit.id : unit.unitId;
+                    if (string.IsNullOrWhiteSpace(unitId) || !assignedUnitIds.Contains(unitId))
+                        continue;
+                }
                 if (!string.Equals(NormalizeBarracksId(ResolveSourceBarracksKey(unit)), barracksId, StringComparison.OrdinalIgnoreCase)) continue;
                 var row = ResolveRow(unit, site, ownerLane);
                 if (row == null) continue;
                 if (rowsByKey.TryGetValue(row.StableKey, out var existing)) existing.Count += 1;
                 else { row.Count = 1; rowsByKey[row.StableKey] = row; }
             }
+        }
+
+        static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
+        {
+            if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
+                return null;
+
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lane.assignedUnits.Length; i++)
+            {
+                var id = lane.assignedUnits[i];
+                if (!string.IsNullOrWhiteSpace(id))
+                    ids.Add(id);
+            }
+            return ids;
         }
 
         static BarracksActivityRow ResolveRow(MLUnit unit, MLBarracksSite site, MLLaneSnap ownerLane)
