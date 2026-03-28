@@ -304,7 +304,7 @@ namespace CastleDefender.UI
             var ordersLabel = EnsureText(root, "OrdersLabel", "Formation Orders", 11f, FontStyles.Normal);
             ordersLabel.alignment = TextAlignmentOptions.Left;
             ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            ordersLabel.enableWordWrapping = false;
+            ordersLabel.textWrappingMode = TextWrappingModes.NoWrap;
             ordersLabel.overflowMode = TextOverflowModes.Ellipsis;
 
             var controls = EnsureChildRect(root, "Controls");
@@ -327,7 +327,7 @@ namespace CastleDefender.UI
             var troopsLabel = EnsureText(root, "TroopsLabel", "Active Troops", 11f, FontStyles.Normal);
             troopsLabel.alignment = TextAlignmentOptions.Left;
             troopsLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            troopsLabel.enableWordWrapping = false;
+            troopsLabel.textWrappingMode = TextWrappingModes.NoWrap;
             troopsLabel.overflowMode = TextOverflowModes.Ellipsis;
 
             var rows = EnsureChildRect(root, "Rows");
@@ -594,13 +594,13 @@ namespace CastleDefender.UI
             name.enableAutoSizing = true;
             name.fontSizeMin = IsCompactPanel() ? 7f : 9f;
             name.fontSizeMax = IsCompactPanel() ? 10f : 11f;
-            name.enableWordWrapping = GetCardsPerRow() == 1;
+            name.textWrappingMode = GetCardsPerRow() == 1 ? TextWrappingModes.Normal : TextWrappingModes.NoWrap;
             name.overflowMode = GetCardsPerRow() == 1 ? TextOverflowModes.Truncate : TextOverflowModes.Ellipsis;
 
             var subtitle = EnsureText(textRoot, "Subtitle", row.IsHero ? "Hero" : "Troop", 8f, FontStyles.Normal);
             subtitle.alignment = TextAlignmentOptions.Center;
             subtitle.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            subtitle.enableWordWrapping = false;
+            subtitle.textWrappingMode = TextWrappingModes.NoWrap;
             subtitle.overflowMode = TextOverflowModes.Ellipsis;
             subtitle.gameObject.SetActive(!IsCompactPanel());
 
@@ -826,8 +826,7 @@ namespace CastleDefender.UI
             if (existing != null)
             {
                 existing.text = value;
-                existing.fontSize = fontSize;
-                existing.fontStyle = fontStyle;
+                ApplyTextDefaults(existing, fontSize, fontStyle);
                 if (TMP_Settings.defaultFontAsset != null && existing.font == null) existing.font = TMP_Settings.defaultFontAsset;
                 return existing;
             }
@@ -836,13 +835,19 @@ namespace CastleDefender.UI
             go.transform.SetParent(parent, false);
             var text = go.GetComponent<TextMeshProUGUI>();
             text.text = value;
-            text.fontSize = fontSize;
-            text.fontStyle = fontStyle;
             text.color = Color.white;
-            text.textWrappingMode = TextWrappingModes.NoWrap;
-            text.overflowMode = TextOverflowModes.Ellipsis;
+            ApplyTextDefaults(text, fontSize, fontStyle);
             if (TMP_Settings.defaultFontAsset != null) text.font = TMP_Settings.defaultFontAsset;
             return text;
+        }
+
+        static void ApplyTextDefaults(TMP_Text text, float fontSize, FontStyles fontStyle)
+        {
+            text.fontSize = fontSize;
+            text.fontStyle = fontStyle;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Ellipsis;
+            text.extraPadding = true;
         }
 
         static BarracksCommandButtonView EnsureCommandButton(Transform parent, string name, string label, bool compact, float buttonHeight)
@@ -850,9 +855,22 @@ namespace CastleDefender.UI
             var existingButton = parent.Find(name)?.GetComponent<Button>();
             if (existingButton != null)
             {
+                var existingLayout = existingButton.GetComponent<LayoutElement>();
+                if (existingLayout != null)
+                {
+                    existingLayout.minHeight = buttonHeight;
+                    existingLayout.preferredHeight = buttonHeight;
+                }
+
                 var existingLabel = existingButton.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
                 if (existingLabel != null)
+                {
                     existingLabel.text = label;
+                    existingLabel.fontSize = compact ? 11f : 12f;
+                    existingLabel.enableAutoSizing = false;
+                    existingLabel.alignment = TextAlignmentOptions.Center;
+                    Stretch(existingLabel.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
+                }
                 return new BarracksCommandButtonView(existingButton, existingLabel);
             }
 
@@ -870,15 +888,15 @@ namespace CastleDefender.UI
             layout.preferredWidth = 0f;
             layout.flexibleWidth = 1f;
 
-            var text = EnsureText(root, "Label", label, compact ? 9f : 10f, FontStyles.Bold);
+            var text = EnsureText(root, "Label", label, compact ? 11f : 12f, FontStyles.Bold);
             text.alignment = TextAlignmentOptions.Center;
             text.color = new Color(0.96f, 0.98f, 1f, 1f);
-            text.enableAutoSizing = true;
-            text.fontSizeMin = compact ? 7f : 8f;
-            text.fontSizeMax = compact ? 9f : 10f;
-            text.enableWordWrapping = false;
+            text.enableAutoSizing = false;
+            text.fontSizeMin = compact ? 10f : 11f;
+            text.fontSizeMax = compact ? 11f : 12f;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
             text.overflowMode = TextOverflowModes.Ellipsis;
-            Stretch(text.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 0f));
+            Stretch(text.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
 
             return new BarracksCommandButtonView(button, text);
         }
@@ -918,13 +936,41 @@ namespace CastleDefender.UI
             }
 
             if (section.OrdersLabel != null)
-                section.OrdersLabel.fontSize = compact ? 9f : 11f;
+                section.OrdersLabel.fontSize = compact ? 10f : 11f;
             if (section.TroopsLabel != null)
-                section.TroopsLabel.fontSize = compact ? 9f : 11f;
+                section.TroopsLabel.fontSize = compact ? 10f : 11f;
+
+            float commandButtonHeight = GetCommandButtonHeight();
+            ApplyResponsiveCommandButtonLayout(section.AttackButton, compact, commandButtonHeight);
+            ApplyResponsiveCommandButtonLayout(section.DefendButton, compact, commandButtonHeight);
+            ApplyResponsiveCommandButtonLayout(section.RetreatButton, compact, commandButtonHeight);
 
             var rowsLayout = section.RowsRoot != null ? section.RowsRoot.GetComponent<VerticalLayoutGroup>() : null;
             if (rowsLayout != null)
                 rowsLayout.spacing = compact ? 4f : 6f;
+        }
+
+        static void ApplyResponsiveCommandButtonLayout(BarracksCommandButtonView buttonView, bool compact, float buttonHeight)
+        {
+            if (buttonView?.Button == null)
+                return;
+
+            var layout = buttonView.Button.GetComponent<LayoutElement>();
+            if (layout != null)
+            {
+                layout.minHeight = buttonHeight;
+                layout.preferredHeight = buttonHeight;
+            }
+
+            if (buttonView.Label == null)
+                return;
+
+            buttonView.Label.fontSize = compact ? 11f : 12f;
+            buttonView.Label.fontSizeMin = compact ? 10f : 11f;
+            buttonView.Label.fontSizeMax = compact ? 11f : 12f;
+            buttonView.Label.enableAutoSizing = false;
+            buttonView.Label.alignment = TextAlignmentOptions.Center;
+            Stretch(buttonView.Label.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
         }
 
         bool IsCompactPanel()
@@ -940,7 +986,7 @@ namespace CastleDefender.UI
             return width >= 210f ? 2 : 1;
         }
 
-        float GetCommandButtonHeight() => IsCompactPanel() ? 28f : 34f;
+        float GetCommandButtonHeight() => IsCompactPanel() ? 32f : 38f;
 
         float GetUnitCardHeight() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 60f : 68f) : (IsCompactPanel() ? 64f : 74f);
 
