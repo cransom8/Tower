@@ -265,7 +265,6 @@ function createMLSnapshot(game, deps) {
           maxHp: u.maxHp,
           moveSpeed: Number(u.baseSpeed) || 0,
           isWaveUnit: !!(typeof isScheduledWaveUnit === "function" ? isScheduledWaveUnit(u) : u.isWaveUnit),
-          isDefender: canonicalStance === "DEFEND" || !!u.isDefender,
           isAttacking: !!(u.combatTarget && u.combatTarget.unitId),
           combatTargetId: u.combatTargetId || (u.combatTarget && u.combatTarget.unitId ? u.combatTarget.unitId : null),
           attackPulse: Number(u.attackPulse) || 0,

@@ -72,7 +72,6 @@ const CASTLE_YG = 27;
 const MAX_PATH_LEN = GRID_W * GRID_H; // kept for reference; path is always GRID_H steps
 const SPLASH_RADIUS_TILES = 1.5;
 const MIN_UNIT_SPACING = 0.8;      // minimum pathIdx gap enforced by applySeparation
-const TOWER_TARGET_MODES = new Set(["first", "last", "weakest", "strongest"]);
 
 // Combat movement tuning
 // All combat movers share a fixed server-side base path speed so the battlefield
@@ -812,6 +811,53 @@ function sampleLaneCommandAnchor(game, lane) {
   };
 }
 
+function normalizeLegacyDefenderUnit(game, fallbackLane, unit) {
+  if (!unit || !unit.isDefender)
+    return false;
+
+  const ownerLane = getSourceLane(game, Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1) || fallbackLane;
+  if (!ownerLane || !Number.isInteger(ownerLane.laneIndex))
+    return false;
+
+  const normalizedBarracksId = resolveUnitSourceBarracksId(unit) || "center";
+  const allegianceKey = resolveLaneAllegianceKey(ownerLane) || resolveUnitAllegianceKey(game, ownerLane, unit);
+
+  unit.isDefender = false;
+  unit.spawnSourceType = unit.isHero ? SPAWN_SOURCE_TYPES.BARRACKS_HERO : SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
+  unit.sourceLaneIndex = ownerLane.laneIndex;
+  unit.ownerLaneIndex = ownerLane.laneIndex;
+  unit.ownerLane = ownerLane.laneIndex;
+  unit.targetLaneIndex = Number.isInteger(unit.targetLaneIndex) ? unit.targetLaneIndex : ownerLane.laneIndex;
+  unit.laneId = unit.targetLaneIndex;
+  unit.sourceBarracksId = normalizedBarracksId;
+  unit.sourceBarracksKey = normalizedBarracksId;
+  unit.barracksId = normalizedBarracksId;
+  unit.allegianceKey = allegianceKey;
+  unit.sourceTeam = resolveLegacySourceTeamFromAllegianceKey(allegianceKey) || ownerLane.team || null;
+  unit.stance = null;
+  unit.pathContractType = null;
+  unit.combatTarget = null;
+  unit.combatTargetId = null;
+  unit.defState = null;
+  unit._legacyDefenderNormalized = true;
+  return true;
+}
+
+function normalizeLegacyDefenderUnits(game) {
+  if (!game || !Array.isArray(game.lanes))
+    return;
+
+  for (const lane of game.lanes) {
+    if (!lane || !Array.isArray(lane.units))
+      continue;
+
+    for (const unit of lane.units) {
+      if (normalizeLegacyDefenderUnit(game, lane, unit))
+        applyCanonicalUnitMirrors(game, lane, unit);
+    }
+  }
+}
+
 function isLaneControlledUnit(unit) {
   if (!unit || !Number.isInteger(unit.sourceLaneIndex) || unit.sourceLaneIndex < 0)
     return false;
@@ -962,7 +1008,6 @@ function advanceRouteState(unit, deltaDistance) {
       unit.segmentProgress = 0;
       continue;
     }
-
     const distanceToStart = distanceOnSegment;
     if (Math.abs(remaining) < distanceToStart) {
       unit.segmentProgress = (distanceOnSegment + remaining) / segmentLength;
@@ -1590,6 +1635,8 @@ function syncLaneCommandAssignments(game) {
   if (!game || !Array.isArray(game.lanes))
     return;
 
+  normalizeLegacyDefenderUnits(game);
+
   for (const lane of game.lanes) {
     if (!lane)
       continue;
@@ -1713,12 +1760,6 @@ function syncLaneCommandAssignments(game) {
     }
   }
 }
-
-// Warlock debuff constants (3-second window at 20 hz)
-const WARLOCK_DEBUFF_CD    = 60;  // ticks between debuff attempts
-const WARLOCK_DEBUFF_TICKS = 60;  // debuff duration in ticks
-const WARLOCK_DEBUFF_MULT  = 0.75; // -25% tower damage
-const WARLOCK_DEBUFF_RANGE = 3.5;  // tile radius
 
 // Unit and tower definitions are DB-driven via unitTypes.js.
 // These empty objects are kept for backward-compat exports only.
@@ -3710,8 +3751,6 @@ function markLaneDefeated(game, lane, defeatContext = null) {
   lane.units = (lane.units || []).filter((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit));
   lane.spawnQueue = (lane.spawnQueue || []).filter((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit));
   lane.projectiles = [];
-  if (lane.mobileDefenders && typeof lane.mobileDefenders.clear === "function")
-    lane.mobileDefenders.clear();
 }
 
 function recomputeTeamHpState(game) {
@@ -4575,7 +4614,6 @@ function createMLGame(playerCount, options) {
       barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
       heroCooldownReadyTicks: {},
       units: [],
-      mobileDefenders: new Map(),
       spawnQueue: [],
       projectiles: [],
       loadoutKeys: null,
@@ -5335,7 +5373,7 @@ function canRouteUnitEngageTarget(game, lane, attacker, target) {
   if (!canLaneControlledUnitSeekCombat(game, attacker, target))
     return false;
   if (target.isDefender)
-    return canEngageDefenderInZone(game, lane, attacker, target);
+    return false;
   return canEngageRouteUnitTarget(game, attacker, target);
 }
 
@@ -5637,53 +5675,11 @@ function isMergeZoneUnit(unit) {
   return !isSplitZoneUnit(unit);
 }
 
-function canEngageDefenderInZone(game, lane, attacker, defender) {
-  return !!(
-    attacker
-    && defender
-    && defender.isDefender
-    && defender.hp > 0
-    && canLaneControlledUnitSeekCombat(game, attacker, defender)
-    && isRouteUnitHostileToLane(game, lane, attacker)
-  );
-}
-
 function getWaveUnitTargetDistance(unit, target) {
   if (!unit || !target) return null;
   const dx = Number(target.posX) - Number(unit.posX);
   const dy = Number(target.posY) - Number(unit.posY);
   return Math.sqrt(dx * dx + dy * dy);
-}
-
-function findWaveUnitDefenderTarget(game, lane, unit, requireAttackRange = false) {
-  if (!lane || !unit) return null;
-  if (!isRouteUnitHostileToLane(game, lane, unit)) return null;
-
-  const maxRange = requireAttackRange
-    ? getUnitStopDistance(unit.type, "guardian")
-    : getUnitEngagementRange(unit.type);
-
-  let best = null;
-  let bestPriority = Infinity;
-  let bestDist = Infinity;
-
-  for (const defender of lane.units) {
-    if (!canEngageDefenderInZone(game, lane, unit, defender)) continue;
-    const dist = dist2D(unit, defender);
-    const rangeLimit = requireAttackRange
-      ? getUnitStopDistance(unit.type, defender.type) + CONTACT_SLOT_TOLERANCE
-      : maxRange;
-    if (dist > rangeLimit) continue;
-
-    const priority = requireAttackRange ? 0 : 1;
-    if (priority < bestPriority || (priority === bestPriority && dist < bestDist)) {
-      best = defender;
-      bestPriority = priority;
-      bestDist = dist;
-    }
-  }
-
-  return best;
 }
 
 function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false) {
@@ -5756,14 +5752,8 @@ function getWaveUnitPreferredTarget(game, lane, unit) {
   const routeUnitInAttackRange = findHostileRouteUnitTarget(game, lane, unit, true);
   if (routeUnitInAttackRange) return { kind: "unit", entity: routeUnitInAttackRange.entity, laneIndex: routeUnitInAttackRange.laneIndex, reason: "route_unit_attack_range" };
 
-  const defenderInAttackRange = findWaveUnitDefenderTarget(game, lane, unit, true);
-  if (defenderInAttackRange) return { kind: "unit", entity: defenderInAttackRange, laneIndex: lane.laneIndex, reason: "defender_attack_range" };
-
   const routeUnitInEngageRange = findHostileRouteUnitTarget(game, lane, unit, false);
   if (routeUnitInEngageRange) return { kind: "unit", entity: routeUnitInEngageRange.entity, laneIndex: routeUnitInEngageRange.laneIndex, reason: "route_unit_engage_range" };
-
-  const defenderInEngageRange = findWaveUnitDefenderTarget(game, lane, unit, false);
-  if (defenderInEngageRange) return { kind: "unit", entity: defenderInEngageRange, laneIndex: lane.laneIndex, reason: "defender_engage_range" };
 
   return null;
 }
@@ -5932,67 +5922,7 @@ function _doAttack(game, lane, attacker, target) {
   attacker.atkCd = cdTk;
 }
 
-function countDefenderAssignments(lane, defenderState) {
-  const counts = new Map();
-  for (const unit of lane.units) {
-    if (!unit || !unit.isDefender || unit.hp <= 0) continue;
-    if (defenderState && unit.defState !== defenderState) continue;
-    const targetId = unit.combatTarget && unit.combatTarget.unitId;
-    if (!targetId) continue;
-    counts.set(targetId, (counts.get(targetId) || 0) + 1);
-  }
-  return counts;
-}
-
-function pickDefenderCombatTarget(lane, defender, attackers, defenderState) {
-  if (!Array.isArray(attackers) || attackers.length === 0) return null;
-
-  const assignmentCounts = countDefenderAssignments(lane, defenderState);
-  if (defender?.combatTarget?.unitId) {
-    assignmentCounts.set(
-      defender.combatTarget.unitId,
-      Math.max(0, (assignmentCounts.get(defender.combatTarget.unitId) || 1) - 1)
-    );
-  }
-
-  let best = null;
-  let bestAssigned = Infinity;
-  let bestDist = Infinity;
-
-  for (const attacker of attackers) {
-    if (!attacker || attacker.hp <= 0) continue;
-    const assigned = assignmentCounts.get(attacker.id) || 0;
-    const dist = dist2D(defender, attacker);
-    if (assigned < bestAssigned || (assigned === bestAssigned && dist < bestDist)) {
-      best = attacker;
-      bestAssigned = assigned;
-      bestDist = dist;
-    }
-  }
-
-  return best;
-}
-
 // ── Wave defense helpers ──────────────────────────────────────────────────────
-
-function _pickTowerTarget(tile, unitsInRange) {
-  const mode = TOWER_TARGET_MODES.has(tile.targetMode) ? tile.targetMode : "first";
-  let target = unitsInRange[0];
-  if (mode === "strongest") {
-    for (const u of unitsInRange) { if (u.hp > target.hp) target = u; }
-    return target;
-  }
-  if (mode === "weakest") {
-    for (const u of unitsInRange) { if (u.hp < target.hp) target = u; }
-    return target;
-  }
-  if (mode === "last") {
-    for (const u of unitsInRange) { if (u.pathIdx < target.pathIdx) target = u; }
-    return target;
-  }
-  for (const u of unitsInRange) { if (u.pathIdx > target.pathIdx) target = u; }
-  return target;
-}
 
 function resolveWaveForRound(game, roundNumber) {
   const cfg = Array.isArray(game.waveConfig) ? game.waveConfig : [];
@@ -6432,7 +6362,7 @@ function mlTick(game) {
   for (const lane of game.lanes) {
     const laneHasActiveOccupiers = laneHasOccupyingForces(lane);
     if (lane.eliminated && !laneHasActiveOccupiers) continue;
-    const fortressSystemsActive = !lane.eliminated;
+    const laneActive = !lane.eliminated;
 
     // Drain spawn queue — place each unit at a unique position in a rectangle
     // so the whole wave arrives at once but spread across the grid width.
@@ -6491,7 +6421,6 @@ function mlTick(game) {
         resolveAbilityHook(game, lane, unit, "onSpawn", {});
       }
     }
-
     for (const unit of lane.units) {
       applyCanonicalUnitMirrors(game, lane, unit);
     }
@@ -6499,123 +6428,10 @@ function mlTick(game) {
     // Decrement cooldowns
     for (const u of lane.units) {
       if (u.atkCd > 0) u.atkCd -= 1;
-      if (u.warlockCd !== undefined && u.warlockCd > 0) u.warlockCd -= 1;
     }
-    if (fortressSystemsActive) {
-    for (let tx = 0; tx < GRID_W; tx++) {
-      for (let ty = 0; ty < GRID_H; ty++) {
-        const tile = lane.grid[tx][ty];
-        if (tile.type === "tower" && !tile.mobilized && tile.atkCd > 0) tile.atkCd -= 1;
-      }
-    }
-
-    // Aura refresh
-    const towerAuraSources = [];
-    for (let ax = 0; ax < GRID_W; ax++) {
-      for (let ay = 0; ay < GRID_H; ay++) {
-        const atile = lane.grid[ax][ay];
-        if (atile.type === "tower" && atile.abilities && atile.abilities.length > 0) {
-          towerAuraSources.push({ abilities: atile.abilities });
-        }
-      }
-    }
-    applyAuras(game, lane, towerAuraSources);
-    const activeAuras = lane.activeAuras || {};
-
-    // Tower attacks on wave units
-    for (let tx = 0; tx < GRID_W; tx++) {
-      for (let ty = 0; ty < GRID_H; ty++) {
-        const tile = lane.grid[tx][ty];
-        if (tile.type !== "tower" || !tile.towerType || tile.atkCd > 0 || tile.mobilized) continue;
-        const stats = getTowerStats(tile.towerType, tile.towerLevel || 1);
-        if (!stats) continue;
-        const auraRange = activeAuras.range_bonus || 0;
-        const auraSpd = (activeAuras.atk_speed_bonus || 0) + (activeAuras.cooldown_reduction || 0);
-        // Use Y-only (row) distance so defenders at any column engage units on the path.
-        // Min 3.5 rows so towers can always reach units that stopped within the 3-row
-        // engagement search radius (Math.floor rounding can add ~1 extra row of gap).
-        const effRows = Math.max(stats.range, 3.5) * (1 + auraRange / 100);
-        const effAtkCd = auraSpd > 0
-          ? Math.max(1, Math.round(stats.atkCdTicks * (1 - auraSpd / 100)))
-          : stats.atkCdTicks;
-        const unitsInRange = [];
-        for (const u of lane.units) {
-          if (u.hp <= 0 || u.isDefender) continue;
-          if (!isRouteUnitHostileToLane(game, lane, u)) continue;
           // Use raw float pathIdx for row distance — avoids Math.floor rounding units out of range.
-          if (Math.abs(ty - u.pathIdx) <= effRows) unitsInRange.push(u);
-        }
-        if (unitsInRange.length === 0) continue;
-        const target = _pickTowerTarget(tile, unitsInRange);
-        const debuffMult = (tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick)
-          ? (tile.debuffMult || 1.0) : 1.0;
-        const auraDmgMult = 1 + (activeAuras.dmg_bonus || 0) / 100;
-        const effDmg = stats.dmg * debuffMult * auraDmgMult;
-        const attackCtx = {
-          target,
-          behavior:       stats.projBehavior,
-          behaviorParams: Object.assign({}, stats.projBehaviorParams),
-        };
-        if (tile.abilities && tile.abilities.length > 0) {
-          resolveAbilityHook(game, lane, { abilities: tile.abilities }, "onAttack", attackCtx);
-        }
-        fireProjectile(game, lane,
-          { id: `tower_${tx}_${ty}`, kind: "tower", x: tx, y: ty },
-          target.id,
-          {
-            dmg:            effDmg,
-            damageType:     stats.damageType,
-            behavior:       attackCtx.behavior,
-            behaviorParams: attackCtx.behaviorParams,
-            travelTicks:    stats.projectileTicks,
-            isSplash:       attackCtx.behavior === "splash",
-            projectileType: tile.towerType,
-            abilities:      tile.abilities || [],
-          }
-        );
-        tile.atkCd = effAtkCd;
-      }
-    }
-
     // ── Mobile defender AI ────────────────────────────────────────────────────
-    for (const d of lane.units) {
-      if (!d.isDefender || d.hp <= 0) continue;
-
-      d.guardAnchorX = Number.isFinite(d.guardAnchorX) ? d.guardAnchorX : d.posX;
-      d.guardAnchorY = Number.isFinite(d.guardAnchorY) ? d.guardAnchorY : d.posY;
-      const liveAttackers = lane.units.filter((u) => !u.isDefender && u.hp > 0 && isRouteUnitHostileToLane(game, lane, u));
-      if (d.combatTarget && !lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0))
-        d.combatTarget = null;
-      if (!d.combatTarget && liveAttackers.length > 0) {
-        const best = pickDefenderCombatTarget(lane, d, liveAttackers, null);
-        if (best)
-          d.combatTarget = { unitId: best.id, kind: "unit" };
-      }
-
-      const holdSpeed = d.moveSpeed || DEFENDER_BASE_SPEED;
-      if (d.combatTarget) {
-        const holdTarget = lane.units.find(u => u.id === d.combatTarget.unitId && u.hp > 0);
-        if (!holdTarget) {
-          d.combatTarget = null;
-        } else {
-          const holdDist = dist2D(d, holdTarget);
-          const holdStopDist = getUnitStopDistance(d.type, holdTarget.type);
-          if (holdDist <= holdStopDist) {
-            if (d.atkCd <= 0)
-              _doAttack(game, lane, d, holdTarget);
-          } else {
-            moveTowardContact2D(d, holdTarget, holdSpeed, holdStopDist, -64, 64, -64, 64);
-            clampUnitToAnchor(d, d.guardAnchorX, d.guardAnchorY, DEFENDER_HOLD_LEASH, -64, 64, -64, 64);
-          }
-        }
-      } else {
-        moveTowardPoint2D(d, d.guardAnchorX, d.guardAnchorY, holdSpeed, -64, 64, -64, 64);
-      }
-      continue;
-    }
-    }
-
-    // Wave unit movement, defender attacks, and Town Core assaults
+    // Wave unit movement, combat targeting, and Town Core assaults
     const dotDeadIds = new Set();
 
     for (const u of lane.units) {
@@ -6638,28 +6454,6 @@ function mlTick(game) {
           coreDamageApplied: false,
         });
         continue;
-      }
-
-      // Warlock debuff on nearby tower
-      const def = resolveUnitDef(u.type);
-      if (def && def.warlockDebuff && (u.warlockCd === undefined || u.warlockCd <= 0)) {
-        u.warlockCd = WARLOCK_DEBUFF_CD;
-        const pos = getUnitTilePos(u, lane.fullPath);
-        if (pos) {
-          let bestTile = null, bestDist = Infinity;
-          for (let dtx = 0; dtx < GRID_W; dtx++) {
-            for (let dty = 0; dty < GRID_H; dty++) {
-              const dtile = lane.grid[dtx][dty];
-              if (dtile.type !== "tower") continue;
-              const d = tileDist(pos.x, pos.y, dtx, dty);
-              if (d <= WARLOCK_DEBUFF_RANGE && d < bestDist) { bestDist = d; bestTile = dtile; }
-            }
-          }
-          if (bestTile) {
-            bestTile.debuffEndTick = game.tick + WARLOCK_DEBUFF_TICKS;
-            bestTile.debuffMult = WARLOCK_DEBUFF_MULT;
-          }
-        }
       }
 
       // ── Wave unit combat target tracking (mobile defenders) ─────────────────
@@ -6734,32 +6528,14 @@ function mlTick(game) {
               t.hp = Math.max(0, t.hp - dmg);
               u.attackPulse = (u.attackPulse || 0) + 1;
               if (t.hp <= 0) {
-                if (t.isDefender) {
-                  const defenderLane = targetLane || lane;
-                  const htile = defenderLane.grid[t.homeTx] && defenderLane.grid[t.homeTx][t.homeTy];
-                  if (htile) {
-                    htile.type = "dead_tower";
-                    htile.mobilized = false;
-                  }
-                  defenderLane.mobileDefenders.delete(`${t.homeTx}_${t.homeTy}`);
-                  combatLog.logEvent(game, "defender_killed", {
-                    x: t.homeTx,
-                    y: t.homeTy,
-                    defenderType: t.type,
-                    killedBy: u.id,
-                    killedByType: u.type,
-                    lane: defenderLane.laneIndex,
-                  });
-                } else {
-                  combatLog.logEvent(game, "route_unit_killed", {
-                    unitId: t.id,
-                    unitType: t.type,
-                    lane: targetLane ? targetLane.laneIndex : null,
-                    killedBy: u.id,
-                    killedByType: u.type,
-                    killedByLane: lane.laneIndex,
-                  });
-                }
+                combatLog.logEvent(game, "route_unit_killed", {
+                  unitId: t.id,
+                  unitType: t.type,
+                  lane: targetLane ? targetLane.laneIndex : null,
+                  killedBy: u.id,
+                  killedByType: u.type,
+                  killedByLane: lane.laneIndex,
+                });
                 u.combatTarget = null;
               }
               u.atkCd = cooldownTicks;
@@ -6871,7 +6647,7 @@ function mlTick(game) {
     }
 
     // Keep hot-path movement debug opt-in so local terminals do not stall under log spam.
-    if (fortressSystemsActive && ENABLE_WAVE_UNIT_TRACE && game.tick % 20 === 0 && lane.units.length > 0) {
+    if (laneActive && ENABLE_WAVE_UNIT_TRACE && game.tick % 20 === 0 && lane.units.length > 0) {
       const waveUnits = lane.units.filter(u => !u.isDefender && u.hp > 0);
       if (waveUnits.length > 0) {
         const maxIdx = Math.max(...waveUnits.map(u => u.pathIdx));

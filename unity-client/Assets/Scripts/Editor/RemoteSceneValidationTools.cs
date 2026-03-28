@@ -805,7 +805,7 @@ namespace CastleDefender.Editor
                 hp = 100f,
                 maxHp = 100f,
                 isWaveUnit = isWaveUnit,
-                isDefender = isDefender,
+                stance = isDefender ? "DEFEND" : "ATTACK",
                 isAttacking = isAttacking,
                 combatTargetId = combatTargetId,
                 attackPulse = attackPulse,

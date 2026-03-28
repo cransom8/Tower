@@ -740,7 +740,7 @@ namespace CastleDefender.Game
                 $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
                 $"archetypeKey='{identity.ArchetypeKey ?? "<null>"}' presentationKey='{identity.PresentationKey ?? "<null>"}' " +
                 $"sourceTeam='{unit.sourceTeam ?? "<none>"}' ownerLane={unit.ownerLane} sourceLane={unit.sourceLaneIndex} " +
-                $"isWaveUnit={unit.isWaveUnit.ToString().ToLowerInvariant()} isDefender={unit.isDefender.ToString().ToLowerInvariant()} " +
+                $"isWaveUnit={unit.isWaveUnit.ToString().ToLowerInvariant()} stance='{unit.stance ?? "<null>"}' " +
                 $"resolvedPrefab='{prefab.name}' " +
                 $"spawnedName='{go.name}' worldPos=({spawnPos.x:0.###},{spawnPos.y:0.###},{spawnPos.z:0.###}) " +
                 $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'",
@@ -1448,7 +1448,7 @@ namespace CastleDefender.Game
                     $"[SpawnAudit][ClientSnapshot] spawnType='{ResolveSpawnType(unit)}' unitId='{unit?.id ?? "<null>"}' unitType='{unit?.type ?? "<null>"}' " +
                     $"skinKey='{unit?.skinKey ?? "<default>"}' sourceTeam='{unit?.sourceTeam ?? "<none>"}' " +
                     $"ownerLane={unit?.ownerLane ?? -1} isWaveUnit={(unit != null && unit.isWaveUnit).ToString().ToLowerInvariant()} " +
-                    $"isDefender={(unit != null && unit.isDefender).ToString().ToLowerInvariant()} " +
+                    $"stance='{unit?.stance ?? "<null>"}' " +
                     $"lane={lane?.laneIndex ?? -1} spatialLane={spatialLane} team='{lane?.team ?? "<null>"}' " +
                     $"sourceLane={unit?.sourceLaneIndex ?? -1} sourceBarracksKey='{ResolveSourceBarracksKey(unit)}' " +
                     $"routeType='{unit?.routeType ?? "<null>"}' currentSegment='{unit?.currentSegment ?? "<null>"}' " +

@@ -700,7 +700,6 @@ namespace CastleDefender.Net
         public float  maxHp;
         public float  moveSpeed;    // authoritative server path speed for combat visuals
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
-        public bool   isDefender;   // true = mobile defender unit
         public bool   isAttacking;  // true when unit has a combat target (stops advancing)
         public string combatTargetId; // unit id or fortress pad id
         public int    attackPulse;  // increments on each real strike in the sim
