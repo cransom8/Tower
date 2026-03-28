@@ -3,9 +3,10 @@ using UnityEngine;
 namespace CastleDefender.Game
 {
     /// <summary>
-    /// Legacy helper arrow for authored lane path markers.
-    /// The route anchors still exist, but these old generated meshes stay hidden
-    /// unless they are explicitly re-enabled for debugging.
+    /// Legacy helper arrow for retired authored route helpers.
+    /// The authoritative live route now comes from the server route graph plus
+    /// authored fortress and wave anchors, so these meshes stay hidden unless
+    /// explicitly re-enabled for debugging.
     /// </summary>
     [ExecuteAlways]
     public class PathMarkerVisual : MonoBehaviour
@@ -107,12 +108,24 @@ namespace CastleDefender.Game
             if (!UseLaneColor)
                 return;
 
-            int lane = LaneColorVisual.ResolveLaneIndex(transform);
+            int lane = FortressLaneResolver.ResolveLaneIndex(transform, FortressPadAnchor.LaneColor.Any);
             if (lane < 0)
                 return;
 
-            BaseColor = LaneColorVisual.GetLaneColor(lane, 0.34f);
-            EmissionColor = LaneColorVisual.GetLaneColor(lane, 1f);
+            BaseColor = ResolveLaneColor(lane, 0.34f);
+            EmissionColor = ResolveLaneColor(lane, 1f);
+        }
+
+        static Color ResolveLaneColor(int laneIndex, float alpha)
+        {
+            return laneIndex switch
+            {
+                0 => new Color(0.92f, 0.22f, 0.22f, alpha), // red
+                1 => new Color(1.00f, 0.78f, 0.18f, alpha), // yellow
+                2 => new Color(0.18f, 0.55f, 0.95f, alpha), // blue
+                3 => new Color(0.22f, 0.82f, 0.38f, alpha), // green
+                _ => new Color(1f, 1f, 1f, alpha),
+            };
         }
 
         void EnsureRoot()

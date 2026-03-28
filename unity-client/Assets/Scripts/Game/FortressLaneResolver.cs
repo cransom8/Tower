@@ -15,6 +15,11 @@ namespace CastleDefender.Game
             return LaneColorToLaneKey(explicitLaneColor);
         }
 
+        public static int ResolveLaneIndex(Transform source, FortressPadAnchor.LaneColor explicitLaneColor)
+        {
+            return LaneKeyToLaneIndex(ResolveLaneKey(source, explicitLaneColor));
+        }
+
         public static bool MatchesLane(Transform source, FortressPadAnchor.LaneColor explicitLaneColor, string slotColor, int laneIndex)
         {
             string ownLaneKey = ResolveLaneKey(source, explicitLaneColor);
@@ -99,6 +104,18 @@ namespace CastleDefender.Game
                 FortressPadAnchor.LaneColor.Blue => "blue",
                 FortressPadAnchor.LaneColor.Green => "green",
                 _ => string.Empty,
+            };
+        }
+
+        public static int LaneKeyToLaneIndex(string laneKey)
+        {
+            return FortressPadAnchor.NormalizeLaneKey(laneKey) switch
+            {
+                "red" => 0,
+                "yellow" => 1,
+                "blue" => 2,
+                "green" => 3,
+                _ => -1,
             };
         }
 
