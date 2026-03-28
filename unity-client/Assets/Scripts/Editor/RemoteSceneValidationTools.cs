@@ -759,9 +759,6 @@ namespace CastleDefender.Editor
                 income = 1,
                 lives = 100,
                 barracksLevel = 1,
-                towerCells = System.Array.Empty<MLTowerCell>(),
-                mobilizedCells = System.Array.Empty<MLTowerCell>(),
-                deadCells = System.Array.Empty<MLDeadCell>(),
                 projectiles = System.Array.Empty<MLProjectile>(),
                 units = BuildLaneUnits(laneIndex),
                 path = BuildLanePath()

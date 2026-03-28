@@ -3770,37 +3770,7 @@ namespace CastleDefender.UI
 
         float CalculateLaneBuildValue(MLLaneSnap lane)
         {
-            if (lane == null)
-                return 0f;
-
-            var seen = new HashSet<string>();
-            float total = 0f;
-
-            AddCells(lane.towerCells);
-            AddCells(lane.mobilizedCells);
-            return total;
-
-            void AddCells(MLTowerCell[] cells)
-            {
-                if (cells == null)
-                    return;
-
-                for (int i = 0; i < cells.Length; i++)
-                {
-                    var cell = cells[i];
-                    if (cell == null || string.IsNullOrWhiteSpace(cell.type))
-                        continue;
-
-                    string key = $"{cell.type}:{cell.X}:{cell.Y}";
-                    if (!seen.Add(key))
-                        continue;
-
-                    if (_catalogByKey.TryGetValue(cell.type, out var entry))
-                        total += Mathf.Max(0f, entry.build_cost);
-                    else
-                        total += 10f;
-                }
-            }
+            return lane != null ? Mathf.Max(0f, lane.buildValue) : 0f;
         }
 
         int CountWaveUnits(MLLaneSnap lane)

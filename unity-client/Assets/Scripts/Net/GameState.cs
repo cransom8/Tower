@@ -427,6 +427,7 @@ namespace CastleDefender.Net
         public bool           combatEnabled;
         public float          gold;
         public float          income;
+        public float          buildValue;
         public int            lives; // legacy field; mirrors current Town Core HP
         public int            barracksLevel;
         public MLFortressPad[] fortressPads;
@@ -437,9 +438,6 @@ namespace CastleDefender.Net
         public MLUpcomingWave[] upcomingWaveQueue;
         public int            barracksSendTimerTicksRemaining;
         public int            barracksSendTimerTotalTicks;
-        public MLTowerCell[]  towerCells;      // active defender tiles
-        public MLTowerCell[]  mobilizedCells;  // mobilized during combat — render as floor but selectable for upgrade/sell
-        public MLDeadCell[]   deadCells;       // dead defender tiles (inactive until next build phase)
         public MLGridPos[]    path;            // wave path as [{x,y}] array
         public int            fullPathLength;
         public MLUnit[]       units;
@@ -632,39 +630,6 @@ namespace CastleDefender.Net
         public int Y => (x != 0 || y != 0) ? y
                     : (gridX != 0 || gridY != 0) ? gridY
                     : row;
-    }
-
-    [Serializable]
-    public class MLTowerCell
-    {
-        public int    x;
-        public int    y;
-        // Backward/forward compatibility with server payload variants.
-        public int    gridX;
-        public int    gridY;
-        public int    col;
-        public int    row;
-        public string type;     // unit type key, e.g. "goblin"|"orc"|"cyclops"
-        public int    level;
-        public bool   debuffed;
-        public float  hp;       // current HP (wave defense)
-        public float  maxHp;    // max HP (wave defense)
-
-        public int X => (x != 0 || y != 0) ? x
-                    : (gridX != 0 || gridY != 0) ? gridX
-                    : col;
-        public int Y => (x != 0 || y != 0) ? y
-                    : (gridX != 0 || gridY != 0) ? gridY
-                    : row;
-    }
-
-    // Dead defender tile — unit died this round; tile reserved until next build phase.
-    [Serializable]
-    public class MLDeadCell
-    {
-        public int    x;
-        public int    y;
-        public string type;     // unit type key (for rendering the inactive unit sprite)
     }
 
     [Serializable]

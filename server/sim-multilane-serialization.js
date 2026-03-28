@@ -47,6 +47,57 @@ function getUnitSnapshotBarracksLevel(game, lane, unit, deps) {
   return Math.max(1, Math.floor(Number(sourceLane && sourceLane.barracks && sourceLane.barracks.level) || 1));
 }
 
+function getSerializedLaneBuildValue(lane, barracksRoster, deps) {
+  const { GRID_W, GRID_H } = deps;
+  let total = 0;
+
+  if (lane && Array.isArray(lane.grid)) {
+    for (let x = 0; x < GRID_W; x++) {
+      for (let y = 0; y < GRID_H; y++) {
+        const tile = lane.grid[x] && lane.grid[x][y];
+        if (!tile || (tile.type !== "tower" && tile.type !== "dead_tower") || !Array.isArray(tile.costHistory))
+          continue;
+
+        for (const entry of tile.costHistory)
+          total += Number(entry && entry.cost) || 0;
+      }
+    }
+  }
+
+  if (lane && Array.isArray(lane.fortressPads)) {
+    for (const pad of lane.fortressPads) {
+      if (!pad || !Array.isArray(pad.costHistory))
+        continue;
+
+      for (const entry of pad.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+
+  if (lane && lane.barracksSiteStates && typeof lane.barracksSiteStates === "object") {
+    for (const siteState of Object.values(lane.barracksSiteStates)) {
+      if (!siteState || !Array.isArray(siteState.costHistory))
+        continue;
+
+      for (const entry of siteState.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+
+  if (Array.isArray(barracksRoster)) {
+    for (const entry of barracksRoster) {
+      if (!entry)
+        continue;
+
+      const ownedCount = Math.max(0, Math.floor(Number(entry.ownedCount) || 0));
+      const buyCost = Math.max(0, Math.floor(Number(entry.buyCost) || 0));
+      total += ownedCount * buyCost;
+    }
+  }
+
+  return total;
+}
+
 function createMLSnapshot(game, deps) {
   const {
     WAVE_TIMER_TICKS,
@@ -108,36 +159,6 @@ function createMLSnapshot(game, deps) {
     teamHp: game.teamHp || { left: game.teamHpMax || TEAM_HP_START, right: game.teamHpMax || TEAM_HP_START },
     teamHpMax: game.teamHpMax || TEAM_HP_START,
     lanes: game.lanes.map((lane) => {
-      const towerCells = [];
-      const mobilizedCells = [];
-      const deadCells = [];
-      for (let x = 0; x < GRID_W; x++) {
-        for (let y = 0; y < GRID_H; y++) {
-          const tile = lane.grid[x][y];
-          if (tile.type === "tower" && !tile.mobilized) {
-            towerCells.push({
-              x,
-              y,
-              type: tile.towerType,
-              level: tile.towerLevel,
-              targetMode: tile.targetMode || "first",
-              debuffed: tile.debuffEndTick !== undefined && tile.debuffEndTick > game.tick,
-              hp: tile.hp != null ? tile.hp : tile.maxHp,
-              maxHp: tile.maxHp || null,
-            });
-          } else if (tile.type === "tower" && tile.mobilized) {
-            mobilizedCells.push({
-              x,
-              y,
-              type: tile.towerType,
-              level: tile.towerLevel,
-            });
-          } else if (tile.type === "dead_tower") {
-            deadCells.push({ x, y, type: tile.towerType });
-          }
-        }
-      }
-
       const projectiles = lane.projectiles.map((p) => ({
         id: p.id,
         ownerLane: p.ownerLane,
@@ -155,6 +176,7 @@ function createMLSnapshot(game, deps) {
       const snapFullPath = lane.fullPath || lane.path || [];
       const barracksTimerSnapshot = getLaneBarracksSendTimerSnapshot(game, lane, deps);
       syncLegacyBarracksAggregate(lane);
+      const barracksRoster = createBarracksRosterSnapshot(game, lane);
       const mapSnapshotUnit = (u) => {
         const canonicalTargetLaneIndex = typeof resolveUnitTargetLaneIndex === "function"
           ? resolveUnitTargetLaneIndex(game, lane, u)
@@ -291,6 +313,7 @@ function createMLSnapshot(game, deps) {
         combatEnabled: !!lane.combatEnabled,
         gold: lane.gold,
         income: lane.income,
+        buildValue: getSerializedLaneBuildValue(lane, barracksRoster, deps),
         lives: lane.lives,
         barracksLevel: Math.max(1, Math.floor(Number(lane.barracks && lane.barracks.level) || 1)),
         fortressPads: Array.isArray(lane.fortressPads)
@@ -301,13 +324,10 @@ function createMLSnapshot(game, deps) {
           .filter(Boolean),
         upcomingWave: createLaneUpcomingWavePreview(game, lane),
         upcomingWaveQueue: createLaneUpcomingWaveQueue(game, lane, 5),
-        barracksRoster: createBarracksRosterSnapshot(game, lane),
+        barracksRoster,
         heroRoster: createHeroRosterSnapshot(game, lane),
         barracksSendTimerTicksRemaining: barracksTimerSnapshot.remaining,
         barracksSendTimerTotalTicks: barracksTimerSnapshot.total,
-        towerCells,
-        mobilizedCells,
-        deadCells,
         path: lane.path || [],
         fullPathLength: snapFullPath.length,
         units: lane.units.map(mapSnapshotUnit),
