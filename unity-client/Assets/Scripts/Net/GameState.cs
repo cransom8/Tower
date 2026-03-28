@@ -786,7 +786,7 @@ namespace CastleDefender.Net
         public float gold;
         public float income;
         public int   lives;
-        // towers dict: deserialized manually in ClassicGameManager if needed
+        // towers dict: legacy classic payload field, deserialized manually if needed
     }
 
     [Serializable]

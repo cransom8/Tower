@@ -9,8 +9,8 @@
 //
 // What it creates / wires:
 //   • TileGrid        — single instance; handles the player's viewed branch interactively
-//   • LaneRenderer    — single instance; renders units for all 4 branches simultaneously
-//   • SnapshotApplier — singleton that feeds ML snapshots to both TileGrid and LaneRenderer
+//   • GameplayPresentationRoot — single shared presentation host for combat visuals
+//   • SnapshotApplier — singleton that feeds ML snapshots to both TileGrid and presentation systems
 //   • NetworkManager  — if absent (needed by SnapshotApplier.OnEnable)
 //
 // After running, also run "Wire Registry and Scene" to assign tile prefabs + UnitPrefabRegistry.
@@ -58,7 +58,7 @@ namespace CastleDefender.Editor
                                  " — run 'Wire Registry and Scene' afterward.");
 
             EnsureTileGrid(registry);
-            EnsureLaneRenderer(registry);
+            EnsureGameplayPresentationRoot(registry);
             EnsureSnapshotApplier();
 
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
@@ -109,22 +109,22 @@ namespace CastleDefender.Editor
             Debug.Log("[MultiLane] 4 TileGrids wired (lanes 0-3).");
         }
 
-        // ── LaneRenderer ──────────────────────────────────────────────────────
+        // ── GameplayPresentationRoot ─────────────────────────────────────────
 
-        static void EnsureLaneRenderer(UnitPrefabRegistry registry)
+        static void EnsureGameplayPresentationRoot(UnitPrefabRegistry registry)
         {
-            var lr = Object.FindFirstObjectByType<LaneRenderer>();
-            if (lr == null)
+            var root = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+            if (root == null)
             {
-                lr = new GameObject("LaneRenderer").AddComponent<LaneRenderer>();
-                Debug.Log("[MultiLane] Created LaneRenderer.");
+                root = new GameObject("GameplayPresentation").AddComponent<GameplayPresentationRoot>();
+                Debug.Log("[MultiLane] Created GameplayPresentationRoot.");
             }
 
-            if (registry != null && lr.Registry == null)
-                lr.Registry = registry;
+            if (registry != null && root.Registry == null)
+                root.Registry = registry;
 
-            EditorUtility.SetDirty(lr);
-            Debug.Log("[MultiLane] LaneRenderer wired.");
+            EditorUtility.SetDirty(root);
+            Debug.Log("[MultiLane] GameplayPresentationRoot wired.");
         }
 
         // ── SnapshotApplier + NetworkManager ──────────────────────────────────

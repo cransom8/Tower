@@ -11,15 +11,7 @@ namespace CastleDefender.UI
 
         public static UnitPrefabRegistry ResolveRegistry(UnitPrefabRegistry preferred = null)
         {
-            if (preferred != null) return preferred;
-
-            var laneRenderer = Object.FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer != null && laneRenderer.Registry != null) return laneRenderer.Registry;
-
-            var tileGrid = Object.FindFirstObjectByType<TileGrid>();
-            if (tileGrid != null && tileGrid.Registry != null) return tileGrid.Registry;
-
-            return null;
+            return GameplayPresentationRoot.ResolveRegistry(preferred);
         }
 
         public static UnitPortraitCamera Create(

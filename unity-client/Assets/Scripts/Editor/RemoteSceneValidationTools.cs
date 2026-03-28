@@ -232,7 +232,6 @@ namespace CastleDefender.Editor
             }
 
             snapshotApplier.DebugApplyMLSnapshot(snapshot);
-            ForceLaneRenderRefresh(snapshot);
             LogSpawnedMockUnits();
             Debug.Log($"[RemoteSceneValidation] Injected mock ML snapshot for {label}.");
         }
@@ -365,8 +364,6 @@ namespace CastleDefender.Editor
         static System.Collections.IEnumerator RunLiveSoloMatchValidation(NetworkManager nm, RemoteContentManager remoteContent)
         {
             s_liveSoloValidationRunning = true;
-            CastleDefender.Game.LaneRenderer.DebugLogCadence = true;
-
             string initialRoomCode = nm.MyRoomCode;
             var initialPendingLoadoutPhase = nm.PendingLoadoutPhase;
             var initialMatchLoadout = nm.LastMatchLoadout;
@@ -821,14 +818,16 @@ namespace CastleDefender.Editor
 
         static void LogSpawnedMockUnits()
         {
-            var laneRenderer = Object.FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer == null)
+            var waveRuntime = Object.FindFirstObjectByType<WaveSnapshotRuntimeSpawner>();
+            var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+            var animatorRoot = waveRuntime != null ? waveRuntime.transform : presentationRoot != null ? presentationRoot.transform : null;
+            if (animatorRoot == null)
             {
-                Debug.LogWarning("[RemoteSceneValidation] LaneRenderer not found after mock snapshot injection.");
+                Debug.LogWarning("[RemoteSceneValidation] Gameplay presentation root not found after mock snapshot injection.");
                 return;
             }
 
-            var animators = laneRenderer.GetComponentsInChildren<Animator>(includeInactive: true);
+            var animators = animatorRoot.GetComponentsInChildren<Animator>(includeInactive: true);
             for (int i = 0; i < animators.Length; i++)
             {
                 var animator = animators[i];
@@ -859,20 +858,6 @@ namespace CastleDefender.Editor
                     $"state='{stateName}' clip='{clipName}' normalizedTime={state.normalizedTime:0.00} " +
                     $"worldPos={animator.transform.position} params={animator.parameterCount}");
             }
-        }
-
-        static void ForceLaneRenderRefresh(MLSnapshot snapshot)
-        {
-            if (snapshot == null)
-                return;
-
-            var method = typeof(LaneRenderer).GetMethod("OnSnapshot", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (method == null)
-                return;
-
-            var renderers = Object.FindObjectsByType<LaneRenderer>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            foreach (var renderer in renderers)
-                method.Invoke(renderer, new object[] { snapshot });
         }
 
         static void FrameCombatValidationCamera()

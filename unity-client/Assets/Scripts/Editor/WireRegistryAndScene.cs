@@ -2,7 +2,7 @@
 // Menu: Castle Defender → Setup → Wire Registry and Scene
 //
 // Creates (or refreshes) Assets/UnitPrefabRegistry.asset with all 30 creature
-// unit types, then assigns it + tile prefabs to TileGrid and LaneRenderer
+// unit types, then assigns it + tile prefabs to TileGrid and GameplayPresentationRoot
 // in the currently open scene.
 #if UNITY_EDITOR
 using System.Collections.Generic;
@@ -136,17 +136,17 @@ namespace CastleDefender.Editor
                 warnings++;
             }
 
-            // ── 4. Wire LaneRenderer ───────────────────────────────────────
-            var laneRenderer = Object.FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer != null)
+            // ── 4. Wire GameplayPresentationRoot ───────────────────────────
+            var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+            if (presentationRoot != null)
             {
-                laneRenderer.Registry = registry;
-                EditorUtility.SetDirty(laneRenderer);
-                Debug.Log("[WireRegistry] LaneRenderer wired.");
+                presentationRoot.Registry = registry;
+                EditorUtility.SetDirty(presentationRoot);
+                Debug.Log("[WireRegistry] GameplayPresentationRoot wired.");
             }
             else
             {
-                Debug.LogWarning("[WireRegistry] No LaneRenderer found in scene — open Game_ML scene first.");
+                Debug.LogWarning("[WireRegistry] No GameplayPresentationRoot found in scene — open Game_ML scene first.");
                 warnings++;
             }
 

@@ -34,17 +34,17 @@ namespace CastleDefender.Editor
                 else Debug.Log("[BattlefieldSetup] TileGrid OK.");
             }
 
-            // ── LaneRenderer ─────────────────────────────────────────────────
-            var laneRenderer = Object.FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer == null)
+            // ── GameplayPresentationRoot ────────────────────────────────────
+            var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+            if (presentationRoot == null)
             {
-                Debug.LogError("[BattlefieldSetup] No LaneRenderer found in scene. Add a GameObject with LaneRenderer component.");
+                Debug.LogError("[BattlefieldSetup] No GameplayPresentationRoot found in scene. Add a GameObject with GameplayPresentationRoot component.");
                 errors++;
             }
             else
             {
-                if (laneRenderer.Registry == null) { Debug.LogWarning("[BattlefieldSetup] LaneRenderer.Registry not assigned."); warnings++; }
-                else Debug.Log("[BattlefieldSetup] LaneRenderer OK.");
+                if (presentationRoot.Registry == null) { Debug.LogWarning("[BattlefieldSetup] GameplayPresentationRoot.Registry not assigned."); warnings++; }
+                else Debug.Log("[BattlefieldSetup] GameplayPresentationRoot OK.");
             }
 
             // ── NetworkManager ────────────────────────────────────────────────

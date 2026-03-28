@@ -11,7 +11,7 @@ using CastleDefender.UI;
 ///   2. Creates Canvas/WaveHUD panel with top HUD labels
 ///   3. Wires GameManager.TxtRound/Phase/Countdown/TeamHpLeft/Right
 ///   4. Wires an InfoBar component for Gold/Income top labels
-///   5. Assigns HpBarPrefab to LaneRenderer + all 4 TileGrid components
+///   5. Assigns HpBarPrefab to GameplayPresentationRoot + all 4 TileGrid components
 /// Run via: Castle Defender → Setup → Setup Wave HUD
 /// </summary>
 public static class SetupWaveHUD
@@ -162,14 +162,14 @@ public static class SetupWaveHUD
         infoBar.ImgIncomeRing = null;
         EditorUtility.SetDirty(infoBar);
 
-        // ── 4. Assign HpBarPrefab to LaneRenderer and all TileGrids ──────────
-        var lr = Object.FindFirstObjectByType<LaneRenderer>();
-        if (lr != null)
+        // ── 4. Assign HpBarPrefab to GameplayPresentationRoot and all TileGrids ─
+        var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+        if (presentationRoot != null)
         {
-            Undo.RecordObject(lr, "Wire HpBar");
-            lr.HpBarPrefab = hpBarPrefab;
-            EditorUtility.SetDirty(lr);
-            Debug.Log("[SetupWaveHUD] LaneRenderer.HpBarPrefab assigned.");
+            Undo.RecordObject(presentationRoot, "Wire HpBar");
+            presentationRoot.HpBarPrefab = hpBarPrefab;
+            EditorUtility.SetDirty(presentationRoot);
+            Debug.Log("[SetupWaveHUD] GameplayPresentationRoot.HpBarPrefab assigned.");
         }
 
         var grids = Object.FindObjectsByType<TileGrid>(FindObjectsSortMode.None);

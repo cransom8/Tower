@@ -1,5 +1,5 @@
 // TileGrid.cs — 11×28 tile grid for the viewed player branch, positioned in battlefield world space.
-// Unit management is handled by LaneRenderer.cs.
+// Unit presentation is handled by WaveSnapshotRuntimeSpawner.cs.
 //
 // SETUP:
 //   1. Attach to GameObject "TileGrid" in Game_ML scene.
@@ -61,7 +61,7 @@ namespace CastleDefender.Game
         [Tooltip("Vertical lift for towers so they sit on top of floor tiles.")]
         public float TowerSpawnYOffset = 0.54f;
 
-        [Header("HP bar prefab (optional WorldSpace Canvas Image, same as LaneRenderer)")]
+        [Header("HP bar prefab (optional WorldSpace Canvas Image, same as GameplayPresentationRoot)")]
         [Tooltip("If assigned, a fill-bar is shown above each living tower tile.")]
         public GameObject HpBarPrefab;
 
@@ -1136,7 +1136,7 @@ static readonly Vector3[][] _lanePathWaypoints =
                 { anim.CrossFade(s, 0.05f, 0, 0); return; }
         }
 
-        // ── Level helpers (mirrors LaneRenderer) ─────────────────────────────
+        // ── Level helpers (mirrors gameplay presentation helpers) ───────────
 
         static float GetLevelScale(int level)
         {

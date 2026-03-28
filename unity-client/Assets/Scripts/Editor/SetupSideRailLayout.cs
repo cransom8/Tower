@@ -45,7 +45,6 @@ namespace CastleDefender.Editor
 
             // Hide horizontal top/bottom bars
             HideByComponentName("LaneTabs");
-            HideByComponentName("LaneViewBar");
 
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
             Debug.Log("[SideRailLayout] Done — CmdBar left rail, InfoBar right rail.");

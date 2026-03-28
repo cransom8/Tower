@@ -130,7 +130,7 @@ GameObject:
   - component: {fileID: 528488670}
   - component: {fileID: 528488669}
   m_Layer: 0
-  m_Name: LoadoutManager
+  m_Name: LoadoutPhaseManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

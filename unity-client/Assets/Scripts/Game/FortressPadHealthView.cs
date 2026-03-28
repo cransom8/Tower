@@ -257,14 +257,14 @@ namespace CastleDefender.Game
 
         static GameObject ResolveHpBarPrefab()
         {
-            var laneRenderer = FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer != null && laneRenderer.HpBarPrefab != null)
-                return laneRenderer.HpBarPrefab;
+            var hpBarPrefab = GameplayPresentationRoot.ResolveHpBarPrefab();
+            if (hpBarPrefab != null)
+                return hpBarPrefab;
 
-            if (s_missingHpBarLogs.Add("LaneRenderer.HpBarPrefab"))
+            if (s_missingHpBarLogs.Add("GameplayPresentationRoot.HpBarPrefab"))
             {
                 Debug.LogError(
-                    "[FortressPadHealthView] Missing LaneRenderer.HpBarPrefab. " +
+                    "[FortressPadHealthView] Missing GameplayPresentationRoot.HpBarPrefab. " +
                     "Fortress pad HP bars will not render until the real scene reference is assigned.");
             }
 

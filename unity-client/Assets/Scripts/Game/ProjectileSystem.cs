@@ -3,7 +3,7 @@
 // positions them between source and target tiles in branch world space each frame.
 //
 // SETUP (Game_ML.unity):
-//   Attach alongside LaneRenderer.
+//   Attach alongside GameplayPresentationRoot.
 //   Inspector:
 //     ProjectilePrefab  — small sphere / sprite (used for all types)
 //     CannonPrefab      — larger sphere for cannon shots (optional, falls back to ProjectilePrefab)

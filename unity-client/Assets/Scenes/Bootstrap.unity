@@ -130,7 +130,6 @@ GameObject:
   - component: {fileID: 803473424}
   - component: {fileID: 803473423}
   - component: {fileID: 803473425}
-  - component: {fileID: 803473426}
   m_Layer: 0
   m_Name: NetworkManager
   m_TagString: Untagged
@@ -178,18 +177,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f498265777641be44b00ea9c75ac5984, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Net.CatalogLoader
---- !u!114 &803473426
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 803473422}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 61dce1e59c7f4da47b0f14ddd9233462, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: CastleDefender.Net::CastleDefender.Net.LoadoutManager
 --- !u!1 &1234567890
 GameObject:
   m_ObjectHideFlags: 0

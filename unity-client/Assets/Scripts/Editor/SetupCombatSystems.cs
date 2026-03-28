@@ -10,8 +10,8 @@
 //   6.  Creates FloatingText.prefab (WorldSpace Canvas root + FloatingText + TMP)
 //   7.  Creates HpBar.prefab (3D bar: Background cube + Fill cube child)
 //   8.  Finds/creates GameManager GO and assigns all FX prefabs
-//   9.  Adds ProjectileSystem to LaneRenderer GO and wires prefabs
-//   10. Wires HpBarPrefab on LaneRenderer
+//   9.  Adds ProjectileSystem to GameplayPresentationRoot GO and wires prefabs
+//   10. Wires HpBarPrefab on GameplayPresentationRoot
 //   11. Ensures TileGrids has 4 Lane children (Lane_0..3) with TileGrid + all refs
 //   12. Saves the scene
 
@@ -58,29 +58,30 @@ namespace CastleDefender.Editor
             // ── 4. GameManager GO ─────────────────────────────────────────────
             WireGameManager(hitEffectPrefab, cannonSplashPrefab, goldPopPrefab, floatingTextPrefab);
 
-            // ── 5. LaneRenderer GO ────────────────────────────────────────────
-            var laneRendererGO = GameObject.Find("LaneRenderer");
-            if (laneRendererGO == null)
+            // ── 5. GameplayPresentationRoot GO ───────────────────────────────
+            var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
+            if (presentationRoot == null)
             {
-                Debug.LogError("[SetupCombatSystems] LaneRenderer GO not found — skipping ProjectileSystem + LaneRenderer wiring.");
+                Debug.LogError("[SetupCombatSystems] GameplayPresentationRoot GO not found — skipping ProjectileSystem + presentation-root wiring.");
             }
             else
             {
+                var presentationGO = presentationRoot.gameObject;
+
                 // ProjectileSystem
-                var projSys = laneRendererGO.GetComponent<ProjectileSystem>();
+                var projSys = presentationGO.GetComponent<ProjectileSystem>();
                 if (projSys == null)
-                    projSys = laneRendererGO.AddComponent<ProjectileSystem>();
+                    projSys = presentationGO.AddComponent<ProjectileSystem>();
                 projSys.ProjectilePrefab = projPrefab;
                 projSys.CannonPrefab     = cannonPrefab;
                 projSys.ArcHeight        = 1.5f;
-                Debug.Log("[SetupCombatSystems] ProjectileSystem wired on LaneRenderer.");
+                Debug.Log("[SetupCombatSystems] ProjectileSystem wired on GameplayPresentationRoot.");
 
-                // HpBarPrefab on LaneRenderer
-                var lr = laneRendererGO.GetComponent<LaneRenderer>();
-                if (lr != null && hpBarPrefab != null)
+                // HpBarPrefab on GameplayPresentationRoot
+                if (hpBarPrefab != null)
                 {
-                    lr.HpBarPrefab = hpBarPrefab;
-                    Debug.Log("[SetupCombatSystems] HpBarPrefab assigned to LaneRenderer.");
+                    presentationRoot.HpBarPrefab = hpBarPrefab;
+                    Debug.Log("[SetupCombatSystems] HpBarPrefab assigned to GameplayPresentationRoot.");
                 }
             }
 
@@ -521,7 +522,7 @@ namespace CastleDefender.Editor
             }
 
             // 3D bar: thin flat cube (Background) + green cube child (Fill).
-            // LaneRenderer drives Fill.localScale.x = hp/maxHp each frame.
+            // Gameplay presentation uses Fill.localScale.x = hp/maxHp each frame.
             var root = new GameObject("HpBar");
 
             var bg = GameObject.CreatePrimitive(PrimitiveType.Cube);

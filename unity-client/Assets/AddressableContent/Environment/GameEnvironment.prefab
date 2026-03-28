@@ -718,7 +718,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 4487269708849878264}
-  - component: {fileID: 3617511247083694436}
   m_Layer: 0
   m_Name: Marker_4
   m_TagString: Untagged
@@ -741,32 +740,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 2847705252982436205}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &3617511247083694436
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 245383430169911045}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 1, g: 0.58, b: 0.1, a: 0.34}
-  EmissionColor: {r: 1, g: 0.58, b: 0.1, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &256303025781020032
 GameObject:
   m_ObjectHideFlags: 0
@@ -1333,7 +1306,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6201934931364662554}
-  - component: {fileID: 7227295575462815802}
   m_Layer: 0
   m_Name: Marker_5
   m_TagString: Untagged
@@ -1356,32 +1328,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 2847705252982436205}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &7227295575462815802
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 311595011056943012}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 1, g: 0.58, b: 0.1, a: 0.34}
-  EmissionColor: {r: 1, g: 0.58, b: 0.1, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &325829095291577165
 GameObject:
   m_ObjectHideFlags: 0
@@ -1974,7 +1920,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 4743783414915098960}
-  - component: {fileID: 680697195484296821}
   m_Layer: 0
   m_Name: Marker_5
   m_TagString: Untagged
@@ -1997,32 +1942,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7986061338241875721}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &680697195484296821
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 444411498316581985}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.22, g: 0.82, b: 0.38, a: 0.34}
-  EmissionColor: {r: 0.22, g: 0.82, b: 0.38, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &445019947987749875
 GameObject:
   m_ObjectHideFlags: 0
@@ -2158,8 +2077,6 @@ GameObject:
   - component: {fileID: 4126260140184137044}
   - component: {fileID: 7719863767594100123}
   - component: {fileID: 7200164951346234786}
-  - component: {fileID: 3132323406246210190}
-  - component: {fileID: 7193130916124984331}
   m_Layer: 0
   m_Name: Green_Barracks_Right
   m_TagString: Untagged
@@ -2304,195 +2221,6 @@ MonoBehaviour:
   visualParent: {fileID: 1698211298136384136}
   legacyRenderers:
   - {fileID: 2133844742258044005}
---- !u!114 &3132323406246210190
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 464466848052121290}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 6809764178846151686}
-  markerTransforms:
-  - {fileID: 8917028520641265796}
-  - {fileID: 7966282305946553209}
-  - {fileID: 7758608220614911070}
-  - {fileID: 836139825427057156}
-  - {fileID: 6563634150610363447}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &7193130916124984331
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 464466848052121290}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 3132323406246210190}
-  team: 3
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &471031786356852386
 GameObject:
   m_ObjectHideFlags: 0
@@ -2601,8 +2329,6 @@ GameObject:
   - component: {fileID: 8401237415895572288}
   - component: {fileID: 168980297265997045}
   - component: {fileID: 6060520156536624615}
-  - component: {fileID: 3344286600084354197}
-  - component: {fileID: 5106807823204674752}
   m_Layer: 0
   m_Name: Blue_Barracks_Center
   m_TagString: Untagged
@@ -2771,195 +2497,6 @@ MonoBehaviour:
   visualParent: {fileID: 5395302654324034147}
   legacyRenderers:
   - {fileID: 9195810902873026313}
---- !u!114 &3344286600084354197
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 487999289108746189}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 996165973547641135}
-  markerTransforms:
-  - {fileID: 386847078634074315}
-  - {fileID: 6204641858453325061}
-  - {fileID: 7393261681068133608}
-  - {fileID: 3434015402012470849}
-  - {fileID: 6624889102629304016}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &5106807823204674752
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 487999289108746189}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 3344286600084354197}
-  team: 1
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &490865198650852413
 GameObject:
   m_ObjectHideFlags: 0
@@ -3092,7 +2629,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7543729582839929809}
-  - component: {fileID: 3760511373567723322}
   m_Layer: 0
   m_Name: Marker_4
   m_TagString: Untagged
@@ -3115,32 +2651,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8443962473367739123}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &3760511373567723322
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 539373846542643542}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.92, g: 0.22, b: 0.22, a: 0.34}
-  EmissionColor: {r: 0.92, g: 0.22, b: 0.22, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &548708245668201976
 GameObject:
   m_ObjectHideFlags: 0
@@ -4157,8 +3667,6 @@ GameObject:
   - component: {fileID: 6643539901793476928}
   - component: {fileID: 8076806760974289154}
   - component: {fileID: 3362833460070856314}
-  - component: {fileID: 3627539408336464151}
-  - component: {fileID: 4266654505806531214}
   m_Layer: 0
   m_Name: Red_Barracks_Center_starting Barracks
   m_TagString: Untagged
@@ -4327,195 +3835,6 @@ MonoBehaviour:
   visualParent: {fileID: 6695045229071439697}
   legacyRenderers:
   - {fileID: 3338411490129326484}
---- !u!114 &3627539408336464151
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 602962360527212053}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 7182083246059714374}
-  markerTransforms:
-  - {fileID: 421541342374059044}
-  - {fileID: 4499384378595230806}
-  - {fileID: 7011979803393349873}
-  - {fileID: 8931603388671335594}
-  - {fileID: 1153547398247738585}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &4266654505806531214
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 602962360527212053}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 3627539408336464151}
-  team: 0
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &618947318061147694
 GameObject:
   m_ObjectHideFlags: 0
@@ -5365,7 +4684,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 4803935779061665424}
-  - component: {fileID: 4903512496777644866}
   m_Layer: 0
   m_Name: Marker_3
   m_TagString: Untagged
@@ -5388,32 +4706,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7986061338241875721}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &4903512496777644866
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 723250202107140600}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.22, g: 0.82, b: 0.38, a: 0.34}
-  EmissionColor: {r: 0.22, g: 0.82, b: 0.38, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &724865802722650122
 GameObject:
   m_ObjectHideFlags: 0
@@ -6429,7 +5721,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 3472621165217408042}
-  - component: {fileID: 4571548751224671676}
   m_Layer: 0
   m_Name: Marker_3
   m_TagString: Untagged
@@ -6452,32 +5743,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8443962473367739123}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &4571548751224671676
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 964982445541504433}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.92, g: 0.22, b: 0.22, a: 0.34}
-  EmissionColor: {r: 0.92, g: 0.22, b: 0.22, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &977223054676120902
 GameObject:
   m_ObjectHideFlags: 0
@@ -8830,8 +8095,6 @@ GameObject:
   - component: {fileID: 6602949974898636563}
   - component: {fileID: 8137263667316134291}
   - component: {fileID: 5338084806383546631}
-  - component: {fileID: 3729033165065422284}
-  - component: {fileID: 3975279265588746746}
   m_Layer: 0
   m_Name: Red_Barracks_Left_purchase required
   m_TagString: Untagged
@@ -8976,195 +8239,6 @@ MonoBehaviour:
   visualParent: {fileID: 3147000557927692086}
   legacyRenderers:
   - {fileID: 90668609027660871}
---- !u!114 &3729033165065422284
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1338375510179796297}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 5207102460286686731}
-  markerTransforms:
-  - {fileID: 8841813756637592727}
-  - {fileID: 6121256382731084594}
-  - {fileID: 7411643825064592336}
-  - {fileID: 7818993523091686573}
-  - {fileID: 2011425876572400209}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &3975279265588746746
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1338375510179796297}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 3729033165065422284}
-  team: 0
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &1345334776331060581
 GameObject:
   m_ObjectHideFlags: 0
@@ -10048,7 +9122,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1091571863192814189}
-  - component: {fileID: 8867318790485841657}
   m_Layer: 0
   m_Name: Marker_2
   m_TagString: Untagged
@@ -10071,32 +9144,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8734975502505549895}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8867318790485841657
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1580163495654646124}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.18, g: 0.55, b: 0.95, a: 0.34}
-  EmissionColor: {r: 0.18, g: 0.55, b: 0.95, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &1593779441374365362
 GameObject:
   m_ObjectHideFlags: 0
@@ -19151,8 +18198,6 @@ GameObject:
   - component: {fileID: 2478112727287224377}
   - component: {fileID: 532049898492339690}
   - component: {fileID: 2357407940181364704}
-  - component: {fileID: 6079896352026930838}
-  - component: {fileID: 7378964576365367550}
   m_Layer: 0
   m_Name: Yellow_Barracks_Left
   m_TagString: Untagged
@@ -19297,195 +18342,6 @@ MonoBehaviour:
   visualParent: {fileID: 2785404165797873849}
   legacyRenderers:
   - {fileID: 6464368384095241220}
---- !u!114 &6079896352026930838
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2065768410567738482}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 3742020431882843171}
-  markerTransforms:
-  - {fileID: 898503397002141140}
-  - {fileID: 4577514669585356431}
-  - {fileID: 4598570564159483083}
-  - {fileID: 4482830802716289188}
-  - {fileID: 3594946833583497161}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &7378964576365367550
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2065768410567738482}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 6079896352026930838}
-  team: 2
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &2075275188838348843
 GameObject:
   m_ObjectHideFlags: 0
@@ -20430,7 +19286,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7504601349624923760}
-  - component: {fileID: 8170987838739646625}
   m_Layer: 0
   m_Name: Marker_2
   m_TagString: Untagged
@@ -20453,32 +19308,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8443962473367739123}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8170987838739646625
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2219942036689121745}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.92, g: 0.22, b: 0.22, a: 0.34}
-  EmissionColor: {r: 0.92, g: 0.22, b: 0.22, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &2227893979952876245
 GameObject:
   m_ObjectHideFlags: 0
@@ -23849,8 +22678,6 @@ GameObject:
   - component: {fileID: 701461001919290382}
   - component: {fileID: 3419775810280695936}
   - component: {fileID: 2094828775906864607}
-  - component: {fileID: 6623944644182378612}
-  - component: {fileID: 213430288993518621}
   m_Layer: 0
   m_Name: Red_Barracks_Right_purchase required
   m_TagString: Untagged
@@ -23995,195 +22822,6 @@ MonoBehaviour:
   visualParent: {fileID: 3120155183225336335}
   legacyRenderers:
   - {fileID: 3699980615731534250}
---- !u!114 &6623944644182378612
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2957456387003058981}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 8341596344368004733}
-  markerTransforms:
-  - {fileID: 170967765800895462}
-  - {fileID: 1294935215438818461}
-  - {fileID: 4814302990648795344}
-  - {fileID: 2047189561701751090}
-  - {fileID: 7279581212664055376}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &213430288993518621
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 2957456387003058981}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 6623944644182378612}
-  team: 0
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &2974782836085314664
 GameObject:
   m_ObjectHideFlags: 0
@@ -25158,7 +23796,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 9212726807423776332}
-  - component: {fileID: 8454887887729018415}
   m_Layer: 0
   m_Name: Marker_1
   m_TagString: Untagged
@@ -25181,32 +23818,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7986061338241875721}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8454887887729018415
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3334711086097215398}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.22, g: 0.82, b: 0.38, a: 0.34}
-  EmissionColor: {r: 0.22, g: 0.82, b: 0.38, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &3334774064689022914
 GameObject:
   m_ObjectHideFlags: 0
@@ -27402,8 +26013,6 @@ GameObject:
   - component: {fileID: 8070140129743637193}
   - component: {fileID: 1092956034975957095}
   - component: {fileID: 1039744762542713899}
-  - component: {fileID: 1915753026278675489}
-  - component: {fileID: 1075514617249081641}
   m_Layer: 0
   m_Name: Blue_Barracks_Right
   m_TagString: Untagged
@@ -27548,195 +26157,6 @@ MonoBehaviour:
   visualParent: {fileID: 5452078288113402128}
   legacyRenderers:
   - {fileID: 8071827825557269941}
---- !u!114 &1915753026278675489
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4099279462033337152}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 7484106081363073520}
-  markerTransforms:
-  - {fileID: 535633246233414045}
-  - {fileID: 8622660821198117404}
-  - {fileID: 7278899307836133148}
-  - {fileID: 3352785470063793788}
-  - {fileID: 7155911685163110496}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &1075514617249081641
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4099279462033337152}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 1915753026278675489}
-  team: 1
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &4117351310308694285
 GameObject:
   m_ObjectHideFlags: 0
@@ -30029,8 +28449,6 @@ GameObject:
   - component: {fileID: 375580652067384386}
   - component: {fileID: 5391287225519173234}
   - component: {fileID: 7890415454090654443}
-  - component: {fileID: 8026351912410127872}
-  - component: {fileID: 8956795816921726523}
   m_Layer: 0
   m_Name: Yellow_Barracks_Right
   m_TagString: Untagged
@@ -30175,195 +28593,6 @@ MonoBehaviour:
   visualParent: {fileID: 6186805190453228459}
   legacyRenderers:
   - {fileID: 5554340576060528113}
---- !u!114 &8026351912410127872
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4688160398357611500}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 3605863747376818612}
-  markerTransforms:
-  - {fileID: 1606058736964686237}
-  - {fileID: 1658869854201674643}
-  - {fileID: 7569796445937936531}
-  - {fileID: 4985708618556772887}
-  - {fileID: 7263690174712338334}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &8956795816921726523
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4688160398357611500}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 8026351912410127872}
-  team: 2
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &4720764420050994484
 GameObject:
   m_ObjectHideFlags: 0
@@ -37982,7 +36211,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 5537093298300155023}
-  - component: {fileID: 5229743112297346507}
   m_Layer: 0
   m_Name: Marker_2
   m_TagString: Untagged
@@ -38005,32 +36233,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7986061338241875721}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &5229743112297346507
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4995088485083026547}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.22, g: 0.82, b: 0.38, a: 0.34}
-  EmissionColor: {r: 0.22, g: 0.82, b: 0.38, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &5006546720728808335
 GameObject:
   m_ObjectHideFlags: 0
@@ -38075,7 +36277,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2284527174939849101}
-  - component: {fileID: 6904033516128464026}
   m_Layer: 0
   m_Name: Marker_3
   m_TagString: Untagged
@@ -38098,32 +36299,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8734975502505549895}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &6904033516128464026
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5098632888184975622}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.18, g: 0.55, b: 0.95, a: 0.34}
-  EmissionColor: {r: 0.18, g: 0.55, b: 0.95, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &5099477492595307111
 GameObject:
   m_ObjectHideFlags: 0
@@ -40129,8 +38304,6 @@ GameObject:
   - component: {fileID: 499636217510176381}
   - component: {fileID: 3238284835602751815}
   - component: {fileID: 1431450655206868451}
-  - component: {fileID: 2400698918346118576}
-  - component: {fileID: 5889319254844671017}
   m_Layer: 0
   m_Name: Yellow_Barracks_Center
   m_TagString: Untagged
@@ -40299,195 +38472,6 @@ MonoBehaviour:
   visualParent: {fileID: 8602503278650747130}
   legacyRenderers:
   - {fileID: 5240218526012605609}
---- !u!114 &2400698918346118576
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5682887220127960260}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 4045611189407875947}
-  markerTransforms:
-  - {fileID: 903259255038203040}
-  - {fileID: 5220996660101476022}
-  - {fileID: 274680027772796438}
-  - {fileID: 604715029155136521}
-  - {fileID: 38815704558955321}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &5889319254844671017
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5682887220127960260}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 2400698918346118576}
-  team: 2
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &5709526583322346985
 GameObject:
   m_ObjectHideFlags: 0
@@ -41270,7 +39254,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7243256144817136671}
-  - component: {fileID: 8930975107750985245}
   m_Layer: 0
   m_Name: Marker_4
   m_TagString: Untagged
@@ -41293,32 +39276,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7986061338241875721}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8930975107750985245
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5818213354637807793}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.22, g: 0.82, b: 0.38, a: 0.34}
-  EmissionColor: {r: 0.22, g: 0.82, b: 0.38, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &5819303506687484614
 GameObject:
   m_ObjectHideFlags: 0
@@ -41689,8 +39646,6 @@ GameObject:
   - component: {fileID: 337136525686861516}
   - component: {fileID: 7112818137277142737}
   - component: {fileID: 8998797742089647274}
-  - component: {fileID: 8965661071806815783}
-  - component: {fileID: 6606095566760703304}
   m_Layer: 0
   m_Name: Green_Barracks_Left
   m_TagString: Untagged
@@ -41835,195 +39790,6 @@ MonoBehaviour:
   visualParent: {fileID: 1073745646386547022}
   legacyRenderers:
   - {fileID: 1665970752294053958}
---- !u!114 &8965661071806815783
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5926814577419182841}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 359469972141862104}
-  markerTransforms:
-  - {fileID: 3231643841477425692}
-  - {fileID: 7975706880095467317}
-  - {fileID: 6386631512955799739}
-  - {fileID: 450752751079533406}
-  - {fileID: 5838428523166201963}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &6606095566760703304
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5926814577419182841}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 8965661071806815783}
-  team: 3
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &5933019359261948512
 GameObject:
   m_ObjectHideFlags: 0
@@ -49167,7 +46933,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6319020672730650634}
-  - component: {fileID: 3178660738970948417}
   m_Layer: 0
   m_Name: Marker_1
   m_TagString: Untagged
@@ -49190,32 +46955,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8734975502505549895}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &3178660738970948417
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6098088776717981349}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.18, g: 0.55, b: 0.95, a: 0.34}
-  EmissionColor: {r: 0.18, g: 0.55, b: 0.95, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &6161275534688403325
 GameObject:
   m_ObjectHideFlags: 0
@@ -49448,7 +47187,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 3429596081725293303}
-  - component: {fileID: 375327281154906989}
   m_Layer: 0
   m_Name: Marker_1
   m_TagString: Untagged
@@ -49471,32 +47209,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8443962473367739123}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &375327281154906989
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6223871245024312913}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.92, g: 0.22, b: 0.22, a: 0.34}
-  EmissionColor: {r: 0.92, g: 0.22, b: 0.22, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &6240822004168357969
 GameObject:
   m_ObjectHideFlags: 0
@@ -50812,7 +48524,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 900523363406655230}
-  - component: {fileID: 7480690048937714593}
   m_Layer: 0
   m_Name: Marker_1
   m_TagString: Untagged
@@ -50835,32 +48546,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 2847705252982436205}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &7480690048937714593
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6632980110090884593}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 1, g: 0.58, b: 0.1, a: 0.34}
-  EmissionColor: {r: 1, g: 0.58, b: 0.1, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &6664565701017073412
 GameObject:
   m_ObjectHideFlags: 0
@@ -53067,7 +50752,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 848384570105917979}
-  - component: {fileID: 3440998612716146787}
   m_Layer: 0
   m_Name: Marker_4
   m_TagString: Untagged
@@ -53090,32 +50774,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8734975502505549895}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &3440998612716146787
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7176869344203669763}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.18, g: 0.55, b: 0.95, a: 0.34}
-  EmissionColor: {r: 0.18, g: 0.55, b: 0.95, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &7196264030428486250
 GameObject:
   m_ObjectHideFlags: 0
@@ -54480,7 +52138,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1090048920484867481}
-  - component: {fileID: 9042838152417709298}
   m_Layer: 0
   m_Name: Marker_2
   m_TagString: Untagged
@@ -54503,32 +52160,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 2847705252982436205}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &9042838152417709298
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7483832703816402154}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 1, g: 0.58, b: 0.1, a: 0.34}
-  EmissionColor: {r: 1, g: 0.58, b: 0.1, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &7499229293447354192
 GameObject:
   m_ObjectHideFlags: 0
@@ -55288,8 +52919,6 @@ GameObject:
   - component: {fileID: 5796133277108530054}
   - component: {fileID: 9075096809065096906}
   - component: {fileID: 5018717090328998474}
-  - component: {fileID: 417611515333545924}
-  - component: {fileID: 3846951461784182410}
   m_Layer: 0
   m_Name: Green_Barracks_Center
   m_TagString: Untagged
@@ -55458,195 +53087,6 @@ MonoBehaviour:
   visualParent: {fileID: 4134231423402240409}
   legacyRenderers:
   - {fileID: 8773768735784171438}
---- !u!114 &417611515333545924
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7746005210801156762}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 79292683850051545}
-  markerTransforms:
-  - {fileID: 3713618651704301683}
-  - {fileID: 1246945537814352390}
-  - {fileID: 5288828735142130814}
-  - {fileID: 3054158728390551960}
-  - {fileID: 5727764598989866896}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &3846951461784182410
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7746005210801156762}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 417611515333545924}
-  team: 3
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &7753436474566198421
 GameObject:
   m_ObjectHideFlags: 0
@@ -62644,8 +60084,6 @@ GameObject:
   - component: {fileID: 7880642322915247612}
   - component: {fileID: 3916108314384129421}
   - component: {fileID: 4804395035576798347}
-  - component: {fileID: 4439030975865932265}
-  - component: {fileID: 2775031978795861881}
   m_Layer: 0
   m_Name: Blue_Barracks_Left
   m_TagString: Untagged
@@ -62790,195 +60228,6 @@ MonoBehaviour:
   visualParent: {fileID: 5756726019397948316}
   legacyRenderers:
   - {fileID: 8690825362951472483}
---- !u!114 &4439030975865932265
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7924462095721528220}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8915150878ea1e343895e2ccaecbc7bf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksLanePath
-  spawnPoint: {fileID: 6430650049511412025}
-  markerTransforms:
-  - {fileID: 8009627228377357635}
-  - {fileID: 1937547475361815475}
-  - {fileID: 5896234471858750281}
-  - {fileID: 7340707109737168448}
-  - {fileID: 8302417387725823993}
-  drawGizmos: 1
-  gizmoColor: {r: 0.25, g: 0.9, b: 0.35, a: 1}
---- !u!114 &2775031978795861881
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7924462095721528220}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 29bdff63edc376a4c98c626cf927b0a6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BarracksAutoSpawner
-  barracksPath: {fileID: 4439030975865932265}
-  team: 1
-  roster:
-  - displayName: Peasant
-    unitTypeKey: goblin
-    skinKey: tt_peasant
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPeasant
-  - displayName: Scout
-    unitTypeKey: kobold
-    skinKey: tt_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksScout
-  - displayName: Settler
-    unitTypeKey: giant_rat
-    skinKey: tt_settler
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSettler
-  - displayName: Light Infantry
-    unitTypeKey: hobgoblin
-    skinKey: tt_light_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightInfantry
-  - displayName: Spearman
-    unitTypeKey: ghoul
-    skinKey: tt_spearman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksSpearman
-  - displayName: Heavy Infantry
-    unitTypeKey: orc
-    skinKey: tt_heavy_infantry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyInfantry
-  - displayName: Halberdier
-    unitTypeKey: troll
-    skinKey: tt_halberdier
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHalberdier
-  - displayName: Heavy Swordsman
-    unitTypeKey: ogre
-    skinKey: tt_heavy_swordman
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavySwordsman
-  - displayName: Light Cavalry
-    unitTypeKey: werewolf
-    skinKey: tt_light_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksLightCavalry
-  - displayName: Heavy Cavalry
-    unitTypeKey: wyvern
-    skinKey: tt_heavy_cavalry
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksHeavyCavalry
-  - displayName: Paladin
-    unitTypeKey: griffin
-    skinKey: tt_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksPaladin
-  - displayName: King
-    unitTypeKey: cyclops
-    skinKey: tt_king
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksKing
-  - displayName: Mounted Scout
-    unitTypeKey: fantasy_wolf
-    skinKey: tt_mounted_scout
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedScout
-  - displayName: Mounted Knight
-    unitTypeKey: skeleton_knight
-    skinKey: tt_mounted_knight
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKnight
-  - displayName: Mounted Paladin
-    unitTypeKey: chimera
-    skinKey: tt_mounted_paladin
-    role: 0
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPaladin
-  - displayName: Archer
-    unitTypeKey: harpy
-    skinKey: tt_archer
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksArcher
-  - displayName: Crossbowman
-    unitTypeKey: darkness_spider
-    skinKey: tt_crossbowman
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksCrossbowman
-  - displayName: Mage
-    unitTypeKey: evil_watcher
-    skinKey: tt_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMage
-  - displayName: Mounted Mage
-    unitTypeKey: vampire
-    skinKey: tt_mounted_mage
-    role: 1
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedMage
-  - displayName: Priest
-    unitTypeKey: undead_warrior
-    skinKey: tt_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksPriest
-  - displayName: High Priest
-    unitTypeKey: mummy
-    skinKey: tt_high_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksHighPriest
-  - displayName: Mounted Priest
-    unitTypeKey: lizard_warrior
-    skinKey: tt_mounted_priest
-    role: 2
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedPriest
-  - displayName: Commander
-    unitTypeKey: manticora
-    skinKey: tt_commander
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksCommander
-  - displayName: Mounted King
-    unitTypeKey: demon_lord
-    skinKey: tt_mounted_king
-    role: 3
-    ownedCount: 0
-    spawnedUnitName: BarracksMountedKing
-  spawnIntervalSeconds: 15
-  moveSpeed: 8
-  formationLateralSpacing: 2.6
-  formationRowSpacing: 3.4
-  unitTypeKey: harpy
-  skinKey: tt_archer
-  spawnedUnitName: BarracksArcher
-  purchasedArcherCount: 0
-  legacyPrototypeMigrated: 1
 --- !u!1 &7974986001174799597
 GameObject:
   m_ObjectHideFlags: 0
@@ -65044,7 +62293,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 8479482057491871519}
-  - component: {fileID: 8448239145556643924}
   m_Layer: 0
   m_Name: Marker_5
   m_TagString: Untagged
@@ -65067,32 +62315,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8734975502505549895}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &8448239145556643924
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8428975911702170944}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.18, g: 0.55, b: 0.95, a: 0.34}
-  EmissionColor: {r: 0.18, g: 0.55, b: 0.95, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &8429477029943250370
 GameObject:
   m_ObjectHideFlags: 0
@@ -65844,7 +63066,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6451607473044222863}
-  - component: {fileID: 7657571903519182307}
   m_Layer: 0
   m_Name: Marker_3
   m_TagString: Untagged
@@ -65867,32 +63088,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 2847705252982436205}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &7657571903519182307
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 8507924058998094884}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 1, g: 0.58, b: 0.1, a: 0.34}
-  EmissionColor: {r: 1, g: 0.58, b: 0.1, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &8517027082050282267
 GameObject:
   m_ObjectHideFlags: 0
@@ -68577,7 +65772,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2622590570854217819}
-  - component: {fileID: 2427117945365994039}
   m_Layer: 0
   m_Name: Marker_5
   m_TagString: Untagged
@@ -68600,32 +65794,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 8443962473367739123}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &2427117945365994039
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 9133039735211038293}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 9247b35007691a443ad48483725cf333, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.PathMarkerVisual
-  BodyLength: 1.6
-  BodyWidth: 0.28
-  HeadLength: 0.85
-  HeadWidth: 0.75
-  Height: 0.12
-  HoverHeight: 0.08
-  UseLaneColor: 1
-  BaseColor: {r: 0.92, g: 0.22, b: 0.22, a: 0.34}
-  EmissionColor: {r: 0.92, g: 0.22, b: 0.22, a: 1}
-  EmissionStrength: 1.75
-  AddGlowLight: 1
-  GlowRange: 3.5
-  GlowIntensity: 1.4
-  ShowLegacyVisual: 0
 --- !u!1 &9141858444529196190
 GameObject:
   m_ObjectHideFlags: 0
@@ -75345,4 +72513,3 @@ MeshCollider:
   m_Convex: 0
   m_CookingOptions: 30
   m_Mesh: {fileID: 0}
-

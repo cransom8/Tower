@@ -275,19 +275,7 @@ namespace CastleDefender.Game
 
         static GameObject ResolveHpBarPrefab()
         {
-            var waveRuntime = FindFirstObjectByType<WaveSnapshotRuntimeSpawner>();
-            if (waveRuntime != null && waveRuntime.HpBarPrefab != null)
-                return waveRuntime.HpBarPrefab;
-
-            var laneRenderer = FindFirstObjectByType<LaneRenderer>();
-            if (laneRenderer != null && laneRenderer.HpBarPrefab != null)
-                return laneRenderer.HpBarPrefab;
-
-            var tileGrid = FindFirstObjectByType<TileGrid>();
-            if (tileGrid != null && tileGrid.HpBarPrefab != null)
-                return tileGrid.HpBarPrefab;
-
-            return null;
+            return GameplayPresentationRoot.ResolveHpBarPrefab();
         }
 
         static Transform FindChildRecursive(Transform root, string childName)

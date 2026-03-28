@@ -156,7 +156,7 @@ namespace CastleDefender.Game
             if (existing != null)
                 return existing;
 
-            var host = FindFirstObjectByType<LaneRenderer>();
+            var host = GameplayPresentationRoot.FindActive();
             if (host == null)
                 return null;
 
@@ -624,23 +624,8 @@ namespace CastleDefender.Game
 
         void SyncDependenciesFromScene()
         {
-            if (Registry == null || HpBarPrefab == null)
-            {
-                var laneRenderer = GetComponent<LaneRenderer>() ?? FindFirstObjectByType<LaneRenderer>();
-                if (laneRenderer != null)
-                {
-                    Registry ??= laneRenderer.Registry;
-                    HpBarPrefab ??= laneRenderer.HpBarPrefab;
-                }
-            }
-
-            if (HpBarPrefab == null)
-            {
-                var tileGrid = FindFirstObjectByType<TileGrid>();
-                if (tileGrid != null)
-                    HpBarPrefab = tileGrid.HpBarPrefab;
-            }
-
+            Registry = GameplayPresentationRoot.ResolveRegistry(Registry);
+            HpBarPrefab = GameplayPresentationRoot.ResolveHpBarPrefab(HpBarPrefab);
         }
 
         WaveView CreateSnapshotView(
