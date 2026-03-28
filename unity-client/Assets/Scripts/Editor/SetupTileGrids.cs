@@ -1,12 +1,11 @@
 // SetupTileGrids.cs — One-click setup: creates 4 TileGrid GameObjects in Game_ML,
-// each wired to the correct TileMenuUI, tile prefabs, camera, and UnitPrefabRegistry.
+// each wired to tile prefabs, camera, and UnitPrefabRegistry.
 // Run once via Castle Defender → Setup → Setup TileGrids.
 
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.SceneManagement;
 using CastleDefender.Game;
-using CastleDefender.UI;
 
 namespace CastleDefender.Editor
 {
@@ -37,23 +36,6 @@ namespace CastleDefender.Editor
             if (cam == null) cam = Object.FindFirstObjectByType<Camera>(FindObjectsInactive.Include);
             Debug.Log($"[SetupTileGrids] cam={cam?.name ?? "null"}");
             if (cam == null) { Debug.LogError("[SetupTileGrids] No camera found."); return; }
-
-            // ── Find all TileMenuUI components in scene ────────────────────────
-            // Resources.FindObjectsOfTypeAll finds inactive GOs too (editor-only).
-            var allMenusRaw = Resources.FindObjectsOfTypeAll<TileMenuUI>();
-            // Filter to only scene objects (exclude prefab assets)
-            var menuList = new System.Collections.Generic.List<TileMenuUI>();
-            foreach (var m in allMenusRaw)
-                if (m.gameObject.scene.isLoaded) menuList.Add(m);
-            var allMenus = menuList.ToArray();
-            Debug.Log($"[SetupTileGrids] found {allMenus.Length} TileMenuUI(s) in loaded scene");
-            if (allMenus.Length < 4)
-            {
-                Debug.LogError($"[SetupTileGrids] Need at least 4 TileMenuUI components in scene, found {allMenus.Length}");
-                return;
-            }
-            System.Array.Sort(allMenus, (a, b) =>
-                a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
 
             // ── Remove any existing TileGrids parent ───────────────────────────
             var existing = GameObject.Find("TileGrids");
@@ -90,9 +72,8 @@ namespace CastleDefender.Editor
                 tg.CastlePrefab  = castlePrefab;
                 tg.Registry      = registry;
                 tg.Cam           = cam;
-                tg.TileMenuBehaviour      = allMenus[lane];
 
-                Debug.Log($"[SetupTileGrids] Lane {lane} ({laneNames[lane]}) → TileMenuUI '{allMenus[lane].name}'");
+                Debug.Log($"[SetupTileGrids] Lane {lane} ({laneNames[lane]}) ready.");
             }
 
             EditorUtility.SetDirty(parent);

@@ -41,7 +41,7 @@ namespace CastleDefender.Net
         // ── Cross-scene loadout cache ─────────────────────────────────────────
         // Populated as soon as the per-player ml_match_config arrives, which
         // typically happens before Game_ML finishes loading.  CmdBar and
-        // TileMenuUI read this on Start() / EnsureInitialized() to avoid the
+        // Legacy gameplay UI used this on Start() to avoid the
         // race condition where OnMLMatchConfig fires before any scene subscriber
         // has a chance to hook in.
         public LoadoutEntry[] LastMatchLoadout { get; private set; }

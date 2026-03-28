@@ -4,8 +4,7 @@
 // SETUP:
 //   1. Attach to GameObject "TileGrid" in Game_ML scene.
 //   2. Assign FloorPrefab, WallPrefab, CastlePrefab, Registry (UnitPrefabRegistry).
-//   3. Assign Camera (main or Cinemachine brain).
-//   4. Assign TileMenu (TileMenuUI component in scene).
+//   3. Assign Camera (legacy tile picking only; current fortress flow does not use it).
 //
 // Tile coordinate system (per branch):
 //   col 0-10 (local width axis), row 0-27 (local depth axis)
@@ -52,10 +51,6 @@ namespace CastleDefender.Game
 
         [Header("Camera (for tile picking)")]
         public Camera Cam;
-
-        [Header("Tile interaction")]
-        public MonoBehaviour TileMenuBehaviour;
-        ITileMenu TileMenu => TileMenuBehaviour as ITileMenu;
 
         [Header("Spawn offsets")]
         [Tooltip("Vertical lift for towers so they sit on top of floor tiles.")]
@@ -166,13 +161,9 @@ namespace CastleDefender.Game
         readonly Dictionary<int, MLTowerCell>  _mobilizedMapBuf     = new();
         readonly Dictionary<int, MLDeadCell>   _deadMapBuf          = new();
         readonly HashSet<string>               _currentIdsBuf       = new();
-        readonly HashSet<string>               _legacyTileMenuBlockLogs = new();
-        readonly HashSet<string>               _tileMenuResolutionLogs = new();
         // Static attack state table (avoids per-call array alloc)
         static readonly string[] s_attackStates = { "Attack1", "Attack", "AttackSwordShield", "AttackDaggers", "Shoot", "Cast" };
 
-        Vector3              _mouseDownPos;
-        bool                 _wasDrag;
         readonly HashSet<int>      _waypointTileIndices = new();
         readonly List<GameObject>  _waypointMarkers     = new();
         readonly List<GameObject>  _laneMarkers         = new();
@@ -185,7 +176,6 @@ namespace CastleDefender.Game
             _tileObjects = new GameObject[Cols * Rows];
             _tileTypes   = new string[Cols * Rows];
             _towerTypes  = new string[Cols * Rows];
-            TryResolveTileMenu();
         }
 
         void OnEnable()
@@ -670,206 +660,27 @@ namespace CastleDefender.Game
         void Update()
         {
             TrySubscribeSnapshots();
-            TryResolveTileMenu();
-
-            // Automatically become interactive only for the player's assigned lane.
-            var sa = SnapshotApplier.Instance;
-            if (sa != null && sa.MyLaneIndex >= 0)
-                IsInteractive = (sa.MyLaneIndex == LaneIndex);
-
-            HandleInput();
+            var snapshotApplier = SnapshotApplier.Instance;
+            if (snapshotApplier != null && snapshotApplier.MyLaneIndex >= 0)
+                IsInteractive = snapshotApplier.MyLaneIndex == LaneIndex;
         }
 
         void TrySubscribeSnapshots()
         {
             if (_subscribed) return;
-            var sa = SnapshotApplier.Instance;
-            if (sa == null) return;
+            var snapshotApplier = SnapshotApplier.Instance;
+            if (snapshotApplier == null) return;
 
-            sa.OnMLSnapshotApplied += OnSnapshot;
+            snapshotApplier.OnMLSnapshotApplied += OnSnapshot;
             _subscribed = true;
 
-            if (sa.LatestML != null) OnSnapshot(sa.LatestML);
-        }
-
-        void HandleInput()
-        {
-            if (!IsInteractive) return;
-
-            if (Input.GetMouseButtonDown(0))
-            {
-                _mouseDownPos = Input.mousePosition;
-                _wasDrag      = false;
-            }
-
-            if (Input.GetMouseButton(0))
-            {
-                if (Vector3.Distance(Input.mousePosition, _mouseDownPos) > 12f) _wasDrag = true;
-            }
-
-            if (Input.GetMouseButtonUp(0))
-            {
-                bool overUI = UnityEngine.EventSystems.EventSystem.current != null
-                    && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
-                if (_wasDrag || overUI)
-                    return;
-
-                if (ShouldBlockLegacyTileMenu(out string reason))
-                {
-                    LogLegacyTileMenuBlocked("HandleInput", reason);
-                    return;
-                }
-
-                if (TryPickTile(Input.mousePosition, out int cc, out int rr))
-                    HandleTileClick(cc, rr);
-            }
-        }
-
-        void HandleTileClick(int col, int row)
-        {
-            if (!IsInteractive) return;
-
-            var snap = SnapshotApplier.Instance?.LatestML;
-            Debug.Log($"[TileGrid] tap ({col},{row}) roundState={snap?.roundState ?? "NULL"} snapNull={snap == null}");
-            if (snap == null) return;
-
-            var lane = GetLaneSnap(snap, LaneIndex);
-            if (ShouldBlockLegacyTileMenu(out string reason))
-            {
-                LogLegacyTileMenuBlocked("HandleTileClick", reason);
-                return;
-            }
-
-            int idx = row * Cols + col;
-
-            // Dead defenders: not selectable until next build phase
-            if (_tileTypes[idx] == "dead_tower") return;
-
-            // Tower tile: upgrade/sell menu is always accessible (server allows upgrades any phase)
-            // Also handle mobilized towers (unit walked out during combat — tile looks like floor
-            // but defender still exists and can be upgraded/sold).
-            if (_tileTypes[idx] == "tower" || _tileTypes[idx] == "tower_mobilized")
-            {
-                if (TileMenu == null)
-                {
-                    Debug.LogWarning($"[TileGrid] No TileMenu wired for lane {LaneIndex} on '{name}'.");
-                    return;
-                }
-                TileMenu?.Show(col, row, "tower", _towerTypes[idx]);
-                return;
-            }
-
-            // Placement on empty tiles only valid during build phase
-            if (snap.roundState != "build") return;
-
-            // Path endpoints (spawn / castle): never buildable
-            if (lane != null)
-            {
-                if (lane.path != null && lane.path.Length > 0)
-                {
-                    var spawn  = lane.path[0];
-                    var castle = lane.path[lane.path.Length - 1];
-                    if ((col == spawn.XRounded  && row == spawn.YRounded) ||
-                        (col == castle.XRounded && row == castle.YRounded)) return;
-                }
-            }
-
-            // Empty floor tile: open unit placement picker
-            if (_tileTypes[idx] == "floor")
-            {
-                if (TileMenu == null)
-                {
-                    Debug.LogWarning($"[TileGrid] No TileMenu wired for lane {LaneIndex} on '{name}'.");
-                    return;
-                }
-                TileMenu?.Show(col, row, "empty", null);
-            }
+            if (snapshotApplier.LatestML != null)
+                OnSnapshot(snapshotApplier.LatestML);
         }
 
         bool ShouldBlockLegacyTileMenu(out string reason)
         {
             return FortressSelectionController.ShouldBlockLegacyTileMenu(LaneIndex, out reason);
-        }
-
-        void LogLegacyTileMenuBlocked(string source, string reason)
-        {
-            string key = $"{source}|{reason}";
-            if (_legacyTileMenuBlockLogs.Add(key))
-            {
-                Debug.Log(
-                    $"[FortressSelection] Blocked legacy TileGrid path on '{name}' lane={LaneIndex} source='{source}'. {reason}");
-            }
-        }
-
-        void TryResolveTileMenu()
-        {
-            if (TileMenu != null) return;
-
-            var menus = FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            var tileMenus = new List<MonoBehaviour>();
-            foreach (var mb in menus)
-            {
-                if (mb is ITileMenu)
-                    tileMenus.Add(mb);
-            }
-
-            if (tileMenus.Count == 0)
-            {
-                ReportTileMenuResolutionFailure(
-                    "missing",
-                    $"[TileGrid] Lane {LaneIndex} on '{name}' could not find any ITileMenu implementation in scene '{gameObject.scene.name}'. " +
-                    "Tile interaction is disabled instead of binding to an arbitrary menu.");
-                return;
-            }
-
-            tileMenus.Sort((a, b) =>
-            {
-                int siblingCompare = a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex());
-                if (siblingCompare != 0) return siblingCompare;
-                return string.CompareOrdinal(a.name, b.name);
-            });
-
-            if (LaneIndex >= 0 && LaneIndex < tileMenus.Count)
-            {
-                TileMenuBehaviour = tileMenus[LaneIndex];
-                RuntimeFailureMarker.Clear(transform, "tile_menu_resolution");
-                return;
-            }
-
-            ReportTileMenuResolutionFailure(
-                "index",
-                $"[TileGrid] Lane {LaneIndex} on '{name}' found {tileMenus.Count} ITileMenu instance(s) in scene '{gameObject.scene.name}', " +
-                "but none matched this lane index. Runtime will not bind to the first available menu.");
-        }
-
-        void ReportTileMenuResolutionFailure(string reason, string message)
-        {
-            if (_tileMenuResolutionLogs.Add(reason))
-                Debug.LogError(message, this);
-
-            RuntimeFailureMarker.Mark(transform, "tile_menu_resolution", $"Tile menu error lane {LaneIndex}");
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // Inverse transform: world hit point → tile (col, row) on current branch.
-        bool TryPickTile(Vector3 screenPos, out int col, out int row)
-        {
-            col = row = -1;
-            if (Cam == null) return false;
-
-            Ray ray = Cam.ScreenPointToRay(screenPos);
-            var plane = new Plane(Vector3.up, new Vector3(0f, 1f, 0f));
-            if (!plane.Raycast(ray, out float enter)) return false;
-
-            Vector3 hit = ray.GetPoint(enter);
-
-            if (!BattlefieldSpaceMapper.TryWorldToTile(_currentBranchCfg, hit, Cols, Rows, out col, out row))
-            {
-                col = Mathf.RoundToInt(hit.x / TileW);
-                row = Mathf.RoundToInt(hit.z / TileH);
-            }
-
-            return col >= 0 && col < Cols && row >= 0 && row < Rows;
         }
 
         GameObject GetTowerPrefab(string type)

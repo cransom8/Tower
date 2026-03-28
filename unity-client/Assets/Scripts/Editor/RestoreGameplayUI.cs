@@ -24,12 +24,10 @@ namespace CastleDefender.Editor
             var canvas = EnsureCanvas();
             EnsureEventSystem();
             EnsureCmdBar(canvas.transform);
-            for (int lane = 0; lane < 4; lane++)
-                EnsureTileMenu(canvas.transform, lane);
 
             EditorSceneManager.MarkSceneDirty(scene);
             AssetDatabase.SaveAssets();
-            Debug.Log("[RestoreGameplayUI] Base gameplay UI restored. Run rebuild/wiring steps next.");
+            Debug.Log("[RestoreGameplayUI] Base gameplay UI restored for the fortress HUD flow.");
         }
 
         static Canvas EnsureCanvas()
@@ -228,59 +226,6 @@ namespace CastleDefender.Editor
             txt.alignment = TextAlignmentOptions.Top;
             txt.raycastTarget = false;
             return txt;
-        }
-
-        static TileMenuUI EnsureTileMenu(Transform canvas, int lane)
-        {
-            var rootName = $"TileMenuUI_Lane{lane}";
-            var existing = canvas.Find(rootName);
-            GameObject root;
-            if (existing != null)
-            {
-                root = existing.gameObject;
-            }
-            else
-            {
-                root = new GameObject(rootName, typeof(RectTransform), typeof(TileMenuUI));
-                root.transform.SetParent(canvas, false);
-            }
-
-            var rootRt = root.GetComponent<RectTransform>();
-            rootRt.anchorMin = new Vector2(0.5f, 0.5f);
-            rootRt.anchorMax = new Vector2(0.5f, 0.5f);
-            rootRt.pivot = new Vector2(0.5f, 0.5f);
-            rootRt.anchoredPosition = Vector2.zero;
-            rootRt.sizeDelta = new Vector2(760f, 300f);
-
-            var menu = root.GetComponent<TileMenuUI>();
-            var panel = EnsurePanel(root.transform, "PanelTileMenu");
-            panel.SetActive(false);
-            menu.PanelTileMenu = panel;
-
-            var txtInfo = EnsureText(panel.transform, "Txt_TileInfo", "Place unit", 14f, TextAlignmentOptions.Center);
-            var towerLayout = EnsureTowerButtonRow(panel.transform);
-            var btnArcher = EnsureMenuButton(towerLayout.transform, "Btn_Archer", "Unit\n0g");
-            var btnFighter = EnsureMenuButton(towerLayout.transform, "Btn_Fighter", "Unit\n0g");
-            var btnMage = EnsureMenuButton(towerLayout.transform, "Btn_Mage", "Unit\n0g");
-            var btnBallista = EnsureMenuButton(towerLayout.transform, "Btn_Ballista", "Unit\n0g");
-            var btnCannon = EnsureMenuButton(towerLayout.transform, "Btn_Cannon", "Unit\n0g");
-            var btnUpgrade = EnsureActionButton(panel.transform, "Btn_Upgrade", "Upgrade\n0g", 44f);
-            var btnRemove = EnsureActionButton(panel.transform, "Btn_Remove", "Remove", 38f);
-            var btnClose = EnsureActionButton(panel.transform, "Btn_Close", "Close", 32f);
-
-            menu.TxtTileInfo = txtInfo;
-            menu.HLayoutTowerButtons = towerLayout;
-            menu.BtnArcher = btnArcher;
-            menu.BtnFighter = btnFighter;
-            menu.BtnMage = btnMage;
-            menu.BtnBallista = btnBallista;
-            menu.BtnCannon = btnCannon;
-            menu.BtnUpgrade = btnUpgrade;
-            menu.TxtUpgradeCost = btnUpgrade.GetComponentInChildren<TextMeshProUGUI>(true);
-            menu.BtnRemove = btnRemove;
-            menu.BtnClose = btnClose;
-
-            return menu;
         }
 
         static GameObject EnsurePanel(Transform parent, string name)
