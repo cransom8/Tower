@@ -57,9 +57,6 @@ namespace CastleDefender.Game
             if (!s_activeAnchors.Contains(this))
                 s_activeAnchors.Add(this);
 
-            if (IsRuntimeBindingPending())
-                return;
-
             ValidateIdentity();
             EnsureInteractionCollider();
             EnsureRuntimeHud();
@@ -72,26 +69,9 @@ namespace CastleDefender.Game
 
         void OnValidate()
         {
-            if (IsRuntimeBindingPending())
-                return;
-
             ValidateIdentity();
             if (!Application.isPlaying)
                 EnsureInteractionCollider();
-        }
-
-        public void FinalizeRuntimeBinding()
-        {
-            _cachedRenderers = null;
-            _cachedGhostRenderers = null;
-            _cachedBuiltRenderers = null;
-            ValidateIdentity();
-            EnsureInteractionCollider();
-            EnsureRuntimeHud();
-
-            var marker = GetComponent<FortressPadRuntimeBindingMarker>();
-            if (marker != null)
-                Destroy(marker);
         }
 
         public bool MatchesPad(string padId)
@@ -420,12 +400,6 @@ namespace CastleDefender.Game
                     "Collider sizing and focus framing require real scene renderers.",
                     this);
             }
-        }
-
-        bool IsRuntimeBindingPending()
-        {
-            return Application.isPlaying
-                && GetComponent<FortressPadRuntimeBindingMarker>() != null;
         }
     }
 }

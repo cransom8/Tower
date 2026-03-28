@@ -8,11 +8,11 @@ namespace CastleDefender.Game
     {
         public static string ResolveLaneKey(Transform source, FortressPadAnchor.LaneColor explicitLaneColor)
         {
-            string inferred = InferLaneKeyFromHierarchy(source);
-            if (!string.IsNullOrWhiteSpace(inferred))
-                return inferred;
+            string explicitLaneKey = LaneColorToLaneKey(explicitLaneColor);
+            if (!string.IsNullOrWhiteSpace(explicitLaneKey))
+                return explicitLaneKey;
 
-            return LaneColorToLaneKey(explicitLaneColor);
+            return InferLaneKeyFromHierarchy(source);
         }
 
         public static int ResolveLaneIndex(Transform source, FortressPadAnchor.LaneColor explicitLaneColor)
