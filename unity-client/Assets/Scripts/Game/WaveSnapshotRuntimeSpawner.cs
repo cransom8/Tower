@@ -33,9 +33,41 @@ namespace CastleDefender.Game
         const string BarracksRouteNodeCenterSuffix = "CTR";
         const string BarracksRouteNodeLeftSuffix = "LFT";
         const string BarracksRouteNodeRightSuffix = "RGT";
+        const float CombatFacingTurnSharpness = 20f;
         static readonly string[] MoveStates = { "Run", "Walk", "run", "walk" };
         static readonly string[] IdleStates = { "Idle", "IdleNormal", "IdleCombat", "idle" };
-        static readonly string[] AttackStates = { "Attack1", "Attack2", "Attack", "attack" };
+        static readonly string[] DefaultAttackStates = { "Attack1", "Attack2", "Attack", "attack" };
+        static readonly string[] MeleeAttackStates =
+        {
+            "AttackSwordShield",
+            "AttackDaggers",
+            "AttackHeavy",
+            "Attack1",
+            "Attack2",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] RangedAttackStates =
+        {
+            "Shoot",
+            "AttackBow",
+            "AttackCrossbow",
+            "Attack1",
+            "Attack2",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] MagicAttackStates =
+        {
+            "Cast",
+            "CastSpell",
+            "AttackCast",
+            "Shoot",
+            "Attack1",
+            "Attack2",
+            "Attack",
+            "attack",
+        };
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
@@ -76,13 +108,17 @@ namespace CastleDefender.Game
             public LaneSnapshotCombatant combatant;
             public Animator[] animators;
             public Renderer[] renderers;
+            public string[] attackStates = DefaultAttackStates;
             public Vector3 snapshotWorldPos;
             public Vector3 snapshotVelocity;
+            public Vector3 desiredFacing = Vector3.forward;
             public float timeSinceSnap;
             public float lastAttackAt = float.MinValue;
             public float lastVisualAttackUntil;
             public int lastServerAttackPulse;
             public bool hadSnapshot;
+            public bool lockCombatFacing;
+            public bool hasDesiredFacing;
             public VisualState visualState = VisualState.Idle;
             public Vector3 lastFramePosition;
         }
@@ -224,24 +260,26 @@ namespace CastleDefender.Game
                     new Vector2(0f, 0f),
                     new Vector2(-24f, -24f),
                 },
+                // Keep wave-lane route-space identical to the authoritative server
+                // graph so routeWorldX/Y offsets resolve around the mine center.
                 [ "WA_A" ] = new[]
                 {
-                    new Vector2(-24f, -1f),
+                    new Vector2(0f, 0f),
                     new Vector2(-24f, 24f),
                 },
                 [ "WB_B" ] = new[]
                 {
-                    new Vector2(24f, -1f),
+                    new Vector2(0f, 0f),
                     new Vector2(24f, 24f),
                 },
                 [ "WC_C" ] = new[]
                 {
-                    new Vector2(24f, 1f),
+                    new Vector2(0f, 0f),
                     new Vector2(24f, -24f),
                 },
                 [ "WD_D" ] = new[]
                 {
-                    new Vector2(-24f, 1f),
+                    new Vector2(0f, 0f),
                     new Vector2(-24f, -24f),
                 },
             };
@@ -348,8 +386,17 @@ namespace CastleDefender.Game
                 Vector3 moveDelta = currentPosition - view.lastFramePosition;
                 Vector3 flatDelta = moveDelta;
                 flatDelta.y = 0f;
-                if (flatDelta.sqrMagnitude > 0.0004f)
+                if (view.hasDesiredFacing)
+                {
+                    float turnSharpness = view.lockCombatFacing
+                        ? CombatFacingTurnSharpness
+                        : TargetFollowSharpness;
+                    RotateTowardDirection(view.go.transform, view.desiredFacing, turnSharpness, dt);
+                }
+                else if (flatDelta.sqrMagnitude > 0.0004f)
+                {
                     FaceDirection(view.go.transform, flatDelta);
+                }
 
                 bool moving = flatDelta.sqrMagnitude > 0.0004f;
                 bool attacking = now <= view.lastVisualAttackUntil
@@ -488,7 +535,21 @@ namespace CastleDefender.Game
                     if (createdNow || !hadPreviousSnapshot || (view.go.transform.position - worldPos).sqrMagnitude > spawnSnapDistance * spawnSnapDistance)
                         view.go.transform.position = worldPos;
 
-                    if (view.snapshotVelocity.sqrMagnitude > 0.01f)
+                    view.attackStates = ResolveAttackStateNames(unit);
+                    if (TryResolveDesiredFacing(snap, unit, lane, spatialLane, worldPos, out Vector3 desiredFacing, out bool lockCombatFacing))
+                    {
+                        view.desiredFacing = desiredFacing;
+                        view.hasDesiredFacing = true;
+                        view.lockCombatFacing = lockCombatFacing;
+                        FaceDirection(view.go.transform, desiredFacing);
+                    }
+                    else
+                    {
+                        view.hasDesiredFacing = false;
+                        view.lockCombatFacing = false;
+                    }
+
+                    if (!view.hasDesiredFacing && view.snapshotVelocity.sqrMagnitude > 0.01f)
                         FaceDirection(view.go.transform, view.snapshotVelocity);
 
                     if (unit.attackPulse > 0 && unit.attackPulse != view.lastServerAttackPulse)
@@ -677,6 +738,7 @@ namespace CastleDefender.Game
                 combatant = combatant,
                 animators = animators,
                 renderers = renderers,
+                attackStates = ResolveAttackStateNames(unit),
                 snapshotWorldPos = spawnPos,
                 snapshotVelocity = Vector3.zero,
                 timeSinceSnap = 0f,
@@ -727,108 +789,94 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (!IsDefenderLike(unit))
+            if (string.IsNullOrWhiteSpace(unit.spawnSourceType))
             {
-                if (string.IsNullOrWhiteSpace(unit.spawnSourceType))
-                {
-                    rejectionReason = "spawnSourceType is missing";
-                    return false;
-                }
+                rejectionReason = "spawnSourceType is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.allegianceKey))
-                {
-                    rejectionReason = "allegianceKey is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.allegianceKey))
+            {
+                rejectionReason = "allegianceKey is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.stance))
-                {
-                    rejectionReason = "stance is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.stance))
+            {
+                rejectionReason = "stance is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.pathContractType))
-                {
-                    rejectionReason = "pathContractType is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.pathContractType))
+            {
+                rejectionReason = "pathContractType is missing";
+                return false;
+            }
 
-                if (unit.laneId < 0)
-                {
-                    rejectionReason = "laneId is missing or invalid";
-                    return false;
-                }
+            if (unit.laneId < 0)
+            {
+                rejectionReason = "laneId is missing or invalid";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.pathId))
-                {
-                    rejectionReason = "pathId is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.pathId))
+            {
+                rejectionReason = "pathId is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.routeType))
-                {
-                    rejectionReason = "routeType is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.routeType))
+            {
+                rejectionReason = "routeType is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.currentSegment))
-                {
-                    rejectionReason = "currentSegment is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.currentSegment))
+            {
+                rejectionReason = "currentSegment is missing";
+                return false;
+            }
 
-                if (!float.IsFinite(unit.segmentProgress))
-                {
-                    rejectionReason = "segmentProgress is missing or invalid";
-                    return false;
-                }
+            if (!float.IsFinite(unit.segmentProgress))
+            {
+                rejectionReason = "segmentProgress is missing or invalid";
+                return false;
+            }
 
-                if (!float.IsFinite(unit.routeWorldX) || !float.IsFinite(unit.routeWorldY))
-                {
-                    rejectionReason = "routeWorld is missing or invalid";
-                    return false;
-                }
+            if (!float.IsFinite(unit.routeWorldX) || !float.IsFinite(unit.routeWorldY))
+            {
+                rejectionReason = "routeWorld is missing or invalid";
+                return false;
+            }
 
-                if (unit.currentWaypointIndex < 0)
-                {
-                    rejectionReason = "currentWaypointIndex is missing or invalid";
-                    return false;
-                }
+            if (unit.currentWaypointIndex < 0)
+            {
+                rejectionReason = "currentWaypointIndex is missing or invalid";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.nextWaypoint))
-                {
-                    rejectionReason = "nextWaypoint is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.nextWaypoint))
+            {
+                rejectionReason = "nextWaypoint is missing";
+                return false;
+            }
 
-                if (string.IsNullOrWhiteSpace(unit.movementState))
-                {
-                    rejectionReason = "movementState is missing";
-                    return false;
-                }
+            if (string.IsNullOrWhiteSpace(unit.movementState))
+            {
+                rejectionReason = "movementState is missing";
+                return false;
+            }
 
-                if ((string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase))
-                    && string.IsNullOrWhiteSpace(unit.barracksId))
-                {
-                    rejectionReason = "barracksId is missing for barracks spawn";
-                    return false;
-                }
+            if ((string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase))
+                && string.IsNullOrWhiteSpace(unit.barracksId))
+            {
+                rejectionReason = "barracksId is missing for barracks spawn";
+                return false;
             }
 
             rejectionReason = null;
             return true;
-        }
-
-        static bool IsDefenderLike(MLUnit unit)
-        {
-            if (unit == null)
-                return false;
-
-            if (unit.isDefender)
-                return true;
-
-            return string.Equals(unit.stance, "DEFEND", StringComparison.OrdinalIgnoreCase);
         }
 
         void RefreshBattlefieldRouteCache(MLSnapshot snap)
@@ -1054,6 +1102,8 @@ namespace CastleDefender.Game
                 return false;
             if (!IsCombatSnapshotUnit(unit))
                 return false;
+            if (!ShouldUseLiveCombatProjection(unit, lane))
+                return false;
             if (!TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode))
                 return false;
 
@@ -1076,6 +1126,20 @@ namespace CastleDefender.Game
                 out worldPos,
                 out routeForward,
                 out resolvedRouteSource);
+        }
+
+        bool ShouldUseLiveCombatProjection(MLUnit unit, MLLaneSnap lane)
+        {
+            if (unit == null)
+                return false;
+
+            if (unit.blockedByStructure || !string.IsNullOrWhiteSpace(unit.blockedByStructureId))
+                return true;
+
+            if (string.IsNullOrWhiteSpace(unit.combatTargetId))
+                return false;
+
+            return TryResolveFortressPadWorldPosition(unit.combatTargetId, lane, out _);
         }
 
         bool TryResolveLaneCombatSimWorldPosition(
@@ -1147,11 +1211,6 @@ namespace CastleDefender.Game
             return Mathf.Abs(lateralOffset) <= CombatProjectionLateralLimit;
         }
 
-        static bool LooksLikeFortressTileCoordinates(float gridX, float gridY)
-        {
-            return gridX >= -4f && gridX <= 12f && gridY >= -2f && gridY <= 34f;
-        }
-
         static bool IsCombatSnapshotUnit(MLUnit unit)
         {
             if (unit == null)
@@ -1167,6 +1226,142 @@ namespace CastleDefender.Game
                 || unit.isAttacking;
 
             return isCombatState || hasCombatTarget;
+        }
+
+        bool TryResolveDesiredFacing(
+            MLSnapshot snap,
+            MLUnit unit,
+            MLLaneSnap lane,
+            int spatialLane,
+            Vector3 worldPos,
+            out Vector3 facing,
+            out bool lockCombatFacing)
+        {
+            facing = Vector3.zero;
+            lockCombatFacing = false;
+
+            if (TryResolveCombatFacing(snap, unit, lane, worldPos, spatialLane, out facing))
+            {
+                lockCombatFacing = true;
+                return true;
+            }
+
+            if (TryResolveSnapshotFacing(lane, unit, spatialLane, out facing))
+                return facing.sqrMagnitude > 0.0001f;
+
+            return false;
+        }
+
+        bool TryResolveCombatFacing(
+            MLSnapshot snap,
+            MLUnit unit,
+            MLLaneSnap lane,
+            Vector3 worldPos,
+            int spatialLane,
+            out Vector3 facing)
+        {
+            facing = Vector3.zero;
+            if (unit == null || lane == null || !IsCombatSnapshotUnit(unit))
+                return false;
+
+            string targetId = !string.IsNullOrWhiteSpace(unit.combatTargetId)
+                ? unit.combatTargetId
+                : unit.blockedByStructureId;
+
+            if (TryResolveCombatTargetWorldPosition(snap, targetId, lane, out Vector3 targetWorld))
+            {
+                Vector3 targetDelta = targetWorld - worldPos;
+                targetDelta.y = 0f;
+                if (targetDelta.sqrMagnitude > 0.0001f)
+                {
+                    facing = targetDelta.normalized;
+                    return true;
+                }
+            }
+
+            if (TryResolveSnapshotFacing(lane, unit, spatialLane, out Vector3 routeFacing))
+            {
+                routeFacing.y = 0f;
+                if (routeFacing.sqrMagnitude > 0.0001f)
+                {
+                    facing = routeFacing.normalized;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        bool TryResolveCombatTargetWorldPosition(
+            MLSnapshot snap,
+            string targetId,
+            MLLaneSnap sourceLane,
+            out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (string.IsNullOrWhiteSpace(targetId))
+                return false;
+
+            if (TryResolveFortressPadWorldPosition(targetId, sourceLane, out worldPos))
+                return true;
+
+            if (snap?.lanes != null)
+            {
+                for (int laneIndex = 0; laneIndex < snap.lanes.Length; laneIndex++)
+                {
+                    MLLaneSnap lane = snap.lanes[laneIndex];
+                    if (lane?.units == null)
+                        continue;
+
+                    int spatialLane = (uint)lane.laneIndex < (uint)_branchMap.Length
+                        ? _branchMap[lane.laneIndex]
+                        : lane.laneIndex;
+                    for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                    {
+                        MLUnit candidate = lane.units[unitIndex];
+                        if (candidate == null
+                            || !string.Equals(candidate.id, targetId, System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        return TryResolveSnapshotWorldPosition(candidate, lane, spatialLane, out worldPos, out _);
+                    }
+                }
+            }
+
+            if (_views.TryGetValue(targetId, out WaveView targetView) && targetView?.go != null)
+            {
+                worldPos = targetView.hadSnapshot
+                    ? targetView.snapshotWorldPos
+                    : targetView.go.transform.position;
+                return true;
+            }
+
+            return false;
+        }
+
+        bool TryResolveFortressPadWorldPosition(string targetId, MLLaneSnap lane, out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (string.IsNullOrWhiteSpace(targetId))
+                return false;
+
+            _fortressAnchorScratch.Clear();
+            FortressPadAnchor.CollectAnchors(_fortressAnchorScratch);
+            for (int i = 0; i < _fortressAnchorScratch.Count; i++)
+            {
+                FortressPadAnchor anchor = _fortressAnchorScratch[i];
+                if (anchor == null || !anchor.MatchesPad(targetId))
+                    continue;
+                if (lane != null && !anchor.MatchesLane(lane.slotColor, lane.laneIndex))
+                    continue;
+
+                worldPos = anchor.FocusTransform.position;
+                return true;
+            }
+
+            return false;
         }
 
         void RefreshBattlefieldRouteNodeMap(MLSnapshot snap)
@@ -1253,24 +1448,6 @@ namespace CastleDefender.Game
             string laneFailureKey = $"battlefield_routes_lane_{lane?.laneIndex ?? -1}";
             Vector3 markerWorld = ResolveLaneFailureMarkerWorld(spatialLane);
 
-            if (TryResolveGridWorldPosition(unit, spatialLane, out worldPos))
-            {
-                LogPathMode("BattlefieldRoutes", nameof(TryResolveSnapshotWorldPosition), unit, lane, spatialLane, "defender_grid");
-                RuntimeFailureMarker.Clear(transform, $"wave_failure_{laneFailureKey}");
-                worldPos = ProjectToVisibleGround(worldPos);
-                failureReason = "resolved_via_defender_grid";
-                return true;
-            }
-
-            if (TryResolveDefenderCombatWorldPosition(unit, lane, out worldPos, out _, out string defenderResolvedSource))
-            {
-                LogPathMode("BattlefieldRoutes", nameof(TryResolveSnapshotWorldPosition), unit, lane, spatialLane, defenderResolvedSource);
-                RuntimeFailureMarker.Clear(transform, $"wave_failure_{laneFailureKey}");
-                worldPos = ProjectToVisibleGround(worldPos);
-                failureReason = "resolved_via_defender_combat_space";
-                return true;
-            }
-
             if (TryResolveBattlefieldRouteWorldPosition(
                 unit,
                 lane,
@@ -1311,56 +1488,6 @@ namespace CastleDefender.Game
                 $"segment='{unit?.currentSegment ?? "<null>"}' routeType='{unit?.routeType ?? "<null>"}' " +
                 $"failure='{routeFailure ?? "<unknown>"}'.");
             return false;
-        }
-
-        static bool TryResolveGridWorldPosition(MLUnit unit, int spatialLane, out Vector3 worldPos)
-        {
-            worldPos = default;
-            if (unit == null || !float.IsFinite(unit.gridX) || !float.IsFinite(unit.gridY))
-                return false;
-
-            if (!IsDefenderLike(unit))
-                return false;
-
-            if (!LooksLikeFortressTileCoordinates(unit.gridX, unit.gridY))
-                return false;
-
-            worldPos = TileGrid.TileToWorld(spatialLane, unit.gridX, unit.gridY);
-            return true;
-        }
-
-        bool TryResolveDefenderCombatWorldPosition(
-            MLUnit unit,
-            MLLaneSnap lane,
-            out Vector3 worldPos,
-            out Vector3 routeForward,
-            out string resolvedRouteSource)
-        {
-            worldPos = default;
-            routeForward = Vector3.forward;
-            resolvedRouteSource = null;
-
-            if (!IsDefenderLike(unit) || lane == null)
-                return false;
-            if (!float.IsFinite(unit.gridX) || !float.IsFinite(unit.gridY))
-                return false;
-            if (LooksLikeFortressTileCoordinates(unit.gridX, unit.gridY))
-                return false;
-
-            string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
-            if (string.IsNullOrWhiteSpace(laneKey))
-                laneKey = ResolveFixedLaneKeyForLaneIndex(lane.laneIndex);
-            if (string.IsNullOrWhiteSpace(laneKey))
-                return false;
-
-            return TryResolveLaneCombatSimWorldPosition(
-                unit.gridX,
-                unit.gridY,
-                lane.laneIndex,
-                laneKey,
-                out worldPos,
-                out routeForward,
-                out resolvedRouteSource);
         }
 
         static Vector3 ApplyWaveLateralOffset(Vector3 worldPos, float lateralOffset, int spatialLane)
@@ -1436,12 +1563,6 @@ namespace CastleDefender.Game
         bool TryResolveSnapshotFacing(MLLaneSnap lane, MLUnit unit, int spatialLane, out Vector3 facing)
         {
             facing = Vector3.zero;
-            if (IsDefenderLike(unit))
-            {
-                facing = TileGrid.GetLaneForwardDir(spatialLane);
-                return facing.sqrMagnitude > 0.0001f;
-            }
-
             if (TryResolveBattlefieldRouteWorldPosition(
                 unit,
                 lane,
@@ -1991,25 +2112,53 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (!float.IsFinite(unit.routeWorldX) || !float.IsFinite(unit.routeWorldY))
-            {
-                failureReason = $"routeWorld is invalid ({unit.routeWorldX:0.###},{unit.routeWorldY:0.###})";
-                return false;
-            }
-
             if (!TrySampleRouteSpacePolyline(segmentId, segmentProgress, out Vector2 routeCenter, out Vector2 routeTangent))
             {
                 failureReason = $"route-space sample failed for segment '{segmentId}'";
                 return false;
             }
 
+            if (!TryResolveAuthoritativeRouteSamplePoint(unit, out Vector2 authoritativePoint, out string pointFailure))
+            {
+                failureReason = pointFailure;
+                return false;
+            }
+
             Vector2 tangent = routeTangent.sqrMagnitude > 0.0001f ? routeTangent.normalized : Vector2.up;
             Vector2 lateral = new(-tangent.y, tangent.x);
-            Vector2 routeWorld = new(unit.routeWorldX, unit.routeWorldY);
-            Vector2 delta = routeWorld - routeCenter;
+            Vector2 delta = authoritativePoint - routeCenter;
             longitudinalOffset = Vector2.Dot(delta, tangent);
             lateralOffset = Vector2.Dot(delta, lateral);
             return true;
+        }
+
+        static bool TryResolveAuthoritativeRouteSamplePoint(MLUnit unit, out Vector2 point, out string failureReason)
+        {
+            point = Vector2.zero;
+            failureReason = null;
+
+            if (unit == null)
+            {
+                failureReason = "unit is null";
+                return false;
+            }
+
+            if (float.IsFinite(unit.gridX) && float.IsFinite(unit.gridY))
+            {
+                point = new Vector2(unit.gridX, unit.gridY);
+                return true;
+            }
+
+            if (float.IsFinite(unit.routeWorldX) && float.IsFinite(unit.routeWorldY))
+            {
+                point = new Vector2(unit.routeWorldX, unit.routeWorldY);
+                return true;
+            }
+
+            failureReason =
+                $"authoritative sim point is invalid grid=({unit.gridX:0.###},{unit.gridY:0.###}) " +
+                $"routeWorld=({unit.routeWorldX:0.###},{unit.routeWorldY:0.###})";
+            return false;
         }
 
         static bool TrySampleRouteSpacePolyline(string segmentId, float progress, out Vector2 routeCenter, out Vector2 routeTangent)
@@ -2126,8 +2275,6 @@ namespace CastleDefender.Game
                     ? "dungeon_wave"
                     : normalized;
             }
-            if (IsDefenderLike(unit))
-                return unit.isHero ? "barracks_hero" : "barracks_roster";
             if (unit.isHero)
                 return "barracks_hero";
             if (!string.IsNullOrWhiteSpace(ResolveSourceBarracksKey(unit)))
@@ -2186,7 +2333,7 @@ namespace CastleDefender.Game
             if (!string.IsNullOrWhiteSpace(unit?.sourceTeam))
                 return BattleTeamUtility.NormalizeServerTeamKey(unit.sourceTeam);
 
-            if (unit != null && !unit.isWaveUnit && !IsDefenderLike(unit))
+            if (unit != null && !unit.isWaveUnit)
             {
                 string sourceLaneTeamKey = ResolveLaneTeamKey(unit.sourceLaneIndex);
                 if (!string.IsNullOrWhiteSpace(sourceLaneTeamKey))
@@ -2196,10 +2343,8 @@ namespace CastleDefender.Game
                 string ownerLaneTeamKey = ResolveLaneTeamKey(ownerLaneIndex);
                 if (!string.IsNullOrWhiteSpace(ownerLaneTeamKey))
                     return ownerLaneTeamKey;
-            }
-
-            if (IsDefenderLike(unit))
                 return defenderTeamKey;
+            }
 
             return null;
         }
@@ -2320,11 +2465,33 @@ namespace CastleDefender.Game
             if (!string.IsNullOrWhiteSpace(ownerTeamKey)
                 && BattleTeamUtility.TryParseServerTeamKey(ownerTeamKey, out BattleTeam team))
             {
+                if (ApplyTeamMaterialProfiles(root, team))
+                    return;
+
                 ApplyTeamTint(renderers, team);
                 return;
             }
 
             ApplyHostileTint(renderers);
+        }
+
+        static bool ApplyTeamMaterialProfiles(GameObject root, BattleTeam team)
+        {
+            if (root == null)
+                return false;
+
+            bool appliedAny = false;
+            var profiles = root.GetComponentsInChildren<TeamColorMaterialProfile>(true);
+            for (int i = 0; i < profiles.Length; i++)
+            {
+                var profile = profiles[i];
+                if (profile == null)
+                    continue;
+
+                appliedAny |= profile.Apply(team);
+            }
+
+            return appliedAny;
         }
 
         static void ApplyTeamTint(Renderer[] renderers, BattleTeam team)
@@ -2441,6 +2608,20 @@ namespace CastleDefender.Game
             target.rotation = Quaternion.LookRotation(delta.normalized, Vector3.up);
         }
 
+        static void RotateTowardDirection(Transform target, Vector3 delta, float turnSharpness, float dt)
+        {
+            if (target == null)
+                return;
+
+            delta.y = 0f;
+            if (delta.sqrMagnitude <= 0.0001f)
+                return;
+
+            Quaternion desired = Quaternion.LookRotation(delta.normalized, Vector3.up);
+            float turnT = 1f - Mathf.Exp(-Mathf.Max(0.01f, turnSharpness) * dt);
+            target.rotation = Quaternion.Slerp(target.rotation, desired, turnT);
+        }
+
         static void SetVisualState(WaveView view, VisualState desired)
         {
             if (view == null || view.animators == null || view.visualState == desired)
@@ -2453,7 +2634,7 @@ namespace CastleDefender.Game
                     CrossFadeFirstAvailable(view.animators, MoveStates, 0.08f);
                     break;
                 case VisualState.Attacking:
-                    CrossFadeFirstAvailable(view.animators, AttackStates, 0.04f);
+                    CrossFadeFirstAvailable(view.animators, view.attackStates, 0.04f);
                     break;
                 default:
                     CrossFadeFirstAvailable(view.animators, IdleStates, 0.08f);
@@ -2467,8 +2648,75 @@ namespace CastleDefender.Game
                 return;
 
             view.lastVisualAttackUntil = Time.time + AttackVisualHoldSeconds;
-            CrossFadeFirstAvailable(view.animators, AttackStates, 0.04f);
+            CrossFadeFirstAvailable(view.animators, view.attackStates, 0.04f);
             view.visualState = VisualState.Attacking;
+        }
+
+        static string[] ResolveAttackStateNames(MLUnit unit)
+        {
+            if (unit == null)
+                return DefaultAttackStates;
+
+            if (FortUnitIdentityCatalog.TryResolveBarracksDefinition(
+                null,
+                unit.archetypeKey,
+                string.IsNullOrWhiteSpace(unit.catalogUnitKey) ? unit.type : unit.catalogUnitKey,
+                unit.skinKey,
+                out FortBarracksRosterDefinition definition))
+            {
+                return definition.barracksRole switch
+                {
+                    BarracksUnitRole.Ranged => LooksLikeMagicUnit(unit) ? MagicAttackStates : RangedAttackStates,
+                    BarracksUnitRole.Support => MagicAttackStates,
+                    BarracksUnitRole.Siege => MagicAttackStates,
+                    _ => MeleeAttackStates,
+                };
+            }
+
+            if (LooksLikeMagicUnit(unit))
+                return MagicAttackStates;
+            if (LooksLikeRangedUnit(unit))
+                return RangedAttackStates;
+
+            return DefaultAttackStates;
+        }
+
+        static bool LooksLikeMagicUnit(MLUnit unit)
+        {
+            return ContainsAttackHint(unit, "mage")
+                || ContainsAttackHint(unit, "wizard")
+                || ContainsAttackHint(unit, "cleric")
+                || ContainsAttackHint(unit, "priest")
+                || ContainsAttackHint(unit, "thaum")
+                || ContainsAttackHint(unit, "arcane")
+                || ContainsAttackHint(unit, "bishop");
+        }
+
+        static bool LooksLikeRangedUnit(MLUnit unit)
+        {
+            return ContainsAttackHint(unit, "archer")
+                || ContainsAttackHint(unit, "crossbow")
+                || ContainsAttackHint(unit, "ranger")
+                || ContainsAttackHint(unit, "bow")
+                || ContainsAttackHint(unit, "scout");
+        }
+
+        static bool ContainsAttackHint(MLUnit unit, string hint)
+        {
+            if (unit == null || string.IsNullOrWhiteSpace(hint))
+                return false;
+
+            return ContainsIgnoreCase(unit.archetypeKey, hint)
+                || ContainsIgnoreCase(unit.catalogUnitKey, hint)
+                || ContainsIgnoreCase(unit.skinKey, hint)
+                || ContainsIgnoreCase(unit.type, hint)
+                || ContainsIgnoreCase(unit.heroKey, hint);
+        }
+
+        static bool ContainsIgnoreCase(string value, string hint)
+        {
+            return !string.IsNullOrWhiteSpace(value)
+                && value.IndexOf(hint, System.StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         static bool CrossFadeFirstAvailable(Animator[] animators, string[] stateNames, float transitionDuration)
@@ -2503,25 +2751,3 @@ namespace CastleDefender.Game
         }
     }
 }
-                if (ApplyTeamMaterialProfiles(root, team))
-                    return;
-
-        static bool ApplyTeamMaterialProfiles(GameObject root, BattleTeam team)
-        {
-            if (root == null)
-                return false;
-
-            bool appliedAny = false;
-            var profiles = root.GetComponentsInChildren<TeamColorMaterialProfile>(true);
-            for (int i = 0; i < profiles.Length; i++)
-            {
-                var profile = profiles[i];
-                if (profile == null)
-                    continue;
-
-                appliedAny |= profile.Apply(team);
-            }
-
-            return appliedAny;
-        }
-

@@ -60,8 +60,11 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 type = "goblin",
                                 skinKey = "tt_peasant",
                                 laneId = 0,
+                                allegianceKey = "dungeon",
                                 isWaveUnit = true,
                                 spawnSourceType = "scheduled_wave",
+                                stance = "ATTACK",
+                                pathContractType = "wave_lane",
                                 routeType = "WAVE_LANE",
                                 routeStartNode = "WA",
                                 routeTargetNode = "A",
@@ -71,8 +74,8 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 currentSegment = "WA_A",
                                 segmentProgress = 0f,
                                 movementState = "MOVING",
-                                routeWorldX = -24f,
-                                routeWorldY = -1f,
+                                routeWorldX = 0f,
+                                routeWorldY = 0f,
                                 hp = 10f,
                                 maxHp = 10f,
                                 moveSpeed = 1f,
@@ -152,8 +155,11 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 type = "goblin",
                                 skinKey = "tt_peasant",
                                 laneId = 0,
+                                allegianceKey = "dungeon",
                                 isWaveUnit = true,
                                 spawnSourceType = "scheduled_wave",
+                                stance = "ATTACK",
+                                pathContractType = "wave_lane",
                                 routeType = "WAVE_LANE",
                                 routeStartNode = "WA",
                                 routeTargetNode = "A",
@@ -215,30 +221,157 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
     }
 
     [UnityTest]
-    public System.Collections.IEnumerator DefenderUnit_Materializes_Through_Unified_SnapshotSpawner()
+    public System.Collections.IEnumerator RouteUnit_Combat_Does_Not_Reproject_Through_Target_Core_CombatSpace()
     {
         Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
         Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
-        Type combatantType = FindType("CastleDefender.Game.LaneSnapshotCombatant");
-        Type tileGridType = FindType("CastleDefender.Game.TileGrid");
 
         Assert.That(registryType, Is.Not.Null);
         Assert.That(spawnerType, Is.Not.Null);
-        Assert.That(combatantType, Is.Not.Null);
-        Assert.That(tileGridType, Is.Not.Null);
 
-        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_Defender");
+        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_RouteCombatProjection");
         ScriptableObject registry = null;
         GameObject prefab = null;
 
         try
         {
+            GameObject redTownCore = CreateTownCoreAnchor("Red_TownCore_Anchor", "Red", new Vector3(-20f, 0f, 20f));
+            GameObject yellowTownCore = CreateTownCoreAnchor("Yellow_TownCore_Anchor", "Gold", new Vector3(20f, 0f, 20f));
+            CreateFrontGateAnchor("Yellow_Gate_Front", new Vector3(12f, 0f, 12f));
+            GameObject redCenterBarracks = CreateBarracksSiteAnchor("Red_Center_Barracks_Anchor", "Red", "center", new Vector3(-6f, 0f, 12f));
+
             registry = ScriptableObject.CreateInstance(registryType);
             prefab = CreateUnitPrefab();
             ConfigureSkinEntries(registry, prefab);
             InvokeNoArgs(registry, "Rebuild");
 
-            var spawnerHost = new GameObject("UnifiedSnapshotRuntime");
+            var spawnerHost = new GameObject("RouteCombatProjectionRuntime");
+            spawnerHost.transform.SetParent(root.transform, false);
+            var spawner = spawnerHost.AddComponent(spawnerType);
+            spawnerType.GetField("Registry", BindingFlags.Instance | BindingFlags.Public).SetValue(spawner, registry);
+
+            var snapshot = new MLSnapshot
+            {
+                lanes = new[]
+                {
+                    new MLLaneSnap
+                    {
+                        laneIndex = 0,
+                        team = "red",
+                        slotColor = "red",
+                        branchId = "left_branch_a",
+                        units = Array.Empty<MLUnit>(),
+                    },
+                    new MLLaneSnap
+                    {
+                        laneIndex = 1,
+                        team = "gold",
+                        slotColor = "gold",
+                        branchId = "left_branch_b",
+                        units = new[]
+                        {
+                            new MLUnit
+                            {
+                                id = "route_combat_projection_attacker",
+                                type = "infantry_t1",
+                                archetypeKey = "infantry_t1",
+                                presentationKey = "human_default",
+                                laneId = 1,
+                                allegianceKey = "red",
+                                barracksId = "center",
+                                spawnSourceType = "barracks_roster",
+                                isWaveUnit = false,
+                                stance = "ATTACK",
+                                pathContractType = "barracks_cross",
+                                ownerLane = 0,
+                                sourceLaneIndex = 0,
+                                sourceTeam = "red",
+                                sourceBarracksKey = "center",
+                                sourceBarracksId = "center",
+                                pathId = "ACTR_A>A_M>M_B",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "A",
+                                routeType = "CENTER_CROSS",
+                                routeStartNode = "ACTR",
+                                routeTargetNode = "B",
+                                currentSegment = "ACTR_A",
+                                segmentProgress = 0.6f,
+                                movementState = "COMBAT",
+                                state = "COMBAT",
+                                combatTargetId = "enemy_route_unit",
+                                isAttacking = true,
+                                gridX = -24.8f,
+                                gridY = 23.2f,
+                                routeWorldX = -24f,
+                                routeWorldY = 23.2f,
+                                hp = 15f,
+                                maxHp = 15f,
+                                moveSpeed = 1f,
+                            }
+                        }
+                    }
+                }
+            };
+
+            Invoke(spawner, "DebugApplySnapshot", snapshot);
+            yield return null;
+
+            Transform attacker = spawnerHost.transform.Find("SnapshotUnit_route_combat_projection_attacker_tt_peasant_tt_peasant");
+            Assert.That(attacker, Is.Not.Null, "Route combat presenters should still materialize when the snapshot enters COMBAT.");
+
+            Vector3 routeCenter = Vector3.Lerp(redCenterBarracks.transform.position, redTownCore.transform.position, 0.6f);
+            Vector3 routeForward = (redTownCore.transform.position - redCenterBarracks.transform.position).normalized;
+            Vector3 routeLateral = Vector3.Cross(routeForward, Vector3.up).normalized;
+            Vector3 expected = routeCenter + (routeLateral * 0.8f);
+
+            Assert.That(attacker.position.x, Is.EqualTo(expected.x).Within(0.08f));
+            Assert.That(attacker.position.z, Is.EqualTo(expected.z).Within(0.08f));
+            Assert.That(
+                Vector3.Distance(attacker.position, yellowTownCore.transform.position),
+                Is.GreaterThan(20f),
+                "Barracks units fighting along a route should not jump into the target lane's fortress combat projection.");
+        }
+        finally
+        {
+            if (root != null)
+                UnityEngine.Object.DestroyImmediate(root);
+            if (prefab != null)
+                UnityEngine.Object.DestroyImmediate(prefab);
+            if (registry != null)
+                UnityEngine.Object.DestroyImmediate(registry);
+            DestroyIfPresent("Red_TownCore_Anchor");
+            DestroyIfPresent("Yellow_TownCore_Anchor");
+            DestroyIfPresent("Yellow_Gate_Front");
+            DestroyIfPresent("Red_Center_Barracks_Anchor");
+        }
+    }
+
+    [UnityTest]
+    public System.Collections.IEnumerator HoldRouteUnit_Materializes_Through_Unified_SnapshotSpawner()
+    {
+        Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
+        Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
+        Type combatantType = FindType("CastleDefender.Game.LaneSnapshotCombatant");
+
+        Assert.That(registryType, Is.Not.Null);
+        Assert.That(spawnerType, Is.Not.Null);
+        Assert.That(combatantType, Is.Not.Null);
+
+        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_HoldRoute");
+        ScriptableObject registry = null;
+        GameObject prefab = null;
+
+        try
+        {
+            GameObject redTownCore = CreateTownCoreAnchor("Red_TownCore_Anchor", "Red", new Vector3(-20f, 0f, 20f));
+            GameObject redCenterBarracks = CreateBarracksSiteAnchor("Red_Center_Barracks_Anchor", "Red", "center", new Vector3(-6f, 0f, 12f));
+
+            registry = ScriptableObject.CreateInstance(registryType);
+            prefab = CreateUnitPrefab();
+            ConfigureSkinEntries(registry, prefab);
+            InvokeNoArgs(registry, "Rebuild");
+
+            var spawnerHost = new GameObject("UnifiedSnapshotRuntime_HoldRoute");
             spawnerHost.transform.SetParent(root.transform, false);
             var spawner = spawnerHost.AddComponent(spawnerType);
             spawnerType.GetField("Registry", BindingFlags.Instance | BindingFlags.Public).SetValue(spawner, registry);
@@ -256,14 +389,35 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                         {
                             new MLUnit
                             {
-                                id = "def_runtime_1",
+                                id = "hold_runtime_1",
                                 type = "tt_peasant",
                                 skinKey = "tt_peasant",
+                                laneId = 0,
+                                allegianceKey = "red",
                                 isWaveUnit = false,
-                                isDefender = true,
+                                spawnSourceType = "barracks_roster",
+                                stance = "HOLD",
+                                pathContractType = "guard_anchor",
+                                ownerLane = 0,
+                                sourceLaneIndex = 0,
                                 sourceTeam = "red",
-                                gridX = 5f,
-                                gridY = 6f,
+                                barracksId = "center",
+                                sourceBarracksKey = "center",
+                                sourceBarracksId = "center",
+                                pathId = "ACTR_A",
+                                routeType = "CENTER_CROSS",
+                                routeStartNode = "ACTR",
+                                routeTargetNode = "A",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "A",
+                                currentSegment = "ACTR_A",
+                                segmentProgress = 0.5f,
+                                movementState = "MOVING",
+                                state = "MOVING",
+                                gridX = -24f,
+                                gridY = 23f,
+                                routeWorldX = -24f,
+                                routeWorldY = 23f,
                                 hp = 12f,
                                 maxHp = 12f,
                                 moveSpeed = 1f,
@@ -276,12 +430,12 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
             Invoke(spawner, "DebugApplySnapshot", snapshot);
             yield return null;
 
-            Transform defenderUnit = spawnerHost.transform.Find("SnapshotUnit_def_runtime_1_tt_peasant_tt_peasant");
-            Vector3 expected = InvokeStaticVector3(tileGridType, "TileToWorld", 0, 5f, 6f);
-            Assert.That(defenderUnit, Is.Not.Null, "Defenders should materialize through the same snapshot-driven runtime spawner as attackers.");
-            Assert.That(defenderUnit.position.x, Is.EqualTo(expected.x).Within(0.01f));
-            Assert.That(defenderUnit.position.z, Is.EqualTo(expected.z).Within(0.01f));
-            Assert.That(defenderUnit.GetComponent(combatantType), Is.Not.Null, "Unified snapshot units should register the shared LaneSnapshotCombatant.");
+            Transform routeUnit = spawnerHost.transform.Find("SnapshotUnit_hold_runtime_1_tt_peasant_tt_peasant");
+            Vector3 expected = Vector3.Lerp(redCenterBarracks.transform.position, redTownCore.transform.position, 0.5f);
+            Assert.That(routeUnit, Is.Not.Null, "Hold-route units should materialize through the same snapshot-driven runtime spawner as attackers.");
+            Assert.That(routeUnit.position.x, Is.EqualTo(expected.x).Within(0.01f));
+            Assert.That(routeUnit.position.z, Is.EqualTo(expected.z).Within(0.01f));
+            Assert.That(routeUnit.GetComponent(combatantType), Is.Not.Null, "Unified snapshot units should register the shared LaneSnapshotCombatant.");
         }
         finally
         {
@@ -292,8 +446,7 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
             if (registry != null)
                 UnityEngine.Object.DestroyImmediate(registry);
             DestroyIfPresent("Red_TownCore_Anchor");
-            DestroyIfPresent("Blue_TownCore_Anchor");
-            DestroyIfPresent("Wave_Center_Anchor");
+            DestroyIfPresent("Red_Center_Barracks_Anchor");
         }
     }
 
@@ -353,9 +506,12 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 archetypeKey = "infantry_t1",
                                 presentationKey = "human_default",
                                 laneId = 1,
+                                allegianceKey = "red",
                                 barracksId = "center",
                                 spawnSourceType = "barracks_roster",
                                 isWaveUnit = false,
+                                stance = "ATTACK",
+                                pathContractType = "barracks_cross",
                                 ownerLane = 0,
                                 sourceLaneIndex = 0,
                                 sourceTeam = "red",
@@ -383,9 +539,12 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 archetypeKey = "infantry_t1",
                                 presentationKey = "human_default",
                                 laneId = 1,
+                                allegianceKey = "red",
                                 barracksId = "center",
                                 spawnSourceType = "barracks_roster",
                                 isWaveUnit = false,
+                                stance = "ATTACK",
+                                pathContractType = "barracks_cross",
                                 ownerLane = 0,
                                 sourceLaneIndex = 0,
                                 sourceTeam = "red",
@@ -447,6 +606,158 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
     }
 
     [UnityTest]
+    public System.Collections.IEnumerator CombatUnits_Face_Their_Authoritative_Target_Instead_Of_Teleport_Delta()
+    {
+        Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
+        Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
+
+        Assert.That(registryType, Is.Not.Null);
+        Assert.That(spawnerType, Is.Not.Null);
+
+        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_CombatFacing");
+        ScriptableObject registry = null;
+        GameObject prefab = null;
+
+        try
+        {
+            CreateTownCoreAnchor("Red_TownCore_Anchor", "Red", new Vector3(-20f, 0f, 20f));
+            CreateBarracksSiteAnchor("Red_Center_Barracks_Anchor", "Red", "center", new Vector3(-6f, 0f, 12f));
+
+            registry = ScriptableObject.CreateInstance(registryType);
+            prefab = CreateUnitPrefab();
+            ConfigureSkinEntries(registry, prefab);
+            InvokeNoArgs(registry, "Rebuild");
+
+            var spawnerHost = new GameObject("CombatFacingRuntime");
+            spawnerHost.transform.SetParent(root.transform, false);
+            var spawner = spawnerHost.AddComponent(spawnerType);
+            spawnerType.GetField("Registry", BindingFlags.Instance | BindingFlags.Public).SetValue(spawner, registry);
+
+            var snapshot = new MLSnapshot
+            {
+                lanes = new[]
+                {
+                    new MLLaneSnap
+                    {
+                        laneIndex = 0,
+                        team = "red",
+                        slotColor = "red",
+                        branchId = "left_branch_a",
+                        units = new[]
+                        {
+                            new MLUnit
+                            {
+                                id = "combat_facing_attacker",
+                                type = "infantry_t1",
+                                archetypeKey = "infantry_t1",
+                                presentationKey = "human_default",
+                                laneId = 0,
+                                allegianceKey = "red",
+                                isWaveUnit = false,
+                                spawnSourceType = "barracks_roster",
+                                stance = "ATTACK",
+                                pathContractType = "guard_anchor",
+                                ownerLane = 0,
+                                sourceLaneIndex = 0,
+                                sourceTeam = "red",
+                                barracksId = "center",
+                                sourceBarracksKey = "center",
+                                sourceBarracksId = "center",
+                                routeType = "CENTER_CROSS",
+                                routeStartNode = "ACTR",
+                                routeTargetNode = "A",
+                                pathId = "ACTR_A",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "A",
+                                currentSegment = "ACTR_A",
+                                segmentProgress = 0.55f,
+                                movementState = "COMBAT",
+                                state = "COMBAT",
+                                gridX = -24.6f,
+                                gridY = 23.1f,
+                                routeWorldX = -24f,
+                                routeWorldY = 23.1f,
+                                combatTargetId = "combat_facing_target",
+                                isAttacking = true,
+                                hp = 10f,
+                                maxHp = 10f,
+                                moveSpeed = 1f,
+                            },
+                            new MLUnit
+                            {
+                                id = "combat_facing_target",
+                                type = "infantry_t1",
+                                archetypeKey = "infantry_t1",
+                                presentationKey = "human_default",
+                                laneId = 0,
+                                allegianceKey = "red",
+                                isWaveUnit = false,
+                                spawnSourceType = "barracks_roster",
+                                stance = "HOLD",
+                                pathContractType = "guard_anchor",
+                                ownerLane = 0,
+                                sourceLaneIndex = 0,
+                                sourceTeam = "red",
+                                barracksId = "center",
+                                sourceBarracksKey = "center",
+                                sourceBarracksId = "center",
+                                routeType = "CENTER_CROSS",
+                                routeStartNode = "ACTR",
+                                routeTargetNode = "A",
+                                pathId = "ACTR_A",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "A",
+                                currentSegment = "ACTR_A",
+                                segmentProgress = 0.8f,
+                                movementState = "COMBAT",
+                                state = "COMBAT",
+                                gridX = -23.5f,
+                                gridY = 23.8f,
+                                routeWorldX = -24f,
+                                routeWorldY = 23.6f,
+                                hp = 12f,
+                                maxHp = 12f,
+                                moveSpeed = 1f,
+                            }
+                        }
+                    }
+                }
+            };
+
+            Invoke(spawner, "DebugApplySnapshot", snapshot);
+            yield return null;
+
+            Transform attacker = spawnerHost.transform.Find("SnapshotUnit_combat_facing_attacker_tt_peasant_tt_peasant");
+            Transform target = spawnerHost.transform.Find("SnapshotUnit_combat_facing_target_tt_peasant_tt_peasant");
+            Assert.That(attacker, Is.Not.Null);
+            Assert.That(target, Is.Not.Null);
+
+            Vector3 desiredFacing = target.position - attacker.position;
+            desiredFacing.y = 0f;
+            Assert.That(desiredFacing.sqrMagnitude, Is.GreaterThan(0.01f));
+
+            Vector3 actualFacing = attacker.forward;
+            actualFacing.y = 0f;
+            float facingDot = Vector3.Dot(actualFacing.normalized, desiredFacing.normalized);
+            Assert.That(
+                facingDot,
+                Is.GreaterThan(0.97f),
+                "Combat presenters should face their real combat target instead of inheriting a random teleport delta.");
+        }
+        finally
+        {
+            if (root != null)
+                UnityEngine.Object.DestroyImmediate(root);
+            if (prefab != null)
+                UnityEngine.Object.DestroyImmediate(prefab);
+            if (registry != null)
+                UnityEngine.Object.DestroyImmediate(registry);
+            DestroyIfPresent("Red_TownCore_Anchor");
+            DestroyIfPresent("Red_Center_Barracks_Anchor");
+        }
+    }
+
+    [UnityTest]
     public System.Collections.IEnumerator TwoPlayer_OuterLoop_Units_Materialize_Through_Unused_Travel_Lanes()
     {
         Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
@@ -502,9 +813,12 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
                                 archetypeKey = "infantry_t1",
                                 presentationKey = "human_default",
                                 laneId = 1,
+                                allegianceKey = "red",
                                 barracksId = "right",
                                 spawnSourceType = "barracks_roster",
                                 isWaveUnit = false,
+                                stance = "ATTACK",
+                                pathContractType = "barracks_loop",
                                 ownerLane = 0,
                                 sourceLaneIndex = 0,
                                 sourceTeam = "red",
