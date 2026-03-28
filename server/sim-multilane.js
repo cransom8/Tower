@@ -4703,16 +4703,6 @@ function parseBulkTiles(rawTiles) {
 
 function getLaneBuildValue(lane) {
   let total = 0;
-  for (let tx = 0; tx < GRID_W; tx++) {
-    for (let ty = 0; ty < GRID_H; ty++) {
-      const tile = lane.grid[tx][ty];
-      if ((tile.type === "tower" || tile.type === "dead_tower") && tile.costHistory) {
-        for (const entry of tile.costHistory) {
-          total += entry.cost;
-        }
-      }
-    }
-  }
   if (Array.isArray(lane.fortressPads)) {
     for (const pad of lane.fortressPads) {
       if (!pad || !Array.isArray(pad.costHistory)) continue;

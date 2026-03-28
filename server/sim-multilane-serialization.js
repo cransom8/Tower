@@ -48,21 +48,7 @@ function getUnitSnapshotBarracksLevel(game, lane, unit, deps) {
 }
 
 function getSerializedLaneBuildValue(lane, barracksRoster, deps) {
-  const { GRID_W, GRID_H } = deps;
   let total = 0;
-
-  if (lane && Array.isArray(lane.grid)) {
-    for (let x = 0; x < GRID_W; x++) {
-      for (let y = 0; y < GRID_H; y++) {
-        const tile = lane.grid[x] && lane.grid[x][y];
-        if (!tile || (tile.type !== "tower" && tile.type !== "dead_tower") || !Array.isArray(tile.costHistory))
-          continue;
-
-        for (const entry of tile.costHistory)
-          total += Number(entry && entry.cost) || 0;
-      }
-    }
-  }
 
   if (lane && Array.isArray(lane.fortressPads)) {
     for (const pad of lane.fortressPads) {

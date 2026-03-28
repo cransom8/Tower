@@ -1,9 +1,7 @@
 // ActionSender.cs - wraps socket.emit("player_action", ...) for all game actions.
 // Matches server event names and payload schemas exactly.
 //
-// Usage:
-//   ActionSender.PlaceUnit(col, row, "goblin");
-//   Fortress-mode unit flow now comes from barracks actions only.
+// Fortress-mode unit flow now comes from pads, barracks sites, and lane commands.
 
 using UnityEngine;
 using CastleDefender.Net;
@@ -20,35 +18,6 @@ namespace CastleDefender.Game
                 : new { type, data };
             NetworkManager.Instance?.Emit("player_action", payload);
         }
-
-        public static void PlaceUnit(int col, int row, string unitTypeKey)
-        {
-            Debug.Log($"[ActionSender] PlaceUnit col={col} row={row} unitTypeKey={unitTypeKey}");
-            SendAction("place_unit", new
-            {
-                gridX = col,
-                gridY = row,
-                unitTypeKey
-            });
-        }
-
-        public static void SellTower(int col, int row)
-            => SendAction("sell_tower", new { gridX = col, gridY = row });
-
-        public static void UpgradeTower(int col, int row, string towerType = null)
-            => SendAction("upgrade_tower", new
-            {
-                gridX = col,
-                gridY = row,
-                x = col,
-                y = row,
-                col,
-                row,
-                towerType
-            });
-
-        public static void UpgradeBarracks()
-            => SendAction("upgrade_barracks");
 
         public static void BuildOnPad(string padId)
             => SendAction("build_on_pad", new { padId });
@@ -125,18 +94,6 @@ namespace CastleDefender.Game
 
         public static void SetLaneRetreatProgress(float progress)
             => SendAction("set_lane_retreat", new { progress });
-
-        public static void ClassicSpawnUnit(string unitType)
-            => SendAction("spawn_unit", new { unitType });
-
-        public static void ClassicBuildTower(string slot, string towerType)
-            => SendAction("build_tower", new { slot, towerType });
-
-        public static void ClassicUpgradeTower(string slot)
-            => SendAction("upgrade_tower", new { slot });
-
-        public static void ClassicSellTower(string slot)
-            => SendAction("sell_tower", new { slot });
 
         public static void CreateMLRoom(string displayName = "Player")
             => NetworkManager.Instance.Emit("create_ml_room", new { displayName });

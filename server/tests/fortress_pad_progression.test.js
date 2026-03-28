@@ -118,3 +118,23 @@ test("legacy classic actions stay disabled in fortress mode", () => {
   fail(game, 0, "set_autosend", { enabled: true }, /Barracks/i);
   fail(game, 0, "upgrade_barracks", {}, /Select Barracks Left, Center, or Right/i);
 });
+
+test("lane build value ignores legacy grid towers and only counts fortress investments", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+
+  const baseline = simMl.getLaneBuildValue(lane);
+  assert.equal(simMl.createMLSnapshot(game).lanes[0].buildValue, baseline);
+
+  act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
+  const investedValue = simMl.getLaneBuildValue(lane);
+  assert.ok(investedValue > baseline, "expected fortress pad spend to increase build value");
+
+  const legacyTile = lane.grid[5][10];
+  legacyTile.type = "tower";
+  legacyTile.towerType = "archery_tower";
+  legacyTile.costHistory = [{ cost: 999 }];
+
+  assert.equal(simMl.getLaneBuildValue(lane), investedValue);
+  assert.equal(simMl.createMLSnapshot(game).lanes[0].buildValue, investedValue);
+});
