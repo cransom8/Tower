@@ -338,7 +338,7 @@ public class CameraController : MonoBehaviour
     public void FocusTile(int col, int row)
     {
         int lane = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.ViewingLane : 0;
-        Vector3 point = TileGrid.TileToWorld(lane, col, row);
+        Vector3 point = BattlefieldSpaceMapper.TileToWorld(lane, col, row);
         PanTo(point);
     }
 
@@ -433,10 +433,6 @@ public class CameraController : MonoBehaviour
         if (ConfigureBoundsFromFortressAnchors())
             return;
 
-        var grid = FindFirstObjectByType<TileGrid>();
-        if (grid == null)
-            return;
-
         float minX = float.MaxValue;
         float maxX = float.MinValue;
         float minZ = float.MaxValue;
@@ -446,10 +442,10 @@ public class CameraController : MonoBehaviour
         {
             foreach (var point in new[]
             {
-                TileGrid.TileToWorld(lane, 0, 0),
-                TileGrid.TileToWorld(lane, grid.Cols - 1, 0),
-                TileGrid.TileToWorld(lane, 0, grid.Rows - 1),
-                TileGrid.TileToWorld(lane, grid.Cols - 1, grid.Rows - 1),
+                BattlefieldSpaceMapper.TileToWorld(lane, 0, 0),
+                BattlefieldSpaceMapper.TileToWorld(lane, BattlefieldSpaceMapper.LaneCols - 1, 0),
+                BattlefieldSpaceMapper.TileToWorld(lane, 0, BattlefieldSpaceMapper.LaneRows - 1),
+                BattlefieldSpaceMapper.TileToWorld(lane, BattlefieldSpaceMapper.LaneCols - 1, BattlefieldSpaceMapper.LaneRows - 1),
             })
             {
                 if (point.x < minX) minX = point.x;

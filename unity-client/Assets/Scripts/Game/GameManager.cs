@@ -390,13 +390,13 @@ namespace CastleDefender.Game
             {
                 foreach (var a in sa.LatestMLMatchReady.laneAssignments)
                     if (a.laneIndex == laneIndex)
-                    { int bc = TileGrid.GetBranchConfigIndex(a.branchId); if (bc >= 0) { branchCfg = bc; break; } }
+                    { int bc = BattlefieldSpaceMapper.GetBranchConfigIndex(a.branchId); if (bc >= 0) { branchCfg = bc; break; } }
             }
             else if (sa?.LatestML?.lanes != null)
             {
                 foreach (var ls in sa.LatestML.lanes)
                     if (ls != null && ls.laneIndex == laneIndex)
-                    { int bc = TileGrid.GetBranchConfigIndex(ls.branchId); if (bc >= 0) { branchCfg = bc; break; } }
+                    { int bc = BattlefieldSpaceMapper.GetBranchConfigIndex(ls.branchId); if (bc >= 0) { branchCfg = bc; break; } }
             }
 
             if (TryGetFortressLaneCameraFrame(cam, laneIndex, out var fortressFocus, out var fortressScreenUp, out var fortressOrthoSize))
@@ -417,8 +417,8 @@ namespace CastleDefender.Game
                 return;
             }
 
-            Vector3 castlePos  = TileGrid.TileToWorld(branchCfg, 5, 27);
-            Vector3 spawnPos   = TileGrid.TileToWorld(branchCfg, 5, 0);
+            Vector3 castlePos  = BattlefieldSpaceMapper.TileToWorld(branchCfg, 5, BattlefieldSpaceMapper.LaneRows - 1);
+            Vector3 spawnPos   = BattlefieldSpaceMapper.TileToWorld(branchCfg, 5, 0);
             Vector3 laneCenter = (castlePos + spawnPos) * 0.5f;
             Vector3 camPos     = laneCenter + Vector3.up * CameraHeight;
 
@@ -426,7 +426,7 @@ namespace CastleDefender.Game
 
             // Orient so spawn (row 0) appears at the TOP of the screen.
             // rowDir points spawn→castle, so negating it gives the screen-up direction.
-            Vector3 screenUp = -TileGrid.GetLaneForwardDir(branchCfg);
+            Vector3 screenUp = -BattlefieldSpaceMapper.GetLaneForwardDir(branchCfg);
             if (screenUp.sqrMagnitude < 0.001f) screenUp = Vector3.back;
             cam.transform.LookAt(laneCenter, screenUp);
 

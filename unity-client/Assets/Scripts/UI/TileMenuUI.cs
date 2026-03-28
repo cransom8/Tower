@@ -640,11 +640,11 @@ namespace CastleDefender.UI
             var canvas = GetComponentInParent<Canvas>();
             if (rt == null || canvas == null)
             {
-                transform.position = TileGrid.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
+                transform.position = BattlefieldSpaceMapper.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
                 return;
             }
 
-            Vector3 world = TileGrid.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
+            Vector3 world = BattlefieldSpaceMapper.TileToWorld(SnapshotApplier.Instance?.MyLaneIndex ?? 0, col, row) + Vector3.up * 0.5f;
 
             // For ScreenSpaceCamera with no worldCamera assigned, Unity falls back to
             // rendering as ScreenSpaceOverlay — so use null for the conversion camera.

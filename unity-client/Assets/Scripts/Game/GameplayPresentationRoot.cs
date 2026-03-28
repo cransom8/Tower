@@ -33,10 +33,6 @@ namespace CastleDefender.Game
             if (waveRuntime != null && waveRuntime.Registry != null)
                 return waveRuntime.Registry;
 
-            var tileGrid = Object.FindFirstObjectByType<TileGrid>();
-            if (tileGrid != null && tileGrid.Registry != null)
-                return tileGrid.Registry;
-
             return null;
         }
 
@@ -52,10 +48,6 @@ namespace CastleDefender.Game
             var waveRuntime = Object.FindFirstObjectByType<WaveSnapshotRuntimeSpawner>();
             if (waveRuntime != null && waveRuntime.HpBarPrefab != null)
                 return waveRuntime.HpBarPrefab;
-
-            var tileGrid = Object.FindFirstObjectByType<TileGrid>();
-            if (tileGrid != null && tileGrid.HpBarPrefab != null)
-                return tileGrid.HpBarPrefab;
 
             return null;
         }

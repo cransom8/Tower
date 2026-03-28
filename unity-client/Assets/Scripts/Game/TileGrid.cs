@@ -39,8 +39,8 @@ namespace CastleDefender.Game
         public bool IsInteractive = true;
 
         [Header("Grid")]
-        public int Cols = 11;
-        public int Rows = 28;
+        public int Cols = BattlefieldSpaceMapper.LaneCols;
+        public int Rows = BattlefieldSpaceMapper.LaneRows;
 
         [Header("Tile prefabs")]
         public GameObject FloorPrefab;
@@ -80,40 +80,8 @@ namespace CastleDefender.Game
         public float FortressPadMarkerYOffset = 0.18f;
 
         // ── Public static geometry ────────────────────────────────────────────
-        public const float TileW = 1f;  // 1 world unit per tile (bridge 27 units / 27 rows = 1; row 27 extends 1 tile onto island)
-        public const float TileH = 1f;
-
-        // ── Battlefield branch configs ────────────────────────────────────────
-        // Each branch has an origin (world pos of col=0, row=0), a per-column
-        // step direction, and a per-row step direction.
-        //
-        // Col 5 is the center column for each branch. The four build lanes sit on two
-        // opposing loop islands: two lanes on the top island and two on the bottom.
-        // Row 0 begins near the center mine shaft approach and row 27 reaches the outer
-        // end of the branch before units transition to the side bridge / castle route.
-
-        struct BranchConfig
-        {
-            public Vector3 origin;
-            public Vector3 colDir;
-            public Vector3 rowDir;
-            public BranchConfig(Vector3 o, Vector3 c, Vector3 r)
-            { origin = o; colDir = c; rowDir = r; }
-        }
-
-        // The winter board uses raised lane slabs around the forge floor.
-        // Tile centers sit slightly above the slab top so the grid renders cleanly on the lane surface.
-        const float LaneTileSurfaceY = 2.54f;
-
-        static readonly BranchConfig[] _branchConfigs =
-        {
-            // Lane slabs in GameEnvironment:
-            // row 0 begins at the inner edge nearest the mine/forge side, row 27 reaches the outer edge.
-            new BranchConfig(new Vector3( 14f, LaneTileSurfaceY, -5f), new Vector3( 0f,0f, 1f), new Vector3( 1f,0f, 0f)), // Lane 0 Red   east lane
-            new BranchConfig(new Vector3(-14f, LaneTileSurfaceY,  5f), new Vector3( 0f,0f,-1f), new Vector3(-1f,0f, 0f)), // Lane 1 Gold  west lane
-            new BranchConfig(new Vector3( -5f, LaneTileSurfaceY,-14f), new Vector3( 1f,0f, 0f), new Vector3( 0f,0f,-1f)), // Lane 2 Blue  south lane
-            new BranchConfig(new Vector3(  5f, LaneTileSurfaceY, 14f), new Vector3(-1f,0f, 0f), new Vector3( 0f,0f, 1f)), // Lane 3 Green north lane
-        };
+        public const float TileW = BattlefieldSpaceMapper.TileW;
+        public const float TileH = BattlefieldSpaceMapper.TileH;
 
         // Fallback lane colors used before the server snapshot arrives.
         // Must match SnapshotApplier.TryResolveSlotColor: Red, Gold, Blue, Green.
@@ -130,34 +98,14 @@ namespace CastleDefender.Game
         /// <summary>Maps tile (col, row) on a given branch to world space.</summary>
         public static Vector3 TileToWorld(int laneIndex, int col, int row)
         {
-            if ((uint)laneIndex < (uint)_branchConfigs.Length)
-            {
-                var bc = _branchConfigs[laneIndex];
-                return bc.origin + bc.colDir * (col * TileW) + bc.rowDir * (row * TileH);
-            }
-            return TileToWorld(col, row);
+            return BattlefieldSpaceMapper.TileToWorld(laneIndex, col, row);
         }
 
         /// <summary>Float overload — used by mobile defenders with sub-tile positions.</summary>
         public static Vector3 TileToWorld(int laneIndex, float col, float row)
         {
-            if ((uint)laneIndex < (uint)_branchConfigs.Length)
-            {
-                var bc = _branchConfigs[laneIndex];
-                return bc.origin + bc.colDir * (col * TileW) + bc.rowDir * (row * TileH);
-            }
-            return new Vector3(col * TileW, 0f, row * TileH);
+            return BattlefieldSpaceMapper.TileToWorld(laneIndex, col, row);
         }
-
-static readonly Vector3[][] _lanePathWaypoints =
-        {
-            // 6 waypoints per lane — center mine shaft -> top/bottom loop -> side bridge -> castle.
-            // Y=1 = the top surface of the islands / bridges.
-            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f, 14f), new Vector3(-24f,1f, 14f), new Vector3(-38f,1f,  8f), new Vector3(-54f,1f,0f), new Vector3(-72f,1f,0f) }, // Lane 0 Red
-            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f,-14f), new Vector3(-24f,1f,-14f), new Vector3(-38f,1f, -8f), new Vector3(-54f,1f,0f), new Vector3(-72f,1f,0f) }, // Lane 1 Gold
-            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f, 14f), new Vector3( 24f,1f, 14f), new Vector3( 38f,1f,  8f), new Vector3( 54f,1f,0f), new Vector3( 72f,1f,0f) }, // Lane 2 Blue
-            new[]{ new Vector3(  0f,1f,  0f), new Vector3(  0f,1f,-14f), new Vector3( 24f,1f,-14f), new Vector3( 38f,1f, -8f), new Vector3( 54f,1f,0f), new Vector3( 72f,1f,0f) }, // Lane 3 Green
-        };
 
         /// <summary>
         /// Maps normProgress (0..1) to world position along the lane's polyline.
@@ -166,48 +114,20 @@ static readonly Vector3[][] _lanePathWaypoints =
         /// </summary>
         public static Vector3 NormProgressToWorld(int laneIndex, float normProgress)
         {
-            var pts = (uint)laneIndex < (uint)_lanePathWaypoints.Length
-                ? _lanePathWaypoints[laneIndex]
-                : _lanePathWaypoints[0];
-
-            float t = Mathf.Clamp01(normProgress);
-
-            // Compute total arc length
-            float totalLen = 0f;
-            for (int i = 0; i < pts.Length - 1; i++)
-                totalLen += Vector3.Distance(pts[i], pts[i + 1]);
-
-            // Walk segments until we reach the proportional distance
-            float target = t * totalLen;
-            float walked = 0f;
-            for (int i = 0; i < pts.Length - 1; i++)
-            {
-                float segLen = Vector3.Distance(pts[i], pts[i + 1]);
-                if (walked + segLen >= target)
-                {
-                    float segT = segLen > 0f ? (target - walked) / segLen : 0f;
-                    return Vector3.Lerp(pts[i], pts[i + 1], segT);
-                }
-                walked += segLen;
-            }
-            return pts[pts.Length - 1];
+            return BattlefieldSpaceMapper.NormProgressToWorld(laneIndex, normProgress);
         }
 
 
         /// <summary>Returns the world-space forward direction units travel along a lane (rowDir).</summary>
         public static Vector3 GetLaneForwardDir(int laneIndex)
         {
-            if ((uint)laneIndex < (uint)_branchConfigs.Length)
-                return _branchConfigs[laneIndex].rowDir;
-            return Vector3.forward;
+            return BattlefieldSpaceMapper.GetLaneForwardDir(laneIndex);
         }
 
         /// <summary>Returns the world-space lateral direction across a lane (colDir).</summary>
         public static Vector3 GetLaneLateralDir(int laneIndex)
         {
-            if ((uint)laneIndex < (uint)_branchConfigs.Length)
-                return _branchConfigs[laneIndex].colDir;
-            return Vector3.right;
+            return BattlefieldSpaceMapper.GetLaneLateralDir(laneIndex);
         }
 
         /// <summary>
@@ -217,49 +137,18 @@ static readonly Vector3[][] _lanePathWaypoints =
         /// </summary>
         public static Vector3 SuffixProgressToWorld(int branchCfg, float suffixProgress)
         {
-            var pts = (uint)branchCfg < (uint)_lanePathWaypoints.Length
-                ? _lanePathWaypoints[branchCfg]
-                : _lanePathWaypoints[0];
-
-            // Suffix uses pt2..pt5 (indices 2..5)
-            const int suffixStart = 2;
-            float t = Mathf.Clamp01(suffixProgress);
-
-            float totalLen = 0f;
-            for (int i = suffixStart; i < pts.Length - 1; i++)
-                totalLen += Vector3.Distance(pts[i], pts[i + 1]);
-
-            float target = t * totalLen;
-            float walked = 0f;
-            for (int i = suffixStart; i < pts.Length - 1; i++)
-            {
-                float segLen = Vector3.Distance(pts[i], pts[i + 1]);
-                if (walked + segLen >= target)
-                {
-                    float segT = segLen > 0f ? (target - walked) / segLen : 0f;
-                    return Vector3.Lerp(pts[i], pts[i + 1], segT);
-                }
-                walked += segLen;
-            }
-            return pts[pts.Length - 1];
+            return BattlefieldSpaceMapper.SuffixProgressToWorld(branchCfg, suffixProgress);
         }
 
-        /// <summary>Maps branchId from server snapshot to the local _branchConfigs index.</summary>
+        /// <summary>Maps branchId from server snapshot to the authoritative battlefield lane index.</summary>
         public static int GetBranchConfigIndex(string branchId)
         {
-            switch (branchId)
-            {
-                case "left_branch_a":  return 0;
-                case "left_branch_b":  return 1;
-                case "right_branch_a": return 2;
-                case "right_branch_b": return 3;
-                default:               return -1;
-            }
+            return BattlefieldSpaceMapper.GetBranchConfigIndex(branchId);
         }
 
         /// <summary>Legacy single-lane mapping (straight +Z). Prefer the 3-arg overload.</summary>
         public static Vector3 TileToWorld(int col, int row)
-            => new Vector3(col * TileW, 0f, row * TileH);
+            => BattlefieldSpaceMapper.TileToWorld(col, row);
 
         // ── Runtime state ─────────────────────────────────────────────────────
         GameObject[] _tileObjects;
@@ -421,9 +310,9 @@ static readonly Vector3[][] _lanePathWaypoints =
             _waypointMarkers.Clear();
             _waypointTileIndices.Clear();
 
-            if ((uint)laneIndex >= (uint)_lanePathWaypoints.Length) return;
+            if (!BattlefieldSpaceMapper.IsValidLaneIndex(laneIndex)) return;
 
-            foreach (var worldPos in _lanePathWaypoints[laneIndex])
+            foreach (var worldPos in BattlefieldSpaceMapper.GetLanePathWaypoints(laneIndex))
             {
                 // Spawn marker
                 GameObject marker;
@@ -587,13 +476,7 @@ static readonly Vector3[][] _lanePathWaypoints =
         /// <summary>Inverse of TileToWorld — returns the tile (col, row) for a world position, or false if outside the grid.</summary>
         bool TryWorldToTile(int laneIndex, Vector3 worldPos, out int col, out int row)
         {
-            col = row = -1;
-            if ((uint)laneIndex >= (uint)_branchConfigs.Length) return false;
-            var bc  = _branchConfigs[laneIndex];
-            var loc = worldPos - bc.origin;
-            col = Mathf.RoundToInt(Vector3.Dot(loc, bc.colDir) / TileW);
-            row = Mathf.RoundToInt(Vector3.Dot(loc, bc.rowDir) / TileH);
-            return col >= 0 && col < Cols && row >= 0 && row < Rows;
+            return BattlefieldSpaceMapper.TryWorldToTile(laneIndex, worldPos, Cols, Rows, out col, out row);
         }
 
         // ── Tile sync ─────────────────────────────────────────────────────────
@@ -980,15 +863,7 @@ static readonly Vector3[][] _lanePathWaypoints =
 
             Vector3 hit = ray.GetPoint(enter);
 
-            if (_currentBranchCfg >= 0 && _currentBranchCfg < _branchConfigs.Length)
-            {
-                // Project hit onto branch local axes via dot product
-                var bc  = _branchConfigs[_currentBranchCfg];
-                var loc = hit - bc.origin;
-                col = Mathf.RoundToInt(Vector3.Dot(loc, bc.colDir) / TileW);
-                row = Mathf.RoundToInt(Vector3.Dot(loc, bc.rowDir) / TileH);
-            }
-            else
+            if (!BattlefieldSpaceMapper.TryWorldToTile(_currentBranchCfg, hit, Cols, Rows, out col, out row))
             {
                 col = Mathf.RoundToInt(hit.x / TileW);
                 row = Mathf.RoundToInt(hit.z / TileH);

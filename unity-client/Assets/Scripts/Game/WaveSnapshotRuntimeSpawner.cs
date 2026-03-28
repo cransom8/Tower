@@ -442,7 +442,7 @@ namespace CastleDefender.Game
                 if (lane == null || (uint)lane.laneIndex >= (uint)_branchMap.Length)
                     continue;
 
-                int branchCfg = TileGrid.GetBranchConfigIndex(lane.branchId);
+                int branchCfg = BattlefieldSpaceMapper.GetBranchConfigIndex(lane.branchId);
                 if (branchCfg >= 0)
                     _branchMap[lane.laneIndex] = branchCfg;
             }
@@ -1480,7 +1480,7 @@ namespace CastleDefender.Game
             if (Mathf.Abs(lateralOffset) <= 0.0001f)
                 return worldPos;
 
-            Vector3 lateral = TileGrid.GetLaneLateralDir(spatialLane);
+            Vector3 lateral = BattlefieldSpaceMapper.GetLaneLateralDir(spatialLane);
             lateral.y = 0f;
             if (lateral.sqrMagnitude <= 0.0001f)
                 return worldPos;
@@ -1542,7 +1542,7 @@ namespace CastleDefender.Game
             if (TryResolveSnapshotFacing(lane, unit, spatialLane, out Vector3 facing))
                 return Quaternion.LookRotation(facing, Vector3.up);
 
-            return Quaternion.LookRotation(TileGrid.GetLaneForwardDir(spatialLane), Vector3.up);
+            return Quaternion.LookRotation(BattlefieldSpaceMapper.GetLaneForwardDir(spatialLane), Vector3.up);
         }
 
         bool TryResolveSnapshotFacing(MLLaneSnap lane, MLUnit unit, int spatialLane, out Vector3 facing)
@@ -1572,7 +1572,7 @@ namespace CastleDefender.Game
             out string failureReason)
         {
             worldPos = default;
-            routeForward = TileGrid.GetLaneForwardDir(lane?.laneIndex ?? 0);
+            routeForward = BattlefieldSpaceMapper.GetLaneForwardDir(lane?.laneIndex ?? 0);
             resolvedRouteSource = null;
             failureReason = null;
 
@@ -1890,7 +1890,7 @@ namespace CastleDefender.Game
 
         static bool TryResolveRouteTowardMineDirection(int spatialLane, out Vector3 direction)
         {
-            direction = -TileGrid.GetLaneForwardDir(spatialLane);
+            direction = -BattlefieldSpaceMapper.GetLaneForwardDir(spatialLane);
             direction.y = 0f;
             if (direction.sqrMagnitude <= 0.0001f)
                 return false;
@@ -2279,7 +2279,7 @@ namespace CastleDefender.Game
 
         static Vector3 ResolveLaneFailureMarkerWorld(int spatialLane)
         {
-            return TileGrid.TileToWorld(spatialLane, 5, 0) + Vector3.up * 2.4f;
+            return BattlefieldSpaceMapper.TileToWorld(spatialLane, 5, 0) + Vector3.up * 2.4f;
         }
 
         static string ResolveDefenderTeamKey(MLLaneSnap lane)

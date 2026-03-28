@@ -113,8 +113,8 @@ namespace CastleDefender.Game
                     view = CreateProjectile(p);
 
                 // Use ownerLane for branch-local world positions
-                view.from     = TileGrid.TileToWorld(p.ownerLane, p.fromX, p.fromY);
-                view.to       = TileGrid.TileToWorld(p.ownerLane, p.toX,   p.toY);
+                view.from     = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.fromX, p.fromY);
+                view.to       = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.toX,   p.toY);
                 view.progress = p.progress;
                 view.isSplash = p.isSplash;
             }
@@ -126,8 +126,8 @@ namespace CastleDefender.Game
             var  prefab   = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
             if (prefab == null) return new ProjView();
 
-            var from = TileGrid.TileToWorld(p.ownerLane, p.fromX, p.fromY);
-            var to   = TileGrid.TileToWorld(p.ownerLane, p.toX,   p.toY);
+            var from = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.fromX, p.fromY);
+            var to   = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.toX,   p.toY);
             var go   = Instantiate(prefab, from, Quaternion.identity, transform);
             go.name  = $"Proj_{p.id}";
 
