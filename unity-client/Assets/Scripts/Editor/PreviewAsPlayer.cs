@@ -33,8 +33,8 @@ public static class PreviewAsPlayer
         var cam = Object.FindFirstObjectByType<Camera>();
         if (cam == null) { Debug.LogError("[PreviewAsPlayer] No Camera found in scene."); return; }
 
-        Vector3 castlePos  = TileGrid.TileToWorld(laneIndex, 5, 27);
-        Vector3 spawnPos   = TileGrid.TileToWorld(laneIndex, 5, 0);
+        Vector3 castlePos  = BattlefieldSpaceMapper.TileToWorld(laneIndex, 5, 27);
+        Vector3 spawnPos   = BattlefieldSpaceMapper.TileToWorld(laneIndex, 5, 0);
         Vector3 laneCenter = (castlePos + spawnPos) * 0.5f + new Vector3(0f, 0f, CAM_Z_OFFSET);
         Vector3 camPos     = laneCenter + Vector3.up * CAM_HEIGHT;
 

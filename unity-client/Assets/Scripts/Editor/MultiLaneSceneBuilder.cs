@@ -1,20 +1,14 @@
-// MultiLaneSceneBuilder.cs — Ensures Game_ML has the correct GameObjects for the
-// 4-lane H-shaped battlefield.
+// MultiLaneSceneBuilder.cs - Ensures Game_ML has the core multiplayer runtime objects.
 //
-// Menu: Castle Defender → Setup → Build 4-Lane Scene
-//       Castle Defender → Setup → Apply to Game_ML Scene
-//
-// "Build 4-Lane Scene" operates on the currently open scene.
-// "Apply to Game_ML Scene" saves current scene, opens Game_ML, runs the build, and saves it.
+// Menu: Castle Defender -> Setup -> Build 4-Lane Scene
+//       Castle Defender -> Setup -> Apply to Game_ML Scene
 //
 // What it creates / wires:
-//   • TileGrid        — single instance; handles the player's viewed branch interactively
-//   • GameplayPresentationRoot — single shared presentation host for combat visuals
-//   • SnapshotApplier — singleton that feeds ML snapshots to both TileGrid and presentation systems
-//   • NetworkManager  — if absent (needed by SnapshotApplier.OnEnable)
+//   * GameplayPresentationRoot - shared presentation host for combat visuals
+//   * SnapshotApplier - singleton that feeds ML snapshots to presentation and UI systems
+//   * NetworkManager - if absent (needed by SnapshotApplier.OnEnable)
 //
-// After running, also run "Wire Registry and Scene" to assign tile prefabs + UnitPrefabRegistry.
-
+// After running, also run "Wire Registry and Scene" to assign the UnitPrefabRegistry.
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
@@ -26,10 +20,6 @@ namespace CastleDefender.Editor
 {
     public static class MultiLaneSceneBuilder
     {
-        // All paths from EditorPaths.cs — do not redeclare here.
-
-        // ── Menu items ────────────────────────────────────────────────────────
-
         [MenuItem("Castle Defender/Setup/Build 4-Lane Scene")]
         static void BuildCurrentScene()
         {
@@ -40,7 +30,8 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/Setup/Apply to Game_ML Scene")]
         static void ApplyToBothScenes()
         {
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
 
             var sceneML = EditorSceneManager.OpenScene(EditorPaths.SCENE_ML, OpenSceneMode.Single);
             BuildScene();
@@ -48,68 +39,19 @@ namespace CastleDefender.Editor
             Debug.Log("[MultiLane] Game_ML built and saved. Run 'Wire Registry and Scene' to assign prefabs.");
         }
 
-        // ── Core builder ──────────────────────────────────────────────────────
-
         static void BuildScene()
         {
             var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(EditorPaths.REGISTRY);
             if (registry == null)
-                Debug.LogWarning("[MultiLane] UnitPrefabRegistry not found at " + EditorPaths.REGISTRY +
-                                 " — run 'Wire Registry and Scene' afterward.");
-
-            EnsureTileGrid(registry);
-            EnsureGameplayPresentationRoot(registry);
-            EnsureSnapshotApplier();
-
-            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-        }
-
-        // ── TileGrid (4 instances, one per lane) ──────────────────────────────
-
-        static readonly string[] LaneNames = { "TileGrid_Lane0_Red", "TileGrid_Lane1_Gold", "TileGrid_Lane2_Blue", "TileGrid_Lane3_Green" };
-
-        static void EnsureTileGrid(UnitPrefabRegistry registry)
-        {
-            var floorPrefab  = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_FLOOR);
-            var wallPrefab   = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_WALL);
-            var castlePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TILE_CASTLE);
-            var cam          = Camera.main ?? Object.FindFirstObjectByType<Camera>();
-
-            // Build a lookup of existing TileGrids by LaneIndex so we don't duplicate
-            var existing = new System.Collections.Generic.Dictionary<int, TileGrid>();
-            foreach (var tg in Object.FindObjectsByType<TileGrid>(FindObjectsSortMode.None))
-                existing[tg.LaneIndex] = tg;
-
-            for (int lane = 0; lane < 4; lane++)
             {
-                TileGrid tileGrid;
-                if (existing.TryGetValue(lane, out tileGrid))
-                {
-                    Debug.Log($"[MultiLane] Found existing TileGrid for lane {lane}.");
-                }
-                else
-                {
-                    tileGrid = new GameObject(LaneNames[lane]).AddComponent<TileGrid>();
-                    tileGrid.LaneIndex = lane;
-                    Debug.Log($"[MultiLane] Created {LaneNames[lane]}.");
-                }
-
-                // IsInteractive defaults false; TileGrid.Update() auto-sets it at runtime
-                tileGrid.IsInteractive = false;
-
-                if (registry != null)    tileGrid.Registry     = registry;
-                if (floorPrefab  != null) tileGrid.FloorPrefab  = floorPrefab;
-                if (wallPrefab   != null) tileGrid.WallPrefab   = wallPrefab;
-                if (castlePrefab != null) tileGrid.CastlePrefab = castlePrefab;
-                if (cam != null && tileGrid.Cam == null) tileGrid.Cam = cam;
-
-                EditorUtility.SetDirty(tileGrid);
+                Debug.LogWarning("[MultiLane] UnitPrefabRegistry not found at " + EditorPaths.REGISTRY +
+                                 " - run 'Wire Registry and Scene' afterward.");
             }
 
-            Debug.Log("[MultiLane] 4 TileGrids wired (lanes 0-3).");
+            EnsureGameplayPresentationRoot(registry);
+            EnsureSnapshotApplier();
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
         }
-
-        // ── GameplayPresentationRoot ─────────────────────────────────────────
 
         static void EnsureGameplayPresentationRoot(UnitPrefabRegistry registry)
         {
@@ -127,11 +69,8 @@ namespace CastleDefender.Editor
             Debug.Log("[MultiLane] GameplayPresentationRoot wired.");
         }
 
-        // ── SnapshotApplier + NetworkManager ──────────────────────────────────
-
         static void EnsureSnapshotApplier()
         {
-            // NetworkManager must exist for SnapshotApplier.OnEnable to find it
             var nm = Object.FindFirstObjectByType<NetworkManager>();
             if (nm == null)
             {

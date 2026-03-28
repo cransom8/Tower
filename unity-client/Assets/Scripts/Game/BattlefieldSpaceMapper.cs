@@ -4,8 +4,8 @@ namespace CastleDefender.Game
 {
     /// <summary>
     /// Authoritative lane-space mapper for the multilane battlefield.
-    /// Runtime presentation, camera framing, and projectile systems should
-    /// resolve lane geometry here instead of depending on TileGrid.
+    /// Runtime presentation, camera framing, and editor tools should
+    /// resolve lane geometry here instead of duplicating battlefield math.
     /// </summary>
     public static class BattlefieldSpaceMapper
     {

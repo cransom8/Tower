@@ -15,7 +15,7 @@
 //
 // If LVE prefabs cannot be found, coloured Unity primitive proxies are used instead.
 //
-// Battlefield geometry reference (from TileGrid.cs BranchConfigs):
+// Battlefield geometry reference for the authored four-bridge layout:
 //   Lane 0 Red  : origin (0,0,13)  colDir (0,0,-1) rowDir (-1,0,0)  spans X[0..-27] Z[3..13]
 //   Lane 1 Gold : origin (0,0,-3)  colDir (0,0,-1) rowDir (-1,0,0)  spans X[0..-27] Z[-13..-3]
 //   Lane 2 Blue : origin (0,0,3)   colDir (0,0, 1) rowDir ( 1,0,0)  spans X[0..+27] Z[3..13]
@@ -42,7 +42,7 @@ namespace CastleDefender.Editor
         const string CLIFFS_V2  = EditorPaths.LVE_CLIFFS;
         const string PARTICLES  = EditorPaths.LVE_PARTICLES;
 
-        // Bridge geometry constants (must match TileGrid BranchConfigs)
+        // Bridge geometry constants for the authored battlefield span
         const float BRIDGE_HALF_LEN = 13.5f;   // half of 27 tiles (rows 0-27)
         const float BRIDGE_WIDTH    = 11f;      // 11 tiles wide (cols 0-10)
         const float BRIDGE_CENTER_Z = 8f;       // upper pair center Z

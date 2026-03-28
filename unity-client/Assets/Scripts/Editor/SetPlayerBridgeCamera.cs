@@ -6,13 +6,13 @@ using CastleDefender.Game;
 
 /// <summary>
 /// Sets the starting camera in Game_ML to Player_Bridge_Lane_1
-/// (TileGrid lane 0 — upper-left bridge, world center approx (-77, 2, +25)).
+/// (Battlefield lane 0 — upper-left bridge, world center approx (-77, 2, +25)).
 ///
 /// Menu: Castle Defender/Setup/Set Player Bridge Camera (Player 1)
 /// </summary>
 public static class SetPlayerBridgeCamera
 {
-    const int   PLAYER_LANE   = 0;   // TileGrid lane index for Player_Bridge_Lane_1
+    const int   PLAYER_LANE   = 0;   // Battlefield lane index for Player_Bridge_Lane_1
     const float CAM_HEIGHT    = 20f;
     const float CAM_Z_OFFSET  = -10f;
     const float ORTHO_SIZE    = 30f;  // half-height: 60 world units fits the 54-unit lane length
@@ -20,9 +20,9 @@ public static class SetPlayerBridgeCamera
     [MenuItem("Castle Defender/Setup/Set Player Bridge Camera (Player 1)")]
     public static void Run()
     {
-        // Compute camera target from TileGrid lane 0 midpoint
-        Vector3 castlePos  = TileGrid.TileToWorld(PLAYER_LANE, 5, 27);
-        Vector3 spawnPos   = TileGrid.TileToWorld(PLAYER_LANE, 5, 0);
+        // Compute camera target from battlefield lane 0 midpoint
+        Vector3 castlePos  = BattlefieldSpaceMapper.TileToWorld(PLAYER_LANE, 5, 27);
+        Vector3 spawnPos   = BattlefieldSpaceMapper.TileToWorld(PLAYER_LANE, 5, 0);
         Vector3 laneCenter = (castlePos + spawnPos) * 0.5f + new Vector3(0f, 0f, CAM_Z_OFFSET);
         Vector3 camPos     = laneCenter + Vector3.up * CAM_HEIGHT;
 

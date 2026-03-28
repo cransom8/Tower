@@ -2,11 +2,11 @@
 // to 3D prefabs. One asset shared across all game scenes.
 //
 // Create via Assets > Create > CastleDefender > Unit Prefab Registry.
-// Assign to LaneRenderer and TileGrid in the Inspector.
+// Assign to GameplayPresentationRoot and other live presentation systems in the Inspector.
 //
 // Skin system:
 //   Add entries to skinEntries with a skinKey that matches the server DB skin key.
-//   LaneRenderer calls GetPrefabForSkin(type, skinKey) — if skinKey has an entry its
+//   GameplayPresentationRoot consumers call GetPrefabForSkin(type, skinKey) — if skinKey has an entry its
 //   prefab is used, otherwise falls back to the base type entry.
 
 using System.Collections.Generic;
@@ -95,7 +95,13 @@ namespace CastleDefender.Game
             }
 
             if (TryGet(key, out var e) && e.prefab != null)
-                return e.prefab;
+            {
+                if (IsRenderablePrefab(e.prefab, out string localIssue))
+                    return e.prefab;
+
+                LogBrokenLocalUnitPrefabOnce(key, localIssue);
+                return null;
+            }
 
             LogMissingUnitOnce(key, remoteContent);
             return null;
@@ -110,7 +116,7 @@ namespace CastleDefender.Game
         public Color GetTintEnemy(string key) =>
             TryGet(key, out var e) ? e.tintEnemy : new Color(0.90f, 0.25f, 0.25f);
 
-        // ── Skin-aware lookup (call this from LaneRenderer) ───────────────────
+        // ── Skin-aware lookup for gameplay presentation consumers ────────────
         /// <summary>
         /// Returns the skin prefab if skinKey is set and found, otherwise the base type prefab.
         /// </summary>
@@ -125,15 +131,21 @@ namespace CastleDefender.Game
                         return remoteSkinPrefab;
 
                     LogBrokenRemoteSkinPrefabOnce(skinKey, unitType, remoteIssue, remoteContent);
-                    return null;
+                    return GetPrefab(unitType);
                 }
 
                 if (_skinDict == null) Rebuild();
                 if (_skinDict.TryGetValue(skinKey, out var s) && s.prefab != null)
-                    return s.prefab;
+                {
+                    if (IsRenderablePrefab(s.prefab, out string localIssue))
+                        return s.prefab;
+
+                    LogBrokenLocalSkinPrefabOnce(skinKey, unitType, localIssue);
+                    return GetPrefab(unitType);
+                }
 
                 LogMissingSkinOnce(skinKey, unitType, remoteContent);
-                return null;
+                return GetPrefab(unitType);
             }
             return GetPrefab(unitType);
         }
@@ -210,12 +222,9 @@ namespace CastleDefender.Game
 
             string message =
                 $"[UnitPrefabRegistry] Missing prefab for skin '{normalizedKey}' on unit '{unitType ?? "<unknown>"}'. " +
-                "Runtime no longer falls back to the base unit prefab for unresolved skins.";
+                "Falling back to the base unit prefab when one is available.";
 
-            if (IsCriticalSkin(remoteContent, normalizedKey))
-                Debug.LogError(message);
-            else
-                Debug.LogError(message);
+            Debug.LogWarning(message);
         }
 
         void LogBrokenRemoteUnitPrefabOnce(string key, string issue, RemoteContentManager remoteContent)
@@ -242,12 +251,31 @@ namespace CastleDefender.Game
 
             string message =
                 $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
-                "Runtime no longer falls back to a different skin or the base unit prefab.";
+                "Falling back to the base unit prefab when one is available.";
 
-            if (IsCriticalSkin(remoteContent, normalizedKey))
-                Debug.LogError(message);
-            else
-                Debug.LogError(message);
+            Debug.LogWarning(message);
+        }
+
+        void LogBrokenLocalUnitPrefabOnce(string key, string issue)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(key) ? "<empty>" : key.Trim();
+            if (!_loggedMissingUnits.Add($"broken_local:{normalizedKey}"))
+                return;
+
+            Debug.LogError(
+                $"[UnitPrefabRegistry] Local prefab for unit '{normalizedKey}' is broken ({issue}). " +
+                "Fix the registry entry so the authoritative unit can materialize correctly.");
+        }
+
+        void LogBrokenLocalSkinPrefabOnce(string skinKey, string unitType, string issue)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(skinKey) ? "<empty>" : skinKey.Trim();
+            if (!_loggedMissingSkins.Add($"broken_local:{normalizedKey}"))
+                return;
+
+            Debug.LogWarning(
+                $"[UnitPrefabRegistry] Local skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
+                "Falling back to the base unit prefab when one is available.");
         }
 
         static bool IsRenderablePrefab(GameObject prefab, out string issue)

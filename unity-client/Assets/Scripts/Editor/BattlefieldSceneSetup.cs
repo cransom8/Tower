@@ -1,6 +1,6 @@
-// BattlefieldSceneSetup.cs — Editor utility for the H-shaped battlefield scene.
-// Menu: Castle Defender → Setup → Validate Battlefield Scene
-//       Castle Defender → Setup → Frame Battlefield in Scene View
+// BattlefieldSceneSetup.cs - Editor utility for the H-shaped battlefield scene.
+// Menu: Castle Defender -> Setup -> Validate Battlefield Scene
+//       Castle Defender -> Setup -> Frame Battlefield in Scene View
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
@@ -16,24 +16,6 @@ namespace CastleDefender.Editor
         {
             int errors = 0, warnings = 0;
 
-            // ── TileGrid ──────────────────────────────────────────────────────
-            var tileGrid = Object.FindFirstObjectByType<TileGrid>();
-            if (tileGrid == null)
-            {
-                Debug.LogError("[BattlefieldSetup] No TileGrid found in scene. Add a GameObject with TileGrid component.");
-                errors++;
-            }
-            else
-            {
-                if (tileGrid.FloorPrefab  == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.FloorPrefab not assigned.");  warnings++; }
-                if (tileGrid.WallPrefab   == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.WallPrefab not assigned.");   warnings++; }
-                if (tileGrid.CastlePrefab == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.CastlePrefab not assigned."); warnings++; }
-                if (tileGrid.Registry     == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.Registry not assigned.");     warnings++; }
-                if (tileGrid.Cam          == null) { Debug.LogWarning("[BattlefieldSetup] TileGrid.Cam not assigned.");          warnings++; }
-                Debug.Log("[BattlefieldSetup] TileGrid OK.");
-            }
-
-            // ── GameplayPresentationRoot ────────────────────────────────────
             var presentationRoot = Object.FindFirstObjectByType<GameplayPresentationRoot>();
             if (presentationRoot == null)
             {
@@ -42,32 +24,81 @@ namespace CastleDefender.Editor
             }
             else
             {
-                if (presentationRoot.Registry == null) { Debug.LogWarning("[BattlefieldSetup] GameplayPresentationRoot.Registry not assigned."); warnings++; }
-                else Debug.Log("[BattlefieldSetup] GameplayPresentationRoot OK.");
+                if (presentationRoot.Registry == null)
+                {
+                    Debug.LogWarning("[BattlefieldSetup] GameplayPresentationRoot.Registry not assigned.");
+                    warnings++;
+                }
+                else
+                {
+                    Debug.Log("[BattlefieldSetup] GameplayPresentationRoot OK.");
+                }
             }
 
-            // ── NetworkManager ────────────────────────────────────────────────
+            var fortressSelection = Object.FindFirstObjectByType<FortressSelectionController>(FindObjectsInactive.Include);
+            if (fortressSelection == null)
+            {
+                Debug.LogWarning("[BattlefieldSetup] No FortressSelectionController found in scene.");
+                warnings++;
+            }
+            else
+            {
+                Debug.Log("[BattlefieldSetup] FortressSelectionController OK.");
+            }
+
+            var fortressPads = Object.FindObjectsByType<FortressPadAnchor>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (fortressPads == null || fortressPads.Length == 0)
+            {
+                Debug.LogWarning("[BattlefieldSetup] No authored FortressPadAnchor objects found in scene.");
+                warnings++;
+            }
+            else
+            {
+                Debug.Log($"[BattlefieldSetup] FortressPadAnchor count = {fortressPads.Length}.");
+            }
+
+            var barracksSites = Object.FindObjectsByType<BarracksSiteView>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (barracksSites == null || barracksSites.Length == 0)
+            {
+                Debug.LogWarning("[BattlefieldSetup] No authored BarracksSiteView objects found in scene.");
+                warnings++;
+            }
+            else
+            {
+                Debug.Log($"[BattlefieldSetup] BarracksSiteView count = {barracksSites.Length}.");
+            }
+
             var nm = Object.FindFirstObjectByType<NetworkManager>();
-            if (nm == null) { Debug.LogWarning("[BattlefieldSetup] No NetworkManager found in scene."); warnings++; }
-            else Debug.Log("[BattlefieldSetup] NetworkManager OK.");
+            if (nm == null)
+            {
+                Debug.LogWarning("[BattlefieldSetup] No NetworkManager found in scene.");
+                warnings++;
+            }
+            else
+            {
+                Debug.Log("[BattlefieldSetup] NetworkManager OK.");
+            }
 
-            // ── SnapshotApplier ───────────────────────────────────────────────
             var sa = Object.FindFirstObjectByType<SnapshotApplier>();
-            if (sa == null) { Debug.LogWarning("[BattlefieldSetup] No SnapshotApplier found in scene."); warnings++; }
-            else Debug.Log("[BattlefieldSetup] SnapshotApplier OK.");
+            if (sa == null)
+            {
+                Debug.LogWarning("[BattlefieldSetup] No SnapshotApplier found in scene.");
+                warnings++;
+            }
+            else
+            {
+                Debug.Log("[BattlefieldSetup] SnapshotApplier OK.");
+            }
 
-            // ── Summary ───────────────────────────────────────────────────────
             if (errors == 0 && warnings == 0)
                 Debug.Log("[BattlefieldSetup] All checks passed.");
             else
-                Debug.Log($"[BattlefieldSetup] Done — {errors} error(s), {warnings} warning(s). Check Console for details.");
+                Debug.Log($"[BattlefieldSetup] Done - {errors} error(s), {warnings} warning(s). Check Console for details.");
         }
 
         [MenuItem("Castle Defender/Setup/Frame Battlefield in Scene View")]
         static void FrameBattlefield()
         {
-            // Position the scene view camera to see the full H-shaped battlefield.
-            // Battlefield spans roughly X: -30 to +30, Z: -15 to +15.
             var sv = SceneView.lastActiveSceneView;
             if (sv == null)
             {
@@ -79,7 +110,7 @@ namespace CastleDefender.Editor
             sv.rotation = Quaternion.Euler(60f, 0f, 0f);
             sv.size = 35f;
             sv.Repaint();
-            Debug.Log("[BattlefieldSetup] Scene View framed on battlefield (pivot=0, angle=60°, size=35).");
+            Debug.Log("[BattlefieldSetup] Scene View framed on battlefield (pivot=0, angle=60, size=35).");
         }
     }
 }

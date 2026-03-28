@@ -1,5 +1,5 @@
 // SnapshotApplier.cs — receives game snapshots and stores the latest world state.
-// Other scripts (GameplayPresentationRoot, InfoBar, TileGrid, etc.) read from SnapshotApplier.Instance.
+// Other scripts (GameplayPresentationRoot, InfoBar, fortress UI, etc.) read from SnapshotApplier.Instance.
 //
 // SETUP:
 //   Attach to any persistent GameObject in the ML/Classic game scenes.
