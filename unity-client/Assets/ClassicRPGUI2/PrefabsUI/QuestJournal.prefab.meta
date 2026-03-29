@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: ba04fe2ec5f985f4d84a3556c619c5f3
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/QuestJournal.prefab
+  uploadId: 861922

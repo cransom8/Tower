@@ -1,0 +1,57 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 272417254b8e81a459cc5df22a324bf3, type: 3}
+  m_Name: ClassicRpgRuntimeTheme
+  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.UI.ClassicRpgRuntimeThemeAsset
+  TitleFont: {fileID: 11400000, guid: 553a823232d87d34883710702ca5629b, type: 2}
+  HeaderFont: {fileID: 11400000, guid: e094e7db6496c624b9db392cd5f0b72c, type: 2}
+  BodyFont: {fileID: 11400000, guid: e6db03a34d084d04b8f900899b0495eb, type: 2}
+  FrameForSlicing: {fileID: 21300000, guid: 818e638c7f613854399301c243b48f96, type: 3}
+  Paper: {fileID: 21300000, guid: 220114e50ff09c0448df3f5bb2908c59, type: 3}
+  PaperMedium: {fileID: 21300000, guid: 4d503d2d74bdba443a879c93f0ebbdb8, type: 3}
+  MainMenuBar: {fileID: 21300000, guid: b871daf4ba53ca14eb0702160654b40a, type: 3}
+  TitleLong: {fileID: 21300000, guid: 87caf59571654924d81a2e6241775b76, type: 3}
+  TitleMedium: {fileID: 21300000, guid: a0a11864997fc294cb76480d0e1b33d9, type: 3}
+  TitleMini: {fileID: 21300000, guid: 849075831cd06dd4e905a969cb054ef6, type: 3}
+  ShadowBasic: {fileID: 21300000, guid: 1264f46316d191f4794fe710c2fe0ab2, type: 3}
+  PortraitFrame: {fileID: 21300000, guid: 79b14b3fd22725a4a829896b46cfffd8, type: 3}
+  PortraitFrameBackground: {fileID: 21300000, guid: 4b2495e33fc3f6d40b7b1f734dd6d04d, type: 3}
+  SpellPickDarkPart: {fileID: 21300000, guid: 3e36f72d337be7441866ed16d867bb0a, type: 3}
+  SeparatorDark: {fileID: 21300000, guid: c1b1ec04b3fba0c419e7f8035a8bde53, type: 3}
+  FlagBigClassic: {fileID: 21300000, guid: 6eecaaf667adecb418bf905690d2a7f9, type: 3}
+  FlagLittleGold: {fileID: 21300000, guid: 9d49172d1e2a0754fa8234675887aa6c, type: 3}
+  InventoryTitle: {fileID: 21300000, guid: 7894723374441594ea51cb9aff485c14, type: 3}
+  QuestTitleYellow: {fileID: 21300000, guid: 494888dbd774be74f89a70a0bc87dba2, type: 3}
+  ButtonLongNormal: {fileID: 21300000, guid: 70802c1964e7a794786a0c477b505879, type: 3}
+  ButtonLongHovered: {fileID: 21300000, guid: 7d4fd1eb85df5464db00a57872b71e3a, type: 3}
+  ButtonLongPressed: {fileID: 21300000, guid: e6669c318626d78478ce076a1c25ba7e, type: 3}
+  ButtonLongDisabled: {fileID: 21300000, guid: 7314a730b328a5542aa21fce0de30abf, type: 3}
+  ButtonMediumNormal: {fileID: 21300000, guid: 13a1bfedc320cf942b5ead3e353a8f72, type: 3}
+  ButtonMediumHovered: {fileID: 21300000, guid: ed6aac0166942ce4e86285a7aff28f40, type: 3}
+  ButtonMediumPressed: {fileID: 21300000, guid: e8c1909a79c1ae44c8b7c45754449a00, type: 3}
+  ButtonMediumDisabled: {fileID: 21300000, guid: 049dacf49979099488037353f71b714d, type: 3}
+  ButtonMiniGoldNormal: {fileID: 21300000, guid: 9a72393b456a9724b8b08beea05af55d, type: 3}
+  ButtonMiniGoldHovered: {fileID: 21300000, guid: 78cf38afa1243954cb75eaf56b3dd522, type: 3}
+  ButtonMiniGoldPressed: {fileID: 21300000, guid: cd5ac2257704d4843816b51e6434f5b2, type: 3}
+  ButtonMiniGoldDisabled: {fileID: 21300000, guid: 5de716a57d9f5d54fa3de16f14b48249, type: 3}
+  ButtonMiniGreenNormal: {fileID: 21300000, guid: 42d27993e9421ce45bd96351b82c8256, type: 3}
+  ButtonMiniGreenHovered: {fileID: 21300000, guid: b5b79252cb17f4c43b6e09bcbf2bc00c, type: 3}
+  ButtonMiniGreenPressed: {fileID: 21300000, guid: f305abb343db4644c88a052d8aee92c0, type: 3}
+  ButtonMiniGreenDisabled: {fileID: 21300000, guid: 1cc3521e5e62f744f8014b8144e0f271, type: 3}
+  ButtonMiniBrownNormal: {fileID: 21300000, guid: 5e4d2b946ed1333428bc855b39f913e6, type: 3}
+  ButtonMiniBrownHovered: {fileID: 21300000, guid: 1978fcbbac043ee47863e8238cc5d9fe, type: 3}
+  ButtonMiniBrownPressed: {fileID: 21300000, guid: 550ad674defc0ab4b9f04339bd24603e, type: 3}
+  ButtonMiniBrownDisabled: {fileID: 21300000, guid: 904e1b1d6607967419c291a0af2a2f26, type: 3}
+  ButtonMicroExitNormal: {fileID: 21300000, guid: b31f91dab9f325c459e9d3912b727775, type: 3}
+  ButtonMicroExitHovered: {fileID: 21300000, guid: 9b2a747b551f43c428ff35002591157d, type: 3}
+  ButtonMicroExitPressed: {fileID: 21300000, guid: 8b3f61c6379474e4da2dcba25f5fc3b7, type: 3}
+  ButtonMicroExitDisabled: {fileID: 21300000, guid: 2442abe745d41bf468788ed3edb83439, type: 3}

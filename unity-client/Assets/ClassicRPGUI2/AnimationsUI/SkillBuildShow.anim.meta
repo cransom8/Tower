@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: ccba8ee3c687dc049aa26f1210870418
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/SkillBuildShow.anim
+  uploadId: 861922

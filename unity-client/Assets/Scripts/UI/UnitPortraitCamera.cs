@@ -39,6 +39,8 @@ namespace CastleDefender.UI
         [Range(-0.25f, 0.5f)] public float LookAtHeightBias = 0.06f;
 
         GameObject _staged;
+        Animator[] _stagedAnimators = Array.Empty<Animator>();
+        UnitAnimationResolver.ResolvedProfile _stagedAnimationProfile;
 
         public void ShowUnit(string key)
         {
@@ -54,6 +56,8 @@ namespace CastleDefender.UI
 
             ShowPrefab(prefab, Registry.GetScale(key));
         }
+
+        public GameObject StagedObject => _staged;
 
         public void ShowPrefab(GameObject prefab, float scale = 1f, Action<GameObject> configureInstance = null)
         {
@@ -83,6 +87,53 @@ namespace CastleDefender.UI
             PrepareStagedObject(prefab.name, scale);
         }
 
+        public Animator[] GetStagedAnimators()
+        {
+            return _stagedAnimators ?? Array.Empty<Animator>();
+        }
+
+        public void SetAnimatorSpeed(float speed)
+        {
+            var animators = GetStagedAnimators();
+            float resolvedSpeed = Mathf.Max(0.05f, speed);
+            for (int i = 0; i < animators.Length; i++)
+            {
+                var animator = animators[i];
+                if (animator == null)
+                    continue;
+
+                animator.speed = resolvedSpeed;
+            }
+        }
+
+        public bool HasAnyState(string[] stateNames)
+        {
+            return FindPlayableState(stateNames, out _, out _);
+        }
+
+        public bool PlayFirstAvailableState(string[] stateNames, float transitionDuration = 0.08f)
+        {
+            return TryPlayFirstAvailableState(stateNames, out _, out _, transitionDuration);
+        }
+
+        public bool TryPlayFirstAvailableState(
+            string[] stateNames,
+            out string playedState,
+            out float clipLength,
+            float transitionDuration = 0.08f)
+        {
+            playedState = null;
+            clipLength = 0f;
+
+            if (!FindPlayableState(stateNames, out var animator, out var stateName) || animator == null)
+                return false;
+
+            playedState = stateName;
+            clipLength = UnitAnimationResolver.ResolveClipLength(animator, stateName);
+            PlayStateOnAnimators(animator, stateName, transitionDuration);
+            return true;
+        }
+
         public void Clear()
         {
             if (_staged == null)
@@ -91,6 +142,19 @@ namespace CastleDefender.UI
             _staged.SetActive(false);
             DestroyImmediate(_staged);
             _staged = null;
+            _stagedAnimators = Array.Empty<Animator>();
+            _stagedAnimationProfile = null;
+        }
+
+        void LateUpdate()
+        {
+            if (_staged == null || Cam == null || RenderTex == null)
+                return;
+
+            if (!RenderTex.IsCreated())
+                RenderTex.Create();
+
+            Cam.Render();
         }
 
         void ClearStageChildren()
@@ -220,6 +284,20 @@ namespace CastleDefender.UI
                 if (!animator.gameObject.activeInHierarchy)
                     continue;
 
+                animator.updateMode = AnimatorUpdateMode.UnscaledTime;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
+
+            _stagedAnimators = _staged.GetComponentsInChildren<Animator>(true);
+            _stagedAnimationProfile = UnitAnimationResolver.ResolveForUnit(_staged, unit: null);
+            UnitAnimationResolver.PrepareAnimators(_stagedAnimators, _stagedAnimationProfile, forPortrait: true);
+
+            for (int i = 0; i < _stagedAnimators.Length; i++)
+            {
+                var animator = _stagedAnimators[i];
+                if (animator == null)
+                    continue;
+
                 animator.Rebind();
                 animator.Update(0f);
             }
@@ -297,7 +375,40 @@ namespace CastleDefender.UI
                 $"[UnitPortraitCamera] Prepared portrait for '{key}' controller='{controllerName}' " +
                 $"with {renderers.Length} renderers. missingSkinnedMeshes={missingSkinnedMeshes} " +
                 $"missingStaticMeshes={missingStaticMeshes} missingMaterials={missingMaterials} " +
-                $"missingController={missingController}");
+                $"missingController={missingController} animationProfile='{_stagedAnimationProfile?.ProfileId ?? "default"}'");
+        }
+
+        bool FindPlayableState(string[] stateNames, out Animator foundAnimator, out string foundState)
+        {
+            return UnitAnimationResolver.TryFindPlayableState(_stagedAnimators, stateNames, out foundAnimator, out foundState);
+        }
+
+        void PlayStateOnAnimators(Animator animator, string stateName, float transitionDuration)
+        {
+            int stateHash = Animator.StringToHash(stateName);
+            PlayState(animator, stateHash, transitionDuration);
+
+            for (int i = 0; i < _stagedAnimators.Length; i++)
+            {
+                var sibling = _stagedAnimators[i];
+                if (sibling == null || sibling == animator || !sibling.HasState(0, stateHash))
+                    continue;
+
+                PlayState(sibling, stateHash, transitionDuration);
+            }
+        }
+
+        static void PlayState(Animator animator, int stateHash, float transitionDuration)
+        {
+            if (animator == null)
+                return;
+
+            if (transitionDuration <= 0f)
+                animator.Play(stateHash, 0, 0f);
+            else
+                animator.CrossFadeInFixedTime(stateHash, transitionDuration, 0, 0f);
+
+            animator.Update(0f);
         }
 
         Renderer[] ResolveFramingRenderers(Renderer[] fallback)

@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 9a8fbbb24e3660b4f9661c3e0d61ea08
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/SpellBook.prefab
+  uploadId: 861922

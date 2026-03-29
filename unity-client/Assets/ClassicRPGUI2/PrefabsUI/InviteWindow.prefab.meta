@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: cb4e8f39bebc9cd44914cf8ad08c1e46
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/InviteWindow.prefab
+  uploadId: 861922

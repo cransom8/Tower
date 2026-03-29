@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 6fbc6dd362a210647b5389ed66c579d9
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/Menu.prefab
+  uploadId: 861922

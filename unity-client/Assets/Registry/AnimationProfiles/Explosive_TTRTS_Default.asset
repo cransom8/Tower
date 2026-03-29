@@ -1,0 +1,125 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 039cd01dc21c478fb3c35d70f341f8cb, type: 3}
+  m_Name: Explosive_TTRTS_Default
+  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.UnitAnimationProfile
+  profileId: tt_rts_default
+  notes: Fallback profile for TT_RTS prefabs that are still on their original controllers.
+  runtimeController: {fileID: 0}
+  portraitController: {fileID: 0}
+  overrideExistingControllers: 0
+  applyRootMotion: 0
+  animatorSpeedMultiplier: 1
+  defaultAttackFamily: 2
+  idle:
+    stateNames:
+    - Idle
+    - Idle-Sheathed
+    - Sheathed
+    - UnSheathed
+    - Unsheathed
+  move:
+    stateNames:
+    - WalkRun
+    - Run
+    - Walk
+    - Move
+  defend:
+    stateNames:
+    - Blocking
+    - Block
+    - Defend
+    - ShieldBlock
+    - Idle
+  retreat:
+    stateNames:
+    - WalkRun
+    - Run
+    - Walk
+    - Move
+    - Retreat
+  hitReact:
+    stateNames:
+    - Damage
+    - LightHit
+    - Block-HitReact
+    - Hit
+    - HitReact
+    - Hurt
+  death:
+    stateNames:
+    - Death
+    - Die
+    - Knockout
+  spawn:
+    stateNames:
+    - WeaponUnSheath
+    - WeaponUnsheath2
+    - UnSheathed
+    - Unsheathed
+    - Spawn
+    - Idle
+  attackDefault:
+    stateNames:
+    - Attack1
+    - Attack2
+    - Attack3
+    - MoveAttack1
+    - MoveAttack2
+    - SpecialAttack1
+    - SpecialAttack2
+  attackMelee:
+    stateNames:
+    - Attack1
+    - Attack2
+    - Attack3
+    - MoveAttack1
+    - MoveAttack2
+    - SpecialAttack1
+    - SpecialAttack2
+  attackRanged:
+    stateNames:
+    - RangeAttack1
+    - Aiming-Firing
+    - Attack1
+    - MoveAttack1
+    - MoveAttack2
+    - SpecialAttack1
+  attackMagic:
+    stateNames:
+    - RangeAttack1
+    - Attack1
+    - Attack2
+    - SpecialAttack1
+    - SpecialAttack2
+  attackSupport:
+    stateNames:
+    - RangeAttack1
+    - Attack1
+    - Attack2
+    - SpecialAttack1
+    - SpecialAttack2
+  attackSiege:
+    stateNames:
+    - RangeAttack1
+    - SpecialAttack1
+    - SpecialAttack2
+    - Attack1
+  transitions:
+    idleTransitionSeconds: 0.08
+    moveTransitionSeconds: 0.08
+    attackTransitionSeconds: 0.05
+    defendTransitionSeconds: 0.07
+    retreatTransitionSeconds: 0.08
+    hitTransitionSeconds: 0.05
+    deathTransitionSeconds: 0.05
+    spawnTransitionSeconds: 0.05

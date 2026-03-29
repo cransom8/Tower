@@ -482,6 +482,413 @@ test("route units engage hostile movers on shared center routes instead of passi
   assert.equal(attacker.combatState, "COMBAT");
 });
 
+test("attack-mode lane formations share the first hostile contact instead of letting trailing units walk past", () => {
+  const game = createGame();
+  const attackerLane = game.lanes[1];
+  const hostileLane = game.lanes[2];
+  const attackers = [
+    createAttacker({
+      id: "formation_attack_front",
+      sourceLaneIndex: 0,
+      sourceTeam: "red",
+      sourceBarracksId: "center",
+      targetLaneIndex: attackerLane.laneIndex,
+      laneId: attackerLane.laneIndex,
+      routeSegments: ["ACTR_A", "A_M", "M_B"],
+      routeSegmentIndex: 1,
+      segmentProgress: 0.84,
+      posX: -0.2,
+      posY: -1.2,
+      atkCd: 0,
+      baseDmg: 4,
+      baseSpeed: 1.2,
+    }),
+    createAttacker({
+      id: "formation_attack_mid",
+      sourceLaneIndex: 0,
+      sourceTeam: "red",
+      sourceBarracksId: "center",
+      targetLaneIndex: attackerLane.laneIndex,
+      laneId: attackerLane.laneIndex,
+      routeSegments: ["ACTR_A", "A_M", "M_B"],
+      routeSegmentIndex: 1,
+      segmentProgress: 0.79,
+      posX: 0,
+      posY: -1.8,
+      atkCd: 0,
+      baseDmg: 4,
+      baseSpeed: 1.2,
+    }),
+    createAttacker({
+      id: "formation_attack_rear",
+      sourceLaneIndex: 0,
+      sourceTeam: "red",
+      sourceBarracksId: "center",
+      targetLaneIndex: attackerLane.laneIndex,
+      laneId: attackerLane.laneIndex,
+      routeSegments: ["ACTR_A", "A_M", "M_B"],
+      routeSegmentIndex: 1,
+      segmentProgress: 0.74,
+      posX: 0.2,
+      posY: -2.4,
+      atkCd: 0,
+      baseDmg: 4,
+      baseSpeed: 1.2,
+    }),
+  ];
+  const hostileWave = createAttacker({
+    id: "formation_attack_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: hostileLane.laneIndex,
+    laneId: hostileLane.laneIndex,
+    routeSegments: ["WC_C"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.9,
+    posX: 0,
+    posY: 0.55,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+
+  attackerLane.units.push(...attackers);
+  hostileLane.units.push(hostileWave);
+
+  tick(game, 2);
+
+  const liveAttackers = game.lanes
+    .flatMap((lane) => lane.units)
+    .filter((unit) => unit && unit.id.startsWith("formation_attack_") && unit.id !== hostileWave.id);
+
+  assert.equal(liveAttackers.length, 3);
+  assert.ok(
+    liveAttackers.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
+    "once the lead unit finds contact, the rest of the attack formation should also stop and join that fight."
+  );
+  assert.ok(
+    liveAttackers.every((unit) => unit.pathContractType === "intercept"),
+    "formation units that join the shared contact should publish intercept routing instead of continuing past the fight."
+  );
+});
+
+test("lane-controlled attackers keep a short lock on their current contact instead of swapping to a slightly closer newcomer", () => {
+  const game = createGame();
+  const attackerLane = game.lanes[1];
+  const hostileLane = game.lanes[2];
+  const attacker = createAttacker({
+    id: "sticky_target_attacker",
+    sourceLaneIndex: 0,
+    sourceTeam: "red",
+    sourceBarracksId: "center",
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
+    routeSegments: ["ACTR_A", "A_M", "M_B"],
+    routeSegmentIndex: 1,
+    segmentProgress: 0.84,
+    posX: -0.2,
+    posY: -1.2,
+    atkCd: 999,
+    baseSpeed: 1.2,
+  });
+  const firstWave = createAttacker({
+    id: "sticky_target_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: hostileLane.laneIndex,
+    laneId: hostileLane.laneIndex,
+    routeSegments: ["WC_C"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.9,
+    posX: 0,
+    posY: 0.55,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+
+  attackerLane.units.push(attacker);
+  hostileLane.units.push(firstWave);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.unitId, firstWave.id, "the attacker should lock onto the first hostile contact.");
+
+  const secondWave = createAttacker({
+    id: "sticky_target_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: hostileLane.laneIndex,
+    laneId: hostileLane.laneIndex,
+    routeSegments: ["WC_C"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.85,
+    posX: 0.1,
+    posY: -0.2,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+
+  hostileLane.units.push(secondWave);
+
+  tick(game, 1);
+
+  assert.equal(
+    attacker.combatTarget?.unitId,
+    firstWave.id,
+    "a lane-controlled attacker should stay committed to its current combat target during the short lock window."
+  );
+});
+
+test("lane-controlled defenders pause to regroup briefly after a kill before reacquiring the next threat", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const coreTarget = getTownCoreTargetPosition(lane);
+  const defender = createAttacker({
+    id: "regroup_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 0,
+    baseDmg: 10,
+    baseSpeed: 1.0,
+    posX: coreTarget.posX,
+    posY: coreTarget.posY - 1.4,
+  });
+  const firstWave = createAttacker({
+    id: "regroup_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 6,
+    maxHp: 6,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: coreTarget.posX,
+    posY: coreTarget.posY - 0.5,
+  });
+  const secondWave = createAttacker({
+    id: "regroup_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 30,
+    maxHp: 30,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: coreTarget.posX + 1.2,
+    posY: coreTarget.posY - 0.7,
+  });
+
+  lane.units.push(defender, firstWave, secondWave);
+
+  tick(game, 1);
+
+  assert.equal(
+    lane.units.some((unit) => unit.id === firstWave.id),
+    false,
+    "the defender should finish the first weak contact on the opening attack."
+  );
+
+  tick(game, 1);
+
+  const serverDefender = lane.units.find((unit) => unit.id === defender.id);
+  assert.ok(serverDefender, "the regrouping defender should still be alive.");
+  assert.equal(
+    serverDefender.combatTarget,
+    null,
+    "after a kill, a lane-controlled defender should briefly regroup instead of immediately snapping to the next nearby target."
+  );
+  assert.ok(
+    Number(serverDefender.regroupUntilTick) > game.tick,
+    "the regroup window should stay active for a short time after combat ends."
+  );
+
+  tick(game, 10);
+
+  const laterDefender = lane.units.find((unit) => unit.id === defender.id);
+  const laterWave = lane.units.find((unit) => unit.id === secondWave.id);
+  assert.ok(laterDefender, "the defender should still exist after the regroup window.");
+  if (laterWave) {
+    assert.ok(
+      laterDefender.combatTarget?.unitId === laterWave.id || laterDefender.attackPulse > 0,
+      "once the regroup window ends, the defender should be able to reacquire the remaining threat."
+    );
+  }
+});
+
+test("lane-controlled formations keep surround movement inside their combat leash", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const coreTarget = getTownCoreTargetPosition(lane);
+  const defenders = Array.from({ length: 8 }, (_, index) => createAttacker({
+    id: `combat_pocket_defender_${index}`,
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    atkCd: 999,
+    baseSpeed: 0.55,
+    posX: coreTarget.posX + ((index % 2) * 0.4),
+    posY: coreTarget.posY - 0.8 - (index * 0.15),
+  }));
+
+  lane.units.push(...defenders);
+  tick(game, 1);
+
+  assert.ok(lane.formationAnchor, "the lane should expose a defend formation anchor before combat starts.");
+  const hostileWave = createAttacker({
+    id: "combat_pocket_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    routeSegments: ["WA_A"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0.95,
+    hp: 300,
+    maxHp: 300,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: lane.formationAnchor.x + lane.engagementRadius - 0.35,
+    posY: lane.formationAnchor.y,
+  });
+
+  lane.units.push(hostileWave);
+  tick(game, 12);
+
+  const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("combat_pocket_defender_"));
+  assert.equal(liveDefenders.length, defenders.length);
+  assert.ok(
+    liveDefenders.some((unit) => unit.combatTarget?.unitId === hostileWave.id || unit.movementMode === "CombatEngage" || unit.attackPulse > 0),
+    "the formation should actually commit to the hostile wave instead of the test only exercising idle formation movement."
+  );
+  assert.ok(
+    liveDefenders.every((unit) => {
+      const dx = Number(unit.posX) - Number(unit.anchorTargetX);
+      const dy = Number(unit.posY) - Number(unit.anchorTargetY);
+      const leashRadius = Number(unit.combatLeashRadius) || 0;
+      return Math.sqrt((dx * dx) + (dy * dy)) <= leashRadius + 0.05;
+    }),
+    "lane-controlled surround movement should stay inside each unit's combat leash instead of drifting off-lane during combat."
+  );
+});
+
+test("settled lane formations separate with small lateral nudges instead of being shoved off-slot", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const coreTarget = getTownCoreTargetPosition(lane);
+  const formationUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
+    id: `soft_separation_unit_${index}`,
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    atkCd: 999,
+    baseSpeed: 0.01,
+    posX: coreTarget.posX,
+    posY: coreTarget.posY - 0.5 - (index * 0.1),
+  }));
+
+  lane.units.push(...formationUnits);
+  tick(game, 1);
+
+  const settledUnits = lane.units.filter((unit) => unit.id.startsWith("soft_separation_unit_"));
+  const facing = lane.formationFacing || { x: 0, y: -1 };
+  const lateral = { x: -facing.y, y: facing.x };
+  let chosenPair = null;
+  let smallestLateralDelta = Infinity;
+  for (let i = 0; i < settledUnits.length; i += 1) {
+    for (let j = i + 1; j < settledUnits.length; j += 1) {
+      const a = settledUnits[i];
+      const b = settledUnits[j];
+      const anchorDx = Number(b.anchorTargetX) - Number(a.anchorTargetX);
+      const anchorDy = Number(b.anchorTargetY) - Number(a.anchorTargetY);
+      const lateralDelta = Math.abs((anchorDx * lateral.x) + (anchorDy * lateral.y));
+      const depthDelta = Math.abs((anchorDx * facing.x) + (anchorDy * facing.y));
+      if (depthDelta <= 0.5 || lateralDelta >= smallestLateralDelta)
+        continue;
+      smallestLateralDelta = lateralDelta;
+      chosenPair = [a, b];
+    }
+  }
+
+  const [frontUnit, rearUnit] = chosenPair || [];
+  assert.ok(frontUnit && rearUnit, "expected to find a front and rear formation pair in the same column.");
+  assert.ok(
+    smallestLateralDelta < 0.001,
+    "the chosen front and rear units should share a formation column so lateral separation is the drift we are testing."
+  );
+
+  for (const unit of settledUnits) {
+    unit.posX = Number(unit.anchorTargetX);
+    unit.posY = Number(unit.anchorTargetY);
+    unit.pathIdx = unit.posY;
+    unit.routeSegments = null;
+  }
+
+  const midpointX = (Number(frontUnit.anchorTargetX) + Number(rearUnit.anchorTargetX)) / 2;
+  const midpointY = (Number(frontUnit.anchorTargetY) + Number(rearUnit.anchorTargetY)) / 2;
+  frontUnit.posX = midpointX;
+  frontUnit.posY = midpointY - 0.01;
+  frontUnit.pathIdx = frontUnit.posY;
+  rearUnit.posX = midpointX;
+  rearUnit.posY = midpointY + 0.01;
+  rearUnit.pathIdx = rearUnit.posY;
+
+  tick(game, 1);
+
+  const updatedFront = lane.units.find((unit) => unit.id === frontUnit.id);
+  const updatedRear = lane.units.find((unit) => unit.id === rearUnit.id);
+  assert.ok(updatedFront && updatedRear, "the overlapped formation units should still exist after separation resolves.");
+  const relativeDx = Number(updatedRear.posX) - Number(updatedFront.posX);
+  const relativeDy = Number(updatedRear.posY) - Number(updatedFront.posY);
+  const lateralSpacing = Math.abs((relativeDx * lateral.x) + (relativeDy * lateral.y));
+  const frontLateralOffset = Math.abs(((Number(updatedFront.posX) - Number(updatedFront.anchorTargetX)) * lateral.x)
+    + ((Number(updatedFront.posY) - Number(updatedFront.anchorTargetY)) * lateral.y));
+  const rearLateralOffset = Math.abs(((Number(updatedRear.posX) - Number(updatedRear.anchorTargetX)) * lateral.x)
+    + ((Number(updatedRear.posY) - Number(updatedRear.anchorTargetY)) * lateral.y));
+  assert.ok(
+    lateralSpacing > 0.05,
+    "the spacing pass should still separate settled units enough to avoid overlap."
+  );
+  assert.ok(
+    frontLateralOffset < 0.16,
+    "settled front-row units should only get a light sideways nudge instead of being shoved far off their assigned slot."
+  );
+  assert.ok(
+    rearLateralOffset < 0.16,
+    "settled rear-row units should also stay close to their assigned slot while the overlap is resolved."
+  );
+});
+
 test("red center barracks units intercept center-spawn waves before they reach the red Town Core", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const redLane = game.lanes[0];
@@ -568,26 +975,22 @@ test("same-lane hold units do not aggro their own defenders while staging at the
     posX: 0.2,
     posY: 0.2,
   });
-  const defender = {
+  const defender = createAttacker({
     id: "friendly_gate_defender",
-    type: "raider",
+    sourceLaneIndex: 0,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
     hp: def.hp,
     maxHp: def.hp,
     baseDmg: def.dmg,
     atkCd: 0,
     atkCdTicks: def.atkCdTicks,
-    isDefender: true,
-    isWaveUnit: false,
-    moveSpeed: 0,
-    combatTarget: null,
     posX: 0,
     posY: 0,
     pathIdx: 0,
-    homeTx: 0,
-    homeTy: 0,
-    guardAnchorX: 0,
-    guardAnchorY: 0,
-  };
+  });
 
   simMl.initializeMovingUnitRouteState(game, lane, stagingUnit, { x: 0.2, y: 0.2 });
   lane.units.push(defender);
@@ -602,6 +1005,90 @@ test("same-lane hold units do not aggro their own defenders while staging at the
   assert.equal(stagingUnit.combatTarget, null);
   assert.equal(defender.hp, def.hp);
   assert.equal(stagingUnit.hp, def.hp);
+});
+
+test("defend-mode formations fan around an intercepted wave instead of collapsing into one point", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const coreTarget = getTownCoreTargetPosition(lane);
+  const defenders = [
+    createAttacker({
+      id: "defend_ring_left",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      posX: coreTarget.posX - 0.3,
+      posY: coreTarget.posY - 1.7,
+    }),
+    createAttacker({
+      id: "defend_ring_center",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      posX: coreTarget.posX,
+      posY: coreTarget.posY - 2.3,
+    }),
+    createAttacker({
+      id: "defend_ring_right",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      posX: coreTarget.posX + 0.3,
+      posY: coreTarget.posY - 2.9,
+    }),
+  ];
+  const hostileWave = createAttacker({
+    id: "defend_ring_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: coreTarget.posX,
+    posY: coreTarget.posY - 0.6,
+  });
+
+  lane.units.push(...defenders, hostileWave);
+
+  tick(game, 6);
+
+  const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("defend_ring_") && unit.id !== hostileWave.id);
+
+  assert.equal(liveDefenders.length, 3);
+  assert.ok(
+    liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
+    "a DEFEND formation should commit together to a nearby interception target."
+  );
+  const formationFacing = lane.formationFacing || { x: 0, y: -1 };
+  const formationLateral = { x: -formationFacing.y, y: formationFacing.x };
+  const lateralOffsets = liveDefenders.map((unit) =>
+    ((Number(unit.posX) - Number(hostileWave.posX)) * formationLateral.x)
+    + ((Number(unit.posY) - Number(hostileWave.posY)) * formationLateral.y));
+  assert.ok(
+    Math.max(...lateralOffsets) - Math.min(...lateralOffsets) > 0.7,
+    "defenders should occupy distinct surround slots instead of collapsing into one narrow stack."
+  );
 });
 
 test("attackers stay on the destroyed forward objective until the player explicitly recalls them", () => {

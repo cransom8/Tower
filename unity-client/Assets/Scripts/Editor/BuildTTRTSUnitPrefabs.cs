@@ -276,6 +276,9 @@ public static class BuildTTRTSUnitPrefabs
             animator.updateMode = AnimatorUpdateMode.Normal;
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
+            if (instance.GetComponent<TTRTSUnitProportionScaler>() == null)
+                instance.AddComponent<TTRTSUnitProportionScaler>();
+
             if (!ApplyLoadout(instance, loadout, neutralMaterial, teamMaterials, out string error))
             {
                 Debug.LogError($"[BuildTTRTSUnitPrefabs] {instance.name}: {error}");

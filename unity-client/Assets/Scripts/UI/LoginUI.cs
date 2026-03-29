@@ -126,6 +126,9 @@ namespace CastleDefender.UI
 
         void Start()
         {
+            EnsurePersistentEventSystem();
+            ApplyPremiumPresentation();
+
             // Hide Google button until config says it is available
             if (Btn_Google  != null) Btn_Google.gameObject.SetActive(false);
             if (Obj_Divider != null) Obj_Divider.SetActive(false);
@@ -219,22 +222,552 @@ namespace CastleDefender.UI
             if (TxtSubmitBtn != null)
                 TxtSubmitBtn.text = register ? "Register" : "Sign In";
 
-            // Highlight active tab
-            if (Btn_TabSignIn != null)
-            {
-                var txt = Btn_TabSignIn.GetComponentInChildren<TMP_Text>();
-                if (txt != null) txt.color = register ? ColorTabInactive : ColorTabActive;
-            }
-            if (Btn_TabRegister != null)
-            {
-                var txt = Btn_TabRegister.GetComponentInChildren<TMP_Text>();
-                if (txt != null) txt.color = register ? ColorTabActive : ColorTabInactive;
-            }
+            RefreshTabPresentation();
 
             RefreshAuxiliaryAction();
 
             SetError("");
             SetStatus("");
+        }
+
+        void ApplyPremiumPresentation()
+        {
+            if (PanelLogin == null)
+                return;
+
+            var canvas = PanelLogin.GetComponentInParent<Canvas>();
+            if (canvas != null)
+                ClassicRpgUiRuntime.ApplyCanvasScaler(canvas.GetComponent<CanvasScaler>(), new Vector2(1920f, 1080f));
+
+            var root = PanelLogin.transform as RectTransform;
+            if (root == null)
+                return;
+
+            var rootImage = PanelLogin.GetComponent<Image>();
+            if (rootImage != null)
+            {
+                rootImage.color = ClassicRpgUiRuntime.BackdropColor;
+                ClassicRpgUiRuntime.ApplyPanel(rootImage, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.24f));
+            }
+
+            DestroyGeneratedChild(root, "PremiumLoginBackdrop");
+            DestroyGeneratedChild(root, "PremiumLoginStage");
+            DisableLegacyCard(root);
+
+            BuildPremiumBackdrop(root);
+
+            var stage = CreateUiRect("PremiumLoginStage", root);
+            stage.anchorMin = Vector2.zero;
+            stage.anchorMax = Vector2.one;
+            stage.offsetMin = new Vector2(84f, 72f);
+            stage.offsetMax = new Vector2(-84f, -72f);
+
+            var brandColumn = CreateUiRect("BrandColumn", stage);
+            brandColumn.anchorMin = new Vector2(0.03f, 0.08f);
+            brandColumn.anchorMax = new Vector2(0.53f, 0.92f);
+            brandColumn.offsetMin = Vector2.zero;
+            brandColumn.offsetMax = Vector2.zero;
+
+            var brandGroup = brandColumn.gameObject.AddComponent<CanvasGroup>();
+            BuildBrandColumn(brandColumn);
+
+            var cardColumn = CreateUiRect("CardColumn", stage);
+            cardColumn.anchorMin = new Vector2(0.58f, 0.11f);
+            cardColumn.anchorMax = new Vector2(0.95f, 0.89f);
+            cardColumn.offsetMin = Vector2.zero;
+            cardColumn.offsetMax = Vector2.zero;
+
+            var cardGroup = cardColumn.gameObject.AddComponent<CanvasGroup>();
+            var cardContent = BuildLoginCardShell(cardColumn);
+            PopulateLoginCard(cardContent);
+            StyleDevicePanel(root);
+
+            StartCoroutine(AnimatePremiumPresentation(brandGroup, brandColumn, cardGroup, cardColumn));
+        }
+
+        void BuildPremiumBackdrop(RectTransform root)
+        {
+            var backdrop = CreateUiRect("PremiumLoginBackdrop", root);
+            Stretch(backdrop);
+            backdrop.SetSiblingIndex(0);
+
+            var shadow = backdrop.gameObject.AddComponent<Image>();
+            ClassicRpgUiRuntime.ApplyPanel(shadow, ClassicRpgPanelSkin.Shadow, false, new Color(1f, 1f, 1f, 0.30f));
+
+            CreateBackdropBar(backdrop, "TopBar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -46f), new Vector2(1040f, 104f), new Color(0.46f, 0.34f, 0.17f, 0.58f));
+            CreateBackdropBar(backdrop, "BottomBar", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 48f), new Vector2(1040f, 96f), new Color(0.20f, 0.16f, 0.11f, 0.44f));
+
+            CreateBackdropFlag(backdrop, "LeftFlag", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(130f, -140f), new Vector2(260f, 340f), new Color(1f, 1f, 1f, 0.20f), false);
+            CreateBackdropFlag(backdrop, "RightFlag", new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-130f, 150f), new Vector2(240f, 320f), new Color(1f, 1f, 1f, 0.15f), true);
+        }
+
+        void BuildBrandColumn(RectTransform parent)
+        {
+            var layout = parent.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.MiddleLeft;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = 16f;
+            layout.padding = new RectOffset(28, 20, 54, 54);
+
+            var crest = CreateUiImage("Crest", parent, ClassicRpgPanelSkin.FlagClassic, new Color(1f, 1f, 1f, 0.95f), false);
+            var crestLayout = crest.gameObject.AddComponent<LayoutElement>();
+            crestLayout.preferredWidth = 280f;
+            crestLayout.preferredHeight = 114f;
+            crest.rectTransform.pivot = new Vector2(0f, 0.5f);
+            crest.gameObject.AddComponent<UiAmbientMotion>();
+
+            var titlePlate = CreateUiImage("TitlePlate", parent, ClassicRpgPanelSkin.TitleLong, Color.white, false);
+            var titlePlateLayout = titlePlate.gameObject.AddComponent<LayoutElement>();
+            titlePlateLayout.preferredWidth = 520f;
+            titlePlateLayout.preferredHeight = 108f;
+
+            var titleText = CreateUiText("BrandTitle", titlePlate.transform, "RANSOMFORGE\nCASTLE DEFENDER", 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
+            Stretch(titleText.rectTransform, new Vector2(30f, 18f), new Vector2(-30f, -20f));
+            titleText.textWrappingMode = TextWrappingModes.Normal;
+            titleText.lineSpacing = -18f;
+
+            var subtitle = CreateUiText(
+                "BrandSubtitle",
+                parent,
+                "First impressions matter. Command the fortress with confidence from the very first screen.",
+                23f,
+                ClassicRpgTextTone.Heading,
+                ClassicRpgUiRuntime.BrightText);
+            subtitle.alignment = TextAlignmentOptions.TopLeft;
+            subtitle.textWrappingMode = TextWrappingModes.Normal;
+            var subtitleLayout = subtitle.gameObject.AddComponent<LayoutElement>();
+            subtitleLayout.preferredHeight = 86f;
+
+            var bodyCard = CreateUiImage("BodyCard", parent, ClassicRpgPanelSkin.PaperMedium, new Color(0.16f, 0.14f, 0.10f, 0.95f), true);
+            var bodyCardLayout = bodyCard.gameObject.AddComponent<LayoutElement>();
+            bodyCardLayout.preferredHeight = 244f;
+            var bodyCardGroup = bodyCard.gameObject.AddComponent<VerticalLayoutGroup>();
+            bodyCardGroup.childAlignment = TextAnchor.UpperLeft;
+            bodyCardGroup.childControlWidth = true;
+            bodyCardGroup.childControlHeight = false;
+            bodyCardGroup.childForceExpandWidth = true;
+            bodyCardGroup.childForceExpandHeight = false;
+            bodyCardGroup.spacing = 8f;
+            bodyCardGroup.padding = new RectOffset(28, 28, 24, 24);
+
+            var bodyHeader = CreateUiText("BodyHeader", bodyCard.transform, "WAR ROOM BRIEF", 20f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
+            bodyHeader.alignment = TextAlignmentOptions.TopLeft;
+            bodyHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 28f;
+
+            AddBrandBullet(bodyCard.transform, "Premium presentation with classic fantasy craftsmanship.");
+            AddBrandBullet(bodyCard.transform, "Clear hierarchy, larger targets, and stronger motion for confidence.");
+            AddBrandBullet(bodyCard.transform, "A front door that feels intentional instead of placeholder.");
+        }
+
+        void AddBrandBullet(Transform parent, string copy)
+        {
+            var row = CreateUiRect("Bullet", parent);
+            var rowLayout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.UpperLeft;
+            rowLayout.childControlWidth = false;
+            rowLayout.childControlHeight = true;
+            rowLayout.childForceExpandWidth = false;
+            rowLayout.childForceExpandHeight = false;
+            rowLayout.spacing = 10f;
+            row.gameObject.AddComponent<LayoutElement>().preferredHeight = 42f;
+
+            var icon = CreateUiImage("Icon", row, ClassicRpgPanelSkin.FlagClassic, new Color(1f, 1f, 1f, 0.8f), false);
+            icon.rectTransform.sizeDelta = new Vector2(18f, 18f);
+            icon.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+
+            var text = CreateUiText("Copy", row, copy, 16f, ClassicRpgTextTone.Body, new Color(0.92f, 0.89f, 0.82f, 1f));
+            text.alignment = TextAlignmentOptions.TopLeft;
+            text.textWrappingMode = TextWrappingModes.Normal;
+            text.gameObject.AddComponent<LayoutElement>().preferredWidth = 0f;
+        }
+
+        RectTransform BuildLoginCardShell(RectTransform parent)
+        {
+            var shell = CreateUiRect("LoginShell", parent);
+            Stretch(shell);
+
+            var shadow = CreateUiImage("Shadow", shell, ClassicRpgPanelSkin.Shadow, new Color(1f, 1f, 1f, 0.28f), false);
+            Stretch(shadow.rectTransform, new Vector2(-18f, -22f), new Vector2(24f, 24f));
+
+            var outerFrame = CreateUiImage("OuterFrame", shell, ClassicRpgPanelSkin.Frame, Color.white, true);
+            Stretch(outerFrame.rectTransform);
+
+            var innerPanel = CreateUiImage("InnerPanel", shell, ClassicRpgPanelSkin.PaperMedium, new Color(0.15f, 0.13f, 0.09f, 0.96f), true);
+            Stretch(innerPanel.rectTransform, new Vector2(20f, 20f), new Vector2(-20f, -20f));
+
+            var content = CreateUiRect("Content", innerPanel.transform);
+            Stretch(content, new Vector2(34f, 32f), new Vector2(-34f, -32f));
+            var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = 14f;
+
+            return content;
+        }
+
+        void PopulateLoginCard(RectTransform content)
+        {
+            var title = FindDescendant(PanelLogin.transform, "Txt_Title") as RectTransform;
+            var rowTabs = FindDescendant(PanelLogin.transform, "Row_Tabs") as RectTransform;
+
+            var overline = CreateUiText("Overline", content, "ENTER THE WAR ROOM", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
+            overline.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
+
+            if (title != null)
+            {
+                title.SetParent(content, false);
+                PrepareForLayout(title, 76f);
+                var titleText = title.GetComponent<TMP_Text>();
+                if (titleText != null)
+                {
+                    titleText.text = "Sign In";
+                    titleText.fontSize = 34f;
+                    titleText.fontStyle = FontStyles.Bold;
+                    ClassicRpgUiRuntime.ApplyText(titleText, ClassicRpgTextTone.Title, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+                }
+            }
+
+            if (rowTabs != null)
+            {
+                rowTabs.SetParent(content, false);
+                PrepareForLayout(rowTabs, 44f);
+                var tabsLayout = rowTabs.GetComponent<HorizontalLayoutGroup>() ?? rowTabs.gameObject.AddComponent<HorizontalLayoutGroup>();
+                tabsLayout.childAlignment = TextAnchor.MiddleCenter;
+                tabsLayout.childControlWidth = true;
+                tabsLayout.childControlHeight = true;
+                tabsLayout.childForceExpandWidth = true;
+                tabsLayout.childForceExpandHeight = true;
+                tabsLayout.spacing = 12f;
+                tabsLayout.padding = new RectOffset(0, 0, 0, 0);
+            }
+
+            StyleTabButton(Btn_TabSignIn, 210f);
+            StyleTabButton(Btn_TabRegister, 210f);
+
+            if (Input_Email != null) Input_Email.transform.SetParent(content, false);
+            if (Input_DisplayName != null) Input_DisplayName.transform.SetParent(content, false);
+            if (Input_Password != null) Input_Password.transform.SetParent(content, false);
+
+            PrepareField(Input_Email, 64f, "Email address");
+            PrepareField(Input_DisplayName, 64f, "Display name");
+            PrepareField(Input_Password, 64f, "Password");
+
+            if (Btn_Submit != null)
+            {
+                PrepareButton(Btn_Submit, 64f, 0f);
+                Btn_Submit.transform.SetParent(content, false);
+                ClassicRpgUiRuntime.ApplyButton(Btn_Submit, ClassicRpgButtonSkin.LongGold, TxtSubmitBtn);
+            }
+
+            if (Obj_Divider != null)
+            {
+                var dividerRect = Obj_Divider.transform as RectTransform;
+                if (dividerRect != null)
+                {
+                    dividerRect.SetParent(content, false);
+                    PrepareForLayout(dividerRect, 24f);
+                }
+
+                var dividerText = Obj_Divider.GetComponentInChildren<TMP_Text>(true);
+                if (dividerText != null)
+                    ClassicRpgUiRuntime.ApplyText(dividerText, ClassicRpgTextTone.Muted, TextAlignmentOptions.Center, ClassicRpgUiRuntime.MutedText);
+            }
+
+            if (Btn_Google != null)
+            {
+                PrepareButton(Btn_Google, 58f, 0f);
+                Btn_Google.transform.SetParent(content, false);
+                ClassicRpgUiRuntime.ApplyButton(Btn_Google, ClassicRpgButtonSkin.MediumGold);
+                var googleText = Btn_Google.GetComponentInChildren<TMP_Text>(true);
+                if (googleText != null)
+                    googleText.text = "Continue With Google";
+            }
+
+            if (Btn_Browser != null)
+            {
+                PrepareButton(Btn_Browser, 42f, 220f);
+                Btn_Browser.transform.SetParent(content, false);
+                ClassicRpgUiRuntime.ApplyButton(Btn_Browser, ClassicRpgButtonSkin.MiniBrown);
+            }
+
+            if (Txt_Error != null)
+            {
+                Txt_Error.transform.SetParent(content, false);
+                PrepareForLayout(Txt_Error.rectTransform, 42f);
+                Txt_Error.textWrappingMode = TextWrappingModes.Normal;
+                ClassicRpgUiRuntime.ApplyText(Txt_Error, ClassicRpgTextTone.Error, TextAlignmentOptions.Center, ClassicRpgUiRuntime.ErrorText);
+            }
+
+            if (Txt_Status != null)
+            {
+                Txt_Status.transform.SetParent(content, false);
+                PrepareForLayout(Txt_Status.rectTransform, 58f);
+                Txt_Status.textWrappingMode = TextWrappingModes.Normal;
+                ClassicRpgUiRuntime.ApplyText(Txt_Status, ClassicRpgTextTone.Muted, TextAlignmentOptions.Center, ClassicRpgUiRuntime.MutedText);
+            }
+        }
+
+        void StyleDevicePanel(RectTransform root)
+        {
+            if (Obj_DevicePanel == null)
+                return;
+
+            var panelRect = Obj_DevicePanel.transform as RectTransform;
+            if (panelRect == null)
+                return;
+
+            panelRect.SetParent(root, false);
+            panelRect.anchorMin = new Vector2(0.5f, 0.5f);
+            panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+            panelRect.pivot = new Vector2(0.5f, 0.5f);
+            panelRect.sizeDelta = new Vector2(560f, 340f);
+            panelRect.anchoredPosition = Vector2.zero;
+
+            var panelImage = Obj_DevicePanel.GetComponent<Image>();
+            if (panelImage != null)
+            {
+                ClassicRpgUiRuntime.ApplyPanel(panelImage, ClassicRpgPanelSkin.Frame, true, Color.white);
+            }
+
+            if (Txt_DeviceCode != null)
+                ClassicRpgUiRuntime.ApplyText(Txt_DeviceCode, ClassicRpgTextTone.Title, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+
+            if (Txt_DeviceStatus != null)
+            {
+                Txt_DeviceStatus.textWrappingMode = TextWrappingModes.Normal;
+                ClassicRpgUiRuntime.ApplyText(Txt_DeviceStatus, ClassicRpgTextTone.Body, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText);
+            }
+
+            if (Btn_DeviceCancel != null)
+            {
+                PrepareButton(Btn_DeviceCancel, 46f, 200f);
+                ClassicRpgUiRuntime.ApplyButton(Btn_DeviceCancel, ClassicRpgButtonSkin.MiniBrown);
+            }
+        }
+
+        void RefreshTabPresentation()
+        {
+            StyleActiveTab(Btn_TabSignIn, !_isRegisterTab);
+            StyleActiveTab(Btn_TabRegister, _isRegisterTab);
+        }
+
+        void StyleActiveTab(Button button, bool active)
+        {
+            if (button == null)
+                return;
+
+            var text = button.GetComponentInChildren<TMP_Text>(true);
+            ClassicRpgUiRuntime.ApplyButton(button, active ? ClassicRpgButtonSkin.MiniGold : ClassicRpgButtonSkin.MiniBrown, text);
+            if (text != null)
+                text.color = active ? ColorTabActive : ClassicRpgUiRuntime.BrightText;
+        }
+
+        void StyleTabButton(Button button, float preferredWidth)
+        {
+            if (button == null)
+                return;
+
+            PrepareButton(button, 44f, preferredWidth);
+            ClassicRpgUiRuntime.ApplyButton(button, ClassicRpgButtonSkin.MiniBrown);
+        }
+
+        void PrepareField(TMP_InputField field, float preferredHeight, string placeholder)
+        {
+            if (field == null)
+                return;
+
+            var rect = field.transform as RectTransform;
+            if (rect == null)
+                return;
+
+            PrepareForLayout(rect, preferredHeight);
+            ClassicRpgUiRuntime.StyleInputField(field, placeholder);
+        }
+
+        void PrepareButton(Button button, float preferredHeight, float preferredWidth)
+        {
+            if (button == null)
+                return;
+
+            var rect = button.transform as RectTransform;
+            if (rect == null)
+                return;
+
+            PrepareForLayout(rect, preferredHeight);
+            var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
+            if (preferredWidth > 0f)
+                layoutElement.preferredWidth = preferredWidth;
+        }
+
+        static void PrepareForLayout(RectTransform rect, float preferredHeight)
+        {
+            if (rect == null)
+                return;
+
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = Vector2.zero;
+            rect.sizeDelta = new Vector2(0f, preferredHeight);
+            var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
+            layoutElement.preferredHeight = preferredHeight;
+            layoutElement.flexibleWidth = 1f;
+        }
+
+        IEnumerator AnimatePremiumPresentation(CanvasGroup brandGroup, RectTransform brandColumn, CanvasGroup cardGroup, RectTransform cardColumn)
+        {
+            if (brandGroup != null)
+            {
+                brandGroup.alpha = 0f;
+                brandColumn.anchoredPosition += new Vector2(-26f, 0f);
+            }
+
+            if (cardGroup != null)
+            {
+                cardGroup.alpha = 0f;
+                cardColumn.anchoredPosition += new Vector2(38f, 0f);
+            }
+
+            float elapsed = 0f;
+            const float duration = 0.55f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                float eased = 1f - Mathf.Pow(1f - t, 3f);
+
+                if (brandGroup != null)
+                {
+                    brandGroup.alpha = eased;
+                    brandColumn.anchoredPosition = Vector2.Lerp(new Vector2(-26f, 0f), Vector2.zero, eased);
+                }
+
+                if (cardGroup != null)
+                {
+                    float delayed = Mathf.Clamp01((elapsed - 0.08f) / duration);
+                    float delayedEase = 1f - Mathf.Pow(1f - delayed, 3f);
+                    cardGroup.alpha = delayedEase;
+                    cardColumn.anchoredPosition = Vector2.Lerp(new Vector2(38f, 0f), Vector2.zero, delayedEase);
+                }
+
+                yield return null;
+            }
+        }
+
+        void CreateBackdropBar(RectTransform parent, string name, Vector2 anchorMin, Vector2 anchorMax, Vector2 anchoredPosition, Vector2 size, Color color)
+        {
+            var image = CreateUiImage(name, parent, ClassicRpgPanelSkin.MainMenuBar, color, false);
+            image.rectTransform.anchorMin = anchorMin;
+            image.rectTransform.anchorMax = anchorMax;
+            image.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            image.rectTransform.anchoredPosition = anchoredPosition;
+            image.rectTransform.sizeDelta = size;
+            image.gameObject.AddComponent<UiAmbientMotion>();
+        }
+
+        void CreateBackdropFlag(RectTransform parent, string name, Vector2 anchorMin, Vector2 anchorMax, Vector2 anchoredPosition, Vector2 size, Color color, bool mirror)
+        {
+            var image = CreateUiImage(name, parent, ClassicRpgPanelSkin.FlagClassic, color, false);
+            image.rectTransform.anchorMin = anchorMin;
+            image.rectTransform.anchorMax = anchorMax;
+            image.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            image.rectTransform.anchoredPosition = anchoredPosition;
+            image.rectTransform.sizeDelta = size;
+            if (mirror)
+                image.rectTransform.localScale = new Vector3(-1f, 1f, 1f);
+            image.gameObject.AddComponent<UiAmbientMotion>();
+        }
+
+        static void DestroyGeneratedChild(RectTransform parent, string childName)
+        {
+            if (parent == null)
+                return;
+
+            var child = parent.Find(childName);
+            if (child != null)
+                Destroy(child.gameObject);
+        }
+
+        static void DisableLegacyCard(RectTransform root)
+        {
+            if (root == null)
+                return;
+
+            var card = root.Find("Card");
+            if (card == null)
+                return;
+
+            var cardImage = card.GetComponent<Image>();
+            if (cardImage != null)
+                cardImage.raycastTarget = false;
+
+            card.gameObject.SetActive(false);
+        }
+
+        static RectTransform CreateUiRect(string name, Transform parent)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            return go.GetComponent<RectTransform>();
+        }
+
+        static Image CreateUiImage(string name, Transform parent, ClassicRpgPanelSkin skin, Color color, bool sliced)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var image = go.GetComponent<Image>();
+            image.raycastTarget = false;
+            ClassicRpgUiRuntime.ApplyPanel(image, skin, sliced, color);
+            return image;
+        }
+
+        static TMP_Text CreateUiText(string name, Transform parent, string value, float fontSize, ClassicRpgTextTone tone, Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+            go.transform.SetParent(parent, false);
+            var text = go.GetComponent<TextMeshProUGUI>();
+            text.text = value;
+            text.fontSize = fontSize;
+            text.textWrappingMode = TextWrappingModes.Normal;
+            ClassicRpgUiRuntime.ApplyText(text, tone, TextAlignmentOptions.Center, color);
+            return text;
+        }
+
+        static Transform FindDescendant(Transform parent, string name)
+        {
+            if (parent == null)
+                return null;
+
+            if (parent.name == name)
+                return parent;
+
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                var result = FindDescendant(parent.GetChild(i), name);
+                if (result != null)
+                    return result;
+            }
+
+            return null;
+        }
+
+        static void Stretch(RectTransform rect, Vector2? offsetMin = null, Vector2? offsetMax = null)
+        {
+            if (rect == null)
+                return;
+
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = offsetMin ?? Vector2.zero;
+            rect.offsetMax = offsetMax ?? Vector2.zero;
+            rect.anchoredPosition = Vector2.zero;
         }
 
         // ── Submit ────────────────────────────────────────────────────────────
@@ -589,14 +1122,16 @@ namespace CastleDefender.UI
 
         static void EnsurePersistentEventSystem()
         {
-            var current = EventSystem.current;
-            if (current == null)
-            {
-                current = FindFirstObjectByType<EventSystem>(FindObjectsInactive.Include);
-            }
+            var loginUi = FindFirstObjectByType<LoginUI>(FindObjectsInactive.Include);
+            var current = SceneEventSystemUtility.FindBest(loginUi);
 
             if (current == null)
-                return;
+            {
+                var go = new GameObject("LoginEventSystem");
+                current = go.AddComponent<EventSystem>();
+                go.AddComponent<StandaloneInputModule>();
+                Debug.Log("[LoginUI] Created fallback EventSystem for login UI.");
+            }
 
             if (!current.gameObject.activeSelf)
                 current.gameObject.SetActive(true);

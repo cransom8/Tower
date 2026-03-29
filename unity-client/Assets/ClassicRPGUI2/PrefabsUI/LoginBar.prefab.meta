@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 657c3f9bedf4adb4f88c232ee4f3164c
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/LoginBar.prefab
+  uploadId: 861922

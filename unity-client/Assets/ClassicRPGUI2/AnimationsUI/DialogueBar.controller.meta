@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 2c12d24ff3a40194dbfaab1d26538930
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/DialogueBar.controller
+  uploadId: 861922

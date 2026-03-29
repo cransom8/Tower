@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5db0caa7a09c3fb499c0978681589466
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/ShowBar.controller
+  uploadId: 861922

@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 83902a0da4ab2f948b56da905cf633b1
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/CharacterCreationRightBar.prefab
+  uploadId: 861922

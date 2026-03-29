@@ -99,7 +99,15 @@
       "Bash(\"c:/Users/Crans/RansomForge/castle-defender/unity-client/ProjectSettings/GraphicsSettings.asset\")",
       "Bash(__NEW_LINE_a919a232aeae7aa6__ grep:*)",
       "Bash(__NEW_LINE_a919a232aeae7aa6__ echo:*)",
-      "Bash(find c:/Users/Crans/RansomForge/castle-defender/unity-client/Assets/Prefabs -name *.prefab)"
+      "Bash(find c:/Users/Crans/RansomForge/castle-defender/unity-client/Assets/Prefabs -name *.prefab)",
+      "Read(//c/Users/Crans/**)",
+      "Read(//c/Program Files//**)",
+      "Read(//c/Program Files \\(x86\\)//**)",
+      "Bash(\"C:/Users/Crans/.local/bin/uvx.exe\" --prerelease explicit --from \"mcpforunityserver>=0.0.0a0\" mcp-for-unity --help)",
+      "WebSearch"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Crans\\.claude"
     ]
   }
 }

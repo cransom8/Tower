@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 8b455f85c6d3d6849970f3da1200b6c9
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/HeroHPBar2.prefab
+  uploadId: 861922

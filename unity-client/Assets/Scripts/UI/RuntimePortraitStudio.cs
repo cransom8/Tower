@@ -48,7 +48,7 @@ namespace CastleDefender.UI
             cam.nearClipPlane = 0.1f;
             cam.farClipPlane = 30f;
             cam.depth = -10f;
-            cam.enabled = true;
+            cam.enabled = false;
 
             var lightGO = new GameObject("KeyLight");
             lightGO.transform.SetParent(root.transform, false);

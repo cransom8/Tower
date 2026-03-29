@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: d7cfb37f2b9aa4c4495cfa5299775f28
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/UpgradeButton.anim
+  uploadId: 861922

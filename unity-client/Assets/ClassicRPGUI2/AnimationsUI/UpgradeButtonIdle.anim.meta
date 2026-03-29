@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: bb1f15acb63884d47a1d4f4d1a617b47
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/UpgradeButtonIdle.anim
+  uploadId: 861922

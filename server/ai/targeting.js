@@ -1,52 +1,40 @@
 "use strict";
 
-const { estimateLaneDefense, estimateLaneThreat } = require("./observe");
-
-function getOpponents(game, laneIndex) {
-  const self = game && game.lanes && game.lanes[laneIndex];
-  if (!self) return [];
-  return (game.lanes || []).filter((lane) => {
-    if (!lane || lane.eliminated) return false;
-    if (lane.laneIndex === laneIndex) return false;
-    return lane.team !== self.team;
-  });
-}
+const { summarizeLaneForAi, getOpponents } = require("./observe");
 
 function getRecentLeaks(runtime, laneIndex, waves) {
   const arr = runtime && runtime.laneLeakHistory && runtime.laneLeakHistory[laneIndex];
   if (!Array.isArray(arr) || arr.length === 0) return 0;
   const n = Math.max(1, Number(waves) || 3);
   let total = 0;
-  for (let i = Math.max(0, arr.length - n); i < arr.length; i++) {
+  for (let i = Math.max(0, arr.length - n); i < arr.length; i++)
     total += Number(arr[i]) || 0;
-  }
   return total;
 }
 
-function scoreOpponent(game, sourceLaneIndex, targetLaneIndex, runtime) {
-  const source = game && game.lanes && game.lanes[sourceLaneIndex];
-  const target = game && game.lanes && game.lanes[targetLaneIndex];
+function scoreOpponent(game, sourceLaneIndex, targetLaneIndex, runtime, unitDefMap) {
+  const source = summarizeLaneForAi(game, sourceLaneIndex, runtime, unitDefMap);
+  const target = summarizeLaneForAi(game, targetLaneIndex, runtime, unitDefMap);
   if (!source || !target || target.eliminated || source.team === target.team) return -Infinity;
 
-  const weakestScore = Math.max(0, (20 - (target.lives || 0)) / 20);
-  const highIncomeScore = Math.min(1, (target.income || 0) / 220);
+  const weakestCoreScore = Math.max(0, 1 - target.coreHpRatio);
+  const highIncomeScore = Math.min(1, target.income / 220);
   const recentLeakScore = Math.min(1, getRecentLeaks(runtime, targetLaneIndex, 3) / 8);
-
-  const defense = estimateLaneDefense(target);
-  const threat = estimateLaneThreat(target);
-  const defensePressure = threat <= 0 ? 0 : Math.max(0, (defense - threat) / Math.max(1, defense));
-  const vulnerability = Math.max(0, (threat - defense) / Math.max(1, threat + defense));
+  const vulnerability = Math.max(0, (target.threat - target.defense) / Math.max(1, target.threat + target.defense));
+  const structureLightness = Math.max(0, 1 - Math.min(1, target.frontDefensePads.length / 12));
+  const barracksWeakness = Math.max(0, 1 - Math.min(1, target.builtBarracksSites / 3));
 
   return (
-    weakestScore * 0.4 +
-    highIncomeScore * 0.28 +
-    recentLeakScore * 0.22 +
-    vulnerability * 0.25 -
-    defensePressure * 0.2
+    weakestCoreScore * 0.42 +
+    highIncomeScore * 0.24 +
+    recentLeakScore * 0.18 +
+    vulnerability * 0.22 +
+    structureLightness * 0.18 +
+    barracksWeakness * 0.12
   );
 }
 
-function chooseTargetOpponent(game, laneIndex, runtime, memory, rng) {
+function chooseTargetOpponent(game, laneIndex, runtime, memory, rng, unitDefMap) {
   const opponents = getOpponents(game, laneIndex);
   if (opponents.length === 0) return null;
   const currentTick = Number(game && game.tick) || 0;
@@ -56,41 +44,47 @@ function chooseTargetOpponent(game, laneIndex, runtime, memory, rng) {
     : null;
 
   if (currentTarget !== null && currentTick < holdUntilTick) {
-    const lane = opponents.find((o) => o.laneIndex === currentTarget);
+    const lane = opponents.find((entry) => entry.laneIndex === currentTarget);
     if (lane) return currentTarget;
   }
 
+  const scoredOpponents = opponents.map((opp) => ({
+    laneIndex: opp.laneIndex,
+    score: scoreOpponent(game, laneIndex, opp.laneIndex, runtime, unitDefMap),
+  }));
   let best = null;
-  for (const opp of opponents) {
-    const score = scoreOpponent(game, laneIndex, opp.laneIndex, runtime);
-    if (!best || score > best.score) best = { laneIndex: opp.laneIndex, score };
+  for (const entry of scoredOpponents) {
+    if (!best || entry.score > best.score)
+      best = entry;
   }
-  if (!best) return opponents[0].laneIndex;
+  if (!best)
+    return opponents[0].laneIndex;
 
-  // Small deterministic noise avoids identical tie-lock in mirrored states.
-  if (rng && typeof rng.next === "function") {
-    const tieCandidates = opponents
-      .map((opp) => ({ laneIndex: opp.laneIndex, score: scoreOpponent(game, laneIndex, opp.laneIndex, runtime) }))
-      .filter((s) => Math.abs(s.score - best.score) < 0.03);
-    if (tieCandidates.length > 1) {
-      const idx = rng.nextInt(0, tieCandidates.length - 1);
-      best = tieCandidates[idx];
-    }
+  const currentScore = currentTarget === null
+    ? -Infinity
+    : (scoredOpponents.find((entry) => entry.laneIndex === currentTarget) || {}).score;
+  if (currentTarget !== null && Number.isFinite(currentScore)) {
+    if (currentTick < holdUntilTick || best.score <= currentScore + 0.08)
+      return currentTarget;
+  }
+
+  if (rng && typeof rng.nextInt === "function") {
+    const tieCandidates = scoredOpponents.filter((entry) => Math.abs(entry.score - best.score) < 0.03);
+    if (tieCandidates.length > 1)
+      best = tieCandidates[rng.nextInt(0, tieCandidates.length - 1)];
   }
 
   if (memory) {
     memory.currentTargetLaneIndex = best.laneIndex;
-    memory.targetHoldUntilTick = currentTick + 24;
+    memory.targetHoldUntilTick = currentTick + 120 + (rng && typeof rng.nextInt === "function" ? rng.nextInt(0, 40) : 0);
   }
   return best.laneIndex;
 }
 
-function isLaneOverDefended(game, laneIndex) {
-  const lane = game && game.lanes && game.lanes[laneIndex];
-  if (!lane) return false;
-  const defense = estimateLaneDefense(lane);
-  const threat = estimateLaneThreat(lane);
-  return defense > Math.max(8, threat * 2.2);
+function isLaneOverDefended(game, laneIndex, runtime, unitDefMap) {
+  const summary = summarizeLaneForAi(game, laneIndex, runtime, unitDefMap);
+  if (!summary) return false;
+  return summary.defense > Math.max(6, summary.threat * 1.9);
 }
 
 module.exports = {

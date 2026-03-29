@@ -34,40 +34,6 @@ namespace CastleDefender.Game
         const string BarracksRouteNodeLeftSuffix = "LFT";
         const string BarracksRouteNodeRightSuffix = "RGT";
         const float CombatFacingTurnSharpness = 20f;
-        static readonly string[] MoveStates = { "Run", "Walk", "run", "walk" };
-        static readonly string[] IdleStates = { "Idle", "IdleNormal", "IdleCombat", "idle" };
-        static readonly string[] DefaultAttackStates = { "Attack1", "Attack2", "Attack", "attack" };
-        static readonly string[] MeleeAttackStates =
-        {
-            "AttackSwordShield",
-            "AttackDaggers",
-            "AttackHeavy",
-            "Attack1",
-            "Attack2",
-            "Attack",
-            "attack",
-        };
-        static readonly string[] RangedAttackStates =
-        {
-            "Shoot",
-            "AttackBow",
-            "AttackCrossbow",
-            "Attack1",
-            "Attack2",
-            "Attack",
-            "attack",
-        };
-        static readonly string[] MagicAttackStates =
-        {
-            "Cast",
-            "CastSpell",
-            "AttackCast",
-            "Shoot",
-            "Attack1",
-            "Attack2",
-            "Attack",
-            "attack",
-        };
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
@@ -94,13 +60,6 @@ namespace CastleDefender.Game
             new(0f, 1f),
         };
 
-        enum VisualState
-        {
-            Idle,
-            Moving,
-            Attacking
-        }
-
         class WaveView
         {
             public string id;
@@ -108,7 +67,8 @@ namespace CastleDefender.Game
             public LaneSnapshotCombatant combatant;
             public Animator[] animators;
             public Renderer[] renderers;
-            public string[] attackStates = DefaultAttackStates;
+            public UnitAnimationResolver.ResolvedProfile animationProfile;
+            public MLUnit latestSnapshotUnit;
             public Vector3 snapshotWorldPos;
             public Vector3 snapshotVelocity;
             public Vector3 desiredFacing = Vector3.forward;
@@ -119,7 +79,7 @@ namespace CastleDefender.Game
             public bool hadSnapshot;
             public bool lockCombatFacing;
             public bool hasDesiredFacing;
-            public VisualState visualState = VisualState.Idle;
+            public UnitAnimationStateIntent visualState = UnitAnimationStateIntent.Idle;
             public Vector3 lastFramePosition;
         }
 
@@ -402,7 +362,9 @@ namespace CastleDefender.Game
                 bool attacking = now <= view.lastVisualAttackUntil
                     || (view.combatant != null && now - view.combatant.LastAttackAt <= AttackVisualHoldSeconds);
 
-                SetVisualState(view, attacking ? VisualState.Attacking : moving ? VisualState.Moving : VisualState.Idle);
+                SetVisualState(
+                    view,
+                    UnitAnimationResolver.ResolveRuntimeIntent(view.latestSnapshotUnit, moving, attacking));
                 view.lastFramePosition = currentPosition;
             }
         }
@@ -528,6 +490,9 @@ namespace CastleDefender.Game
                     view.snapshotWorldPos = worldPos;
                     view.timeSinceSnap = 0f;
                     view.hadSnapshot = true;
+                    view.latestSnapshotUnit = unit;
+                    view.animationProfile = UnitAnimationResolver.ResolveForUnit(view.go, unit);
+                    UnitAnimationResolver.PrepareAnimators(view.animators, view.animationProfile, forPortrait: false);
 
                     if (!view.go.activeSelf && !view.combatant.IsLocallyDefeated)
                         view.go.SetActive(true);
@@ -535,7 +500,6 @@ namespace CastleDefender.Game
                     if (createdNow || !hadPreviousSnapshot || (view.go.transform.position - worldPos).sqrMagnitude > spawnSnapDistance * spawnSnapDistance)
                         view.go.transform.position = worldPos;
 
-                    view.attackStates = ResolveAttackStateNames(unit);
                     if (TryResolveDesiredFacing(snap, unit, lane, spatialLane, worldPos, out Vector3 desiredFacing, out bool lockCombatFacing))
                     {
                         view.desiredFacing = desiredFacing;
@@ -693,6 +657,8 @@ namespace CastleDefender.Game
             ApplySnapshotUnitTint(go, unit, renderers, ownerTeamKey);
 
             var animators = go.GetComponentsInChildren<Animator>(true);
+            var animationProfile = UnitAnimationResolver.ResolveForUnit(go, unit);
+            UnitAnimationResolver.PrepareAnimators(animators, animationProfile, forPortrait: false);
             for (int i = 0; i < animators.Length; i++)
             {
                 var animator = animators[i];
@@ -723,7 +689,8 @@ namespace CastleDefender.Game
                 combatant = combatant,
                 animators = animators,
                 renderers = renderers,
-                attackStates = ResolveAttackStateNames(unit),
+                animationProfile = animationProfile,
+                latestSnapshotUnit = unit,
                 snapshotWorldPos = spawnPos,
                 snapshotVelocity = Vector3.zero,
                 timeSinceSnap = 0f,
@@ -733,7 +700,7 @@ namespace CastleDefender.Game
             };
 
             _views[unit.id] = view;
-            SetVisualState(view, VisualState.Moving);
+            SetVisualState(view, UnitAnimationStateIntent.Move);
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, 0.25f);
             Debug.Log(
                 $"[SpawnAudit][ClientInstantiate] unitId='{unit.id}' unitType='{unit.type}' " +
@@ -741,7 +708,7 @@ namespace CastleDefender.Game
                 $"archetypeKey='{identity.ArchetypeKey ?? "<null>"}' presentationKey='{identity.PresentationKey ?? "<null>"}' " +
                 $"sourceTeam='{unit.sourceTeam ?? "<none>"}' ownerLane={unit.ownerLane} sourceLane={unit.sourceLaneIndex} " +
                 $"isWaveUnit={unit.isWaveUnit.ToString().ToLowerInvariant()} stance='{unit.stance ?? "<null>"}' " +
-                $"resolvedPrefab='{prefab.name}' " +
+                $"resolvedPrefab='{prefab.name}' animationProfile='{animationProfile.ProfileId}' animationSource='{animationProfile.DebugSource}' " +
                 $"spawnedName='{go.name}' worldPos=({spawnPos.x:0.###},{spawnPos.y:0.###},{spawnPos.z:0.###}) " +
                 $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'",
                 this);
@@ -2607,24 +2574,20 @@ namespace CastleDefender.Game
             target.rotation = Quaternion.Slerp(target.rotation, desired, turnT);
         }
 
-        static void SetVisualState(WaveView view, VisualState desired)
+        static void SetVisualState(WaveView view, UnitAnimationStateIntent desired)
         {
             if (view == null || view.animators == null || view.visualState == desired)
                 return;
 
             view.visualState = desired;
-            switch (desired)
-            {
-                case VisualState.Moving:
-                    CrossFadeFirstAvailable(view.animators, MoveStates, 0.08f);
-                    break;
-                case VisualState.Attacking:
-                    CrossFadeFirstAvailable(view.animators, view.attackStates, 0.04f);
-                    break;
-                default:
-                    CrossFadeFirstAvailable(view.animators, IdleStates, 0.08f);
-                    break;
-            }
+            string[] states = view.animationProfile != null
+                ? view.animationProfile.GetStates(desired)
+                : UnitAnimationResolver.DefaultIdleStates;
+            float transitionSeconds = view.animationProfile != null
+                ? view.animationProfile.GetTransitionSeconds(desired)
+                : 0.08f;
+
+            UnitAnimationResolver.CrossFadeFirstAvailable(view.animators, states, transitionSeconds);
         }
 
         static void PlayAttackAnimation(WaveView view)
@@ -2633,106 +2596,13 @@ namespace CastleDefender.Game
                 return;
 
             view.lastVisualAttackUntil = Time.time + AttackVisualHoldSeconds;
-            CrossFadeFirstAvailable(view.animators, view.attackStates, 0.04f);
-            view.visualState = VisualState.Attacking;
-        }
-
-        static string[] ResolveAttackStateNames(MLUnit unit)
-        {
-            if (unit == null)
-                return DefaultAttackStates;
-
-            if (FortUnitIdentityCatalog.TryResolveBarracksDefinition(
-                null,
-                unit.archetypeKey,
-                string.IsNullOrWhiteSpace(unit.catalogUnitKey) ? unit.type : unit.catalogUnitKey,
-                unit.skinKey,
-                out FortBarracksRosterDefinition definition))
-            {
-                return definition.barracksRole switch
-                {
-                    BarracksUnitRole.Ranged => LooksLikeMagicUnit(unit) ? MagicAttackStates : RangedAttackStates,
-                    BarracksUnitRole.Support => MagicAttackStates,
-                    BarracksUnitRole.Siege => MagicAttackStates,
-                    _ => MeleeAttackStates,
-                };
-            }
-
-            if (LooksLikeMagicUnit(unit))
-                return MagicAttackStates;
-            if (LooksLikeRangedUnit(unit))
-                return RangedAttackStates;
-
-            return DefaultAttackStates;
-        }
-
-        static bool LooksLikeMagicUnit(MLUnit unit)
-        {
-            return ContainsAttackHint(unit, "mage")
-                || ContainsAttackHint(unit, "wizard")
-                || ContainsAttackHint(unit, "cleric")
-                || ContainsAttackHint(unit, "priest")
-                || ContainsAttackHint(unit, "thaum")
-                || ContainsAttackHint(unit, "arcane")
-                || ContainsAttackHint(unit, "bishop");
-        }
-
-        static bool LooksLikeRangedUnit(MLUnit unit)
-        {
-            return ContainsAttackHint(unit, "archer")
-                || ContainsAttackHint(unit, "crossbow")
-                || ContainsAttackHint(unit, "ranger")
-                || ContainsAttackHint(unit, "bow")
-                || ContainsAttackHint(unit, "scout");
-        }
-
-        static bool ContainsAttackHint(MLUnit unit, string hint)
-        {
-            if (unit == null || string.IsNullOrWhiteSpace(hint))
-                return false;
-
-            return ContainsIgnoreCase(unit.archetypeKey, hint)
-                || ContainsIgnoreCase(unit.catalogUnitKey, hint)
-                || ContainsIgnoreCase(unit.skinKey, hint)
-                || ContainsIgnoreCase(unit.type, hint)
-                || ContainsIgnoreCase(unit.heroKey, hint);
-        }
-
-        static bool ContainsIgnoreCase(string value, string hint)
-        {
-            return !string.IsNullOrWhiteSpace(value)
-                && value.IndexOf(hint, System.StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        static bool CrossFadeFirstAvailable(Animator[] animators, string[] stateNames, float transitionDuration)
-        {
-            if (animators == null || stateNames == null || stateNames.Length == 0)
-                return false;
-
-            bool playedAny = false;
-            for (int ai = 0; ai < animators.Length; ai++)
-            {
-                var animator = animators[ai];
-                if (animator == null)
-                    continue;
-
-                for (int si = 0; si < stateNames.Length; si++)
-                {
-                    string stateName = stateNames[si];
-                    if (string.IsNullOrWhiteSpace(stateName))
-                        continue;
-
-                    int stateHash = Animator.StringToHash(stateName);
-                    if (!animator.HasState(0, stateHash))
-                        continue;
-
-                    animator.CrossFade(stateHash, transitionDuration, 0, 0f);
-                    playedAny = true;
-                    break;
-                }
-            }
-
-            return playedAny;
+            UnitAnimationResolver.PlayIntent(
+                view.animators,
+                view.animationProfile,
+                UnitAnimationStateIntent.Attack,
+                fixedTime: false,
+                out _);
+            view.visualState = UnitAnimationStateIntent.Attack;
         }
     }
 }

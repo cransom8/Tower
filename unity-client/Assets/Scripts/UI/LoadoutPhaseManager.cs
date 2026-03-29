@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using CastleDefender.Game;
 using CastleDefender.Net;
+using Newtonsoft.Json.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -106,6 +108,24 @@ namespace CastleDefender.UI
             UnitDetails,
         }
 
+        enum DetailPreviewMotion
+        {
+            Idle,
+            Walk,
+            March,
+            Run,
+            Strike,
+            Special,
+            Hit,
+            Death,
+        }
+
+        enum ClassicRpgButtonSize
+        {
+            Medium,
+            Long,
+        }
+
         [Header("Portrait Fallbacks")]
         [SerializeField] UnitPrefabRegistry PortraitRegistry;
         [SerializeField] UnitPortraitCamera PortraitCam;
@@ -118,15 +138,15 @@ namespace CastleDefender.UI
         [SerializeField] Color timerNormalColor = new Color(1f, 0.92f, 0.38f, 1f);
         [SerializeField] Color timerUrgentColor = new Color(1f, 0.38f, 0.32f, 1f);
 
-        const float PortraitFrameHeight = 94f;
+        const float PortraitFrameHeight = 118f;
         const float UnitCardWidth = 216f;
-        const float UnitCardHeight = 214f;
+        const float UnitCardHeight = 252f;
         const float BuildingCardHeight = 264f;
         const float BuildingImageFrameHeight = 84f;
         const float RequirementCardWidth = 160f;
         const float RequirementCardHeight = 126f;
         const float CompactRequirementCardHeight = 116f;
-        const float LaneRowHeight = 292f;
+        const float LaneRowHeight = 308f;
         const float BuildingLaneRowHeight = 352f;
         const float CivicLaneRowHeight = 548f;
         const float ChainArrowWidth = 34f;
@@ -149,6 +169,9 @@ namespace CastleDefender.UI
         RaceProgressionTab _selectedTreeTab = RaceProgressionTab.Units;
 
         GameObject _panelRoot;
+        GameObject _treeSectionRoot;
+        GameObject _detailsOverlayRoot;
+        GameObject _runtimePreviewRoot;
         TMP_Text _txtTitle;
         TMP_Text _txtSubtitle;
         TMP_Text _txtTimer;
@@ -172,13 +195,38 @@ namespace CastleDefender.UI
         TMP_Text _txtDetailsStats;
         TMP_Text _txtDetailsState;
         TMP_Text _txtDetailsRequirement;
+        TMP_Text _txtDetailsMoves;
+        TMP_Text _txtDetailsAudioStatus;
         TMP_Text _txtDetailsBody;
+        TMP_Text _txtDetailsPreviewStatus;
+        Button _btnDetailsClose;
+        Button _btnDetailsPreviewSfx;
+        TMP_Text _txtDetailsPreviewSfx;
+        Button _btnDetailsPreviewVoice;
+        TMP_Text _txtDetailsPreviewVoice;
+        Button _btnPreviewIdle;
+        TMP_Text _txtPreviewIdle;
+        Button _btnPreviewWalk;
+        TMP_Text _txtPreviewWalk;
+        Button _btnPreviewMarch;
+        TMP_Text _txtPreviewMarch;
+        Button _btnPreviewRun;
+        TMP_Text _txtPreviewRun;
+        Button _btnPreviewStrike;
+        TMP_Text _txtPreviewStrike;
+        Button _btnPreviewSpecial;
+        TMP_Text _txtPreviewSpecial;
+        Button _btnPreviewHit;
+        TMP_Text _txtPreviewHit;
+        Button _btnPreviewDeath;
+        TMP_Text _txtPreviewDeath;
 
         RaceProgressionDefinition _selectedRace;
         RaceProgressionUnitDefinition _selectedUnit;
         string[] _availableRaceIds = Array.Empty<string>();
         float _timerRemaining;
         float _phaseStartTime;
+        bool _detailsModalOpen;
 
         readonly List<RaceCardView> _raceCards = new();
         readonly Dictionary<string, UnitCardView> _unitCards = new(StringComparer.OrdinalIgnoreCase);
@@ -198,7 +246,11 @@ namespace CastleDefender.UI
         Coroutine _environmentWarmupRoutine;
         GameObject _runtimePortraitRoot;
         RenderTexture _runtimePortraitTexture;
+        RenderTexture _runtimePreviewTexture;
         bool _isCapturingPortraits;
+        UnitPortraitCamera _detailsPreviewCam;
+        Coroutine _detailsPreviewResetRoutine;
+        string _detailsPreviewStagedKey;
 
         bool _loadoutReadyEmitted;
         bool _criticalWarmupDone;
@@ -282,6 +334,7 @@ namespace CastleDefender.UI
             _captureQueue.Clear();
             _buildingIconCache.Clear();
             StopWarmupRoutines();
+            StopDetailsPreviewResetRoutine();
             DestroyRuntimePortraitStudio();
         }
 
@@ -548,7 +601,20 @@ namespace CastleDefender.UI
                 rootRect.offsetMin = Vector2.zero;
                 rootRect.offsetMax = Vector2.zero;
             }
-            _panelRoot.AddComponent<Image>().color = new Color(0.04f, 0.05f, 0.09f, 0.97f);
+            var rootImage = _panelRoot.AddComponent<Image>();
+            rootImage.color = ClassicRpgUiRuntime.BackdropColor;
+            ClassicRpgUiRuntime.ApplyPanel(rootImage, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.26f));
+
+            var rootFrame = new GameObject("RootFrame", typeof(RectTransform), typeof(Image));
+            rootFrame.transform.SetParent(_panelRoot.transform, false);
+            var rootFrameRect = rootFrame.GetComponent<RectTransform>();
+            rootFrameRect.anchorMin = Vector2.zero;
+            rootFrameRect.anchorMax = Vector2.one;
+            rootFrameRect.offsetMin = new Vector2(4f, 4f);
+            rootFrameRect.offsetMax = new Vector2(-4f, -4f);
+            var rootFrameImage = rootFrame.GetComponent<Image>();
+            rootFrameImage.raycastTarget = false;
+            ClassicRpgUiRuntime.ApplyPanel(rootFrameImage, ClassicRpgPanelSkin.Frame, true, new Color(1f, 1f, 1f, 0.92f));
 
             var layout = _panelRoot.AddComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
@@ -559,15 +625,19 @@ namespace CastleDefender.UI
 
             _txtTitle = MakeLabel(_panelRoot.transform, "Txt_Title", "Race Progression", 28, Color.white, 34f);
             _txtTitle.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(_txtTitle, true, true);
 
-            _txtSubtitle = MakeLabel(_panelRoot.transform, "Txt_Subtitle", "", 14, new Color(0.82f, 0.85f, 0.92f), 24f);
+            _txtSubtitle = MakeLabel(_panelRoot.transform, "Txt_Subtitle", "", 16, new Color(0.82f, 0.85f, 0.92f), 28f);
             _txtSubtitle.alignment = TextAlignmentOptions.Center;
+            ApplyClassicRpgLabelTheme(_txtSubtitle, false, true);
 
             _txtTimer = MakeLabel(_panelRoot.transform, "Txt_Timer", "", 20, timerNormalColor, 26f);
             _txtTimer.gameObject.SetActive(_mode == ProgressionViewerMode.PreMatchConfirm);
+            ApplyClassicRpgLabelTheme(_txtTimer, false, true);
 
-            _txtStatus = MakeLabel(_panelRoot.transform, "Txt_Status", "", 14, new Color(0.74f, 0.78f, 0.85f), 22f);
+            _txtStatus = MakeLabel(_panelRoot.transform, "Txt_Status", "", 16, new Color(0.74f, 0.78f, 0.85f), 26f);
             _txtStatus.alignment = TextAlignmentOptions.Center;
+            ApplyClassicRpgLabelTheme(_txtStatus, false, true);
 
             BuildCurrentPage(_panelRoot.transform);
 
@@ -585,6 +655,8 @@ namespace CastleDefender.UI
                 Destroy(_panelRoot);
 
             _panelRoot = null;
+            _treeSectionRoot = null;
+            _detailsOverlayRoot = null;
             _playerPanelRoot = null;
             _playerRows.Clear();
             _raceCards.Clear();
@@ -594,11 +666,36 @@ namespace CastleDefender.UI
             _treeTabButtons.Clear();
             _pendingPortraitTargets.Clear();
             _detailsPortrait = null;
+            _detailsBuildingIcon = null;
+            _detailsBuildingFallback = null;
             _txtDetailsTitle = null;
             _txtDetailsStats = null;
             _txtDetailsState = null;
             _txtDetailsRequirement = null;
+            _txtDetailsMoves = null;
+            _txtDetailsAudioStatus = null;
             _txtDetailsBody = null;
+            _btnDetailsClose = null;
+            _btnDetailsPreviewSfx = null;
+            _txtDetailsPreviewSfx = null;
+            _btnDetailsPreviewVoice = null;
+            _txtDetailsPreviewVoice = null;
+            _btnPreviewIdle = null;
+            _txtPreviewIdle = null;
+            _btnPreviewWalk = null;
+            _txtPreviewWalk = null;
+            _btnPreviewMarch = null;
+            _txtPreviewMarch = null;
+            _btnPreviewRun = null;
+            _txtPreviewRun = null;
+            _btnPreviewStrike = null;
+            _txtPreviewStrike = null;
+            _btnPreviewSpecial = null;
+            _txtPreviewSpecial = null;
+            _btnPreviewHit = null;
+            _txtPreviewHit = null;
+            _btnPreviewDeath = null;
+            _txtPreviewDeath = null;
             _btnPrimaryAction = null;
             _txtPrimaryAction = null;
             _btnSecondaryAction = null;
@@ -618,9 +715,13 @@ namespace CastleDefender.UI
                     break;
                 case WizardPage.ProgressionTree:
                     BuildProgressionTree(parent);
+                    BuildDetailsPanel(_treeSectionRoot != null ? _treeSectionRoot.transform : parent);
                     break;
                 case WizardPage.UnitDetails:
-                    BuildDetailsPanel(parent);
+                    _activePage = WizardPage.ProgressionTree;
+                    _detailsModalOpen = true;
+                    BuildProgressionTree(parent);
+                    BuildDetailsPanel(_treeSectionRoot != null ? _treeSectionRoot.transform : parent);
                     break;
             }
         }
@@ -711,7 +812,9 @@ namespace CastleDefender.UI
         void BuildProgressionTree(Transform parent)
         {
             var section = CreateSectionPanel(parent, "Section_Tree", new Color(0.07f, 0.10f, 0.16f, 0.98f), 0f, flexibleHeight: 1f);
-            MakeLabel(section.transform, "Txt_TreeHeader", "Upgrade Progression Tree", 16, Color.white, 24f).fontStyle = FontStyles.Bold;
+            _treeSectionRoot = section;
+            var treeHeader = MakeLabel(section.transform, "Txt_TreeHeader", "Upgrade Progression Tree", 18, Color.white, 28f);
+            treeHeader.fontStyle = FontStyles.Bold;
 
             BuildTreeTabBar(section.transform);
 
@@ -792,7 +895,7 @@ namespace CastleDefender.UI
             tabBar.transform.SetParent(parent, false);
             tabBar.GetComponent<Image>().color = new Color(0.10f, 0.13f, 0.20f, 0.98f);
             var layoutElement = tabBar.GetComponent<LayoutElement>();
-            layoutElement.preferredHeight = 48f;
+            layoutElement.preferredHeight = 54f;
             layoutElement.flexibleWidth = 1f;
 
             var layout = tabBar.GetComponent<HorizontalLayoutGroup>();
@@ -815,7 +918,7 @@ namespace CastleDefender.UI
             var buttonGo = new GameObject($"Tab_{tab}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button));
             buttonGo.transform.SetParent(parent, false);
             var layoutElement = buttonGo.GetComponent<LayoutElement>();
-            layoutElement.preferredHeight = 32f;
+            layoutElement.preferredHeight = 36f;
             layoutElement.flexibleWidth = 1f;
 
             var background = buttonGo.GetComponent<Image>();
@@ -830,7 +933,7 @@ namespace CastleDefender.UI
                 buttonGo.transform,
                 "Txt_Label",
                 label,
-                12,
+                14,
                 Color.white,
                 Vector2.zero,
                 Vector2.one,
@@ -887,17 +990,17 @@ namespace CastleDefender.UI
             headerLayout.spacing = 10f;
 
             var laneHeader = CreateInlineText(headerRow.transform, "Txt_Lane", lane.Label, 15f, new Color(0.90f, 0.93f, 1f), FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
-            SetSingleLine(laneHeader);
+            SetResponsiveSingleLine(laneHeader, 13f, 17f);
 
             var laneSummary = CreateInlineText(
                 headerRow.transform,
                 "Txt_LaneSummary",
                 BuildLaneSummaryText(lane),
-                11f,
+                13f,
                 new Color(0.72f, 0.79f, 0.90f),
                 FontStyles.Normal,
                 TextAlignmentOptions.MidlineLeft);
-            SetSingleLine(laneSummary);
+            SetResponsiveSingleLine(laneSummary, 11f, 13f);
 
             if (lane.Layout == RaceProgressionLaneLayout.BuildingStepsToOutcomeCards)
                 BuildCivicLaneRows(laneGo.transform, lane);
@@ -1172,21 +1275,21 @@ namespace CastleDefender.UI
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 6f;
+            layout.spacing = 8f;
             layout.padding = new RectOffset(10, 10, 10, 10);
 
             var stateStrip = new GameObject("StateStrip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             stateStrip.transform.SetParent(cardGo.transform, false);
-            stateStrip.GetComponent<LayoutElement>().preferredHeight = 24f;
+            stateStrip.GetComponent<LayoutElement>().preferredHeight = 28f;
             var stateBackground = stateStrip.GetComponent<Image>();
             stateBackground.color = new Color(0.16f, 0.22f, 0.32f, 0.96f);
-            var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 11f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+            var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 12f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var stateRect = state.rectTransform;
             stateRect.anchorMin = Vector2.zero;
             stateRect.anchorMax = Vector2.one;
             stateRect.offsetMin = new Vector2(8f, 3f);
             stateRect.offsetMax = new Vector2(-8f, -3f);
-            SetResponsiveSingleLine(state, 8f, 11f);
+            SetResponsiveSingleLine(state, 12f, 12f);
 
             var portraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             portraitFrame.transform.SetParent(cardGo.transform, false);
@@ -1198,53 +1301,53 @@ namespace CastleDefender.UI
             var portraitRect = portraitGo.GetComponent<RectTransform>();
             portraitRect.anchorMin = Vector2.zero;
             portraitRect.anchorMax = Vector2.one;
-            portraitRect.offsetMin = new Vector2(6f, 4f);
-            portraitRect.offsetMax = new Vector2(-6f, -4f);
+            portraitRect.offsetMin = new Vector2(8f, 4f);
+            portraitRect.offsetMax = new Vector2(-8f, -4f);
             var portrait = portraitGo.GetComponent<RawImage>();
             portrait.color = new Color(1f, 1f, 1f, 0f);
             portrait.raycastTarget = false;
             portraitGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 1f;
+            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.72f;
 
             var iconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image), typeof(AspectRatioFitter));
             iconGo.transform.SetParent(portraitFrame.transform, false);
             var iconRect = iconGo.GetComponent<RectTransform>();
             iconRect.anchorMin = Vector2.zero;
             iconRect.anchorMax = Vector2.one;
-            iconRect.offsetMin = new Vector2(6f, 4f);
-            iconRect.offsetMax = new Vector2(-6f, -4f);
+            iconRect.offsetMin = new Vector2(8f, 4f);
+            iconRect.offsetMax = new Vector2(-8f, -4f);
             var icon = iconGo.GetComponent<Image>();
             icon.raycastTarget = false;
             icon.preserveAspect = true;
             iconGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            iconGo.GetComponent<AspectRatioFitter>().aspectRatio = 1f;
+            iconGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.72f;
 
-            var iconFallback = CreateInlineText(portraitFrame.transform, "Txt_IconFallback", BuildNameFallbackIcon(unit.DisplayName), 22f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+            var iconFallback = CreateInlineText(portraitFrame.transform, "Txt_IconFallback", BuildNameFallbackIcon(unit.DisplayName), 24f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var iconFallbackRect = iconFallback.rectTransform;
             iconFallbackRect.anchorMin = Vector2.zero;
             iconFallbackRect.anchorMax = Vector2.one;
             iconFallbackRect.offsetMin = Vector2.zero;
             iconFallbackRect.offsetMax = Vector2.zero;
-            SetResponsiveSingleLine(iconFallback, 11f, 22f);
+            SetResponsiveSingleLine(iconFallback, 12f, 24f);
 
             ApplyFeatureCardArt(unit, portrait, icon, iconFallback);
 
-            var name = MakeLabel(cardGo.transform, "Txt_Name", unit.DisplayName, 15, Color.white, 20f);
+            var name = MakeLabel(cardGo.transform, "Txt_Name", unit.DisplayName, 17, Color.white, 24f);
             name.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(name, 10f, 15f);
+            SetResponsiveSingleLine(name, 12f, 17f);
 
-            var stats = MakeLabel(cardGo.transform, "Txt_Stats", BuildUnitStatsLine(unit), 10, new Color(0.86f, 0.88f, 0.92f), 20f);
+            var stats = MakeLabel(cardGo.transform, "Txt_Stats", BuildUnitCardStatsText(unit), 13, new Color(0.86f, 0.88f, 0.92f), 28f);
             stats.alignment = TextAlignmentOptions.Center;
-            SetResponsiveSingleLine(stats, 7f, 10f);
+            SetResponsiveSingleLine(stats, 12f, 13f);
 
             var laneHint = MakeLabel(
                 cardGo.transform,
                 "Txt_LaneHint",
-                string.IsNullOrWhiteSpace(unit.CardTag) ? lane.Label : unit.CardTag,
-                10,
+                BuildUnitCardSubtitle(lane, unit),
+                12,
                 new Color(0.70f, 0.78f, 0.90f),
-                16f);
-            SetResponsiveSingleLine(laneHint, 7f, 10f);
+                24f);
+            SetResponsiveSingleLine(laneHint, 12f, 12f);
 
             _unitCards[unit.Id] = new UnitCardView
             {
@@ -1317,7 +1420,7 @@ namespace CastleDefender.UI
             headerLayout.childForceExpandHeight = true;
             headerLayout.spacing = 10f;
 
-            var name = MakeLabel(headerRow.transform, "Txt_Name", BuildBuildingCardTitle(unit), 15, Color.white, 44f);
+            var name = MakeLabel(headerRow.transform, "Txt_Name", BuildBuildingCardTitle(unit), 17, Color.white, 48f);
             var nameLayout = name.GetComponent<LayoutElement>();
             if (nameLayout != null)
             {
@@ -1327,7 +1430,7 @@ namespace CastleDefender.UI
             name.fontStyle = FontStyles.Bold;
             name.alignment = TextAlignmentOptions.Left;
             name.overflowMode = TextOverflowModes.Ellipsis;
-            SetResponsiveWrappedText(name, 9f, 15f);
+            SetResponsiveWrappedText(name, 12f, 17f);
 
             var stateStrip = new GameObject("StateStrip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             stateStrip.transform.SetParent(headerRow.transform, false);
@@ -1337,13 +1440,13 @@ namespace CastleDefender.UI
             stateStripLayout.preferredHeight = 26f;
             var stateBackground = stateStrip.GetComponent<Image>();
             stateBackground.color = new Color(0.16f, 0.22f, 0.32f, 0.96f);
-            var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 10.5f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+            var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 12f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var stateRect = state.rectTransform;
             stateRect.anchorMin = Vector2.zero;
             stateRect.anchorMax = Vector2.one;
             stateRect.offsetMin = new Vector2(6f, 2f);
             stateRect.offsetMax = new Vector2(-6f, -2f);
-            SetResponsiveSingleLine(state, 8f, 10.5f);
+            SetResponsiveSingleLine(state, 12f, 12f);
 
             float bodyHeight = Mathf.Max(132f, preferredHeight - 66f);
             var bodyRow = new GameObject("BodyRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
@@ -1463,15 +1566,15 @@ namespace CastleDefender.UI
             rowLayout.childForceExpandHeight = false;
             rowLayout.spacing = 0f;
 
-            var label = MakeLabel(row.transform, "Txt_Label", labelText.ToUpperInvariant(), 8, new Color(0.66f, 0.73f, 0.84f, 0.92f), 10f);
+            var label = MakeLabel(row.transform, "Txt_Label", labelText.ToUpperInvariant(), 10, new Color(0.66f, 0.73f, 0.84f, 0.92f), 12f);
             label.alignment = TextAlignmentOptions.MidlineLeft;
             label.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(label, 6.5f, 8f);
+            SetResponsiveSingleLine(label, 10f, 10f);
 
-            var value = MakeLabel(row.transform, "Txt_Value", valueText, 11, valueColor, 18f);
+            var value = MakeLabel(row.transform, "Txt_Value", valueText, 13, valueColor, 20f);
             value.alignment = TextAlignmentOptions.MidlineLeft;
             value.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(value, 7f, 11f);
+            SetResponsiveSingleLine(value, 12f, 13f);
             return value;
         }
 
@@ -1536,37 +1639,37 @@ namespace CastleDefender.UI
             var icon = iconGo.GetComponent<Image>();
             icon.preserveAspect = true;
 
-            float iconFallbackFont = compact ? 13f : 15f;
+            float iconFallbackFont = compact ? 14f : 16f;
             var iconFallback = CreateInlineText(iconFrame.transform, "Txt_IconFallback", BuildRequirementFallbackIcon(requirement), iconFallbackFont, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var fallbackRect = iconFallback.rectTransform;
             fallbackRect.anchorMin = Vector2.zero;
             fallbackRect.anchorMax = Vector2.one;
             fallbackRect.offsetMin = Vector2.zero;
             fallbackRect.offsetMax = Vector2.zero;
-            SetResponsiveSingleLine(iconFallback, compact ? 9f : 10f, iconFallbackFont);
+            SetResponsiveSingleLine(iconFallback, compact ? 12f : 12f, iconFallbackFont);
 
-            float nameFont = compact ? 11f : 12f;
+            float nameFont = compact ? 12f : 14f;
             var name = MakeLabel(cardGo.transform, "Txt_Name", requirement.BuildingName, (int)Mathf.Round(nameFont), Color.white, 20f);
             name.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(name, compact ? 7f : 8f, nameFont);
+            SetResponsiveSingleLine(name, 12f, nameFont);
 
-            float tierFont = compact ? 9f : 10f;
+            float tierFont = compact ? 12f : 13f;
             var tier = MakeLabel(cardGo.transform, "Txt_Tier", BuildRequirementTierText(requirement), (int)Mathf.Round(tierFont), new Color(0.77f, 0.82f, 0.90f), 16f);
-            SetResponsiveSingleLine(tier, compact ? 6.5f : 7f, tierFont);
+            SetResponsiveSingleLine(tier, 12f, tierFont);
 
             var statusStrip = new GameObject("StatusStrip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             statusStrip.transform.SetParent(cardGo.transform, false);
             statusStrip.GetComponent<LayoutElement>().preferredHeight = compact ? 20f : 24f;
             var statusBackground = statusStrip.GetComponent<Image>();
             statusBackground.color = new Color(0.22f, 0.26f, 0.32f, 0.98f);
-            float statusFont = compact ? 9.5f : 10.5f;
+            float statusFont = compact ? 12f : 13f;
             var status = CreateInlineText(statusStrip.transform, "Txt_Status", "", statusFont, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var statusRect = status.rectTransform;
             statusRect.anchorMin = Vector2.zero;
             statusRect.anchorMax = Vector2.one;
             statusRect.offsetMin = new Vector2(8f, 3f);
             statusRect.offsetMax = new Vector2(-8f, -3f);
-            SetResponsiveSingleLine(status, compact ? 6.5f : 7f, statusFont);
+            SetResponsiveSingleLine(status, 12f, statusFont);
 
             ApplyRequirementIcon(icon, iconFallback, requirement);
 
@@ -1612,55 +1715,166 @@ namespace CastleDefender.UI
 
         void BuildDetailsPanel(Transform parent)
         {
-            var panel = CreateSectionPanel(parent, "Section_Details", new Color(0.08f, 0.10f, 0.15f, 0.98f), 0f, flexibleHeight: 1f);
-            MakeLabel(panel.transform, "Txt_DetailsHeader", "Upgrade Details", 16, Color.white, 22f).fontStyle = FontStyles.Bold;
+            var overlayGo = new GameObject("Overlay_Details", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button));
+            overlayGo.transform.SetParent(parent, false);
+            var overlayLayout = overlayGo.GetComponent<LayoutElement>();
+            overlayLayout.ignoreLayout = true;
+            var overlayRect = overlayGo.GetComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+            var overlayImage = overlayGo.GetComponent<Image>();
+            overlayImage.color = new Color(0.02f, 0.03f, 0.06f, 0.84f);
+            var overlayButton = overlayGo.GetComponent<Button>();
+            overlayButton.targetGraphic = overlayImage;
+            overlayButton.transition = Selectable.Transition.None;
+            overlayButton.onClick.AddListener(CloseDetailsModal);
+            _detailsOverlayRoot = overlayGo;
 
-            var content = new GameObject("DetailsContent", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
-            content.transform.SetParent(panel.transform, false);
-            content.GetComponent<LayoutElement>().preferredHeight = 172f;
-            var horizontal = content.GetComponent<HorizontalLayoutGroup>();
-            horizontal.childAlignment = TextAnchor.UpperLeft;
-            horizontal.childControlWidth = true;
-            horizontal.childControlHeight = true;
-            horizontal.childForceExpandWidth = false;
-            horizontal.childForceExpandHeight = false;
-            horizontal.spacing = 12f;
+            var modalGo = new GameObject("DetailsModal", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(Button));
+            modalGo.transform.SetParent(overlayGo.transform, false);
+            var modalLayoutElement = modalGo.GetComponent<LayoutElement>();
+            modalLayoutElement.ignoreLayout = true;
+            var modalRect = modalGo.GetComponent<RectTransform>();
+            modalRect.anchorMin = new Vector2(0.005f, 0.01f);
+            modalRect.anchorMax = new Vector2(0.995f, 0.992f);
+            modalRect.offsetMin = Vector2.zero;
+            modalRect.offsetMax = Vector2.zero;
+            var modalImage = modalGo.GetComponent<Image>();
+            modalImage.color = new Color(0.07f, 0.09f, 0.15f, 0.985f);
+            var modalButton = modalGo.GetComponent<Button>();
+            modalButton.targetGraphic = modalImage;
+            modalButton.transition = Selectable.Transition.None;
+            var modalLayout = modalGo.GetComponent<VerticalLayoutGroup>();
+            modalLayout.childAlignment = TextAnchor.UpperCenter;
+            modalLayout.childControlWidth = true;
+            modalLayout.childControlHeight = true;
+            modalLayout.childForceExpandWidth = true;
+            modalLayout.childForceExpandHeight = false;
+            modalLayout.spacing = 16f;
+            modalLayout.padding = new RectOffset(38, 38, 22, 28);
+
+            var modalFrameArt = new GameObject("ModalFrameArt", typeof(RectTransform), typeof(Image));
+            modalFrameArt.transform.SetParent(modalGo.transform, false);
+            var modalFrameRect = modalFrameArt.GetComponent<RectTransform>();
+            modalFrameRect.anchorMin = Vector2.zero;
+            modalFrameRect.anchorMax = Vector2.one;
+            modalFrameRect.offsetMin = Vector2.zero;
+            modalFrameRect.offsetMax = Vector2.zero;
+            var modalFrameImage = modalFrameArt.GetComponent<Image>();
+            modalFrameImage.raycastTarget = false;
+            modalFrameImage.color = new Color(1f, 1f, 1f, 0.88f);
+            ApplyClassicRpgFrameTheme(modalFrameImage, "Assets/ClassicRPGUI2/UIElementsPNG/FrameForSlicing.png", true);
+
+            var controlRow = new GameObject("ControlRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            controlRow.transform.SetParent(modalGo.transform, false);
+            var controlLayoutElement = controlRow.GetComponent<LayoutElement>();
+            controlLayoutElement.preferredHeight = 60f;
+            var controlLayout = controlRow.GetComponent<HorizontalLayoutGroup>();
+            controlLayout.childAlignment = TextAnchor.MiddleRight;
+            controlLayout.childControlWidth = false;
+            controlLayout.childControlHeight = true;
+            controlLayout.childForceExpandWidth = false;
+            controlLayout.childForceExpandHeight = false;
+            controlLayout.spacing = 10f;
+
+            _btnDetailsClose = MakeButton(controlRow.transform, "Btn_DetailsClose", "Close", 60f, new Color(0.20f, 0.28f, 0.40f, 1f));
+            var closeLayout = _btnDetailsClose.GetComponent<LayoutElement>();
+            if (closeLayout != null)
+                closeLayout.preferredWidth = 220f;
+            var closeText = _btnDetailsClose.GetComponentInChildren<TMP_Text>();
+            if (closeText != null)
+            {
+                closeText.fontSize = 19f;
+                closeText.fontStyle = FontStyles.Bold;
+            }
+            ApplyClassicRpgButtonTheme(_btnDetailsClose, ClassicRpgButtonSize.Long);
+            ApplyClassicRpgLabelTheme(closeText, false, true);
+            _btnDetailsClose.onClick.AddListener(CloseDetailsModal);
+
+            var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            titlePlate.transform.SetParent(modalGo.transform, false);
+            var titlePlateLayoutElement = titlePlate.GetComponent<LayoutElement>();
+            titlePlateLayoutElement.preferredHeight = 76f;
+            titlePlateLayoutElement.preferredWidth = 560f;
+            var titlePlateLayout = titlePlate.GetComponent<HorizontalLayoutGroup>();
+            titlePlateLayout.childAlignment = TextAnchor.MiddleCenter;
+            titlePlateLayout.childControlWidth = true;
+            titlePlateLayout.childControlHeight = true;
+            titlePlateLayout.childForceExpandWidth = true;
+            titlePlateLayout.childForceExpandHeight = true;
+            titlePlateLayout.padding = new RectOffset(18, 18, 10, 12);
+            var titlePlateImage = titlePlate.GetComponent<Image>();
+            titlePlateImage.color = Color.white;
+            ApplyClassicRpgFrameTheme(titlePlateImage, "Assets/ClassicRPGUI2/UIElementsPNG/TitleLong.png");
+
+            _txtDetailsTitle = MakeLabel(titlePlate.transform, "Txt_Title", "", 34, new Color(0.96f, 0.84f, 0.50f, 1f), 52f);
+            _txtDetailsTitle.alignment = TextAlignmentOptions.Center;
+            _txtDetailsTitle.fontStyle = FontStyles.Bold;
+            SetResponsiveSingleLine(_txtDetailsTitle, 22f, 34f);
+            ApplyClassicRpgLabelTheme(_txtDetailsTitle, true, true);
+
+            var portraitRow = new GameObject("PortraitRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            portraitRow.transform.SetParent(modalGo.transform, false);
+            var portraitRowLayoutElement = portraitRow.GetComponent<LayoutElement>();
+            portraitRowLayoutElement.preferredHeight = 292f;
+            var portraitRowLayout = portraitRow.GetComponent<HorizontalLayoutGroup>();
+            portraitRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            portraitRowLayout.childControlWidth = false;
+            portraitRowLayout.childControlHeight = true;
+            portraitRowLayout.childForceExpandWidth = false;
+            portraitRowLayout.childForceExpandHeight = false;
 
             var portraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            portraitFrame.transform.SetParent(content.transform, false);
-            portraitFrame.GetComponent<Image>().color = new Color(0.11f, 0.15f, 0.22f, 1f);
-            portraitFrame.GetComponent<LayoutElement>().preferredWidth = 118f;
-            portraitFrame.GetComponent<LayoutElement>().preferredHeight = 148f;
+            portraitFrame.transform.SetParent(portraitRow.transform, false);
+            var portraitFrameImage = portraitFrame.GetComponent<Image>();
+            portraitFrameImage.color = Color.white;
+            ApplyClassicRpgFrameTheme(portraitFrameImage, "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrame.png", true);
+            var portraitLayout = portraitFrame.GetComponent<LayoutElement>();
+            portraitLayout.preferredWidth = 212f;
+            portraitLayout.preferredHeight = 276f;
+
+            var portraitInnerFrame = new GameObject("PortraitInnerFrame", typeof(RectTransform), typeof(Image));
+            portraitInnerFrame.transform.SetParent(portraitFrame.transform, false);
+            var innerRect = portraitInnerFrame.GetComponent<RectTransform>();
+            innerRect.anchorMin = Vector2.zero;
+            innerRect.anchorMax = Vector2.one;
+            innerRect.offsetMin = new Vector2(18f, 22f);
+            innerRect.offsetMax = new Vector2(-18f, -22f);
+            var portraitInnerImage = portraitInnerFrame.GetComponent<Image>();
+            portraitInnerImage.color = new Color(0.07f, 0.10f, 0.16f, 1f);
+            ApplyClassicRpgFrameTheme(portraitInnerImage, "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrameBg.png");
 
             var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
-            portraitGo.transform.SetParent(portraitFrame.transform, false);
+            portraitGo.transform.SetParent(portraitInnerFrame.transform, false);
             var portraitRect = portraitGo.GetComponent<RectTransform>();
             portraitRect.anchorMin = Vector2.zero;
             portraitRect.anchorMax = Vector2.one;
-            portraitRect.offsetMin = new Vector2(6f, 6f);
-            portraitRect.offsetMax = new Vector2(-6f, -6f);
+            portraitRect.offsetMin = new Vector2(8f, 10f);
+            portraitRect.offsetMax = new Vector2(-8f, -10f);
             _detailsPortrait = portraitGo.GetComponent<RawImage>();
             _detailsPortrait.color = new Color(1f, 1f, 1f, 0f);
             _detailsPortrait.raycastTarget = false;
             portraitGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 1f;
+            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.68f;
 
             var detailsIconGo = new GameObject("BuildingIcon", typeof(RectTransform), typeof(Image));
-            detailsIconGo.transform.SetParent(portraitFrame.transform, false);
+            detailsIconGo.transform.SetParent(portraitInnerFrame.transform, false);
             var detailsIconRect = detailsIconGo.GetComponent<RectTransform>();
             detailsIconRect.anchorMin = Vector2.zero;
             detailsIconRect.anchorMax = Vector2.one;
-            detailsIconRect.offsetMin = new Vector2(14f, 14f);
-            detailsIconRect.offsetMax = new Vector2(-14f, -14f);
+            detailsIconRect.offsetMin = new Vector2(18f, 20f);
+            detailsIconRect.offsetMax = new Vector2(-18f, -20f);
             _detailsBuildingIcon = detailsIconGo.GetComponent<Image>();
             _detailsBuildingIcon.preserveAspect = true;
             _detailsBuildingIcon.enabled = false;
 
             _detailsBuildingFallback = CreateInlineText(
-                portraitFrame.transform,
+                portraitInnerFrame.transform,
                 "Txt_BuildingFallback",
                 "",
-                30f,
+                44f,
                 Color.white,
                 FontStyles.Bold,
                 TextAlignmentOptions.Center);
@@ -1671,34 +1885,221 @@ namespace CastleDefender.UI
             detailsFallbackRect.offsetMax = Vector2.zero;
             _detailsBuildingFallback.gameObject.SetActive(false);
 
-            var textColumn = new GameObject("TextColumn", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
-            textColumn.transform.SetParent(content.transform, false);
-            textColumn.GetComponent<LayoutElement>().flexibleWidth = 1f;
-            var textLayout = textColumn.GetComponent<VerticalLayoutGroup>();
-            textLayout.childAlignment = TextAnchor.UpperLeft;
-            textLayout.childControlWidth = true;
-            textLayout.childControlHeight = true;
-            textLayout.childForceExpandWidth = true;
-            textLayout.childForceExpandHeight = false;
-            textLayout.spacing = 4f;
+            var previewGrid = new GameObject("MotionPreviewGrid", typeof(RectTransform), typeof(LayoutElement), typeof(GridLayoutGroup));
+            previewGrid.transform.SetParent(modalGo.transform, false);
+            var previewGridLayout = previewGrid.GetComponent<LayoutElement>();
+            previewGridLayout.preferredHeight = 220f;
+            var previewGridGroup = previewGrid.GetComponent<GridLayoutGroup>();
+            previewGridGroup.cellSize = new Vector2(170f, 44f);
+            previewGridGroup.spacing = new Vector2(10f, 10f);
+            previewGridGroup.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            previewGridGroup.constraintCount = 2;
+            previewGridGroup.childAlignment = TextAnchor.MiddleCenter;
+            previewGridGroup.startAxis = GridLayoutGroup.Axis.Horizontal;
+            previewGridGroup.startCorner = GridLayoutGroup.Corner.UpperLeft;
 
-            _txtDetailsTitle = MakeLabel(textColumn.transform, "Txt_Title", "", 18, Color.white, 24f);
-            _txtDetailsTitle.alignment = TextAlignmentOptions.MidlineLeft;
-            _txtDetailsTitle.fontStyle = FontStyles.Bold;
+            _btnPreviewIdle = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewIdle", "Idle", PreviewIdleMotion, out _txtPreviewIdle);
+            _btnPreviewWalk = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewWalk", "Walk", PreviewWalkMotion, out _txtPreviewWalk);
+            _btnPreviewMarch = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewMarch", "March", PreviewMarchMotion, out _txtPreviewMarch);
+            _btnPreviewRun = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewRun", "Run", PreviewRunMotion, out _txtPreviewRun);
+            _btnPreviewStrike = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewStrike", "Strike", PreviewStrikeMotion, out _txtPreviewStrike);
+            _btnPreviewSpecial = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewSpecial", "Special Move", PreviewSpecialMotion, out _txtPreviewSpecial);
+            _btnPreviewHit = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewHit", "Hit React", PreviewHitMotion, out _txtPreviewHit);
+            _btnPreviewDeath = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewDeath", "Death", PreviewDeathMotion, out _txtPreviewDeath);
 
-            _txtDetailsStats = MakeLabel(textColumn.transform, "Txt_Stats", "", 12, new Color(0.88f, 0.90f, 0.96f), 22f);
-            _txtDetailsStats.alignment = TextAlignmentOptions.MidlineLeft;
+            _txtDetailsPreviewStatus = MakeLabel(modalGo.transform, "Txt_PreviewStatus", "", 15, new Color(0.84f, 0.88f, 0.95f), 28f);
+            _txtDetailsPreviewStatus.alignment = TextAlignmentOptions.Center;
+            SetResponsiveWrappedText(_txtDetailsPreviewStatus, 12f, 15f);
+            ApplyClassicRpgLabelTheme(_txtDetailsPreviewStatus, false, true);
 
-            _txtDetailsState = MakeLabel(textColumn.transform, "Txt_State", "", 12, selectedColor, 20f);
-            _txtDetailsState.alignment = TextAlignmentOptions.MidlineLeft;
+            var scrollGo = new GameObject("DetailsScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
+            scrollGo.transform.SetParent(modalGo.transform, false);
+            var scrollLayoutElement = scrollGo.GetComponent<LayoutElement>();
+            scrollLayoutElement.flexibleHeight = 1f;
+            scrollLayoutElement.minHeight = 220f;
+            scrollGo.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.14f, 0.92f);
+            var scrollRect = scrollGo.GetComponent<ScrollRect>();
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.scrollSensitivity = 24f;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollGo.transform, false);
+            var viewportRect = viewportGo.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+            viewportGo.GetComponent<Image>().color = Color.white;
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(viewportGo.transform, false);
+            var contentRect = contentGo.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.offsetMin = new Vector2(18f, 0f);
+            contentRect.offsetMax = new Vector2(-18f, 0f);
+            var contentLayout = contentGo.GetComponent<VerticalLayoutGroup>();
+            contentLayout.childAlignment = TextAnchor.UpperCenter;
+            contentLayout.childControlWidth = false;
+            contentLayout.childControlHeight = true;
+            contentLayout.childForceExpandWidth = false;
+            contentLayout.childForceExpandHeight = false;
+            contentLayout.spacing = 12f;
+            contentLayout.padding = new RectOffset(0, 0, 20, 20);
+            contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            contentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = contentRect;
+
+            var contentColumn = new GameObject("ContentColumn", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentColumn.transform.SetParent(contentGo.transform, false);
+            var contentColumnLayout = contentColumn.GetComponent<LayoutElement>();
+            contentColumnLayout.preferredWidth = 760f;
+            var contentColumnGroup = contentColumn.GetComponent<VerticalLayoutGroup>();
+            contentColumnGroup.childAlignment = TextAnchor.UpperCenter;
+            contentColumnGroup.childControlWidth = true;
+            contentColumnGroup.childControlHeight = true;
+            contentColumnGroup.childForceExpandWidth = true;
+            contentColumnGroup.childForceExpandHeight = false;
+            contentColumnGroup.spacing = 12f;
+            contentColumnGroup.padding = new RectOffset(0, 0, 4, 8);
+            contentColumn.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            contentColumn.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var stateCard = CreateDetailsModalCard(contentColumn.transform, "StateCard", new Color(0.09f, 0.12f, 0.19f, 0.96f), 104f);
+            var stateHeader = MakeLabel(stateCard.transform, "Txt_StateHeader", "Battle Standing", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            stateHeader.alignment = TextAlignmentOptions.Center;
+            stateHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(stateHeader, true, true);
+            _txtDetailsState = MakeLabel(stateCard.transform, "Txt_State", "", 19, selectedColor, 56f);
+            _txtDetailsState.alignment = TextAlignmentOptions.Center;
             _txtDetailsState.fontStyle = FontStyles.Bold;
+            SetResponsiveWrappedText(_txtDetailsState, 13f, 19f);
+            ApplyClassicRpgLabelTheme(_txtDetailsState, false, true);
 
-            _txtDetailsRequirement = MakeLabel(textColumn.transform, "Txt_Requirement", "", 11, new Color(0.82f, 0.86f, 0.92f), 22f);
-            _txtDetailsRequirement.alignment = TextAlignmentOptions.MidlineLeft;
+            var statsCard = CreateDetailsModalCard(contentColumn.transform, "StatsCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 220f);
+            var statsHeader = MakeLabel(statsCard.transform, "Txt_StatsHeader", "War Ledger", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            statsHeader.alignment = TextAlignmentOptions.Center;
+            statsHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(statsHeader, true, true);
+            _txtDetailsStats = MakeLabel(statsCard.transform, "Txt_Stats", "", 16, new Color(0.88f, 0.90f, 0.96f), 182f);
+            _txtDetailsStats.alignment = TextAlignmentOptions.TopLeft;
+            SetResponsiveWrappedText(_txtDetailsStats, 13f, 16f);
+            ApplyClassicRpgLabelTheme(_txtDetailsStats);
 
-            _txtDetailsBody = MakeLabel(textColumn.transform, "Txt_Body", "", 12, new Color(0.78f, 0.82f, 0.90f), 64f);
+            var requirementCard = CreateDetailsModalCard(contentColumn.transform, "RequirementCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 132f);
+            var requirementHeader = MakeLabel(requirementCard.transform, "Txt_RequirementHeader", "Unlock Decree", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            requirementHeader.alignment = TextAlignmentOptions.Center;
+            requirementHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(requirementHeader, true, true);
+            _txtDetailsRequirement = MakeLabel(requirementCard.transform, "Txt_Requirement", "", 15, new Color(0.82f, 0.86f, 0.92f), 102f);
+            _txtDetailsRequirement.alignment = TextAlignmentOptions.TopLeft;
+            SetResponsiveWrappedText(_txtDetailsRequirement, 13f, 15f);
+            ApplyClassicRpgLabelTheme(_txtDetailsRequirement);
+
+            var movesCard = CreateDetailsModalCard(contentColumn.transform, "MovesCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 196f);
+            var movesHeader = MakeLabel(movesCard.transform, "Txt_MovesHeader", "Move Scroll", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            movesHeader.alignment = TextAlignmentOptions.Center;
+            movesHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(movesHeader, true, true);
+            _txtDetailsMoves = MakeLabel(movesCard.transform, "Txt_Moves", "", 15, new Color(0.84f, 0.88f, 0.95f), 160f);
+            _txtDetailsMoves.alignment = TextAlignmentOptions.TopLeft;
+            SetResponsiveWrappedText(_txtDetailsMoves, 13f, 15f);
+            ApplyClassicRpgLabelTheme(_txtDetailsMoves);
+
+            var soundCard = CreateDetailsModalCard(contentColumn.transform, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 164f);
+            var soundHeader = MakeLabel(soundCard.transform, "Txt_SoundHeader", "Sound Hall", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            soundHeader.alignment = TextAlignmentOptions.Center;
+            soundHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(soundHeader, true, true);
+
+            var soundRow = new GameObject("SoundPreviewRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            soundRow.transform.SetParent(soundCard.transform, false);
+            soundRow.GetComponent<LayoutElement>().preferredHeight = 46f;
+            var soundRowLayout = soundRow.GetComponent<HorizontalLayoutGroup>();
+            soundRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            soundRowLayout.childControlWidth = false;
+            soundRowLayout.childControlHeight = true;
+            soundRowLayout.childForceExpandWidth = false;
+            soundRowLayout.childForceExpandHeight = false;
+            soundRowLayout.spacing = 12f;
+
+            _btnDetailsPreviewSfx = MakeButton(soundRow.transform, "Btn_PreviewSfx", "Preview SFX", 44f, new Color(0.24f, 0.33f, 0.49f, 1f));
+            var sfxLayout = _btnDetailsPreviewSfx.GetComponent<LayoutElement>();
+            if (sfxLayout != null)
+                sfxLayout.preferredWidth = 184f;
+            _txtDetailsPreviewSfx = _btnDetailsPreviewSfx.GetComponentInChildren<TMP_Text>();
+            if (_txtDetailsPreviewSfx != null)
+                _txtDetailsPreviewSfx.fontSize = 14f;
+            ApplyClassicRpgButtonTheme(_btnDetailsPreviewSfx, ClassicRpgButtonSize.Medium);
+            ApplyClassicRpgLabelTheme(_txtDetailsPreviewSfx, false, true);
+            _btnDetailsPreviewSfx.onClick.AddListener(PreviewSelectedUnitSfx);
+
+            _btnDetailsPreviewVoice = MakeButton(soundRow.transform, "Btn_PreviewVoice", "Voice Lines", 44f, new Color(0.19f, 0.24f, 0.34f, 1f));
+            var voiceLayout = _btnDetailsPreviewVoice.GetComponent<LayoutElement>();
+            if (voiceLayout != null)
+                voiceLayout.preferredWidth = 184f;
+            _txtDetailsPreviewVoice = _btnDetailsPreviewVoice.GetComponentInChildren<TMP_Text>();
+            if (_txtDetailsPreviewVoice != null)
+                _txtDetailsPreviewVoice.fontSize = 14f;
+            ApplyClassicRpgButtonTheme(_btnDetailsPreviewVoice, ClassicRpgButtonSize.Medium);
+            ApplyClassicRpgLabelTheme(_txtDetailsPreviewVoice, false, true);
+            _btnDetailsPreviewVoice.onClick.AddListener(PreviewSelectedUnitVoice);
+
+            _txtDetailsAudioStatus = MakeLabel(soundCard.transform, "Txt_AudioStatus", "", 14, new Color(0.80f, 0.84f, 0.92f), 72f);
+            _txtDetailsAudioStatus.alignment = TextAlignmentOptions.Center;
+            SetResponsiveWrappedText(_txtDetailsAudioStatus, 12f, 14f);
+            ApplyClassicRpgLabelTheme(_txtDetailsAudioStatus, false, true);
+
+            var bodyCard = CreateDetailsModalCard(contentColumn.transform, "BodyCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 276f);
+            var bodyHeader = MakeLabel(bodyCard.transform, "Txt_BodyHeader", "Chronicle", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            bodyHeader.alignment = TextAlignmentOptions.Center;
+            bodyHeader.fontStyle = FontStyles.Bold;
+            ApplyClassicRpgLabelTheme(bodyHeader, true, true);
+            _txtDetailsBody = MakeLabel(bodyCard.transform, "Txt_Body", "", 15, new Color(0.78f, 0.82f, 0.90f), 240f);
             _txtDetailsBody.alignment = TextAlignmentOptions.TopLeft;
-            _txtDetailsBody.textWrappingMode = TextWrappingModes.Normal;
+            SetResponsiveWrappedText(_txtDetailsBody, 13f, 15f);
+            ApplyClassicRpgLabelTheme(_txtDetailsBody);
+        }
+
+        GameObject CreateDetailsModalCard(Transform parent, string name, Color color, float preferredHeight)
+        {
+            var card = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            card.transform.SetParent(parent, false);
+            var image = card.GetComponent<Image>();
+            image.color = color;
+            ApplyClassicRpgFrameTheme(image, "Assets/ClassicRPGUI2/UIElementsPNG/PaperMedium.png");
+            var layoutElement = card.GetComponent<LayoutElement>();
+            layoutElement.flexibleWidth = 1f;
+            layoutElement.preferredHeight = preferredHeight;
+            var layout = card.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = 8f;
+            layout.padding = new RectOffset(18, 18, 16, 16);
+            return card;
+        }
+
+        Button CreateMotionPreviewButton(Transform parent, string name, string label, UnityEngine.Events.UnityAction onClick, out TMP_Text text)
+        {
+            var button = MakeButton(parent, name, label, 44f, new Color(0.19f, 0.26f, 0.38f, 1f));
+            ApplyClassicRpgButtonTheme(button, ClassicRpgButtonSize.Medium);
+            text = button.GetComponentInChildren<TMP_Text>();
+            if (text != null)
+            {
+                text.fontSize = 14f;
+                ApplyClassicRpgLabelTheme(text, false, true);
+            }
+            button.onClick.AddListener(onClick);
+            return button;
         }
 
         void BuildActionRow(Transform parent)
@@ -1716,10 +2117,14 @@ namespace CastleDefender.UI
 
             _btnSecondaryAction = MakeButton(row.transform, "Btn_Secondary", "Back", 46f, new Color(0.20f, 0.26f, 0.38f, 1f));
             _txtSecondaryAction = _btnSecondaryAction.GetComponentInChildren<TMP_Text>();
+            ApplyClassicRpgButtonTheme(_btnSecondaryAction, ClassicRpgButtonSize.Medium);
+            ApplyClassicRpgLabelTheme(_txtSecondaryAction, false, true);
             _btnSecondaryAction.onClick.AddListener(HandleSecondaryAction);
 
             _btnPrimaryAction = MakeButton(row.transform, "Btn_Primary", "Continue", 46f, new Color(0.20f, 0.58f, 0.30f, 1f));
             _txtPrimaryAction = _btnPrimaryAction.GetComponentInChildren<TMP_Text>();
+            ApplyClassicRpgButtonTheme(_btnPrimaryAction, ClassicRpgButtonSize.Long);
+            ApplyClassicRpgLabelTheme(_txtPrimaryAction, false, true);
             _btnPrimaryAction.onClick.AddListener(HandlePrimaryAction);
             RefreshPrimaryAction();
         }
@@ -1729,6 +2134,7 @@ namespace CastleDefender.UI
             string resolvedRaceId = RaceProgressionCatalog.ResolveAllowedRaceId(_availableRaceIds, raceId, "race button");
             _selectedRace = RaceProgressionCatalog.GetOrDefault(resolvedRaceId, "race button");
             _selectedUnit = GetDefaultUnit(_selectedRace);
+            _detailsModalOpen = false;
             NavigateToPage(WizardPage.ProgressionTree);
         }
 
@@ -1738,7 +2144,20 @@ namespace CastleDefender.UI
                 return;
 
             _selectedUnit = unit;
-            NavigateToPage(WizardPage.UnitDetails);
+            _detailsModalOpen = true;
+            _activePage = WizardPage.ProgressionTree;
+            RefreshCopy();
+            RefreshVisuals();
+        }
+
+        void CloseDetailsModal()
+        {
+            if (!_detailsModalOpen)
+                return;
+
+            _detailsModalOpen = false;
+            RefreshCopy();
+            RefreshVisuals();
         }
 
         void OnTreeTabSelected(RaceProgressionTab tab)
@@ -1747,6 +2166,7 @@ namespace CastleDefender.UI
                 return;
 
             _selectedTreeTab = tab;
+            _detailsModalOpen = false;
             RebuildPanel();
         }
 
@@ -1754,6 +2174,9 @@ namespace CastleDefender.UI
         {
             if (page == WizardPage.UnitDetails && _selectedUnit == null)
                 _selectedUnit = GetDefaultUnit(_selectedRace);
+
+            if (page != WizardPage.UnitDetails)
+                _detailsModalOpen = false;
 
             _activePage = page;
             RebuildPanel();
@@ -1782,10 +2205,13 @@ namespace CastleDefender.UI
             switch (_activePage)
             {
                 case WizardPage.UnitDetails:
-                    NavigateToPage(WizardPage.ProgressionTree);
+                    CloseDetailsModal();
                     break;
                 case WizardPage.ProgressionTree:
-                    NavigateToPage(WizardPage.RaceSelection);
+                    if (_detailsModalOpen)
+                        CloseDetailsModal();
+                    else
+                        NavigateToPage(WizardPage.RaceSelection);
                     break;
                 case WizardPage.RaceSelection:
                     if (_mode == ProgressionViewerMode.LobbyViewer)
@@ -1856,9 +2282,11 @@ namespace CastleDefender.UI
         {
             return _activePage switch
             {
-                WizardPage.RaceSelection => "Step 1 of 3. Choose a race to begin.",
-                WizardPage.ProgressionTree => "Step 2 of 3. Review the upgrade chain for this race.",
-                WizardPage.UnitDetails => "Step 3 of 3. Review the selected card's stats and unlock path.",
+                WizardPage.RaceSelection => "Step 1 of 2. Choose a race to begin.",
+                WizardPage.ProgressionTree => _detailsModalOpen
+                    ? "Step 2 of 2. Review the selected unit in the readable popup."
+                    : "Step 2 of 2. Review the upgrade chain and tap any card for readable details.",
+                WizardPage.UnitDetails => "Step 2 of 2. Review the selected unit in the readable popup.",
                 _ => "Review the race progression.",
             };
         }
@@ -1870,12 +2298,14 @@ namespace CastleDefender.UI
                 WizardPage.RaceSelection => _selectedRace != null
                     ? $"Open {_selectedRace.DisplayName} to review its upgrade chain."
                     : "Select a race to continue.",
-                WizardPage.ProgressionTree => _selectedRace != null
-                    ? $"{_selectedRace.DisplayName} selected. Click any card to open its details."
-                    : "Select a race to continue.",
+                WizardPage.ProgressionTree => _detailsModalOpen && _selectedUnit != null
+                    ? $"{_selectedUnit.DisplayName} is open. Tap outside the panel or press Close to return to the tree."
+                    : _selectedRace != null
+                        ? $"{_selectedRace.DisplayName} selected. Tap any card to open a larger readable detail popup."
+                        : "Select a race to continue.",
                 WizardPage.UnitDetails => _selectedUnit != null
-                    ? $"{_selectedUnit.DisplayName} selected. Use Back to return to the upgrade tree."
-                    : "Choose a card from the tree to continue.",
+                    ? $"{_selectedUnit.DisplayName} is open. Tap outside the panel or press Close to return to the tree."
+                    : "Select a race to continue.",
                 _ => "Review the race progression.",
             };
         }
@@ -2065,6 +2495,17 @@ namespace CastleDefender.UI
 
         void RefreshDetailsPanel()
         {
+            bool showModal = _detailsModalOpen
+                && _selectedUnit != null
+                && (_activePage == WizardPage.ProgressionTree || _activePage == WizardPage.UnitDetails);
+            if (_detailsOverlayRoot != null)
+                _detailsOverlayRoot.SetActive(showModal);
+            if (!showModal)
+            {
+                ClearDetailsLivePreview();
+                return;
+            }
+
             if (_selectedUnit == null)
                 _selectedUnit = GetDefaultUnit(_selectedRace);
             if (_selectedUnit == null)
@@ -2073,14 +2514,19 @@ namespace CastleDefender.UI
             if (_txtDetailsTitle != null)
                 _txtDetailsTitle.text = _selectedUnit.DisplayName;
             if (_txtDetailsStats != null)
-                _txtDetailsStats.text = BuildUnitStatsLine(_selectedUnit);
+                _txtDetailsStats.text = BuildUnitDetailStatsText(_selectedUnit);
             if (_txtDetailsState != null)
                 _txtDetailsState.text = BuildUnitDetailsStateText(_selectedUnit);
             if (_txtDetailsRequirement != null)
                 _txtDetailsRequirement.text = BuildUnitDetailsRequirementText(_selectedUnit);
+            if (_txtDetailsMoves != null)
+                _txtDetailsMoves.text = BuildUnitMoveSetText(_selectedUnit);
+            if (_txtDetailsAudioStatus != null)
+                _txtDetailsAudioStatus.text = BuildUnitAudioStatusText(_selectedUnit);
             if (_txtDetailsBody != null)
-                _txtDetailsBody.text = $"{_selectedUnit.Description}\n{BuildUnitDetailsBodySuffix(_selectedUnit)}";
+                _txtDetailsBody.text = BuildUnitDetailsBodyText(_selectedUnit);
 
+            RefreshDetailsPreviewButtons(_selectedUnit);
             RefreshDetailsPortrait(_selectedUnit);
         }
 
@@ -2726,31 +3172,48 @@ namespace CastleDefender.UI
 
         string BuildUnitDetailsRequirementText(RaceProgressionUnitDefinition unit)
         {
+            string requirementText;
             if (unit == null || unit.IsStartUnit)
             {
                 if (unit != null && unit.CardStyle == RaceProgressionUnitCardStyle.UpgradeStep)
-                    return "Requirement: Starting civic tier";
+                    return "[Gate] Starting civic tier";
                 if (unit != null && unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier)
-                    return "Requirement: Available immediately";
-                return "Requirement: Start unit";
+                    return "[Gate] Available immediately";
+                requirementText = "[Gate] Start unit";
             }
-
-            var requirement = unit.UnlockRequirement;
-            if (requirement == null && unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier)
+            else
             {
-                if (_selectedRace != null
-                    && _selectedRace.TryGetLane(unit.LaneId, out var lane)
-                    && GetUnitIndex(lane, unit.Id) == 0)
+                var requirement = unit.UnlockRequirement;
+                if (requirement == null && unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier)
                 {
-                    return "Requirement: Available immediately";
+                    if (_selectedRace != null
+                        && _selectedRace.TryGetLane(unit.LaneId, out var lane)
+                        && GetUnitIndex(lane, unit.Id) == 0)
+                    {
+                        return "[Gate] Available immediately";
+                    }
+
+                    return "[Gate] Previous tier in this row";
                 }
 
-                return "Requirement: Previous tier in this row";
+                requirementText = requirement == null
+                    ? "[Gate] Unknown"
+                    : $"[Gate] {requirement.BuildingName} T{requirement.RequiredTier}";
             }
 
-            return requirement == null
-                ? "Requirement: Unknown"
-                : $"Requirement: {requirement.BuildingName} T{requirement.RequiredTier}";
+            if (unit == null
+                || unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier
+                || unit.CardStyle == RaceProgressionUnitCardStyle.UpgradeStep
+                || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+            {
+                return requirementText;
+            }
+
+            var builder = new StringBuilder();
+            builder.AppendLine(requirementText);
+            builder.AppendLine($"[Rank] {BuildFormationDetailText(unit)}");
+            builder.Append($"[Source] {BuildCurrentSourceText(TryGetCatalogEntry(unit, out var catalog) ? catalog : null)}");
+            return builder.ToString().TrimEnd();
         }
 
         string BuildUnitDetailsBodySuffix(RaceProgressionUnitDefinition unit)
@@ -2799,6 +3262,149 @@ namespace CastleDefender.UI
             return $"{string.Join(", ", names.GetRange(0, names.Count - 1))}, and {names[names.Count - 1]}";
         }
 
+        void PreviewSelectedUnitSfx()
+        {
+            if (!TryResolvePreviewSfx(_selectedUnit, out var sfx, out var label))
+            {
+                SetDetailsPreviewStatus("No dedicated sound preview is wired for this entry yet.");
+                return;
+            }
+
+            AudioManager.I?.Play(sfx, 0.9f);
+            SetDetailsPreviewStatus($"{_selectedUnit?.DisplayName ?? "This entry"} is previewing {label.ToLowerInvariant()} audio.");
+        }
+
+        void PreviewSelectedUnitVoice()
+        {
+            if (!TryResolvePreviewVoice(_selectedUnit, out var sfx, out var label))
+            {
+                SetDetailsPreviewStatus("Voice lines are still pending for this unit.");
+                return;
+            }
+
+            AudioManager.I?.Play(sfx, 0.9f);
+            SetDetailsPreviewStatus($"{_selectedUnit?.DisplayName ?? "This entry"} is previewing {label.ToLowerInvariant()} voice.");
+        }
+
+        void PreviewIdleMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Idle);
+        void PreviewWalkMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Walk);
+        void PreviewMarchMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.March);
+        void PreviewRunMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Run);
+        void PreviewStrikeMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Strike);
+        void PreviewSpecialMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Special);
+        void PreviewHitMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Hit);
+        void PreviewDeathMotion() => PlayDetailsPreviewMotion(DetailPreviewMotion.Death);
+
+        void RefreshDetailsPreviewButtons(RaceProgressionUnitDefinition unit)
+        {
+            bool hasSfx = TryResolvePreviewSfx(unit, out _, out var sfxLabel);
+            bool hasVoice = TryResolvePreviewVoice(unit, out _, out var voiceLabel);
+
+            SetPreviewButtonState(
+                _btnDetailsPreviewSfx,
+                _txtDetailsPreviewSfx,
+                hasSfx,
+                hasSfx ? $"Play {sfxLabel}" : "No SFX Wired",
+                new Color(0.24f, 0.33f, 0.49f, 1f),
+                new Color(0.15f, 0.18f, 0.24f, 0.92f));
+
+            SetPreviewButtonState(
+                _btnDetailsPreviewVoice,
+                _txtDetailsPreviewVoice,
+                hasVoice,
+                hasVoice ? $"Play {voiceLabel}" : "Voices Pending",
+                new Color(0.30f, 0.24f, 0.41f, 1f),
+                new Color(0.15f, 0.18f, 0.24f, 0.92f));
+
+            bool hasLivePreview = TryEnsureDetailsPreviewUnit(unit);
+            SetDetailsPreviewStatus(
+                hasLivePreview
+                    ? $"Preview ready. Choose a motion to watch how {unit?.DisplayName ?? "this unit"} moves in battle."
+                    : $"Live motion preview is not wired for {unit?.DisplayName ?? "this entry"} yet.");
+            RefreshMotionPreviewButton(_btnPreviewIdle, _txtPreviewIdle, "Idle", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Idle));
+            RefreshMotionPreviewButton(_btnPreviewWalk, _txtPreviewWalk, "Walk", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Walk));
+            RefreshMotionPreviewButton(_btnPreviewMarch, _txtPreviewMarch, "March", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.March));
+            RefreshMotionPreviewButton(_btnPreviewRun, _txtPreviewRun, "Run", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Run));
+            RefreshMotionPreviewButton(_btnPreviewStrike, _txtPreviewStrike, "Strike", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Strike));
+            RefreshMotionPreviewButton(
+                _btnPreviewSpecial,
+                _txtPreviewSpecial,
+                BuildSpecialPreviewButtonLabel(unit),
+                hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Special));
+            RefreshMotionPreviewButton(_btnPreviewHit, _txtPreviewHit, "Hit React", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Hit));
+            RefreshMotionPreviewButton(_btnPreviewDeath, _txtPreviewDeath, "Death", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Death));
+        }
+
+        static void SetPreviewButtonState(Button button, TMP_Text label, bool enabled, string text, Color enabledColor, Color disabledColor)
+        {
+            if (button == null)
+                return;
+
+            button.interactable = enabled;
+            if (button.targetGraphic is Image image)
+            {
+                bool usingSpriteSkin = image.sprite != null;
+                image.color = usingSpriteSkin
+                    ? enabled
+                        ? Color.white
+                        : new Color(0.52f, 0.52f, 0.52f, 0.92f)
+                    : enabled
+                        ? enabledColor
+                        : disabledColor;
+            }
+
+            if (label != null)
+            {
+                label.text = text;
+                label.color = enabled ? Color.white : new Color(0.70f, 0.74f, 0.80f, 1f);
+            }
+        }
+
+        void RefreshMotionPreviewButton(Button button, TMP_Text label, string text, bool enabled)
+        {
+            SetPreviewButtonState(
+                button,
+                label,
+                enabled,
+                text,
+                new Color(0.19f, 0.26f, 0.38f, 1f),
+                new Color(0.15f, 0.18f, 0.24f, 0.92f));
+        }
+
+        void PlayDetailsPreviewMotion(DetailPreviewMotion motion)
+        {
+            if (!TryEnsureDetailsPreviewUnit(_selectedUnit))
+            {
+                SetDetailsPreviewStatus("This entry does not have a live rig preview yet.");
+                return;
+            }
+
+            if (_detailsPreviewCam == null)
+                return;
+
+            _detailsPreviewCam.SetAnimatorSpeed(GetPreviewMotionSpeed(motion));
+            if (!_detailsPreviewCam.TryPlayFirstAvailableState(GetPreviewMotionStates(motion), out var playedState, out var clipLength, 0f))
+            {
+                SetDetailsPreviewStatus($"No {BuildPreviewMotionLabel(motion, _selectedUnit).ToLowerInvariant()} animation is wired for {_selectedUnit?.DisplayName ?? "this unit"} yet.");
+                return;
+            }
+
+            StopDetailsPreviewResetRoutine();
+            SetDetailsPreviewStatus(BuildPreviewStatusText(motion, _selectedUnit, playedState));
+
+            if (IsTransientPreviewMotion(motion))
+            {
+                float resetDelay = ResolveTransientPreviewDelay(motion, clipLength);
+                _detailsPreviewResetRoutine = StartCoroutine(ReturnDetailsPreviewToIdle(resetDelay));
+            }
+        }
+
+        bool CanPlayDetailsPreviewMotion(DetailPreviewMotion motion)
+        {
+            return _detailsPreviewCam != null
+                && _detailsPreviewCam.HasAnyState(GetPreviewMotionStates(motion));
+        }
+
         void RefreshDetailsPortrait(RaceProgressionUnitDefinition unit)
         {
             bool showBuildingIcon = unit != null
@@ -2808,6 +3414,7 @@ namespace CastleDefender.UI
 
             if (showBuildingIcon)
             {
+                ClearDetailsLivePreview();
                 if (_detailsPortrait != null)
                 {
                     _detailsPortrait.texture = null;
@@ -2835,8 +3442,202 @@ namespace CastleDefender.UI
             if (_detailsBuildingFallback != null)
                 _detailsBuildingFallback.gameObject.SetActive(false);
 
+            if (TryEnsureDetailsPreviewUnit(unit) && _detailsPortrait != null && _runtimePreviewTexture != null)
+            {
+                _detailsPortrait.texture = _runtimePreviewTexture;
+                _detailsPortrait.color = Color.white;
+                return;
+            }
+
             if (_detailsPortrait != null)
                 StartPortraitCapture(unit?.PortraitKey, _detailsPortrait);
+        }
+
+        bool TryEnsureDetailsPreviewUnit(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep || unit.CardDisplay != null)
+                return false;
+
+            string previewKey = ResolveDetailsPreviewKey(unit);
+            if (string.IsNullOrWhiteSpace(previewKey))
+                return false;
+
+            var previewCam = EnsureDetailsPreviewCamera();
+            if (previewCam == null)
+                return false;
+
+            if (!string.Equals(_detailsPreviewStagedKey, previewKey, StringComparison.OrdinalIgnoreCase) || previewCam.StagedObject == null)
+            {
+                StopDetailsPreviewResetRoutine();
+                previewCam.ShowUnit(previewKey);
+                previewCam.SetAnimatorSpeed(1f);
+                previewCam.PlayFirstAvailableState(GetPreviewMotionStates(DetailPreviewMotion.Idle), 0.05f);
+                _detailsPreviewStagedKey = previewKey;
+            }
+
+            return previewCam.StagedObject != null;
+        }
+
+        void ClearDetailsLivePreview()
+        {
+            StopDetailsPreviewResetRoutine();
+            _detailsPreviewStagedKey = null;
+            if (_detailsPreviewCam != null)
+                _detailsPreviewCam.Clear();
+        }
+
+        string ResolveDetailsPreviewKey(RaceProgressionUnitDefinition unit)
+        {
+            if (!string.IsNullOrWhiteSpace(unit?.PortraitKey))
+                return ResolvePortraitLookupKey(unit.PortraitKey);
+
+            return ResolveTechTreeCatalogKey(unit);
+        }
+
+        UnitPortraitCamera EnsureDetailsPreviewCamera()
+        {
+            if (_detailsPreviewCam != null && _detailsPreviewCam.Registry != null)
+                return _detailsPreviewCam;
+
+            var registry = RuntimePortraitStudio.ResolveRegistry(PortraitRegistry);
+            if (registry == null)
+                return null;
+
+            if (_runtimePreviewRoot == null)
+                _detailsPreviewCam = RuntimePortraitStudio.Create("RaceProgressionDetailsPreviewStudio", registry, out _runtimePreviewRoot, out _runtimePreviewTexture, textureSize: 512);
+
+            _detailsPreviewCam.Registry = registry;
+            _detailsPreviewCam.transform.position = new Vector3(0f, 0f, 80f);
+            _detailsPreviewCam.FitHeight = 2.2f;
+            _detailsPreviewCam.FrameFill = 0.78f;
+            _detailsPreviewCam.VerticalFocus = 0.54f;
+            _detailsPreviewCam.CameraHeightBias = -0.02f;
+            _detailsPreviewCam.LookAtHeightBias = 0.02f;
+            return _detailsPreviewCam;
+        }
+
+        IEnumerator ReturnDetailsPreviewToIdle(float delay)
+        {
+            yield return new WaitForSecondsRealtime(Mathf.Max(0.35f, delay));
+
+            if (_detailsPreviewCam == null || _selectedUnit == null)
+                yield break;
+
+            _detailsPreviewCam.SetAnimatorSpeed(1f);
+            _detailsPreviewCam.PlayFirstAvailableState(GetPreviewMotionStates(DetailPreviewMotion.Idle), 0.08f);
+            SetDetailsPreviewStatus($"Preview reset to idle for {_selectedUnit.DisplayName}.");
+            _detailsPreviewResetRoutine = null;
+        }
+
+        void StopDetailsPreviewResetRoutine()
+        {
+            if (_detailsPreviewResetRoutine == null)
+                return;
+
+            StopCoroutine(_detailsPreviewResetRoutine);
+            _detailsPreviewResetRoutine = null;
+        }
+
+        static float GetPreviewMotionSpeed(DetailPreviewMotion motion)
+        {
+            return motion switch
+            {
+                DetailPreviewMotion.March => 0.72f,
+                _ => 1f,
+            };
+        }
+
+        static string[] GetPreviewMotionStates(DetailPreviewMotion motion)
+        {
+            return motion switch
+            {
+                DetailPreviewMotion.Idle => new[] { "Idle", "IdleNormal", "IdleCombat", "idle" },
+                DetailPreviewMotion.Walk => new[] { "Walk", "walk" },
+                DetailPreviewMotion.March => new[] { "Walk", "walk" },
+                DetailPreviewMotion.Run => new[] { "Run", "run", "Walk", "walk" },
+                DetailPreviewMotion.Strike => new[] { "Attack1", "Attack", "attack" },
+                DetailPreviewMotion.Special => new[] { "Attack2", "Attack1", "Attack", "attack" },
+                DetailPreviewMotion.Hit => new[] { "Damage", "Hit", "damage", "hit" },
+                DetailPreviewMotion.Death => new[] { "Death", "death", "die" },
+                _ => Array.Empty<string>(),
+            };
+        }
+
+        void SetDetailsPreviewStatus(string text)
+        {
+            if (_txtDetailsPreviewStatus == null)
+                return;
+
+            _txtDetailsPreviewStatus.text = text;
+        }
+
+        static string BuildPreviewStatusText(DetailPreviewMotion motion, RaceProgressionUnitDefinition unit, string stateName)
+        {
+            string unitName = unit?.DisplayName ?? "This unit";
+            string moveName = BuildPreviewMotionLabel(motion, unit);
+            return $"{unitName} is now previewing {moveName.ToLowerInvariant()} ({stateName}).";
+        }
+
+        static string BuildPreviewMotionLabel(DetailPreviewMotion motion, RaceProgressionUnitDefinition unit)
+        {
+            return motion switch
+            {
+                DetailPreviewMotion.Idle => "Idle",
+                DetailPreviewMotion.Walk => "Walk",
+                DetailPreviewMotion.March => "March",
+                DetailPreviewMotion.Run => "Run",
+                DetailPreviewMotion.Strike => "Strike",
+                DetailPreviewMotion.Special => BuildSpecialPreviewButtonLabel(unit),
+                DetailPreviewMotion.Hit => "Hit React",
+                DetailPreviewMotion.Death => "Death",
+                _ => "Motion",
+            };
+        }
+
+        static bool IsTransientPreviewMotion(DetailPreviewMotion motion)
+        {
+            return motion == DetailPreviewMotion.Strike
+                || motion == DetailPreviewMotion.Special
+                || motion == DetailPreviewMotion.Hit
+                || motion == DetailPreviewMotion.Death;
+        }
+
+        static float ResolveTransientPreviewDelay(DetailPreviewMotion motion, float clipLength)
+        {
+            float fallback = motion switch
+            {
+                DetailPreviewMotion.Death => 2.2f,
+                DetailPreviewMotion.Hit => 1.2f,
+                _ => 1.45f,
+            };
+
+            return clipLength > 0.01f ? clipLength + 0.1f : fallback;
+        }
+
+        static string BuildSpecialPreviewButtonLabel(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "king" => "Heroic Strike",
+                "paladin" => "Holy Vanguard",
+                "bishop" => "Blessing Rite",
+                "archer" => "Volley Fire",
+                "crossbowman" => "Piercing Bolt",
+                "ranger" => "Skirmish Volley",
+                "mage" => "Arcane Burst",
+                "wizard" => "Spell Volley",
+                "thaumaturge" => "Arcane Control",
+                "cleric" => "Field Mend",
+                "priest" => "Battle Prayer",
+                "high_priest" => "Sanctified Blessing",
+                "shieldman" => "Shield Wall",
+                "shield_guard" => "Heavy Brace",
+                "guardian" => "Bulwark Push",
+                "spearman" => "Brace Reach",
+                "halberdier" => "Heavy Cleave",
+                "lancer" => "Lance Charge",
+                _ => "Special Move",
+            };
         }
 
         bool CanOpenRequirementInWorld(RaceProgressionRequirementDefinition requirement)
@@ -3000,7 +3801,7 @@ namespace CastleDefender.UI
             return $"{char.ToUpperInvariant(parts[0][0])}{char.ToUpperInvariant(parts[1][0])}";
         }
 
-        string BuildUnitStatsLine(RaceProgressionUnitDefinition unit)
+        string BuildUnitCardStatsText(RaceProgressionUnitDefinition unit)
         {
             if (unit == null)
                 return "Stats unavailable";
@@ -3008,29 +3809,822 @@ namespace CastleDefender.UI
             if (unit.CardDisplay != null)
                 return $"{BuildBuildingTierLabel(unit)}   {BuildBuildingTimeText(unit)}   {BuildBuildingCostText(unit)}";
 
-            if (!string.IsNullOrWhiteSpace(unit.StatsSummary))
-                return unit.StatsSummary;
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Building requirement";
+
+            if (IsStableDisplayOnlyUnit(unit))
+            {
+                return "Mount Unlock";
+            }
+
+            if (IsEconomyUnit(unit))
+                return BuildEconomyLapText(unit);
+
+            return BuildUnitRoleLabel(unit);
+        }
+
+        string BuildUnitCardSubtitle(RaceProgressionLaneDefinition lane, RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return lane?.Label ?? "Unit";
+
+            if (IsStableDisplayOnlyUnit(unit))
+                return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Future stable branch";
+
+            string formationText = BuildCompactFormationTag(unit);
+            if (!string.IsNullOrWhiteSpace(formationText))
+                return formationText;
+
+            if (IsEconomyUnit(unit))
+                return "Trade Route Unit";
+
+            return !string.IsNullOrWhiteSpace(unit.CardTag)
+                ? unit.CardTag
+                : lane?.Label ?? "Unit";
+        }
+
+        string BuildUnitDetailStatsText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Stats unavailable";
+
+            if (unit.CardDisplay != null)
+                return $"{BuildBuildingTierLabel(unit)}   {BuildBuildingTimeText(unit)}   {BuildBuildingCostText(unit)}";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Building requirement";
+
+            if (IsStableDisplayOnlyUnit(unit))
+            {
+                return !string.IsNullOrWhiteSpace(unit.StatsSummary)
+                    ? $"[Stable] {unit.StatsSummary}\n[Status] Runtime output not wired yet."
+                    : "[Status] Runtime output not wired yet.";
+            }
 
             if (!TryGetCatalogEntry(unit, out var catalog))
-                return "CATALOG ERROR";
+                return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Catalog data unavailable";
 
-            string incomeText = catalog.income > 0f ? $"+{catalog.income:0.#}/wave" : "No income bonus";
-            return $"HP {Mathf.RoundToInt(catalog.hp)}   Cost {catalog.send_cost}g   {incomeText}";
+            var builder = new StringBuilder();
+            if (IsEconomyUnit(unit))
+                builder.AppendLine($"[Coin] Route Value {BuildEconomyLapText(unit)}");
+
+            builder.AppendLine($"[Role] {BuildUnitRoleLabel(unit)}");
+            builder.AppendLine($"[Rank] {BuildFormationDetailText(unit)}");
+            builder.AppendLine($"[Blade] Attack {FormatStatNumber(catalog.attack_damage)}");
+            builder.AppendLine($"[Tempo] Attack Speed {Mathf.Max(0.01f, catalog.attack_speed):0.##}/s");
+            builder.AppendLine($"[Strike] Damage per second {ComputeUnitDps(catalog):0.#}");
+            builder.AppendLine($"[Heart] Vitality {FormatStatNumber(catalog.hp)}");
+            builder.AppendLine($"[Shield] Armor {HumanizeLabel(catalog.armor_type)}   Guard {Mathf.Max(0f, catalog.damage_reduction_pct):0.#}%");
+            builder.AppendLine($"[Reach] Range {FormatStatNumber(catalog.range)}   [Type] {HumanizeLabel(catalog.damage_type)}");
+            builder.Append($"[Stride] Move Speed {FormatStatNumber(catalog.path_speed)}");
+            if (catalog.send_cost > 0)
+                builder.Append($"   [Send] {catalog.send_cost}g");
+            return builder.ToString();
         }
 
         bool TryGetCatalogEntry(RaceProgressionUnitDefinition unit, out UnitCatalogEntry catalog)
         {
             catalog = null;
-            if (unit == null || string.IsNullOrWhiteSpace(unit.CatalogKey))
+            string catalogKey = ResolveTechTreeCatalogKey(unit);
+            if (string.IsNullOrWhiteSpace(catalogKey))
                 return false;
 
-            if (CatalogLoader.UnitByKey.TryGetValue(unit.CatalogKey, out catalog) && catalog != null)
+            if (CatalogLoader.UnitByKey.TryGetValue(catalogKey, out catalog) && catalog != null)
                 return true;
 
-            if (_missingCatalogLogs.Add(unit.CatalogKey))
-                Debug.LogError($"[RaceProgression] Missing catalog entry for '{unit.CatalogKey}'. The unit card will render an explicit catalog error state.");
+            if (_missingCatalogLogs.Add(catalogKey))
+                Debug.LogError($"[RaceProgression] Missing catalog entry for '{catalogKey}'. The unit card will render an explicit catalog error state.");
 
             return false;
+        }
+
+        static string ResolveTechTreeCatalogKey(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(unit.CatalogKey))
+                return unit.CatalogKey.Trim();
+
+            if ((IsEconomyUnit(unit) || IsStableDisplayOnlyUnit(unit)) && !string.IsNullOrWhiteSpace(unit.PortraitKey))
+                return unit.PortraitKey.Trim();
+
+            return null;
+        }
+
+        static bool IsEconomyUnit(RaceProgressionUnitDefinition unit)
+        {
+            return string.Equals(unit?.LaneId, "market", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsStableDisplayOnlyUnit(RaceProgressionUnitDefinition unit)
+        {
+            return string.Equals(unit?.LaneId, "stable_horses", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string BuildEconomyLapText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "settler" => "+7g / lap",
+                "trader" => "+10g / lap",
+                _ => "+4g / lap",
+            };
+        }
+
+        static string BuildCompactFormationTag(RaceProgressionUnitDefinition unit)
+        {
+            int rank = GetFormationRank(unit);
+            return rank > 0
+                ? $"{Ordinal(rank)} Rank"
+                : IsEconomyUnit(unit)
+                    ? "Trade Route"
+                    : IsStableDisplayOnlyUnit(unit)
+                        ? "Stable Branch"
+                        : null;
+        }
+
+        static string BuildFormationDetailText(RaceProgressionUnitDefinition unit)
+        {
+            int rank = GetFormationRank(unit);
+            if (rank > 0)
+                return $"Formation {Ordinal(rank)} rank";
+
+            if (IsEconomyUnit(unit))
+                return "Formation trade route / not in the main battle line";
+
+            if (IsStableDisplayOnlyUnit(unit))
+                return "Formation not assigned because this branch is display-only";
+
+            return "Formation not assigned";
+        }
+
+        static int GetFormationRank(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "shieldman" => 1,
+                "shield_guard" => 1,
+                "guardian" => 1,
+                "paladin" => 1,
+                "militia" => 2,
+                "swordsman" => 2,
+                "knight" => 2,
+                "king" => 2,
+                "spearman" => 3,
+                "halberdier" => 3,
+                "lancer" => 3,
+                "mage" => 4,
+                "wizard" => 4,
+                "thaumaturge" => 4,
+                "archer" => 5,
+                "crossbowman" => 5,
+                "ranger" => 5,
+                "cleric" => 6,
+                "priest" => 6,
+                "high_priest" => 6,
+                "bishop" => 6,
+                _ => 0,
+            };
+        }
+
+        static string BuildCompactSpecialTag(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "militia" => "Cheap frontline",
+                "swordsman" => "Line fighter",
+                "knight" => "Charge break",
+                "spearman" => "Brace / reach",
+                "halberdier" => "Heavy cleave",
+                "lancer" => "Lance charge",
+                "shieldman" => "Shield wall",
+                "shield_guard" => "Heavy brace",
+                "guardian" => "Bulwark push",
+                "cleric" => "Field mend",
+                "priest" => "Battle prayer",
+                "high_priest" => "Mass sustain",
+                "mage" => "Arcane burst",
+                "wizard" => "Spell volley",
+                "thaumaturge" => "Arcane control",
+                "archer" => "Volley fire",
+                "crossbowman" => "Piercing bolt",
+                "ranger" => "Skirmish shots",
+                "peasant" => "+4g lap",
+                "settler" => "+7g lap",
+                "trader" => "+10g lap",
+                "king" => "Royal command",
+                "paladin" => "Holy vanguard",
+                "bishop" => "Blessing support",
+                "colt" => "Future mount",
+                "stallion" => "Future warhorse",
+                "dark_stallion" => "Future elite mount",
+                _ => unit?.CardTag,
+            };
+        }
+
+        static string BuildUnitRoleLabel(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "militia" => "Frontline levy",
+                "swordsman" => "Line infantry",
+                "knight" => "Shock cavalry",
+                "spearman" => "Reach frontline",
+                "halberdier" => "Anti-armor polearm",
+                "lancer" => "Flank charger",
+                "shieldman" => "Frontline anchor",
+                "shield_guard" => "Heavy bulwark",
+                "guardian" => "Elite bulwark",
+                "cleric" => "Backline support",
+                "priest" => "Backline healer",
+                "high_priest" => "High support caster",
+                "mage" => "Arcane artillery",
+                "wizard" => "Battle mage",
+                "thaumaturge" => "Arcane master",
+                "archer" => "Ranged damage",
+                "crossbowman" => "Anti-armor ranged",
+                "ranger" => "Skirmish ranged",
+                "peasant" => "Economy runner",
+                "settler" => "Economy runner",
+                "trader" => "Economy runner",
+                "king" => "Hero commander",
+                "paladin" => "Hero vanguard",
+                "bishop" => "Hero support",
+                "colt" => "Mount unlock",
+                "stallion" => "Mount unlock",
+                "dark_stallion" => "Mount unlock",
+                _ => "Unit role pending",
+            };
+        }
+
+        static string BuildUnitOriginText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "militia" => "Raised from the town levy once the first Barracks is standing.",
+                "swordsman" => "Trained out of militia once the Blacksmith professionalizes the infantry line.",
+                "knight" => "Fielded from the elite mounted arm once the Blacksmith reaches its final tier.",
+                "spearman" => "Recruited into the disciplined polearm ranks through the Blacksmith.",
+                "halberdier" => "Advanced polearm specialist forged from the same Blacksmith branch.",
+                "lancer" => "Cavalry polearm veteran released at the top of the spear line.",
+                "shieldman" => "Drawn from the city guard and equipped as the front-rank wall.",
+                "shield_guard" => "Veteran shield-line soldier outfitted through upgraded Blacksmith support.",
+                "guardian" => "Late-game elite guard mounted and armored for the final defensive tier.",
+                "cleric" => "Temple acolyte attached to marching companies for field care.",
+                "priest" => "Ordained support unit sent from the upgraded Temple.",
+                "high_priest" => "Senior temple leader deployed once the faith branch is fully matured.",
+                "mage" => "Early battle caster licensed through the Wizard Tower.",
+                "wizard" => "Veteran spellcaster trained after the tower reaches its middle tier.",
+                "thaumaturge" => "Master arcane operative released at the peak of the Wizard Tower.",
+                "archer" => "Drawn from huntsmen and garrison bowmen once the Archery Tower is built.",
+                "crossbowman" => "Armory-trained marksman issued heavier ranged weapons at tier two.",
+                "ranger" => "Veteran frontier skirmisher fielded from the fully upgraded Archery Tower.",
+                "peasant" => "Starter trade laborer sent between the Town Core and Market.",
+                "settler" => "Experienced civilian courier trusted with higher-value cargo.",
+                "trader" => "Top-tier commercial runner representing the Market's late-game route economy.",
+                "king" => "The sovereign enters the field only after Castle is secured.",
+                "paladin" => "Holy champion released when the realm reaches Castle.",
+                "bishop" => "Senior church leader unlocked at Castle to support the army.",
+                "colt" => "Stable-bred mount slot prepared for future mounted expansion.",
+                "stallion" => "Warhorse bred for the middle stable tier while mounted gameplay is still pending.",
+                "dark_stallion" => "Late-tier stable mount reserved for future cavalry expansion.",
+                _ => "Origin note pending.",
+            };
+        }
+
+        static string BuildUnitSkillText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "militia" => "Cheap early frontline body used to establish the second rank.",
+                "swordsman" => "Reliable line fighter that upgrades early militia pressure into a sturdier core.",
+                "knight" => "Shock cavalry finisher for the infantry branch.",
+                "spearman" => "Third-rank reach support that helps control enemy approach.",
+                "halberdier" => "Higher-tier polearm pressure with better anti-armor identity.",
+                "lancer" => "Fast reach cavalry used to punish openings once the line is established.",
+                "shieldman" => "First-rank anchor that protects the rest of the formation.",
+                "shield_guard" => "Improved first-rank tank that stabilizes longer engagements.",
+                "guardian" => "Elite defensive anchor for the late-game frontline.",
+                "cleric" => "Back-rank sustain support and early healing coverage.",
+                "priest" => "Stronger backline sustain with more reliable healing uptime.",
+                "high_priest" => "Peak support output for extended battles.",
+                "mage" => "Backline arcane damage with early spell pressure.",
+                "wizard" => "Stronger magical throughput from deeper in the formation.",
+                "thaumaturge" => "Late-game caster that should define the arcane back line.",
+                "archer" => "Baseline ranged pressure from the fifth rank.",
+                "crossbowman" => "Tier-two ranged specialist intended to hit harder than base archers.",
+                "ranger" => "Late-game skirmisher intended to finish the ranged branch cleanly.",
+                "peasant" => "Carries the starter economy route for the human trade branch.",
+                "settler" => "Improves the value of every completed route lap.",
+                "trader" => "Represents the fully upgraded market economy runner.",
+                "king" => "Frontline hero commander for the Castle outcome row.",
+                "paladin" => "Holy frontline hero meant to absorb and punish pressure.",
+                "bishop" => "Backline hero support that should sit behind the main damage ranks.",
+                "colt" => "Visual stable unlock prepared for future mounted roster logic.",
+                "stallion" => "Mid-tier mount unlock awaiting live stable gameplay.",
+                "dark_stallion" => "End-tier mount unlock awaiting live stable gameplay.",
+                _ => "Skill note pending.",
+            };
+        }
+
+        static string BuildUnitSpecialAttackText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "militia" => "Swarm rush and rough melee pressure.",
+                "swordsman" => "Disciplined sword-line strikes with steadier sustained hits.",
+                "knight" => "Mounted breakthrough charge that punishes opened fronts.",
+                "spearman" => "Brace-and-reach attacks that punish chargers.",
+                "halberdier" => "Heavy halberd swings aimed at armored targets.",
+                "lancer" => "Fast lance impact for flank breaks.",
+                "shieldman" => "Shield wall and forward brace to absorb the opening clash.",
+                "shield_guard" => "Heavy brace with longer hold time under pressure.",
+                "guardian" => "Elite guard impact that keeps the first rank intact.",
+                "cleric" => "Field mend and close support blessings.",
+                "priest" => "Battle prayer and stronger targeted healing.",
+                "high_priest" => "High-output sustain with stronger blessing coverage.",
+                "mage" => "Arcane burst volleys from the back line.",
+                "wizard" => "Heavier spell volleys with stronger magical pressure.",
+                "thaumaturge" => "Late-game arcane control and high burst casting.",
+                "archer" => "Rapid volley fire into softened targets.",
+                "crossbowman" => "Armor-piercing bolt fire with heavier single shots.",
+                "ranger" => "Skirmish volleys and mobile precision fire.",
+                "peasant" => "Completes route laps for steady gold income.",
+                "settler" => "Higher-value cargo runs with better route returns.",
+                "trader" => "Top-tier trade deliveries with the highest lap income.",
+                "king" => "Royal command presence with crushing frontline hits.",
+                "paladin" => "Holy vanguard pressure with strong frontline resilience.",
+                "bishop" => "Blessing support from the rear with strong sustain.",
+                "colt" => "Mount unlock only; live combat output is not wired yet.",
+                "stallion" => "Mount unlock only; live combat output is not wired yet.",
+                "dark_stallion" => "Mount unlock only; live combat output is not wired yet.",
+                _ => "Special attack note pending.",
+            };
+        }
+
+        static string BuildCompactArmorText(UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return "--";
+
+            return $"{HumanizeLabel(catalog.armor_type)}+{Mathf.Max(0f, catalog.damage_reduction_pct):0.#}%";
+        }
+
+        static float ComputeUnitDps(UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return 0f;
+
+            return Mathf.Max(0f, catalog.attack_damage) * Mathf.Max(0.01f, catalog.attack_speed);
+        }
+
+        static float ComputeEffectiveHp(UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return 0f;
+
+            float reduction = Mathf.Clamp01((Mathf.Max(0f, catalog.damage_reduction_pct) / 100f));
+            float divisor = Mathf.Max(0.01f, 1f - reduction);
+            return Mathf.Max(0f, catalog.hp) / divisor;
+        }
+
+        static string HumanizeLabel(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "Unknown";
+
+            var parts = value.Trim().ToLowerInvariant().Split(new[] { '_', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                return "Unknown";
+
+            var builder = new StringBuilder();
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (i > 0)
+                    builder.Append(' ');
+
+                string part = parts[i];
+                builder.Append(part.Length <= 1
+                    ? part.ToUpperInvariant()
+                    : char.ToUpperInvariant(part[0]) + part.Substring(1));
+            }
+
+            return builder.ToString();
+        }
+
+        static string FormatStatNumber(float value)
+        {
+            float rounded = Mathf.Round(value * 10f) / 10f;
+            return Mathf.Approximately(rounded, Mathf.Round(rounded))
+                ? Mathf.RoundToInt(rounded).ToString()
+                : rounded.ToString("0.0");
+        }
+
+        static string NormalizeTechTreeKey(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.Trim().ToLowerInvariant();
+        }
+
+        static string Ordinal(int value)
+        {
+            return value switch
+            {
+                1 => "1st",
+                2 => "2nd",
+                3 => "3rd",
+                _ => $"{value}th",
+            };
+        }
+
+        static string BuildCurrentSourceText(UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return "Unavailable";
+
+            string sourceUnit = HumanizeLabel(catalog.canonical_unit_type);
+            if (string.IsNullOrWhiteSpace(catalog.canonical_unit_type))
+                return "Not specified";
+
+            return sourceUnit;
+        }
+
+        static string BuildLiveHookSummary(UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return "No live ability hooks configured.";
+
+            var parts = new List<string>();
+            if (catalog.abilities != null)
+            {
+                for (int i = 0; i < catalog.abilities.Length; i++)
+                {
+                    var ability = catalog.abilities[i];
+                    if (ability == null || string.IsNullOrWhiteSpace(ability.ability_key))
+                        continue;
+
+                    string label = HumanizeLabel(ability.ability_key);
+                    if (ability.@params is JObject abilityParams && abilityParams.Count > 0)
+                        label = $"{label} ({abilityParams.ToString(Newtonsoft.Json.Formatting.None)})";
+                    parts.Add(label);
+                }
+            }
+
+            if (catalog.special_props is JObject specialProps)
+            {
+                foreach (var property in specialProps.Properties())
+                {
+                    if (property == null || property.Value == null || property.Value.Type == JTokenType.Null)
+                        continue;
+
+                    string valueText = property.Value.Type switch
+                    {
+                        JTokenType.Boolean => property.Value.Value<bool>() ? "On" : "Off",
+                        JTokenType.Float => property.Value.Value<float>().ToString("0.##"),
+                        JTokenType.Integer => property.Value.Value<long>().ToString(),
+                        _ => property.Value.ToString(Newtonsoft.Json.Formatting.None),
+                    };
+                    parts.Add($"{HumanizeLabel(property.Name)} {valueText}");
+                }
+            }
+
+            return parts.Count > 0
+                ? string.Join(" | ", parts)
+                : "No live ability hooks configured.";
+        }
+
+        string BuildUnitMoveSetText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Move preview unavailable.";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return "[Gate] This entry exists to show a build requirement, not a combat move set.";
+
+            if (unit.CardDisplay != null)
+                return BuildBuildingMoveSetText(unit);
+
+            if (IsEconomyUnit(unit))
+            {
+                return
+                    $"[Route] {BuildUnitSpecialAttackText(unit)}\n" +
+                    "[Formation] This runner travels the trade route instead of joining the battle line.\n" +
+                    "[Preview] Economy audio can be previewed below. Combat animation preview is not applicable.";
+            }
+
+            if (IsStableDisplayOnlyUnit(unit))
+            {
+                return
+                    $"[Stable] {BuildUnitSpecialAttackText(unit)}\n" +
+                    "[Formation] This branch is display-only while mounted gameplay is still pending.\n" +
+                    "[Preview] No combat move preview is wired yet because the live stable roster is not active.";
+            }
+
+            var builder = new StringBuilder();
+            builder.AppendLine($"[Primary] {BuildUnitSpecialAttackText(unit)}");
+            builder.AppendLine($"[Stance] {BuildMoveStanceText(unit)}");
+
+            if (TryGetCatalogEntry(unit, out var catalog))
+            {
+                builder.AppendLine($"[Delivery] {BuildUnitDeliveryText(unit, catalog)}");
+                builder.AppendLine($"[Skills] {BuildCondensedLiveHookSummary(catalog)}");
+                builder.Append(
+                    TryResolvePreviewSfx(unit, out _, out var sfxLabel)
+                        ? $"[Preview] Use the live rig above to preview idle, walk, march, run, strike, {BuildSpecialPreviewButtonLabel(unit)}, hit, and death. {sfxLabel} audio can also be previewed below."
+                        : $"[Preview] Use the live rig above to preview idle, walk, march, run, strike, {BuildSpecialPreviewButtonLabel(unit)}, hit, and death. No dedicated unit SFX is wired for this entry yet.");
+            }
+            else
+            {
+                builder.Append("[Preview] Move buttons will still try to play the prefab states, but catalog-backed detail data is missing.");
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        static string BuildBuildingMoveSetText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "ballista" =>
+                    "[Siege] Launches a heavy bolt into lane targets.\n" +
+                    "[Action] Fires a slow, armor-punching ranged shot.\n" +
+                    "[Preview] Siege SFX can be previewed below.",
+                "cannon" =>
+                    "[Siege] Fires explosive artillery into clustered targets.\n" +
+                    "[Action] Uses a blast-impact shot with a heavier report.\n" +
+                    "[Preview] Siege SFX can be previewed below.",
+                _ =>
+                    "[Build] This entry upgrades a fortress structure or civic path.\n" +
+                    "[Action] It changes unlocks and battlefield tools rather than performing a unit attack.\n" +
+                    "[Preview] Construction or upgrade SFX can be previewed below when available.",
+            };
+        }
+
+        static string BuildMoveStanceText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Stance unavailable.";
+
+            int rank = GetFormationRank(unit);
+            if (rank > 0)
+                return $"Holds the {Ordinal(rank)} rank as {BuildUnitRoleLabel(unit).ToLowerInvariant()}.";
+
+            if (IsEconomyUnit(unit))
+                return "Runs the market route and avoids the main battle formation.";
+
+            if (IsStableDisplayOnlyUnit(unit))
+                return "Reserved for future cavalry positioning once mounted combat is live.";
+
+            return "No live formation stance is assigned to this entry.";
+        }
+
+        static string BuildUnitDeliveryText(RaceProgressionUnitDefinition unit, UnitCatalogEntry catalog)
+        {
+            if (catalog == null)
+                return "Delivery data unavailable.";
+
+            int rank = GetFormationRank(unit);
+            string rankText = rank > 0 ? $"{Ordinal(rank)} rank" : "assigned position";
+            string damageType = HumanizeLabel(catalog.damage_type);
+            if (!string.IsNullOrWhiteSpace(catalog.proj_behavior))
+            {
+                return $"{HumanizeLabel(catalog.proj_behavior)} attack using {damageType.ToLowerInvariant()} damage from the {rankText}.";
+            }
+
+            if (catalog.range > 1f)
+                return $"{damageType} ranged strike fired from the {rankText} at {FormatStatNumber(catalog.range)} range.";
+
+            if (catalog.range > 0.30f)
+                return $"{damageType} reach attack delivered from the {rankText}.";
+
+            return $"{damageType} close-range strike delivered from the {rankText}.";
+        }
+
+        static string BuildCondensedLiveHookSummary(UnitCatalogEntry catalog)
+        {
+            string summary = BuildLiveHookSummary(catalog);
+            return string.IsNullOrWhiteSpace(summary)
+                ? "No extra live hooks wired."
+                : summary;
+        }
+
+        string BuildUnitAudioStatusText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Audio preview unavailable.";
+
+            bool hasSfx = TryResolvePreviewSfx(unit, out _, out var sfxLabel);
+            bool hasVoice = TryResolvePreviewVoice(unit, out _, out var voiceLabel);
+
+            var builder = new StringBuilder();
+            builder.AppendLine(hasSfx
+                ? $"[SFX] {sfxLabel} is ready to preview."
+                : "[SFX] No dedicated preview clip is wired for this entry yet.");
+            builder.Append(hasVoice
+                ? $"[Voice] {voiceLabel} is ready to preview."
+                : "[Voice] No voice lines are wired for this unit in the current project.");
+            return builder.ToString();
+        }
+
+        bool TryResolvePreviewSfx(RaceProgressionUnitDefinition unit, out AudioManager.SFX sfx, out string label)
+        {
+            sfx = default;
+            label = null;
+
+            if (unit == null || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return false;
+
+            string unitId = NormalizeTechTreeKey(unit.Id);
+            string laneId = NormalizeTechTreeKey(unit.LaneId);
+
+            if (unitId == "ballista")
+            {
+                sfx = AudioManager.SFX.BallistaShoot;
+                label = "Siege Bolt";
+                return true;
+            }
+
+            if (unitId == "cannon")
+            {
+                sfx = AudioManager.SFX.CannonShoot;
+                label = "Siege Cannon";
+                return true;
+            }
+
+            if (IsEconomyUnit(unit))
+            {
+                sfx = AudioManager.SFX.GoldGain;
+                label = "Trade Coin";
+                return true;
+            }
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier
+                || unit.CardStyle == RaceProgressionUnitCardStyle.UpgradeStep)
+            {
+                sfx = unit.IsStartUnit ? AudioManager.SFX.BuildTower : AudioManager.SFX.UpgradeTower;
+                label = unit.IsStartUnit ? "Build Signal" : "Upgrade Fanfare";
+                return true;
+            }
+
+            switch (laneId)
+            {
+                case "archery":
+                    sfx = AudioManager.SFX.ArcherShoot;
+                    label = "Arrow Volley";
+                    return true;
+                case "wizard":
+                    sfx = AudioManager.SFX.MageShoot;
+                    label = "Arcane Cast";
+                    return true;
+                case "infantry":
+                case "polearm":
+                case "shield":
+                    sfx = AudioManager.SFX.FighterSlash;
+                    label = "Steel Clash";
+                    return true;
+            }
+
+            switch (unitId)
+            {
+                case "king":
+                case "paladin":
+                    sfx = AudioManager.SFX.FighterSlash;
+                    label = "Hero Strike";
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool TryResolvePreviewVoice(RaceProgressionUnitDefinition unit, out AudioManager.SFX sfx, out string label)
+        {
+            sfx = default;
+            label = null;
+            return false;
+        }
+
+        string BuildUnitDetailsBodyText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Tech tree entry unavailable.";
+
+            if (unit.CardDisplay != null || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return $"{unit.Description}\n{BuildUnitDetailsBodySuffix(unit)}";
+
+            var builder = new StringBuilder();
+            builder.AppendLine($"Tech tree note: {unit.Description}");
+
+            if (TryGetCatalogEntry(unit, out var catalog)
+                && !string.IsNullOrWhiteSpace(catalog.description)
+                && !string.Equals(catalog.description.Trim(), unit.Description?.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                builder.AppendLine($"Current catalog note: {catalog.description.Trim()}");
+            }
+
+            builder.AppendLine($"Origin: {BuildUnitOriginText(unit)}");
+            builder.AppendLine($"Role note: {BuildUnitSkillText(unit)}");
+
+            string runtimeStatus = BuildUnitRuntimeStatusText(unit);
+            if (!string.IsNullOrWhiteSpace(runtimeStatus))
+                builder.AppendLine(runtimeStatus);
+
+            string progressionAudit = BuildUnitProgressionAuditText(unit);
+            if (!string.IsNullOrWhiteSpace(progressionAudit))
+                builder.AppendLine(progressionAudit);
+
+            builder.Append(BuildUnitDetailsBodySuffix(unit));
+            return builder.ToString().TrimEnd();
+        }
+
+        string BuildUnitRuntimeStatusText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return null;
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome)
+                return "Runtime note: Castle unlock is live, but summoning still also requires at least one built Barracks site.";
+
+            if (IsStableDisplayOnlyUnit(unit))
+                return "Runtime note: Stable progression exists in the tree, but the live game does not yet attach a horse roster to it.";
+
+            if (IsEconomyUnit(unit))
+                return "Runtime note: Market runners are live and generate gold on completed route laps.";
+
+            return null;
+        }
+
+        string BuildUnitProgressionAuditText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null || _selectedRace == null || !_selectedRace.TryGetLane(unit.LaneId, out var lane))
+                return null;
+
+            var previousUnit = GetPreviousComparableUnit(lane.Units, unit);
+            if (previousUnit == null || !TryGetCatalogEntry(unit, out var currentCatalog) || !TryGetCatalogEntry(previousUnit, out var previousCatalog))
+                return null;
+
+            var issues = new List<string>();
+            float currentDps = ComputeUnitDps(currentCatalog);
+            float previousDps = ComputeUnitDps(previousCatalog);
+            if (currentDps + 0.05f < previousDps)
+                issues.Add($"DPS falls from {previousDps:0.#} to {currentDps:0.#} versus {previousUnit.DisplayName}.");
+
+            float currentEffectiveHp = ComputeEffectiveHp(currentCatalog);
+            float previousEffectiveHp = ComputeEffectiveHp(previousCatalog);
+            if (currentEffectiveHp + 0.5f < previousEffectiveHp)
+                issues.Add($"Durability falls from {previousEffectiveHp:0.#} to {currentEffectiveHp:0.#} effective HP.");
+
+            if (ShouldAuditRangeProgression(unit) && currentCatalog.range + 0.01f < previousCatalog.range)
+                issues.Add($"Range falls from {FormatStatNumber(previousCatalog.range)} to {FormatStatNumber(currentCatalog.range)}.");
+
+            return issues.Count > 0
+                ? $"Progression warning: {string.Join(" ", issues)}"
+                : $"Progression check: No numeric regression detected versus {previousUnit.DisplayName}.";
+        }
+
+        static bool ShouldAuditRangeProgression(RaceProgressionUnitDefinition unit)
+        {
+            string laneId = NormalizeTechTreeKey(unit?.LaneId);
+            return laneId == "archery"
+                || laneId == "wizard"
+                || laneId == "temple";
+        }
+
+        static RaceProgressionUnitDefinition GetPreviousComparableUnit(RaceProgressionUnitDefinition[] units, RaceProgressionUnitDefinition currentUnit)
+        {
+            if (units == null || currentUnit == null)
+                return null;
+
+            int currentIndex = -1;
+            for (int i = 0; i < units.Length; i++)
+            {
+                if (units[i] != null && string.Equals(units[i].Id, currentUnit.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    currentIndex = i;
+                    break;
+                }
+            }
+
+            if (currentIndex <= 0)
+                return null;
+
+            for (int i = currentIndex - 1; i >= 0; i--)
+            {
+                var candidate = units[i];
+                if (candidate == null)
+                    continue;
+                if (candidate.CardStyle == RaceProgressionUnitCardStyle.BuildingTier
+                    || candidate.CardStyle == RaceProgressionUnitCardStyle.UpgradeStep
+                    || candidate.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                {
+                    continue;
+                }
+                if (!string.IsNullOrWhiteSpace(ResolveTechTreeCatalogKey(candidate)))
+                    return candidate;
+            }
+
+            return null;
         }
 
         void RefreshPrimaryAction()
@@ -3045,7 +4639,9 @@ namespace CastleDefender.UI
                 _btnSecondaryAction.interactable = showSecondary;
                 if (_txtSecondaryAction != null)
                 {
-                    _txtSecondaryAction.text = _activePage == WizardPage.RaceSelection
+                    _txtSecondaryAction.text = _activePage == WizardPage.ProgressionTree && _detailsModalOpen
+                        ? "Close Details"
+                        : _activePage == WizardPage.RaceSelection
                         ? "Back to Lobby"
                         : "Back";
                 }
@@ -3445,6 +5041,11 @@ namespace CastleDefender.UI
                 PortraitCam = RuntimePortraitStudio.Create("RaceProgressionPortraitStudio", registry, out _runtimePortraitRoot, out _runtimePortraitTexture);
 
             PortraitCam.Registry = registry;
+            PortraitCam.FitHeight = 2.45f;
+            PortraitCam.FrameFill = 0.92f;
+            PortraitCam.VerticalFocus = 0.70f;
+            PortraitCam.CameraHeightBias = 0.00f;
+            PortraitCam.LookAtHeightBias = 0.08f;
             PortraitCam.transform.position = new Vector3(0f, 0f, 50f);
             return PortraitCam;
         }
@@ -3457,9 +5058,19 @@ namespace CastleDefender.UI
             if (_runtimePortraitTexture != null)
                 _runtimePortraitTexture.Release();
 
+            if (_runtimePreviewRoot != null)
+                Destroy(_runtimePreviewRoot);
+
+            if (_runtimePreviewTexture != null)
+                _runtimePreviewTexture.Release();
+
             _runtimePortraitRoot = null;
             _runtimePortraitTexture = null;
+            _runtimePreviewRoot = null;
+            _runtimePreviewTexture = null;
+            _detailsPreviewStagedKey = null;
             PortraitCam = null;
+            _detailsPreviewCam = null;
         }
 
         UnitPrefabRegistry ResolvePortraitRegistry()
@@ -3745,7 +5356,9 @@ namespace CastleDefender.UI
         {
             var section = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             section.transform.SetParent(parent, false);
-            section.GetComponent<Image>().color = color;
+            var sectionImage = section.GetComponent<Image>();
+            sectionImage.color = color;
+            ClassicRpgUiRuntime.ApplyPanel(sectionImage, ClassicRpgPanelSkin.PaperMedium, true, color);
             var layoutElement = section.GetComponent<LayoutElement>();
             if (preferredHeight > 0f)
                 layoutElement.preferredHeight = preferredHeight;
@@ -3762,6 +5375,61 @@ namespace CastleDefender.UI
             return section;
         }
 
+        void ApplyClassicRpgLabelTheme(TMP_Text label, bool title = false, bool centered = false)
+        {
+            if (label == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyText(
+                label,
+                title ? ClassicRpgTextTone.Title : centered ? ClassicRpgTextTone.Heading : ClassicRpgTextTone.Body,
+                centered ? TextAlignmentOptions.Center : label.alignment);
+        }
+
+        void ApplyClassicRpgFrameTheme(Image image, string assetPath, bool sliced = false)
+        {
+            if (image == null)
+                return;
+
+            if (TryResolvePanelSkin(assetPath, out var skin))
+                ClassicRpgUiRuntime.ApplyPanel(image, skin, sliced, image.color);
+        }
+
+        void ApplyClassicRpgButtonTheme(Button button, ClassicRpgButtonSize size)
+        {
+            if (button == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyButton(
+                button,
+                size == ClassicRpgButtonSize.Long ? ClassicRpgButtonSkin.LongGold : ClassicRpgButtonSkin.MediumGold);
+        }
+
+        static bool TryResolvePanelSkin(string assetPath, out ClassicRpgPanelSkin skin)
+        {
+            switch (assetPath)
+            {
+                case "Assets/ClassicRPGUI2/UIElementsPNG/FrameForSlicing.png":
+                    skin = ClassicRpgPanelSkin.Frame;
+                    return true;
+                case "Assets/ClassicRPGUI2/UIElementsPNG/TitleLong.png":
+                    skin = ClassicRpgPanelSkin.TitleLong;
+                    return true;
+                case "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrame.png":
+                    skin = ClassicRpgPanelSkin.PortraitFrame;
+                    return true;
+                case "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrameBg.png":
+                    skin = ClassicRpgPanelSkin.PortraitBackdrop;
+                    return true;
+                case "Assets/ClassicRPGUI2/UIElementsPNG/PaperMedium.png":
+                    skin = ClassicRpgPanelSkin.PaperMedium;
+                    return true;
+                default:
+                    skin = ClassicRpgPanelSkin.Frame;
+                    return false;
+            }
+        }
+
         static TMP_Text MakeLabel(Transform parent, string goName, string text, int fontSize, Color color, float preferredHeight)
         {
             var go = new GameObject(goName, typeof(RectTransform), typeof(LayoutElement), typeof(TextMeshProUGUI));
@@ -3772,6 +5440,7 @@ namespace CastleDefender.UI
             txt.fontSize = fontSize;
             txt.color = color;
             txt.alignment = TextAlignmentOptions.Center;
+            ClassicRpgUiRuntime.ApplyText(txt, ClassicRpgTextTone.Body, txt.alignment, color);
             return txt;
         }
 
@@ -3788,6 +5457,7 @@ namespace CastleDefender.UI
             label.text = text;
             label.fontSize = fontSize;
             label.color = color;
+            ClassicRpgUiRuntime.ApplyText(label, ClassicRpgTextTone.Body, label.alignment, color);
             return label;
         }
 
@@ -3867,6 +5537,7 @@ namespace CastleDefender.UI
             text.color = Color.white;
             text.alignment = TextAlignmentOptions.Center;
             text.fontStyle = FontStyles.Bold;
+            ClassicRpgUiRuntime.ApplyText(text, ClassicRpgTextTone.Heading, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
             return button;
         }
     }

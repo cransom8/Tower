@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: d31e7f55ab6086e449f1093a0e0391e8
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/Dialog.prefab
+  uploadId: 861922

@@ -537,8 +537,9 @@ namespace CastleDefender.UI
 
         IEnumerator ValidateEventSystemNextFrame()
         {
-            yield return null;
-            yield return null;
+            for (int i = 0; i < 10; i++)
+                yield return null;
+
             ValidateEventSystem();
         }
 

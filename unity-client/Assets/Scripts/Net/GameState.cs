@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace CastleDefender.Net
@@ -1072,7 +1073,20 @@ namespace CastleDefender.Net
         public string armor_type;
         public float  damage_reduction_pct;
         public bool   enabled;
+        public string canonical_skin_key;
+        public string canonical_unit_type;
+        public string proj_behavior;
+        public JToken proj_behavior_params;
+        public JToken special_props;
+        public UnitAbilityAssignmentEntry[] abilities;
         public RemoteContentEntry remote_content;
+    }
+
+    [Serializable]
+    public class UnitAbilityAssignmentEntry
+    {
+        public string ability_key;
+        public JToken @params;
     }
 
     [Serializable]

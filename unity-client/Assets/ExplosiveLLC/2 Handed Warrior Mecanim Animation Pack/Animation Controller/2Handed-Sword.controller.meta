@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: ec6c08fb326f6b9418fac055ab78224e
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 42286
+  packageName: 2-Handed Warrior Mecanim Animation Pack
+  packageVersion: 2.0.1
+  assetPath: Assets/ExplosiveLLC/2 Handed Warrior Mecanim Animation Pack/Animation
+    Controller/2Handed-Sword.controller
+  uploadId: 754780

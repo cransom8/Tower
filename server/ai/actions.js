@@ -5,38 +5,45 @@ const { AI_ACTION_TYPE, COUNT_BUCKETS } = require("./types");
 
 const ACTION_TYPES = new Set(Object.values(AI_ACTION_TYPE));
 const COUNT_BUCKET_SET = new Set(COUNT_BUCKETS);
-const TOWER_MAX_LEVEL = 10;
-
-function makeTileId(x, y) {
-  return `${Number(x)},${Number(y)}`;
-}
-
-function parseGridId(id) {
-  const raw = String(id || "").trim();
-  const parts = raw.split(/[:,|]/).map((p) => p.trim());
-  if (parts.length !== 2) return null;
-  const x = Number(parts[0]);
-  const y = Number(parts[1]);
-  if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
-  return { x, y };
-}
-
-function makeTowerId(x, y) {
-  return makeTileId(x, y);
-}
+const COMMAND_STATES = simMl.LANE_COMMAND_STATES || Object.freeze({
+  ATTACK: "ATTACK",
+  DEFEND: "DEFEND",
+  RETREAT: "RETREAT",
+});
 
 function clampCountBucket(bucket) {
   if (COUNT_BUCKET_SET.has(bucket)) return bucket;
   let best = COUNT_BUCKETS[0];
   let bestDist = Infinity;
-  for (const b of COUNT_BUCKETS) {
-    const d = Math.abs(Number(bucket) - b);
+  for (const candidate of COUNT_BUCKETS) {
+    const d = Math.abs(Number(bucket) - candidate);
     if (d < bestDist) {
       bestDist = d;
-      best = b;
+      best = candidate;
     }
   }
   return best;
+}
+
+function clampProgress(progress) {
+  if (!Number.isFinite(progress)) return null;
+  return Math.max(0, Math.min(1, Number(progress)));
+}
+
+function normalizeCommandState(commandState) {
+  const raw = String(commandState || "").trim().toUpperCase();
+  switch (raw) {
+    case COMMAND_STATES.ATTACK:
+      return COMMAND_STATES.ATTACK;
+    case COMMAND_STATES.DEFEND:
+    case "HOLD":
+      return COMMAND_STATES.DEFEND;
+    case COMMAND_STATES.RETREAT:
+    case "CALLBACK":
+      return COMMAND_STATES.RETREAT;
+    default:
+      return null;
+  }
 }
 
 function createDoNothingAction() {
@@ -47,54 +54,128 @@ function normalizeAction(action) {
   if (!action || typeof action !== "object") return createDoNothingAction();
   const type = String(action.type || AI_ACTION_TYPE.DO_NOTHING);
   if (!ACTION_TYPES.has(type)) return createDoNothingAction();
-  if (type === AI_ACTION_TYPE.DO_NOTHING || type === AI_ACTION_TYPE.UPGRADE_INCOME) {
+
+  if (type === AI_ACTION_TYPE.DO_NOTHING)
     return { type };
-  }
-  if (type === AI_ACTION_TYPE.BUILD_TOWER) {
+
+  if (type === AI_ACTION_TYPE.BUILD_PAD || type === AI_ACTION_TYPE.UPGRADE_PAD) {
     return {
       type,
-      towerType: String(action.towerType || "").toLowerCase(),
-      tileId: String(action.tileId || ""),
+      padId: String(action.padId || "").trim(),
     };
   }
-  if (type === AI_ACTION_TYPE.UPGRADE_TOWER) {
+
+  if (type === AI_ACTION_TYPE.BUILD_BARRACKS_SITE || type === AI_ACTION_TYPE.UPGRADE_BARRACKS_SITE) {
     return {
       type,
-      towerId: String(action.towerId || ""),
+      barracksId: String(action.barracksId || "").trim().toLowerCase(),
     };
   }
+
+  if (type === AI_ACTION_TYPE.BUY_BARRACKS_UNIT) {
+    return {
+      type,
+      barracksId: String(action.barracksId || "").trim().toLowerCase(),
+      rosterKey: String(action.rosterKey || "").trim().toLowerCase(),
+      count: clampCountBucket(Math.max(1, Math.floor(Number(action.count) || 1))),
+    };
+  }
+
+  if (type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
+    return {
+      type,
+      barracksId: String(action.barracksId || "").trim().toLowerCase(),
+      heroKey: String(action.heroKey || "").trim().toLowerCase(),
+    };
+  }
+
+  if (type === AI_ACTION_TYPE.SET_LANE_COMMAND) {
+    return {
+      type,
+      commandState: normalizeCommandState(action.commandState),
+      targetLaneIndex: Number.isInteger(action.targetLaneIndex) ? action.targetLaneIndex : null,
+      progress: clampProgress(action.progress),
+    };
+  }
+
   return createDoNothingAction();
 }
 
-function validateActionShape(action, defs) {
+function validateActionShape(action) {
   const normalized = normalizeAction(action);
 
-  if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    const towerResolved = simMl.resolveTowerDef(normalized.towerType);
-    if (!towerResolved) {
-      return { ok: false, reason: "Unknown tower type", normalized };
-    }
-    if (!parseGridId(normalized.tileId)) {
-      return { ok: false, reason: "Invalid tileId", normalized };
-    }
+  if (normalized.type === AI_ACTION_TYPE.BUILD_PAD || normalized.type === AI_ACTION_TYPE.UPGRADE_PAD) {
+    if (!normalized.padId)
+      return { ok: false, reason: "Missing padId", normalized };
   }
-  if (normalized.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
-    if (!parseGridId(normalized.towerId)) {
-      return { ok: false, reason: "Invalid towerId", normalized };
-    }
+
+  if (normalized.type === AI_ACTION_TYPE.BUILD_BARRACKS_SITE || normalized.type === AI_ACTION_TYPE.UPGRADE_BARRACKS_SITE) {
+    if (!normalized.barracksId)
+      return { ok: false, reason: "Missing barracksId", normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_BARRACKS_UNIT) {
+    if (!normalized.barracksId)
+      return { ok: false, reason: "Missing barracksId", normalized };
+    if (!normalized.rosterKey)
+      return { ok: false, reason: "Missing rosterKey", normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
+    if (!normalized.barracksId)
+      return { ok: false, reason: "Missing barracksId", normalized };
+    if (!normalized.heroKey)
+      return { ok: false, reason: "Missing heroKey", normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.SET_LANE_COMMAND) {
+    if (!normalized.commandState)
+      return { ok: false, reason: "Missing commandState", normalized };
   }
 
   return { ok: true, normalized };
 }
 
-function getTowerUpgradeCost(towerType, nextLevel) {
-  const def = simMl.resolveTowerDef(towerType);
-  if (!def) return Infinity;
-  return Math.ceil(def.cost * (0.75 + 0.25 * nextLevel));
+function isHostileTargetLane(game, laneIndex, targetLaneIndex) {
+  if (!game || !Array.isArray(game.lanes) || !Number.isInteger(targetLaneIndex))
+    return false;
+  const sourceLane = game.lanes[laneIndex];
+  const targetLane = game.lanes[targetLaneIndex];
+  if (!sourceLane || !targetLane)
+    return false;
+  if (targetLane.eliminated)
+    return false;
+  if (laneIndex === targetLaneIndex)
+    return false;
+  return sourceLane.team !== targetLane.team;
 }
 
-function validateActionAgainstGame(game, laneIndex, action, defs) {
-  const shaped = validateActionShape(action, defs);
+function getFortressPadSnapshot(game, lane, padId) {
+  const pad = lane && Array.isArray(lane.fortressPads)
+    ? lane.fortressPads.find((entry) => entry && entry.padId === padId)
+    : null;
+  return pad ? simMl.createFortressPadSnapshot(game, lane, pad) : null;
+}
+
+function getBarracksSiteSnapshot(game, lane, barracksId) {
+  return simMl.createBarracksSiteSnapshot(game, lane, barracksId);
+}
+
+function getBarracksRosterEntry(siteSnapshot, rosterKey) {
+  return siteSnapshot && Array.isArray(siteSnapshot.roster)
+    ? siteSnapshot.roster.find((entry) => entry && entry.rosterKey === rosterKey)
+    : null;
+}
+
+function getHeroSnapshot(game, lane, heroKey) {
+  const heroes = simMl.createHeroRosterSnapshot(game, lane);
+  return Array.isArray(heroes)
+    ? heroes.find((entry) => entry && entry.heroKey === heroKey)
+    : null;
+}
+
+function validateActionAgainstGame(game, laneIndex, action) {
+  const shaped = validateActionShape(action);
   if (!shaped.ok) return shaped;
 
   const normalized = shaped.normalized;
@@ -102,84 +183,153 @@ function validateActionAgainstGame(game, laneIndex, action, defs) {
   const lane = game.lanes && game.lanes[laneIndex];
   if (!lane || lane.eliminated) return { ok: false, reason: "Lane inactive", normalized };
 
-  if (normalized.type === AI_ACTION_TYPE.DO_NOTHING) return { ok: true, normalized };
+  if (normalized.type === AI_ACTION_TYPE.DO_NOTHING)
+    return { ok: true, normalized };
 
-  if (normalized.type === AI_ACTION_TYPE.UPGRADE_INCOME) {
-    const currentLevel = Number(lane.barracks && lane.barracks.level) || 1;
-    const next = simMl.getBarracksLevelDef(currentLevel + 1);
-    if (lane.income < next.reqIncome) {
-      return { ok: false, reason: "Income requirement not met", normalized };
-    }
-    if (lane.gold < next.cost) return { ok: false, reason: "Not enough gold", normalized };
+  if (normalized.type === AI_ACTION_TYPE.BUILD_PAD) {
+    const pad = getFortressPadSnapshot(game, lane, normalized.padId);
+    if (!pad) return { ok: false, reason: "Unknown building pad", normalized };
+    if (!pad.canBuild) return { ok: false, reason: pad.lockedReason || "Building is not available", normalized };
+    if (lane.gold < pad.buildCost) return { ok: false, reason: "Not enough gold", normalized };
     return { ok: true, normalized };
   }
 
-  if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    // In wave defense: direct placement — tile must be empty, cost = towerDef.cost
-    if (game.roundState && game.roundState !== "build") {
-      return { ok: false, reason: "Can only place units during build phase", normalized };
-    }
-    const pos = parseGridId(normalized.tileId);
-    const tile = lane.grid && lane.grid[pos.x] && lane.grid[pos.x][pos.y];
-    if (!tile) return { ok: false, reason: "Tile out of bounds", normalized };
-    if (tile.type === "spawn" || tile.type === "castle") {
-      return { ok: false, reason: "Cannot build on spawn/castle", normalized };
-    }
-    if (tile.type !== "empty") return { ok: false, reason: "Tile not empty", normalized };
-    const towerResolved = simMl.resolveTowerDef(normalized.towerType);
-    const cost = towerResolved ? towerResolved.cost : Infinity;
-    if (lane.gold < cost) return { ok: false, reason: "Not enough gold", normalized };
+  if (normalized.type === AI_ACTION_TYPE.UPGRADE_PAD) {
+    const pad = getFortressPadSnapshot(game, lane, normalized.padId);
+    if (!pad) return { ok: false, reason: "Unknown building pad", normalized };
+    if (!pad.canUpgrade) return { ok: false, reason: pad.lockedReason || "Upgrade unavailable", normalized };
+    if (lane.gold < pad.upgradeCost) return { ok: false, reason: "Not enough gold", normalized };
     return { ok: true, normalized };
   }
 
-  if (normalized.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
-    const pos = parseGridId(normalized.towerId);
-    const tile = lane.grid && lane.grid[pos.x] && lane.grid[pos.x][pos.y];
-    if (!tile || tile.type !== "tower" || !tile.towerType) {
-      return { ok: false, reason: "Tower not found", normalized };
-    }
-    if (tile.towerLevel >= TOWER_MAX_LEVEL) {
-      return { ok: false, reason: "Tower maxed", normalized };
-    }
-    const cost = getTowerUpgradeCost(tile.towerType, tile.towerLevel + 1);
-    if (lane.gold < cost) return { ok: false, reason: "Not enough gold", normalized };
+  if (normalized.type === AI_ACTION_TYPE.BUILD_BARRACKS_SITE) {
+    const site = getBarracksSiteSnapshot(game, lane, normalized.barracksId);
+    if (!site) return { ok: false, reason: "Unknown barracks", normalized };
+    if (!site.canBuild) return { ok: false, reason: site.lockedReason || "Building is not available", normalized };
+    if (lane.gold < site.buildCost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.UPGRADE_BARRACKS_SITE) {
+    const site = getBarracksSiteSnapshot(game, lane, normalized.barracksId);
+    if (!site) return { ok: false, reason: "Unknown barracks", normalized };
+    if (!site.canUpgrade) return { ok: false, reason: site.lockedReason || "Barracks upgrade unavailable", normalized };
+    if (lane.gold < site.upgradeCost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_BARRACKS_UNIT) {
+    const site = getBarracksSiteSnapshot(game, lane, normalized.barracksId);
+    if (!site) return { ok: false, reason: "Unknown barracks", normalized };
+    const rosterEntry = getBarracksRosterEntry(site, normalized.rosterKey);
+    if (!rosterEntry) return { ok: false, reason: "Unknown barracks unit", normalized };
+    if (!rosterEntry.unlocked) return { ok: false, reason: rosterEntry.lockedReason || "Unit is locked", normalized };
+    const totalCost = Math.max(0, Number(rosterEntry.buyCost) || 0) * normalized.count;
+    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
+    const site = getBarracksSiteSnapshot(game, lane, normalized.barracksId);
+    if (!site || !site.isBuilt) return { ok: false, reason: "Buy Building first", normalized };
+    const hero = getHeroSnapshot(game, lane, normalized.heroKey);
+    if (!hero) return { ok: false, reason: "Unknown hero", normalized };
+    if (!hero.canSummon) return { ok: false, reason: hero.disabledReason || hero.lockedReason || "Hero unavailable", normalized };
+    if (lane.gold < hero.summonCost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.SET_LANE_COMMAND) {
+    if (normalized.targetLaneIndex !== null && !isHostileTargetLane(game, laneIndex, normalized.targetLaneIndex))
+      return { ok: false, reason: "Invalid target lane", normalized };
     return { ok: true, normalized };
   }
 
   return { ok: true, normalized };
 }
 
-function translateActionToCommands(game, laneIndex, action, defs) {
-  const checked = validateActionAgainstGame(game, laneIndex, action, defs);
-  if (!checked.ok) return { ok: false, reason: checked.reason, commands: [], normalized: checked.normalized };
-  const normalized = checked.normalized;
-  const lane = game.lanes[laneIndex];
+function translateActionToCommands(game, laneIndex, action) {
+  const checked = validateActionAgainstGame(game, laneIndex, action);
+  if (!checked.ok)
+    return { ok: false, reason: checked.reason, commands: [], normalized: checked.normalized };
 
+  const normalized = checked.normalized;
   if (normalized.type === AI_ACTION_TYPE.DO_NOTHING) {
     return { ok: true, commands: [], normalized };
   }
 
-  if (normalized.type === AI_ACTION_TYPE.UPGRADE_INCOME) {
-    return { ok: true, commands: [{ type: "upgrade_barracks", data: {} }], normalized };
+  if (normalized.type === AI_ACTION_TYPE.BUILD_PAD) {
+    return {
+      ok: true,
+      commands: [{ type: "build_on_pad", data: { padId: normalized.padId } }],
+      normalized,
+    };
   }
 
-  if (normalized.type === AI_ACTION_TYPE.BUILD_TOWER) {
-    const pos = parseGridId(normalized.tileId);
+  if (normalized.type === AI_ACTION_TYPE.UPGRADE_PAD) {
+    return {
+      ok: true,
+      commands: [{ type: "upgrade_building", data: { padId: normalized.padId } }],
+      normalized,
+    };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUILD_BARRACKS_SITE) {
+    return {
+      ok: true,
+      commands: [{ type: "build_barracks_site", data: { barracksId: normalized.barracksId } }],
+      normalized,
+    };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.UPGRADE_BARRACKS_SITE) {
+    return {
+      ok: true,
+      commands: [{ type: "upgrade_barracks_site", data: { barracksId: normalized.barracksId } }],
+      normalized,
+    };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_BARRACKS_UNIT) {
     return {
       ok: true,
       commands: [{
-        type: "place_unit",
-        data: { gridX: pos.x, gridY: pos.y, unitTypeKey: normalized.towerType },
+        type: "buy_barracks_unit",
+        data: {
+          barracksId: normalized.barracksId,
+          rosterKey: normalized.rosterKey,
+          count: normalized.count,
+        },
       }],
       normalized,
     };
   }
 
-  if (normalized.type === AI_ACTION_TYPE.UPGRADE_TOWER) {
-    const pos = parseGridId(normalized.towerId);
+  if (normalized.type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
     return {
       ok: true,
-      commands: [{ type: "upgrade_tower", data: { gridX: pos.x, gridY: pos.y } }],
+      commands: [{
+        type: "deploy_barracks_hero",
+        data: {
+          barracksId: normalized.barracksId,
+          heroKey: normalized.heroKey,
+        },
+      }],
+      normalized,
+    };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.SET_LANE_COMMAND) {
+    const data = {
+      commandState: normalized.commandState,
+    };
+    if (normalized.targetLaneIndex !== null)
+      data.targetLaneIndex = normalized.targetLaneIndex;
+    if (normalized.progress !== null)
+      data.progress = normalized.progress;
+    return {
+      ok: true,
+      commands: [{ type: "set_lane_command", data }],
       normalized,
     };
   }
@@ -189,10 +339,9 @@ function translateActionToCommands(game, laneIndex, action, defs) {
 
 module.exports = {
   ACTION_TYPES,
+  COMMAND_STATES,
   COUNT_BUCKETS,
-  makeTileId,
-  parseGridId,
-  makeTowerId,
+  normalizeCommandState,
   normalizeAction,
   validateActionShape,
   validateActionAgainstGame,

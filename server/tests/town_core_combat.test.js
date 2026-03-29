@@ -162,9 +162,9 @@ function createDefender(typeKey, overrides = {}) {
     ownerLane: overrides.ownerLane ?? 0,
     targetLaneIndex: overrides.targetLaneIndex ?? (overrides.ownerLane ?? 0),
     sourceLaneIndex: overrides.sourceLaneIndex ?? 0,
-    sourceTeam: overrides.sourceTeam ?? null,
-    sourceBarracksId: overrides.sourceBarracksId ?? null,
-    sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? null,
+    sourceTeam: overrides.sourceTeam ?? "red",
+    sourceBarracksId: overrides.sourceBarracksId ?? "center",
+    sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? "center",
     spawnSourceType: overrides.spawnSourceType ?? "barracks_roster",
     type: typeKey,
     skinKey: null,
@@ -175,6 +175,7 @@ function createDefender(typeKey, overrides = {}) {
     hp: overrides.hp ?? def.hp,
     maxHp: overrides.maxHp ?? (overrides.hp ?? def.hp),
     baseDmg: overrides.baseDmg ?? def.dmg,
+    baseSpeed: overrides.baseSpeed ?? def.pathSpeed,
     moveSpeed: overrides.moveSpeed ?? 0.35,
     atkCd: overrides.atkCd ?? 0,
     atkCdTicks: overrides.atkCdTicks ?? def.atkCdTicks,
@@ -182,10 +183,10 @@ function createDefender(typeKey, overrides = {}) {
     damageReductionPct: overrides.damageReductionPct ?? def.damageReductionPct,
     abilities: [],
     bounty: 0,
-    stance: overrides.stance ?? "DEFEND",
-    pathContractType: overrides.pathContractType ?? (overrides.combatTarget ? "intercept" : "guard_anchor"),
+    stance: overrides.stance ?? null,
+    pathContractType: overrides.pathContractType ?? null,
     isWaveUnit: false,
-    isDefender: overrides.isDefender ?? true,
+    isDefender: overrides.isDefender ?? false,
     combatState: overrides.combatState ?? "IDLE",
     combatTarget: null,
     defState: overrides.defState ?? "merge_guard",
@@ -294,6 +295,7 @@ test("destroying one Town Core eliminates that lane without ending the FFA survi
 test("defenders near the town core do not pull wave units into combat from mid-lane", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const coreApproach = getCoreApproachPosition(lane, 1);
   const farRoutePoint = getCoreApproachPosition(lane, 18);
   const defender = createDefender("guardian", {
@@ -333,6 +335,7 @@ test("defenders near the town core do not pull wave units into combat from mid-l
 test("wave units resume from their live combat position instead of snapping back to stale route progress", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   for (const pad of lane.fortressPads || []) {
     if (!pad)
       continue;
@@ -399,6 +402,7 @@ test("wave units resume from their live combat position instead of snapping back
 test("defenders can kill attackers before the Town Core is destroyed", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const corePad = getTownCorePad(lane);
   const coreApproach = getCoreApproachPosition(lane, 1);
   const attacker = createWaveUnit("raider", {
@@ -483,6 +487,7 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
 test("wave units already in defender contact range do not backpedal to a slot before attacking", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const coreApproach = getCoreApproachPosition(lane, 0);
   const defender = createDefender("guardian", {
     hp: 80,
@@ -529,6 +534,7 @@ test("wave units already in defender contact range do not backpedal to a slot be
 test("wave units intercepted near the town square do not damage the Town Core until defenders fall", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const corePad = getTownCorePad(lane);
   const coreApproach = getCoreApproachPosition(lane, 1);
   const defender = createDefender("guardian", {

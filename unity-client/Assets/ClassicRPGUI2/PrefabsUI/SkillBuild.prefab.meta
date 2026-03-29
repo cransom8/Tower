@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 2cc811cacbce67d4db6dc5ddfc07322a
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/SkillBuild.prefab
+  uploadId: 861922

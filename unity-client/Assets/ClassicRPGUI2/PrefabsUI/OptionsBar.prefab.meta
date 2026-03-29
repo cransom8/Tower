@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 0bd8f5919c739204ab601f5efad264e9
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/OptionsBar.prefab
+  uploadId: 861922

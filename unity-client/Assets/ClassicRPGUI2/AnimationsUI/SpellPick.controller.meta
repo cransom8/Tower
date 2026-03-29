@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 17122f331f7cb1f4bb7de0dfccf20868
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/AnimationsUI/SpellPick.controller
+  uploadId: 861922

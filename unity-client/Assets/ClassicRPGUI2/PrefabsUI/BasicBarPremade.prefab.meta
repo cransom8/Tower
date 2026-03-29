@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 617e6b6ccdac79a41a32d4b03417548a
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/BasicBarPremade.prefab
+  uploadId: 861922

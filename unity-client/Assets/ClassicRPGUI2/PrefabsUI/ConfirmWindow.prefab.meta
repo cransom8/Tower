@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 2fead269c02251145929f9dc95226fbf
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/ConfirmWindow.prefab
+  uploadId: 861922

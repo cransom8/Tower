@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 2758619758418254cb340da5e4890656
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 283609
+  packageName: Classic RPG UI 2
+  packageVersion: 1.1
+  assetPath: Assets/ClassicRPGUI2/PrefabsUI/InventoryBar.prefab
+  uploadId: 861922
