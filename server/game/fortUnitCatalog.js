@@ -64,9 +64,9 @@ const FORT_UNIT_PRESENTATION_DEFS = Object.freeze([
   Object.freeze({ archetypeKey: "economy_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_peasant", skinKey: "tt_peasant", portraitKey: "tt_peasant", displayName: "Peasant" }),
   Object.freeze({ archetypeKey: "economy_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_settler", skinKey: "tt_settler", portraitKey: "tt_settler", displayName: "Settler" }),
   Object.freeze({ archetypeKey: "economy_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_settler", skinKey: "tt_settler", portraitKey: "tt_settler", displayName: "Trader" }),
-  Object.freeze({ archetypeKey: "hero_king", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "cyclops", skinKey: "tt_king", portraitKey: "tt_king", displayName: "King" }),
-  Object.freeze({ archetypeKey: "hero_paladin", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "chimera", skinKey: "tt_paladin", portraitKey: "tt_paladin", displayName: "Paladin" }),
-  Object.freeze({ archetypeKey: "hero_bishop", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "manticora", skinKey: "tt_commander", portraitKey: "tt_commander", displayName: "Bishop" }),
+  Object.freeze({ archetypeKey: "hero_king", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_king", skinKey: "tt_king", portraitKey: "tt_king", displayName: "King" }),
+  Object.freeze({ archetypeKey: "hero_paladin", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_paladin", skinKey: "tt_paladin", portraitKey: "tt_paladin", displayName: "Paladin" }),
+  Object.freeze({ archetypeKey: "hero_bishop", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, catalogUnitKey: "tt_commander", skinKey: "tt_commander", portraitKey: "tt_commander", displayName: "Bishop" }),
 ]);
 
 const FORT_UNIT_PRESENTATION_BY_KEY = new Map(

@@ -87,9 +87,9 @@ namespace CastleDefender.Game
             new("economy_t1", "human_default", "tt_peasant", "tt_peasant", "tt_peasant", "Peasant"),
             new("economy_t2", "human_default", "tt_settler", "tt_settler", "tt_settler", "Settler"),
             new("economy_t3", "human_default", "tt_settler", "tt_settler", "tt_settler", "Trader"),
-            new("hero_king", "human_default", "cyclops", "tt_king", "tt_king", "King"),
-            new("hero_paladin", "human_default", "chimera", "tt_paladin", "tt_paladin", "Paladin"),
-            new("hero_bishop", "human_default", "manticora", "tt_commander", "tt_commander", "Bishop"),
+            new("hero_king", "human_default", "tt_king", "tt_king", "tt_king", "King"),
+            new("hero_paladin", "human_default", "tt_paladin", "tt_paladin", "tt_paladin", "Paladin"),
+            new("hero_bishop", "human_default", "tt_commander", "tt_commander", "tt_commander", "Bishop"),
         };
 
         static readonly FortBarracksRosterDefinition[] BarracksDefinitions =
