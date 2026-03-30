@@ -226,6 +226,9 @@ namespace CastleDefender.Game
             if (attacking)
                 return UnitAnimationStateIntent.Attack;
 
+            if (TryResolveServerPresentationIntent(unit, out UnitAnimationStateIntent authoritativeIntent))
+                return authoritativeIntent;
+
             if (IsRetreating(unit) && moving)
                 return UnitAnimationStateIntent.Retreat;
 
@@ -233,6 +236,11 @@ namespace CastleDefender.Game
                 return UnitAnimationStateIntent.Defend;
 
             return moving ? UnitAnimationStateIntent.Move : UnitAnimationStateIntent.Idle;
+        }
+
+        public static UnitAnimationAttackFamily ResolveRuntimeAttackFamily(MLUnit unit)
+        {
+            return ResolveAttackFamily(unit, null, null);
         }
 
         public static void PrepareAnimators(Animator[] animators, ResolvedProfile profile, bool forPortrait)
@@ -513,6 +521,52 @@ namespace CastleDefender.Game
         static bool IsDefending(MLUnit unit)
         {
             return EqualsIgnoreCase(unit != null ? unit.commandState : null, "defend");
+        }
+
+        static bool TryResolveServerPresentationIntent(MLUnit unit, out UnitAnimationStateIntent intent)
+        {
+            intent = UnitAnimationStateIntent.Idle;
+            string presentationIntent = unit != null ? unit.presentationIntent : null;
+            if (string.IsNullOrWhiteSpace(presentationIntent))
+                return false;
+
+            if (EqualsIgnoreCase(presentationIntent, "idle"))
+            {
+                intent = UnitAnimationStateIntent.Idle;
+                return true;
+            }
+
+            if (EqualsIgnoreCase(presentationIntent, "move"))
+            {
+                intent = UnitAnimationStateIntent.Move;
+                return true;
+            }
+
+            if (EqualsIgnoreCase(presentationIntent, "attack"))
+            {
+                intent = UnitAnimationStateIntent.Attack;
+                return true;
+            }
+
+            if (EqualsIgnoreCase(presentationIntent, "defend"))
+            {
+                intent = UnitAnimationStateIntent.Defend;
+                return true;
+            }
+
+            if (EqualsIgnoreCase(presentationIntent, "retreat"))
+            {
+                intent = UnitAnimationStateIntent.Retreat;
+                return true;
+            }
+
+            if (EqualsIgnoreCase(presentationIntent, "death"))
+            {
+                intent = UnitAnimationStateIntent.Death;
+                return true;
+            }
+
+            return false;
         }
 
         static bool IsRetreating(MLUnit unit)

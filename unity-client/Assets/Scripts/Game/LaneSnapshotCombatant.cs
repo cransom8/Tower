@@ -85,6 +85,11 @@ namespace CastleDefender.Game
             ApplySnapshotInternal(defenderTeamKey, ownerTeamKey, hp, maxHp, serverMoveSpeed);
         }
 
+        public void NotifyAttack(float attackTime)
+        {
+            _lastAttackAt = attackTime;
+        }
+
         // Kept as a snapshot-reconciliation hook for runtime tests and any future
         // purely-visual client hit feedback. The server snapshot remains authoritative.
         public void ReceiveDamage(float damage, object attacker)

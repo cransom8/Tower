@@ -221,6 +221,29 @@ const UNIT_MOVEMENT_MODES = Object.freeze({
   RETURN_TO_ANCHOR: "ReturnToAnchor",
 });
 
+const LANE_STANCE_ANCHOR_KINDS = Object.freeze({
+  INSIDE_GATE: "insideGateAnchor",
+  OUTSIDE_GATE: "outsideGateAnchor",
+  ENEMY_CORE: "enemyCoreAnchor",
+});
+
+const UNIT_COMBAT_ROLES = Object.freeze({
+  SHIELD: "shield",
+  SWORD: "sword",
+  SPEAR: "spear",
+  ARCHER: "archer",
+  MAGE: "mage",
+  PRIEST: "priest",
+});
+
+const UNIT_PREFERRED_BANDS = Object.freeze({
+  SHIELD_FRONT: "shield_front",
+  SWORD_LINE: "sword_line",
+  SPEAR_LINE: "spear_line",
+  RANGED_REAR: "ranged_rear",
+  PRIEST_REAR: "priest_rear",
+});
+
 const ROUTE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
 const WAVE_SPAWN_NODE_IDS = Object.freeze(["WA", "WB", "WC", "WD"]);
 const LANE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
@@ -241,13 +264,26 @@ const LANE_FORMATION_JOIN_DISTANCE = 1.6;
 const LANE_FORMATION_ARRIVAL_DEAD_ZONE = 0.2;
 const LANE_FORMATION_MAX_COLUMNS = 5;
 const LANE_FORMATION_SETTLED_SEPARATION_DISTANCE = 0.9;
-const LANE_FORMATION_SETTLED_SEPARATION_SCALE = 0.35;
+const LANE_FORMATION_SETTLED_SEPARATION_SCALE = 0.25;
 const LANE_FORMATION_MIXED_SEPARATION_SCALE = 0.6;
+const LANE_FORMATION_SETTLED_MAX_LATERAL_OFFSET = 0.15;
 const LANE_COMBAT_POCKET_RADIUS_PADDING = ROUTE_FORMATION_ROW_SPACING * 2.5;
 const LANE_COMBAT_POCKET_RADIUS_SCALE = 0.6;
 const LANE_COMBAT_TARGET_LOCK_TICKS = Math.max(1, Math.round(TICK_HZ * 0.5));
 const LANE_COMBAT_REGROUP_TICKS = Math.max(1, Math.round(TICK_HZ * 0.35));
 const LANE_COMBAT_SWITCH_DISTANCE_MARGIN = 0.75;
+// Keep home-side packet anchors aligned with the fortress front-gate combat offset so
+// DEFEND packets actually stage at the gate instead of collapsing around the Town Core.
+const FRONT_GATE_COMBAT_OFFSET = 10.2;
+const PACKET_INSIDE_GATE_OFFSET = FRONT_GATE_COMBAT_OFFSET - 2.0;
+const PACKET_OUTSIDE_GATE_OFFSET = FRONT_GATE_COMBAT_OFFSET + 1.0;
+const PACKET_INTER_PACKET_DEPTH = ROUTE_FORMATION_ROW_SPACING * 3.5;
+const PACKET_BARRACKS_LATERAL_SPACING = ROUTE_FORMATION_COLUMN_SPACING * 2.25;
+const PACKET_ROLE_COLUMN_SPACING = ROUTE_FORMATION_COLUMN_SPACING;
+const PACKET_ROLE_ROW_SPACING = ROUTE_FORMATION_ROW_SPACING;
+const PACKET_FORMATION_MAX_COLUMNS = 4;
+const PACKET_SUPPORT_TARGET_RADIUS = 7.5;
+const PACKET_HOME_STAGING_DEPTH = ROUTE_FORMATION_ROW_SPACING * 1.35;
 const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   spawn_unit: "Manual CMD sends were removed. Units must come from Barracks.",
   place_unit: "Tile-grid defender placement is disabled in fortress mode",
@@ -379,22 +415,7 @@ const ROUTE_SEGMENT_POLYLINES = Object.freeze({
     Object.freeze({ x: 0, y: 0 }),
     Object.freeze({ x: -24, y: -24 }),
   ]),
-  WA_A: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: 24 }),
-  ]),
-  WB_B: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: 24 }),
-  ]),
-  WC_C: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: -24 }),
-  ]),
-  WD_D: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: -24 }),
-  ]),
+  ...buildWaveLanePolylines(),
   ...buildBarracksRouteLinkPolylines(),
 });
 
@@ -587,6 +608,30 @@ function buildBarracksRouteLinkPolylines() {
   return segments;
 }
 
+function buildWaveLanePolylines() {
+  const segments = {};
+  for (let laneIndex = 0; laneIndex < LANE_NODE_IDS.length; laneIndex += 1) {
+    const waveNodeId = WAVE_SPAWN_NODE_IDS[laneIndex];
+    const coreNodeId = LANE_NODE_IDS[laneIndex];
+    const axes = getLaneCombatAxes(laneIndex);
+    const corePos = coreNodeId ? ROUTE_GRAPH_CORE_NODE_POSITIONS[coreNodeId] : null;
+    if (!waveNodeId || !coreNodeId || !axes || !corePos)
+      continue;
+
+    const frontGatePoint = Object.freeze({
+      x: corePos.x + (Number(axes.forward.x) * FRONT_GATE_COMBAT_OFFSET),
+      y: corePos.y + (Number(axes.forward.y) * FRONT_GATE_COMBAT_OFFSET),
+    });
+    segments[`${waveNodeId}_${coreNodeId}`] = Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.y }),
+      frontGatePoint,
+      Object.freeze({ x: corePos.x, y: corePos.y }),
+    ]);
+  }
+
+  return segments;
+}
+
 function getWaveSpawnWorldPosition(laneIndex) {
   if (!Number.isInteger(laneIndex) || laneIndex < 0 || laneIndex >= LANE_NODE_IDS.length)
     return null;
@@ -727,10 +772,13 @@ function getLaneCommandEngagementRadius(lane) {
 
 function getLaneCommandAnchorProgress(lane) {
   const commandState = getLaneCommandState(lane);
-  const fallback = commandState === LANE_COMMAND_STATES.ATTACK ? 1 : 0;
+  if (commandState === LANE_COMMAND_STATES.ATTACK)
+    return 1;
+  if (commandState === LANE_COMMAND_STATES.DEFEND || commandState === LANE_COMMAND_STATES.RETREAT)
+    return 0;
   const raw = Number(lane && (lane.commandAnchorProgress ?? lane.formationAnchorProgress));
   if (!Number.isFinite(raw))
-    return fallback;
+    return 0;
   return Math.max(0, Math.min(1, raw));
 }
 
@@ -770,52 +818,92 @@ function buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksId, object
   return [`${sourceNodeId}_${sourceCoreNodeId}`, ...coreRouteSegments];
 }
 
+function buildLaneCommandAnchorSet(game, lane) {
+  if (!game || !lane || !Number.isInteger(lane.laneIndex))
+    return null;
+
+  const axes = getLaneCombatAxes(lane.laneIndex);
+  if (!axes)
+    return null;
+
+  const objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
+  const objectiveLane = getLaneByIndex(game, objectiveLaneIndex);
+  const enemyCoreTarget = objectiveLane ? getLaneTownCoreCombatTarget(objectiveLane) : null;
+  const attackFacing = enemyCoreTarget
+    ? normalize2D({
+        x: Number(enemyCoreTarget.posX) - Number(axes.core.x),
+        y: Number(enemyCoreTarget.posY) - Number(axes.core.y),
+      })
+    : axes.forward;
+
+  return {
+    insideGateAnchor: {
+      x: Number(axes.core.x) - (Number(axes.forward.x) * PACKET_INSIDE_GATE_OFFSET),
+      y: Number(axes.core.y) - (Number(axes.forward.y) * PACKET_INSIDE_GATE_OFFSET),
+    },
+    outsideGateAnchor: {
+      x: Number(axes.core.x) + (Number(axes.forward.x) * PACKET_OUTSIDE_GATE_OFFSET),
+      y: Number(axes.core.y) + (Number(axes.forward.y) * PACKET_OUTSIDE_GATE_OFFSET),
+    },
+    enemyCoreAnchor: enemyCoreTarget
+      ? {
+          x: Number(enemyCoreTarget.posX) || 0,
+          y: Number(enemyCoreTarget.posY) || 0,
+        }
+      : {
+          x: Number(axes.core.x) || 0,
+          y: Number(axes.core.y) || 0,
+        },
+    objectiveLaneIndex,
+    forward: axes.forward,
+    lateral: axes.lateral,
+    attackFacing,
+  };
+}
+
 function sampleLaneCommandAnchor(game, lane) {
   if (!game || !lane || !Number.isInteger(lane.laneIndex))
     return null;
 
+  const commandState = getLaneCommandState(lane);
+  const anchorSet = buildLaneCommandAnchorSet(game, lane);
+  if (!anchorSet)
+    return null;
   const objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
   const baseRouteSegments = buildLaneCommandCoreRouteSegments(lane.laneIndex, objectiveLaneIndex);
   if (!Array.isArray(baseRouteSegments))
     return null;
-
   const anchorProgress = getLaneCommandAnchorProgress(lane);
-  const anchorSample = baseRouteSegments.length > 0
-    ? sampleRouteByDistanceNorm(baseRouteSegments, anchorProgress, 0)
-    : sampleRoutePosition([`${getLaneNodeId(lane.laneIndex)}_${getLaneNodeId(lane.laneIndex)}`], 0, 0, 0);
-  if (!anchorSample) {
-    const coreNodeId = getLaneNodeId(lane.laneIndex);
-    const fallbackPoint = coreNodeId ? ROUTE_GRAPH_CORE_NODE_POSITIONS[coreNodeId] : null;
-    if (!fallbackPoint)
-      return null;
-    const tangent = getLaneCombatAxes(lane.laneIndex)?.forward || { x: 0, y: -1 };
-    return {
-      commandState: getLaneCommandState(lane),
-      combatEnabled: isLaneCombatEnabledCommandState(getLaneCommandState(lane)),
-      engagementRadius: getLaneCommandEngagementRadius(lane),
-      objectiveLaneIndex,
-      containerLaneIndex: resolveLaneCommandContainerLaneIndex(game, lane),
-      anchorProgress,
-      anchorX: fallbackPoint.x,
-      anchorY: fallbackPoint.y,
-      facing: tangent,
-      lateral: perpendicular2D(tangent),
-      baseRouteSegments,
-    };
-  }
-
-  const facing = normalize2D(anchorSample.tangent);
+  const anchorKind = commandState === LANE_COMMAND_STATES.RETREAT
+    ? LANE_STANCE_ANCHOR_KINDS.INSIDE_GATE
+    : (commandState === LANE_COMMAND_STATES.DEFEND
+      ? LANE_STANCE_ANCHOR_KINDS.OUTSIDE_GATE
+      : LANE_STANCE_ANCHOR_KINDS.ENEMY_CORE);
+  const anchorPoint = anchorKind === LANE_STANCE_ANCHOR_KINDS.INSIDE_GATE
+    ? anchorSet.insideGateAnchor
+    : (anchorKind === LANE_STANCE_ANCHOR_KINDS.OUTSIDE_GATE
+      ? anchorSet.outsideGateAnchor
+      : anchorSet.enemyCoreAnchor);
+  const facing = normalize2D(
+    commandState === LANE_COMMAND_STATES.ATTACK
+      ? anchorSet.attackFacing
+      : anchorSet.forward
+  );
   return {
-    commandState: getLaneCommandState(lane),
-    combatEnabled: isLaneCombatEnabledCommandState(getLaneCommandState(lane)),
+    commandState,
+    combatEnabled: isLaneCombatEnabledCommandState(commandState),
     engagementRadius: getLaneCommandEngagementRadius(lane),
     objectiveLaneIndex,
     containerLaneIndex: resolveLaneCommandContainerLaneIndex(game, lane),
     anchorProgress,
-    anchorX: anchorSample.point.x,
-    anchorY: anchorSample.point.y,
+    anchorKind,
+    anchorX: Number(anchorPoint && anchorPoint.x) || 0,
+    anchorY: Number(anchorPoint && anchorPoint.y) || 0,
     facing,
     lateral: perpendicular2D(facing),
+    insideGateAnchor: anchorSet.insideGateAnchor,
+    outsideGateAnchor: anchorSet.outsideGateAnchor,
+    enemyCoreAnchor: anchorSet.enemyCoreAnchor,
     baseRouteSegments,
   };
 }
@@ -1175,6 +1263,40 @@ function resolveRouteContractForUnit(game, targetLane, unit) {
   };
 }
 
+function resolveRedirectRouteContractForExistingLaneControlledUnit(game, currentLane, targetLane, unit) {
+  if (!game || !currentLane || !targetLane || !unit)
+    return { ok: false, reason: "Missing game, current lane, target lane, or unit" };
+  if (!isLaneControlledUnit(unit))
+    return resolveRouteContractForUnit(game, targetLane, unit);
+
+  const currentLaneIndex = Number.isInteger(currentLane.laneIndex)
+    ? currentLane.laneIndex
+    : resolveUnitTargetLaneIndex(game, currentLane, unit);
+  const commandState = getLaneCommandStateForUnit(game, unit);
+  const routeTargetLaneIndex = commandState === LANE_COMMAND_STATES.RETREAT
+    ? targetLane.laneIndex
+    : resolveUnitObjectiveLaneIndex(game, targetLane, unit);
+  const sourceNodeId = getLaneNodeId(currentLaneIndex);
+  const targetNodeId = getLaneNodeId(routeTargetLaneIndex);
+  const routeSegments = buildLaneCommandCoreRouteSegments(currentLaneIndex, routeTargetLaneIndex);
+
+  if (!sourceNodeId || !targetNodeId || !Array.isArray(routeSegments) || routeSegments.length <= 0) {
+    return resolveRouteContractForUnit(game, targetLane, unit);
+  }
+
+  return {
+    ok: true,
+    spawnSourceType: resolveSpawnSourceTypeFromUnit(unit),
+    routeType: ROUTE_TYPES.CENTER_CROSS,
+    sourceNodeId,
+    targetNodeId,
+    objectiveLaneIndex: routeTargetLaneIndex,
+    routeSegments,
+    pathId: buildRoutePathId(routeSegments),
+    routeLabel: "lane_command_redirect",
+  };
+}
+
 function isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneIndex) {
   if (!routeContract)
     return false;
@@ -1256,6 +1378,8 @@ function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos)
   unit.blockedByStructureType = null;
   unit.combatTargetLockedUntilTick = 0;
   unit.regroupUntilTick = 0;
+  unit.targetLaneIndex = targetLaneIndex;
+  unit.laneId = targetLaneIndex;
   if (!setUnitRouteSnapshotState(unit)) {
     const failure = {
       ok: false,
@@ -1319,16 +1443,24 @@ function applyRouteContractToExistingUnit(unit, routeContract, currentPosition =
     };
   }
 
-  const routeTangent = normalize2D(startSample.tangent);
-  const routeLateral = perpendicular2D(routeTangent);
   const safeCurrentPosition = currentPosition
     && Number.isFinite(Number(currentPosition.x))
     && Number.isFinite(Number(currentPosition.y))
     ? { x: Number(currentPosition.x), y: Number(currentPosition.y) }
     : { x: Number(unit.posX) || Number(startSample.point.x), y: Number(unit.posY) || Number(startSample.point.y) };
-  const originDelta = {
-    x: safeCurrentPosition.x - Number(startSample.point.x),
-    y: safeCurrentPosition.y - Number(startSample.point.y),
+  const projection = projectPointOntoRouteSegments(routeContract.routeSegments, safeCurrentPosition);
+  const routeSample = projection || {
+    segmentIndex: 0,
+    segmentProgress: 0,
+    segmentId: routeContract.routeSegments[0],
+    point: startSample.point,
+    tangent: startSample.tangent,
+  };
+  const routeTangent = normalize2D(routeSample.tangent);
+  const routeLateral = perpendicular2D(routeTangent);
+  const routeDelta = {
+    x: safeCurrentPosition.x - Number(routeSample.point.x),
+    y: safeCurrentPosition.y - Number(routeSample.point.y),
   };
 
   unit.routeType = routeContract.routeType;
@@ -1336,10 +1468,14 @@ function applyRouteContractToExistingUnit(unit, routeContract, currentPosition =
   unit.routeTargetNode = routeContract.targetNodeId;
   unit.objectiveLaneIndex = routeContract.objectiveLaneIndex ?? unit.objectiveLaneIndex ?? unit.targetLaneIndex;
   unit.routeSegments = routeContract.routeSegments;
-  unit.routeSegmentIndex = 0;
-  unit.segmentProgress = 0;
-  unit.routeLateralOffset = dot2D(originDelta, routeLateral);
-  unit.routeLongitudinalOffset = dot2D(originDelta, routeTangent);
+  unit.routeSegmentIndex = Math.max(
+    0,
+    Math.min(routeContract.routeSegments.length - 1, Math.floor(Number(routeSample.segmentIndex) || 0))
+  );
+  unit.segmentProgress = Math.max(0, Math.min(1, Number(routeSample.segmentProgress) || 0));
+  unit.currentSegment = routeSample.segmentId || routeContract.routeSegments[unit.routeSegmentIndex];
+  unit.routeLateralOffset = dot2D(routeDelta, routeLateral);
+  unit.routeLongitudinalOffset = dot2D(routeDelta, routeTangent);
   unit.stance = null;
   unit.routeState = WAVE_UNIT_STATES.MOVING;
   unit.combatState = WAVE_UNIT_STATES.MOVING;
@@ -1597,10 +1733,254 @@ function resolveLaneControlledUnitSortKey(unit) {
   return `id:${String(unit && unit.id || "")}`;
 }
 
-function buildPersistentLaneFormationRoster(ownerLane, controlledUnits) {
-  const entries = Array.isArray(controlledUnits) ? controlledUnits.slice() : [];
-  if (!ownerLane || entries.length <= 0)
+function normalizeCombatRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  switch (normalized) {
+    case UNIT_COMBAT_ROLES.SHIELD:
+      return UNIT_COMBAT_ROLES.SHIELD;
+    case UNIT_COMBAT_ROLES.SPEAR:
+    case "polearm":
+      return UNIT_COMBAT_ROLES.SPEAR;
+    case UNIT_COMBAT_ROLES.ARCHER:
+    case "ranged":
+      return UNIT_COMBAT_ROLES.ARCHER;
+    case UNIT_COMBAT_ROLES.MAGE:
+    case "arcane":
+      return UNIT_COMBAT_ROLES.MAGE;
+    case UNIT_COMBAT_ROLES.PRIEST:
+    case "support":
+    case "healer":
+      return UNIT_COMBAT_ROLES.PRIEST;
+    case UNIT_COMBAT_ROLES.SWORD:
+    case "melee":
+    case "hero":
+      return UNIT_COMBAT_ROLES.SWORD;
+    default:
+      return null;
+  }
+}
+
+function resolvePreferredBandForCombatRole(combatRole) {
+  switch (normalizeCombatRole(combatRole)) {
+    case UNIT_COMBAT_ROLES.SHIELD:
+      return UNIT_PREFERRED_BANDS.SHIELD_FRONT;
+    case UNIT_COMBAT_ROLES.SPEAR:
+      return UNIT_PREFERRED_BANDS.SPEAR_LINE;
+    case UNIT_COMBAT_ROLES.ARCHER:
+    case UNIT_COMBAT_ROLES.MAGE:
+      return UNIT_PREFERRED_BANDS.RANGED_REAR;
+    case UNIT_COMBAT_ROLES.PRIEST:
+      return UNIT_PREFERRED_BANDS.PRIEST_REAR;
+    case UNIT_COMBAT_ROLES.SWORD:
+    default:
+      return UNIT_PREFERRED_BANDS.SWORD_LINE;
+  }
+}
+
+function normalizePreferredBand(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  switch (normalized) {
+    case UNIT_PREFERRED_BANDS.SHIELD_FRONT:
+      return UNIT_PREFERRED_BANDS.SHIELD_FRONT;
+    case UNIT_PREFERRED_BANDS.SWORD_LINE:
+      return UNIT_PREFERRED_BANDS.SWORD_LINE;
+    case UNIT_PREFERRED_BANDS.SPEAR_LINE:
+      return UNIT_PREFERRED_BANDS.SPEAR_LINE;
+    case UNIT_PREFERRED_BANDS.PRIEST_REAR:
+      return UNIT_PREFERRED_BANDS.PRIEST_REAR;
+    case UNIT_PREFERRED_BANDS.RANGED_REAR:
+      return UNIT_PREFERRED_BANDS.RANGED_REAR;
+    default:
+      return null;
+  }
+}
+
+function getPacketBandSortIndex(preferredBand) {
+  switch (normalizePreferredBand(preferredBand)) {
+    case UNIT_PREFERRED_BANDS.SHIELD_FRONT:
+      return 0;
+    case UNIT_PREFERRED_BANDS.SWORD_LINE:
+      return 1;
+    case UNIT_PREFERRED_BANDS.SPEAR_LINE:
+      return 2;
+    case UNIT_PREFERRED_BANDS.RANGED_REAR:
+      return 3;
+    case UNIT_PREFERRED_BANDS.PRIEST_REAR:
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function resolvePacketFormationColumns(preferredBand, unitCount) {
+  const safeCount = Math.max(1, Math.floor(Number(unitCount) || 1));
+  switch (normalizePreferredBand(preferredBand)) {
+    case UNIT_PREFERRED_BANDS.SHIELD_FRONT:
+      return Math.max(1, Math.min(3, safeCount));
+    case UNIT_PREFERRED_BANDS.SWORD_LINE:
+      return Math.max(1, Math.min(PACKET_FORMATION_MAX_COLUMNS, safeCount));
+    case UNIT_PREFERRED_BANDS.SPEAR_LINE:
+      return Math.max(1, Math.min(3, safeCount));
+    case UNIT_PREFERRED_BANDS.RANGED_REAR:
+    case UNIT_PREFERRED_BANDS.PRIEST_REAR:
+      return Math.max(1, Math.min(3, safeCount));
+    default:
+      return Math.max(1, Math.min(PACKET_FORMATION_MAX_COLUMNS, safeCount));
+  }
+}
+
+function resolvePacketLateralBias(barracksId) {
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  switch (normalizedBarracksId) {
+    case "left":
+      return -1;
+    case "right":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function resolvePacketDepthForAnchorState(anchorState, packetIndex, barracksPacketOrdinal) {
+  const safePacketIndex = Math.max(0, Math.floor(Number(packetIndex) || 0));
+  const safeBarracksOrdinal = Math.max(0, Math.floor(Number(barracksPacketOrdinal) || 0));
+  const commandState = anchorState && anchorState.commandState;
+  if (commandState === LANE_COMMAND_STATES.DEFEND || commandState === LANE_COMMAND_STATES.RETREAT)
+    return safeBarracksOrdinal * PACKET_HOME_STAGING_DEPTH;
+  return safePacketIndex * PACKET_INTER_PACKET_DEPTH;
+}
+
+function resolvePacketForwardOffsetForAnchorState(anchorState, packetDepth, packetFormationDepth) {
+  const safePacketDepth = Math.max(0, Number(packetDepth) || 0);
+  const safeFormationDepth = Math.max(0, Number(packetFormationDepth) || 0);
+  const commandState = anchorState && anchorState.commandState;
+  if (commandState === LANE_COMMAND_STATES.DEFEND)
+    return safePacketDepth + safeFormationDepth;
+  return -safePacketDepth;
+}
+
+function createSpawnPacketId(game, sourceLaneIndex, barracksId, prefix = "packet") {
+  const nextPacketId = Math.max(1, Math.floor(Number(game && game.nextPacketId) || 1));
+  if (game)
+    game.nextPacketId = nextPacketId + 1;
+  const safeLaneIndex = Number.isInteger(sourceLaneIndex) ? sourceLaneIndex : -1;
+  const safeBarracksId = normalizeBarracksSiteId(barracksId) || "center";
+  return `${prefix}:${safeLaneIndex}:${safeBarracksId}:${nextPacketId}`;
+}
+
+function resolveUnitPacketGroupId(unit) {
+  const explicitGroupId = String(unit && unit.groupId || "").trim();
+  if (explicitGroupId !== "")
+    return explicitGroupId;
+  if (!isLaneControlledUnit(unit))
+    return null;
+
+  const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+  const targetLaneIndex = Number.isInteger(unit && unit.targetLaneIndex)
+    ? unit.targetLaneIndex
+    : (Number.isInteger(unit && unit.laneId) ? unit.laneId : -1);
+  const sourceBarracksId = resolveUnitSourceBarracksId(unit) || "center";
+  return `legacy_packet:${sourceLaneIndex}:${sourceBarracksId}:${targetLaneIndex}:${resolveSpawnSourceTypeFromUnit(unit) || "lane"}`;
+}
+
+function resolveUnitCombatRole(unit) {
+  const explicitRole = normalizeCombatRole(unit && unit.combatRole);
+  if (explicitRole)
+    return explicitRole;
+
+  const sourceTokens = [
+    unit && unit.heroKey,
+    unit && unit.rosterKey,
+    unit && unit.role,
+    unit && unit.archetypeKey,
+    unit && unit.unitTypeKey,
+    unit && unit.type,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const joined = sourceTokens.join("|");
+  if (joined.includes("shield") || joined.includes("guardian"))
+    return UNIT_COMBAT_ROLES.SHIELD;
+  if (joined.includes("spear") || joined.includes("polearm") || joined.includes("halber") || joined.includes("lancer"))
+    return UNIT_COMBAT_ROLES.SPEAR;
+  if (joined.includes("priest") || joined.includes("cleric") || joined.includes("bishop") || joined.includes("support"))
+    return UNIT_COMBAT_ROLES.PRIEST;
+  if (joined.includes("mage") || joined.includes("wizard") || joined.includes("arcane") || joined.includes("thaum"))
+    return UNIT_COMBAT_ROLES.MAGE;
+  if (joined.includes("archer") || joined.includes("crossbow") || joined.includes("ranger") || joined.includes("ranged"))
+    return UNIT_COMBAT_ROLES.ARCHER;
+  return UNIT_COMBAT_ROLES.SWORD;
+}
+
+function resolveUnitPreferredBand(unit) {
+  const explicitBand = normalizePreferredBand(unit && unit.preferredBand);
+  if (explicitBand)
+    return explicitBand;
+  return resolvePreferredBandForCombatRole(resolveUnitCombatRole(unit));
+}
+
+function resolvePacketUnitSortKey(unit) {
+  const bandSort = getPacketBandSortIndex(resolveUnitPreferredBand(unit));
+  return `${String(bandSort).padStart(2, "0")}:${resolveLaneControlledUnitSortKey(unit)}`;
+}
+
+function buildPersistentPacketOrder(ownerLane, packetEntries) {
+  const entries = Array.isArray(packetEntries) ? packetEntries.slice() : [];
+  if (!ownerLane || entries.length <= 0) {
+    if (ownerLane)
+      ownerLane.packetOrder = [];
     return [];
+  }
+
+  const entryById = new Map();
+  for (const entry of entries) {
+    const packetId = entry && entry.packetId;
+    if (packetId)
+      entryById.set(packetId, entry);
+  }
+
+  const ordered = [];
+  const seen = new Set();
+  const previousOrder = Array.isArray(ownerLane.packetOrder)
+    ? ownerLane.packetOrder
+    : [];
+  for (const packetId of previousOrder) {
+    const entry = entryById.get(packetId);
+    if (!entry)
+      continue;
+    ordered.push(entry);
+    seen.add(packetId);
+  }
+
+  const newcomers = entries
+    .filter((entry) => entry && entry.packetId && !seen.has(entry.packetId))
+    .sort((left, right) => {
+      const leftOrdinal = Number(left && left.groupSpawnOrdinal);
+      const rightOrdinal = Number(right && right.groupSpawnOrdinal);
+      if (Number.isFinite(leftOrdinal) && Number.isFinite(rightOrdinal) && leftOrdinal !== rightOrdinal)
+        return leftOrdinal - rightOrdinal;
+      const leftTick = Number(left && left.groupSpawnTick);
+      const rightTick = Number(right && right.groupSpawnTick);
+      if (Number.isFinite(leftTick) && Number.isFinite(rightTick) && leftTick !== rightTick)
+        return leftTick - rightTick;
+      return String(left && left.packetId || "").localeCompare(String(right && right.packetId || ""));
+    });
+  for (const entry of newcomers) {
+    seen.add(entry.packetId);
+    ordered.push(entry);
+  }
+
+  ownerLane.packetOrder = ordered.map((entry) => entry.packetId);
+  return ordered;
+}
+
+function buildPersistentLanePacketUnitRoster(ownerLane, packetId, packetEntries) {
+  const entries = Array.isArray(packetEntries) ? packetEntries.slice() : [];
+  if (!ownerLane || !packetId || entries.length <= 0)
+    return [];
+
+  if (!ownerLane.packetUnitOrder || typeof ownerLane.packetUnitOrder !== "object")
+    ownerLane.packetUnitOrder = {};
 
   const entryById = new Map();
   for (const entry of entries) {
@@ -1611,8 +1991,8 @@ function buildPersistentLaneFormationRoster(ownerLane, controlledUnits) {
 
   const ordered = [];
   const seen = new Set();
-  const previousOrder = Array.isArray(ownerLane.formationUnitOrder)
-    ? ownerLane.formationUnitOrder
+  const previousOrder = Array.isArray(ownerLane.packetUnitOrder[packetId])
+    ? ownerLane.packetUnitOrder[packetId]
     : [];
   for (const unitId of previousOrder) {
     const entry = entryById.get(unitId);
@@ -1628,7 +2008,7 @@ function buildPersistentLaneFormationRoster(ownerLane, controlledUnits) {
       return unitId && !seen.has(unitId);
     })
     .sort((left, right) =>
-      resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
+      resolvePacketUnitSortKey(left.unit).localeCompare(resolvePacketUnitSortKey(right.unit)));
   for (const entry of newcomers) {
     const unitId = entry && entry.unit && entry.unit.id;
     if (unitId)
@@ -1636,8 +2016,130 @@ function buildPersistentLaneFormationRoster(ownerLane, controlledUnits) {
     ordered.push(entry);
   }
 
-  ownerLane.formationUnitOrder = ordered.map((entry) => entry.unit.id);
+  ownerLane.packetUnitOrder[packetId] = ordered.map((entry) => entry.unit.id);
   return ordered;
+}
+
+function buildPacketFormationLayout(orderedEntries) {
+  const safeEntries = Array.isArray(orderedEntries) ? orderedEntries : [];
+  const placementByUnitId = new Map();
+  const bandEntriesByBand = new Map();
+  let maxDepthDistance = 0;
+
+  for (const entry of safeEntries) {
+    const unit = entry && entry.unit;
+    const unitId = unit && unit.id;
+    if (!unitId)
+      continue;
+
+    const preferredBand = resolveUnitPreferredBand(unit);
+    if (!bandEntriesByBand.has(preferredBand))
+      bandEntriesByBand.set(preferredBand, []);
+    bandEntriesByBand.get(preferredBand).push(entry);
+  }
+
+  for (const [preferredBand, bandEntries] of bandEntriesByBand.entries()) {
+    const columns = resolvePacketFormationColumns(preferredBand, bandEntries.length);
+    const bandDepth = getPacketBandSortIndex(preferredBand);
+    for (let bandIndex = 0; bandIndex < bandEntries.length; bandIndex += 1) {
+      const entry = bandEntries[bandIndex];
+      const unitId = entry && entry.unit && entry.unit.id;
+      if (!unitId)
+        continue;
+
+      const row = Math.floor(bandIndex / columns);
+      const column = bandIndex % columns;
+      const lateralIndex = resolveCenteredFormationOffset(column, columns);
+      const lateralDistance = lateralIndex * PACKET_ROLE_COLUMN_SPACING;
+      const depthDistance = ((bandDepth * PACKET_ROLE_ROW_SPACING) + (row * PACKET_ROLE_ROW_SPACING));
+      if (depthDistance > maxDepthDistance)
+        maxDepthDistance = depthDistance;
+      placementByUnitId.set(unitId, {
+        band: preferredBand,
+        row,
+        column,
+        lateralDistance,
+        depthDistance,
+      });
+    }
+  }
+
+  return {
+    placementByUnitId,
+    maxDepthDistance,
+  };
+}
+
+function buildPacketFormationSlot(packetAnchorState, unit, localIndex, formationPlacement) {
+  const preferredBand = normalizePreferredBand(formationPlacement && formationPlacement.band) || resolveUnitPreferredBand(unit);
+  const row = Number.isInteger(formationPlacement && formationPlacement.row) ? formationPlacement.row : 0;
+  const column = Number.isInteger(formationPlacement && formationPlacement.column) ? formationPlacement.column : 0;
+  const lateralDistance = Number.isFinite(Number(formationPlacement && formationPlacement.lateralDistance))
+    ? Number(formationPlacement.lateralDistance)
+    : 0;
+  const depthDistance = Number.isFinite(Number(formationPlacement && formationPlacement.depthDistance))
+    ? Number(formationPlacement.depthDistance)
+    : getPacketBandSortIndex(preferredBand) * PACKET_ROLE_ROW_SPACING;
+  const anchorX = Number(packetAnchorState && packetAnchorState.groupCenterX) || 0;
+  const anchorY = Number(packetAnchorState && packetAnchorState.groupCenterY) || 0;
+  const facing = packetAnchorState && packetAnchorState.facing ? packetAnchorState.facing : { x: 0, y: -1 };
+  const lateral = packetAnchorState && packetAnchorState.lateral ? packetAnchorState.lateral : perpendicular2D(facing);
+  return {
+    slotIndex: Math.max(0, Math.floor(Number(localIndex) || 0)),
+    band: preferredBand,
+    row,
+    column,
+    x: anchorX + (lateral.x * lateralDistance) - (facing.x * depthDistance),
+    y: anchorY + (lateral.y * lateralDistance) - (facing.y * depthDistance),
+  };
+}
+
+function resolvePacketMovementMode(unitEntries) {
+  const entries = Array.isArray(unitEntries) ? unitEntries : [];
+  if (entries.some((entry) => entry && entry.unit && entry.unit.movementMode === UNIT_MOVEMENT_MODES.COMBAT_ENGAGE))
+    return UNIT_MOVEMENT_MODES.COMBAT_ENGAGE;
+  if (entries.some((entry) => entry && entry.unit && entry.unit.movementMode === UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR))
+    return UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR;
+  if (entries.some((entry) => entry && entry.unit && entry.unit.movementMode === UNIT_MOVEMENT_MODES.FORMATION_JOIN))
+    return UNIT_MOVEMENT_MODES.FORMATION_JOIN;
+  return UNIT_MOVEMENT_MODES.LANE_TRAVEL;
+}
+
+function computePacketCohesionRadius(packetState, packetSlots) {
+  const slots = Array.isArray(packetSlots) ? packetSlots : [];
+  const centerX = Number(packetState && packetState.groupCenterX) || 0;
+  const centerY = Number(packetState && packetState.groupCenterY) || 0;
+  let maxDistance = ROUTE_FORMATION_COLUMN_SPACING;
+  for (const slot of slots) {
+    const dx = (Number(slot && slot.x) || 0) - centerX;
+    const dy = (Number(slot && slot.y) || 0) - centerY;
+    maxDistance = Math.max(maxDistance, Math.sqrt((dx * dx) + (dy * dy)));
+  }
+  return maxDistance + ROUTE_FORMATION_ROW_SPACING;
+}
+
+function resolveUnitLeashFromGroupCenter(unit, cohesionRadius) {
+  const preferredBand = resolveUnitPreferredBand(unit);
+  const baseRadius = Math.max(cohesionRadius, ROUTE_FORMATION_ROW_SPACING);
+  switch (preferredBand) {
+    case UNIT_PREFERRED_BANDS.PRIEST_REAR:
+      return Math.max(baseRadius + 0.75, 3.25);
+    case UNIT_PREFERRED_BANDS.RANGED_REAR:
+      return Math.max(baseRadius + 1.25, 4.0);
+    default:
+      return Math.max(baseRadius + 2.0, 5.0);
+  }
+}
+
+function buildPacketWaypointTarget(anchorState) {
+  return anchorState
+    ? {
+        kind: anchorState.anchorKind || null,
+        laneIndex: Number.isInteger(anchorState.containerLaneIndex) ? anchorState.containerLaneIndex : null,
+        x: Number(anchorState.anchorX) || 0,
+        y: Number(anchorState.anchorY) || 0,
+      }
+    : null;
 }
 
 function shouldKeepUnitAfterLaneDefeat(lane, unit) {
@@ -1706,6 +2208,16 @@ function syncLaneCommandAssignments(game) {
     lane.formationUnitOrder = Array.isArray(lane.formationUnitOrder)
       ? lane.formationUnitOrder
       : [];
+    lane.packetOrder = Array.isArray(lane.packetOrder)
+      ? lane.packetOrder
+      : [];
+    lane.packetUnitOrder = lane.packetUnitOrder && typeof lane.packetUnitOrder === "object"
+      ? lane.packetUnitOrder
+      : {};
+    lane.packetStates = [];
+    lane.insideGateAnchor = null;
+    lane.outsideGateAnchor = null;
+    lane.enemyCoreAnchor = null;
   }
 
   for (const lane of game.lanes) {
@@ -1721,18 +2233,53 @@ function syncLaneCommandAssignments(game) {
       if (!ownerLane)
         continue;
 
+      const commandState = getLaneCommandState(ownerLane);
       const targetLaneIndex = resolveLaneCommandContainerLaneIndex(game, ownerLane);
       const targetLane = getLaneByIndex(game, targetLaneIndex) || lane;
       const objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, ownerLane);
+      const routeObjectiveLaneIndex = commandState === LANE_COMMAND_STATES.RETREAT
+        ? targetLane.laneIndex
+        : objectiveLaneIndex;
       unit.targetLaneIndex = targetLane.laneIndex;
       unit.laneId = targetLane.laneIndex;
-      unit.objectiveLaneIndex = objectiveLaneIndex;
+      unit.objectiveLaneIndex = routeObjectiveLaneIndex;
 
-      const routeContract = resolveRouteContractForUnit(game, targetLane, unit);
-      const desiredPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
       const currentPathId = buildRoutePathId(unit.routeSegments);
+      const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+      const sourceBarracksId = resolveUnitSourceBarracksId(unit);
+      const sourceRouteNodeId = getBarracksRouteStartNodeId(sourceLaneIndex, sourceBarracksId);
+      const sourceCoreNodeId = getLaneNodeId(sourceLaneIndex);
+      const expectedSpawnEntrySegment = sourceRouteNodeId && sourceCoreNodeId
+        ? `${sourceRouteNodeId}_${sourceCoreNodeId}`
+        : null;
+      const currentRouteUsesBattlefieldCore = !!(
+        Array.isArray(unit.routeSegments)
+        && unit.routeSegments.length > 0
+        && expectedSpawnEntrySegment
+        && unit.routeSegments[0] !== expectedSpawnEntrySegment
+      );
+      const desiredTargetNodeId = getLaneNodeId(routeObjectiveLaneIndex);
+
+      let routeContract = null;
+      if (lane === targetLane
+          && currentRouteUsesBattlefieldCore
+          && desiredTargetNodeId
+          && unit.routeTargetNode === desiredTargetNodeId
+          && currentPathId) {
+        routeContract = {
+          ok: true,
+          pathId: currentPathId,
+          objectiveLaneIndex: routeObjectiveLaneIndex,
+          routeSegments: unit.routeSegments,
+        };
+      } else {
+        routeContract = resolveRouteContractForUnit(game, targetLane, unit);
+      }
+      if (routeContract && routeContract.ok && lane !== targetLane)
+        routeContract = resolveRedirectRouteContractForExistingLaneControlledUnit(game, lane, targetLane, unit);
+      const desiredPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
       if (routeContract && routeContract.ok
-          && (lane !== targetLane || desiredPathId !== currentPathId || unit.objectiveLaneIndex !== objectiveLaneIndex)) {
+          && (lane !== targetLane || desiredPathId !== currentPathId || unit.objectiveLaneIndex !== routeObjectiveLaneIndex)) {
         applyRouteContractToExistingUnit(unit, routeContract, {
           x: Number(unit.posX),
           y: Number(unit.posY),
@@ -1780,6 +2327,7 @@ function syncLaneCommandAssignments(game) {
       continue;
 
     const anchorState = sampleLaneCommandAnchor(game, ownerLane);
+    const activePacketIds = new Set();
     ownerLane.combatEnabled = !!(anchorState && anchorState.combatEnabled);
     ownerLane.engagementRadius = anchorState ? anchorState.engagementRadius : 0;
     ownerLane.formationAnchorProgress = anchorState ? anchorState.anchorProgress : 0;
@@ -1790,40 +2338,169 @@ function syncLaneCommandAssignments(game) {
     ownerLane.formationFacing = anchorState
       ? { x: anchorState.facing.x, y: anchorState.facing.y }
       : null;
+    ownerLane.insideGateAnchor = anchorState && anchorState.insideGateAnchor
+      ? { x: anchorState.insideGateAnchor.x, y: anchorState.insideGateAnchor.y }
+      : null;
+    ownerLane.outsideGateAnchor = anchorState && anchorState.outsideGateAnchor
+      ? { x: anchorState.outsideGateAnchor.x, y: anchorState.outsideGateAnchor.y }
+      : null;
+    ownerLane.enemyCoreAnchor = anchorState && anchorState.enemyCoreAnchor
+      ? { x: anchorState.enemyCoreAnchor.x, y: anchorState.enemyCoreAnchor.y }
+      : null;
 
-    const controlledUnits = [];
+    const packetEntriesById = new Map();
     for (const lane of game.lanes) {
       for (const unit of lane.units || []) {
-        if (isLaneControlledUnit(unit) && unit.sourceLaneIndex === ownerLane.laneIndex && unit.hp > 0)
-          controlledUnits.push({ lane, unit });
+        if (!isLaneControlledUnit(unit) || unit.sourceLaneIndex !== ownerLane.laneIndex || unit.hp <= 0)
+          continue;
+
+        const packetId = resolveUnitPacketGroupId(unit);
+        if (!packetId)
+          continue;
+        unit.groupId = packetId;
+        unit.combatRole = resolveUnitCombatRole(unit);
+        unit.preferredBand = resolveUnitPreferredBand(unit);
+
+        let packetEntry = packetEntriesById.get(packetId);
+        if (!packetEntry) {
+          packetEntry = {
+            packetId,
+            sourceLaneIndex: ownerLane.laneIndex,
+            sourceBarracksId: resolveUnitSourceBarracksId(unit),
+            groupSpawnTick: Number.isFinite(Number(unit.groupSpawnTick)) ? Number(unit.groupSpawnTick) : 0,
+            groupSpawnOrdinal: Number.isFinite(Number(unit.groupSpawnOrdinal)) ? Number(unit.groupSpawnOrdinal) : null,
+            entries: [],
+          };
+          packetEntriesById.set(packetId, packetEntry);
+        }
+        packetEntry.entries.push({ lane, unit });
       }
     }
-    const orderedControlledUnits = buildPersistentLaneFormationRoster(ownerLane, controlledUnits);
 
-    for (let slotIndex = 0; slotIndex < orderedControlledUnits.length; slotIndex += 1) {
-      const entry = orderedControlledUnits[slotIndex];
-      const slot = buildLaneFormationSlot(anchorState, slotIndex, orderedControlledUnits.length);
-      entry.unit.currentSlotIndex = slotIndex;
-      entry.unit.anchorTargetX = slot.x;
-      entry.unit.anchorTargetY = slot.y;
-      entry.unit.anchorTargetProgress = anchorState ? anchorState.anchorProgress : 0;
-      entry.unit.anchorFacingX = anchorState ? anchorState.facing.x : 0;
-      entry.unit.anchorFacingY = anchorState ? anchorState.facing.y : -1;
-      entry.unit.anchorLateralX = anchorState ? anchorState.lateral.x : 1;
-      entry.unit.anchorLateralY = anchorState ? anchorState.lateral.y : 0;
-      entry.unit.commandState = anchorState ? anchorState.commandState : null;
-      entry.unit.canEngage = !!(anchorState && anchorState.combatEnabled);
-      entry.unit.combatLeashRadius = anchorState
-        ? Math.max(anchorState.engagementRadius, LANE_COMMAND_COMBAT_LEASH)
-        : LANE_COMMAND_COMBAT_LEASH;
-      ownerLane.assignedUnits.push(entry.unit.id);
-      ownerLane.formationSlots.push({
-        slotIndex,
-        x: Number(slot.x.toFixed(3)),
-        y: Number(slot.y.toFixed(3)),
-        unitId: entry.unit.id,
+    const orderedPackets = buildPersistentPacketOrder(ownerLane, Array.from(packetEntriesById.values()));
+    const packetDepthOrdinalByBarracks = new Map();
+    for (let packetIndex = 0; packetIndex < orderedPackets.length; packetIndex += 1) {
+      const packetEntry = orderedPackets[packetIndex];
+      if (!packetEntry || !packetEntry.packetId)
+        continue;
+
+      activePacketIds.add(packetEntry.packetId);
+      const orderedPacketEntries = buildPersistentLanePacketUnitRoster(
+        ownerLane,
+        packetEntry.packetId,
+        packetEntry.entries
+      );
+      const packetFormationLayout = buildPacketFormationLayout(orderedPacketEntries);
+      const packetLateralBias = resolvePacketLateralBias(packetEntry.sourceBarracksId);
+      const packetDepthKey = normalizeBarracksSiteId(packetEntry.sourceBarracksId) || "center";
+      const barracksPacketOrdinal = packetDepthOrdinalByBarracks.get(packetDepthKey) || 0;
+      packetDepthOrdinalByBarracks.set(packetDepthKey, barracksPacketOrdinal + 1);
+      const packetDepth = resolvePacketDepthForAnchorState(anchorState, packetIndex, barracksPacketOrdinal);
+      const packetForwardOffset = resolvePacketForwardOffsetForAnchorState(
+        anchorState,
+        packetDepth,
+        packetFormationLayout.maxDepthDistance
+      );
+      const groupCenterX = anchorState
+        ? Number(anchorState.anchorX) + ((Number(anchorState.lateral.x) || 0) * packetLateralBias * PACKET_BARRACKS_LATERAL_SPACING)
+          + ((Number(anchorState.facing.x) || 0) * packetForwardOffset)
+        : 0;
+      const groupCenterY = anchorState
+        ? Number(anchorState.anchorY) + ((Number(anchorState.lateral.y) || 0) * packetLateralBias * PACKET_BARRACKS_LATERAL_SPACING)
+          + ((Number(anchorState.facing.y) || 0) * packetForwardOffset)
+        : 0;
+
+      const packetState = {
+        groupId: packetEntry.packetId,
+        laneId: anchorState && Number.isInteger(anchorState.containerLaneIndex)
+          ? anchorState.containerLaneIndex
+          : ownerLane.laneIndex,
+        sourceLaneIndex: ownerLane.laneIndex,
+        sourceBarracksId: packetEntry.sourceBarracksId || null,
+        stance: anchorState ? anchorState.commandState : getLaneCommandState(ownerLane),
+        currentWaypointTarget: buildPacketWaypointTarget(anchorState),
+        groupCenterX,
+        groupCenterY,
+        facing: anchorState ? anchorState.facing : { x: 0, y: -1 },
+        lateral: anchorState ? anchorState.lateral : { x: 1, y: 0 },
+        cohesionRadius: ROUTE_FORMATION_ROW_SPACING,
+        movementMode: resolvePacketMovementMode(orderedPacketEntries),
+        packetIndex,
+        assignedUnits: [],
+        formationSlots: [],
+      };
+
+      for (let unitIndex = 0; unitIndex < orderedPacketEntries.length; unitIndex += 1) {
+        const entry = orderedPacketEntries[unitIndex];
+        const formationPlacement = packetFormationLayout.placementByUnitId.get(entry.unit.id);
+        const slot = buildPacketFormationSlot(packetState, entry.unit, unitIndex, formationPlacement);
+        packetState.assignedUnits.push(entry.unit.id);
+        packetState.formationSlots.push({
+          slotIndex: unitIndex,
+          band: slot.band,
+          x: Number(slot.x.toFixed(3)),
+          y: Number(slot.y.toFixed(3)),
+          unitId: entry.unit.id,
+        });
+      }
+
+      packetState.cohesionRadius = computePacketCohesionRadius(packetState, packetState.formationSlots);
+      ownerLane.packetStates.push({
+        groupId: packetState.groupId,
+        laneId: packetState.laneId,
+        sourceLaneIndex: packetState.sourceLaneIndex,
+        sourceBarracksId: packetState.sourceBarracksId,
+        stance: packetState.stance,
+        currentWaypointTarget: packetState.currentWaypointTarget,
+        groupCenter: { x: Number(packetState.groupCenterX.toFixed(3)), y: Number(packetState.groupCenterY.toFixed(3)) },
+        cohesionRadius: Number(packetState.cohesionRadius.toFixed(3)),
+        movementMode: packetState.movementMode,
+        packetIndex: packetState.packetIndex,
+        assignedUnits: packetState.assignedUnits.slice(),
+        formationSlots: packetState.formationSlots.slice(),
       });
-      applyCanonicalUnitMirrors(game, entry.lane, entry.unit);
+
+      for (let unitIndex = 0; unitIndex < orderedPacketEntries.length; unitIndex += 1) {
+        const entry = orderedPacketEntries[unitIndex];
+        const slot = packetState.formationSlots[unitIndex];
+        const leashFromGroupCenter = resolveUnitLeashFromGroupCenter(entry.unit, packetState.cohesionRadius);
+        entry.unit.currentSlotIndex = unitIndex;
+        entry.unit.anchorTargetX = slot.x;
+        entry.unit.anchorTargetY = slot.y;
+        entry.unit.anchorTargetProgress = anchorState ? anchorState.anchorProgress : 0;
+        entry.unit.anchorFacingX = packetState.facing.x;
+        entry.unit.anchorFacingY = packetState.facing.y;
+        entry.unit.anchorLateralX = packetState.lateral.x;
+        entry.unit.anchorLateralY = packetState.lateral.y;
+        entry.unit.commandState = packetState.stance;
+        entry.unit.groupCenterX = packetState.groupCenterX;
+        entry.unit.groupCenterY = packetState.groupCenterY;
+        entry.unit.cohesionRadius = packetState.cohesionRadius;
+        entry.unit.leashFromGroupCenter = leashFromGroupCenter;
+        entry.unit.groupLaneId = packetState.laneId;
+        entry.unit.packetIndex = packetState.packetIndex;
+        entry.unit.currentWaypointTargetX = packetState.currentWaypointTarget ? packetState.currentWaypointTarget.x : null;
+        entry.unit.currentWaypointTargetY = packetState.currentWaypointTarget ? packetState.currentWaypointTarget.y : null;
+        entry.unit.currentWaypointTargetKind = packetState.currentWaypointTarget ? packetState.currentWaypointTarget.kind : null;
+        entry.unit.canEngage = !!(anchorState && anchorState.combatEnabled);
+        entry.unit.combatLeashRadius = anchorState
+          ? Math.max(anchorState.engagementRadius, leashFromGroupCenter)
+          : leashFromGroupCenter;
+        ownerLane.assignedUnits.push(entry.unit.id);
+        ownerLane.formationSlots.push({
+          slotIndex: ownerLane.formationSlots.length,
+          x: Number(slot.x.toFixed(3)),
+          y: Number(slot.y.toFixed(3)),
+          unitId: entry.unit.id,
+        });
+        applyCanonicalUnitMirrors(game, entry.lane, entry.unit);
+      }
+    }
+
+    ownerLane.formationUnitOrder = ownerLane.assignedUnits.slice();
+    for (const packetId of Object.keys(ownerLane.packetUnitOrder || {})) {
+      if (!activePacketIds.has(packetId))
+        delete ownerLane.packetUnitOrder[packetId];
     }
   }
 }
@@ -1892,7 +2569,7 @@ const FORTRESS_WALL_PAD_LAYOUT = Object.freeze([
 ]);
 
 const FORTRESS_GATE_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 16, combatOffsetX: 0.0, combatOffsetY: 10.2 }),
+  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 16, combatOffsetX: 0.0, combatOffsetY: FRONT_GATE_COMBAT_OFFSET }),
   Object.freeze({ key: "left", displayName: "Left Gate", gridX: -3, gridY: 24, combatOffsetX: -6.0, combatOffsetY: 1.0 }),
   Object.freeze({ key: "right", displayName: "Right Gate", gridX: 8, gridY: 24, combatOffsetX: 6.5, combatOffsetY: 1.0 }),
   Object.freeze({ key: "rear", displayName: "Rear Gate", gridX: 3, gridY: 30, combatOffsetX: 0.0, combatOffsetY: -6.0 }),
@@ -2788,7 +3465,7 @@ function resolveUnitStance(game, fallbackLane, unit) {
     if (commandState === LANE_COMMAND_STATES.RETREAT)
       return UNIT_STANCES.RETREAT;
     if (commandState === LANE_COMMAND_STATES.DEFEND)
-      return UNIT_STANCES.HOLD;
+      return UNIT_STANCES.DEFEND;
     return UNIT_STANCES.ATTACK;
   }
 
@@ -2906,7 +3583,14 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
   const sourceBarracksId = resolveUnitSourceBarracksId(unit);
   const stance = resolveUnitStance(game, fallbackLane, unit);
   const combatTargetId = unit.combatTargetId || (unit.combatTarget && unit.combatTarget.unitId) || null;
-  const isDefenderUnit = !!unit.isDefender || stance === UNIT_STANCES.DEFEND;
+  const groupId = resolveUnitPacketGroupId(unit);
+  const combatRole = resolveUnitCombatRole(unit);
+  const preferredBand = resolveUnitPreferredBand(unit);
+  const isPacketControlledUnit = Number.isInteger(unit.sourceLaneIndex)
+    && unit.sourceLaneIndex >= 0
+    && (spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER
+      || spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_HERO);
+  const isDefenderUnit = !!unit.isDefender && !isPacketControlledUnit;
   const canEngage = isLaneCommandCombatEnabledForUnit(game, unit);
 
   unit.unitId = unitId;
@@ -2926,11 +3610,16 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
   unit.heroKey = unit.heroKey || null;
   unit.stance = stance;
   unit.pathContractType = pathContractType;
+  unit.groupId = groupId;
+  unit.combatRole = combatRole;
+  unit.preferredBand = preferredBand;
   unit.combatTargetId = combatTargetId;
+  unit.currentTargetId = combatTargetId;
   unit.sourceTeam = resolveLegacySourceTeamFromAllegianceKey(allegianceKey);
   unit.isWaveUnit = spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
   unit.isDefender = isDefenderUnit;
   unit.canEngage = canEngage;
+  unit.state = unit.combatState || unit.routeState || unit.state || WAVE_UNIT_STATES.IDLE;
   if (!unit.movementMode)
     unit.movementMode = UNIT_MOVEMENT_MODES.LANE_TRAVEL;
   return unit;
@@ -4383,6 +5072,14 @@ function getBarracksFormationColumns(role, unitCount) {
 function spawnBarracksRosterFormation(game, lane, pendingEntries) {
   if (!game || !lane || !Array.isArray(pendingEntries) || pendingEntries.length === 0) return;
 
+  const sourceLaneIndex = Number.isInteger(pendingEntries[0] && pendingEntries[0].sourceLaneIndex)
+    ? pendingEntries[0].sourceLaneIndex
+    : -1;
+  const sourceBarracksId = normalizeBarracksSiteId(pendingEntries[0] && pendingEntries[0].barracksId) || "center";
+  const groupId = createSpawnPacketId(game, sourceLaneIndex, sourceBarracksId, "packet");
+  const groupSpawnOrdinal = Math.max(1, Math.floor(Number(game && game.nextPacketId) || 1) - 1);
+  const groupSpawnTick = Math.floor(Number(game && game.tick) || 0);
+
   const entriesByRole = new Map();
   for (const role of BARRACKS_SPAWN_ROLE_ORDER) entriesByRole.set(role, []);
   for (const entry of pendingEntries) {
@@ -4412,6 +5109,7 @@ function spawnBarracksRosterFormation(game, lane, pendingEntries) {
       const columnOffset = i % columns;
       const spawnIndex = ((nextRoleRow + rowOffset) * GRID_W) + startCol + columnOffset;
       const entry = roleEntries[i];
+      const combatRole = normalizeCombatRole(entry.combatRole || entry.role) || resolveUnitCombatRole(entry);
       _spawnWaveUnit(game, lane, {
         unit_type: entry.unitType,
         spawn_qty: 1,
@@ -4421,7 +5119,14 @@ function spawnBarracksRosterFormation(game, lane, pendingEntries) {
         sourceLaneIndex: entry.sourceLaneIndex,
         sourceTeam: entry.sourceTeam,
         sourceBarracksId: entry.barracksId,
+        rosterKey: entry.rosterKey || null,
+        role: entry.role || null,
+        combatRole,
+        preferredBand: resolvePreferredBandForCombatRole(combatRole),
         skinKey: entry.skinKey || null,
+        groupId,
+        groupSpawnOrdinal,
+        groupSpawnTick,
         spawnIndex,
       });
     }
@@ -4695,6 +5400,12 @@ function createMLGame(playerCount, options) {
       formationSlots: [],
       assignedUnits: [],
       formationUnitOrder: [],
+      packetOrder: [],
+      packetUnitOrder: {},
+      packetStates: [],
+      insideGateAnchor: null,
+      outsideGateAnchor: null,
+      enemyCoreAnchor: null,
       engagementRadius: LANE_COMMAND_COMBAT_LEASH,
       combatEnabled: true,
     });
@@ -4709,6 +5420,7 @@ function createMLGame(playerCount, options) {
     officialWinningSide: null,
     losingTeam: null,
     losingSide: null,
+    nextPacketId: 1,
     awaitingPostWinDecision: false,
     continuedIntoSurvival: true,
     pvpResolvedAtTick: null,
@@ -5002,6 +5714,12 @@ function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
     isHero: true,
     heroKey: heroDef.heroKey,
     heroVisualStyleKey: heroDef.heroVisualStyleKey || null,
+    role: heroDef.role || null,
+    combatRole: normalizeCombatRole(heroDef.spawnRole || heroDef.role) || UNIT_COMBAT_ROLES.SWORD,
+    preferredBand: resolvePreferredBandForCombatRole(normalizeCombatRole(heroDef.spawnRole || heroDef.role) || UNIT_COMBAT_ROLES.SWORD),
+    groupId: createSpawnPacketId(game, laneIndex, normalizedBarracksId, "hero_packet"),
+    groupSpawnOrdinal: Math.max(1, Math.floor(Number(game && game.nextPacketId) || 1) - 1),
+    groupSpawnTick: Math.floor(Number(game && game.tick) || 0),
   });
 
   return { ok: true };
@@ -5046,10 +5764,8 @@ function applyLaneCommandAction(game, lane, commandState, data = null) {
   let anchorProgress = getLaneCommandAnchorProgress(lane);
   if (normalizedCommandState === LANE_COMMAND_STATES.ATTACK) {
     anchorProgress = 1;
-  } else if (normalizedCommandState === LANE_COMMAND_STATES.RETREAT) {
-    anchorProgress = resolveRequestedLaneAnchorProgress(game, lane, data, 0);
   } else {
-    anchorProgress = resolveRequestedLaneAnchorProgress(game, lane, data, anchorProgress);
+    anchorProgress = 0;
   }
 
   lane.commandState = normalizedCommandState;
@@ -5442,12 +6158,16 @@ function canRouteUnitEngageTarget(game, lane, attacker, target) {
 }
 
 function getLaneControlledSharedCombatAnchor(unit) {
-  const anchorX = Number.isFinite(Number(unit && unit.anchorTargetX))
-    ? Number(unit.anchorTargetX)
-    : Number(unit && unit.posX);
-  const anchorY = Number.isFinite(Number(unit && unit.anchorTargetY))
-    ? Number(unit.anchorTargetY)
-    : Number(unit && unit.posY);
+  const anchorX = Number.isFinite(Number(unit && unit.groupCenterX))
+    ? Number(unit.groupCenterX)
+    : (Number.isFinite(Number(unit && unit.anchorTargetX))
+      ? Number(unit.anchorTargetX)
+      : Number(unit && unit.posX));
+  const anchorY = Number.isFinite(Number(unit && unit.groupCenterY))
+    ? Number(unit.groupCenterY)
+    : (Number.isFinite(Number(unit && unit.anchorTargetY))
+      ? Number(unit.anchorTargetY)
+      : Number(unit && unit.posY));
   if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY))
     return null;
   return { x: anchorX, y: anchorY };
@@ -5465,7 +6185,7 @@ function isLaneControlledUnitNearSharedCombat(unit, target) {
     return false;
 
   const anchor = getLaneControlledSharedCombatAnchor(unit);
-  const leashRadius = Number(unit.combatLeashRadius);
+  const leashRadius = Number(unit.leashFromGroupCenter ?? unit.combatLeashRadius);
   const maxDistance = (Number.isFinite(leashRadius) && leashRadius > 0
     ? leashRadius
     : LANE_COMMAND_COMBAT_LEASH) + ROUTE_FORMATION_ROW_SPACING;
@@ -5484,6 +6204,7 @@ function clearUnitCombatTarget(unit, gameTick = 0, options = {}) {
   const hadTarget = !!(unit.combatTarget && unit.combatTarget.unitId);
   unit.combatTarget = null;
   unit.combatTargetId = null;
+  unit.currentTargetId = null;
   unit.combatTargetLockedUntilTick = 0;
 
   if (!hadTarget || !isLaneControlledUnit(unit))
@@ -5509,6 +6230,7 @@ function assignUnitCombatTarget(unit, targetDescriptor, gameTick = 0) {
     padId: targetDescriptor.padId || null,
   };
   unit.combatTargetId = targetDescriptor.unitId;
+  unit.currentTargetId = targetDescriptor.unitId;
   if (isLaneControlledUnit(unit) && unit.combatTarget.kind === "unit")
     unit.combatTargetLockedUntilTick = gameTick + LANE_COMBAT_TARGET_LOCK_TICKS;
   else
@@ -5559,6 +6281,16 @@ function shouldSwitchCombatTarget(unit, currentTarget, nextTarget) {
   return nextDistance + LANE_COMBAT_SWITCH_DISTANCE_MARGIN < currentDistance;
 }
 
+function isSameLaneControlledPacket(left, right) {
+  return !!(
+    isLaneControlledUnit(left)
+    && isLaneControlledUnit(right)
+    && left.groupId
+    && right.groupId
+    && left.groupId === right.groupId
+  );
+}
+
 function findLaneFormationSharedCombatTarget(game, lane, unit) {
   if (!game || !lane || !isLaneControlledUnit(unit))
     return null;
@@ -5580,6 +6312,19 @@ function findLaneFormationSharedCombatTarget(game, lane, unit) {
       if (!ally.combatTarget || ally.combatTarget.kind !== "unit" || !ally.combatTarget.unitId)
         continue;
 
+      const sharingPacket = isSameLaneControlledPacket(ally, unit);
+      if (!sharingPacket) {
+        const anchor = getLaneControlledSharedCombatAnchor(unit);
+        const allyAnchor = getLaneControlledSharedCombatAnchor(ally);
+        if (!anchor || !allyAnchor)
+          continue;
+        const packetDistance = Math.sqrt(
+          Math.pow(anchor.x - allyAnchor.x, 2) + Math.pow(anchor.y - allyAnchor.y, 2)
+        );
+        if (packetDistance > PACKET_SUPPORT_TARGET_RADIUS)
+          continue;
+      }
+
       const target = resolveWaveCombatTarget(game, allyLane, ally.combatTarget);
       if (!target || target.kind !== "unit")
         continue;
@@ -5597,7 +6342,7 @@ function findLaneFormationSharedCombatTarget(game, lane, unit) {
           kind: "unit",
           entity: target.entity,
           laneIndex: target.laneIndex,
-          reason: "formation_shared",
+          reason: sharingPacket ? "packet_shared" : "packet_support",
         };
         bestDist = dist;
       }
@@ -5608,7 +6353,7 @@ function findLaneFormationSharedCombatTarget(game, lane, unit) {
 }
 
 function getLaneControlledCombatLeashRadius(unit) {
-  const leashRadius = Number(unit && unit.combatLeashRadius);
+  const leashRadius = Number(unit && (unit.leashFromGroupCenter ?? unit.combatLeashRadius));
   if (Number.isFinite(leashRadius) && leashRadius > 0)
     return leashRadius;
   return LANE_COMMAND_COMBAT_LEASH;
@@ -5696,7 +6441,7 @@ function propagateLaneFormationCombatTarget(game, sourceUnit, targetEntity, targ
     for (const ally of allyLane.units) {
       if (!ally || ally.hp <= 0 || ally === sourceUnit)
         continue;
-      if (!isLaneControlledUnit(ally) || ally.sourceLaneIndex !== sourceUnit.sourceLaneIndex)
+      if (!isSameLaneControlledPacket(ally, sourceUnit))
         continue;
       if (!canRouteUnitEngageTarget(game, allyLane, ally, targetEntity))
         continue;
@@ -5907,7 +6652,8 @@ function getContactSlotPoint(lane, attacker, target, stopDistance) {
       u.hp > 0 &&
       !u.isDefender &&
       u.combatTarget &&
-      u.combatTarget.unitId === target.id)
+      u.combatTarget.unitId === target.id &&
+      (!isLaneControlledUnit(attacker) || !isLaneControlledUnit(u) || isSameLaneControlledPacket(u, attacker)))
     .sort((a, b) => {
       const ax = Number(a.spawnIndex);
       const bx = Number(b.spawnIndex);
@@ -5956,8 +6702,66 @@ function getContactSlotPoint(lane, attacker, target, stopDistance) {
   };
 }
 
+function isBacklinePreferredBand(preferredBand) {
+  const normalizedBand = normalizePreferredBand(preferredBand);
+  return normalizedBand === UNIT_PREFERRED_BANDS.RANGED_REAR
+    || normalizedBand === UNIT_PREFERRED_BANDS.PRIEST_REAR;
+}
+
+function resolvePacketBandCombatDistance(preferredBand, stopDistance) {
+  const normalizedBand = normalizePreferredBand(preferredBand);
+  switch (normalizedBand) {
+    case UNIT_PREFERRED_BANDS.PRIEST_REAR:
+      return Math.max(stopDistance, 3.0);
+    case UNIT_PREFERRED_BANDS.RANGED_REAR:
+      return Math.max(stopDistance, 2.35);
+    case UNIT_PREFERRED_BANDS.SPEAR_LINE:
+      return Math.max(stopDistance, 1.75);
+    case UNIT_PREFERRED_BANDS.SWORD_LINE:
+      return Math.max(stopDistance, 1.25);
+    case UNIT_PREFERRED_BANDS.SHIELD_FRONT:
+    default:
+      return Math.max(stopDistance, 0.9);
+  }
+}
+
+function getPacketBandCombatPoint(lane, attacker, target, stopDistance) {
+  const preferredBand = resolveUnitPreferredBand(attacker);
+  const desiredDistance = resolvePacketBandCombatDistance(preferredBand, stopDistance);
+  if (desiredDistance > stopDistance + CONTACT_SLOT_TOLERANCE && !isBacklinePreferredBand(preferredBand))
+    return null;
+
+  const packetUnits = lane.units
+    .filter((unit) =>
+      unit
+      && unit.hp > 0
+      && !unit.isDefender
+      && isSameLaneControlledPacket(unit, attacker))
+    .sort((left, right) =>
+      resolvePacketUnitSortKey(left).localeCompare(resolvePacketUnitSortKey(right)));
+  const bandUnits = packetUnits.filter((unit) => resolveUnitPreferredBand(unit) === preferredBand);
+  const bandIndex = Math.max(0, bandUnits.findIndex((unit) => unit && unit.id === attacker.id));
+  const columns = resolvePacketFormationColumns(preferredBand, bandUnits.length || 1);
+  const row = Math.floor(bandIndex / columns);
+  const column = bandIndex % columns;
+  const lateralIndex = resolveCenteredFormationOffset(column, columns);
+  const anchor = getLaneControlledSharedCombatAnchor(attacker);
+  const frame = anchor
+    ? resolveContactFrame({ posX: anchor.x, posY: anchor.y }, target)
+    : resolveContactFrame(attacker, target);
+  const depth = desiredDistance + (row * ROUTE_FORMATION_ROW_SPACING * 0.8);
+  const lateralOffset = lateralIndex * ROUTE_FORMATION_COLUMN_SPACING * 0.9;
+  return {
+    x: Number(target.posX) + (frame.forward.x * depth) + (frame.right.x * lateralOffset),
+    y: Number(target.posY) + (frame.forward.y * depth) + (frame.right.y * lateralOffset),
+  };
+}
+
 function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance) {
-  const desiredPoint = getContactSlotPoint(lane, attacker, target, stopDistance);
+  const bandPoint = isLaneControlledUnit(attacker)
+    ? getPacketBandCombatPoint(lane, attacker, target, stopDistance)
+    : null;
+  const desiredPoint = bandPoint || getContactSlotPoint(lane, attacker, target, stopDistance);
   if (!isLaneControlledUnit(attacker))
     return desiredPoint;
 
@@ -6065,12 +6869,17 @@ function isLaneControlledUnitSettledInFormation(unit) {
   if (unit.combatTarget || unit.movementMode === UNIT_MOVEMENT_MODES.COMBAT_ENGAGE)
     return false;
 
-  const anchor = getLaneControlledSharedCombatAnchor(unit);
-  if (!anchor)
+  const anchorX = Number.isFinite(Number(unit && unit.anchorTargetX))
+    ? Number(unit.anchorTargetX)
+    : Number(unit && unit.groupCenterX);
+  const anchorY = Number.isFinite(Number(unit && unit.anchorTargetY))
+    ? Number(unit.anchorTargetY)
+    : Number(unit && unit.groupCenterY);
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY))
     return false;
 
-  const dx = Number(unit.posX) - anchor.x;
-  const dy = Number(unit.posY) - anchor.y;
+  const dx = Number(unit.posX) - anchorX;
+  const dy = Number(unit.posY) - anchorY;
   if (!Number.isFinite(dx) || !Number.isFinite(dy))
     return false;
   return Math.sqrt((dx * dx) + (dy * dy)) <= LANE_FORMATION_SETTLED_SEPARATION_DISTANCE;
@@ -6086,6 +6895,33 @@ function getUnitFormationLateralAxis(unit) {
     x: axisX / magnitude,
     y: axisY / magnitude,
   };
+}
+
+function clampLaneControlledUnitToFormationDrift(unit, minX, maxX, minY, maxY) {
+  if (!isLaneControlledUnitSettledInFormation(unit))
+    return false;
+  if (!Number.isFinite(Number(unit && unit.anchorTargetX)) || !Number.isFinite(Number(unit && unit.anchorTargetY)))
+    return false;
+
+  const lateralAxis = getUnitFormationLateralAxis(unit);
+  if (!lateralAxis)
+    return false;
+
+  const anchorX = Number(unit.anchorTargetX);
+  const anchorY = Number(unit.anchorTargetY);
+  const lateralOffset = ((Number(unit.posX) - anchorX) * lateralAxis.x)
+    + ((Number(unit.posY) - anchorY) * lateralAxis.y);
+  const clampedOffset = Math.max(
+    -LANE_FORMATION_SETTLED_MAX_LATERAL_OFFSET,
+    Math.min(LANE_FORMATION_SETTLED_MAX_LATERAL_OFFSET, lateralOffset)
+  );
+  if (Math.abs(clampedOffset - lateralOffset) <= 0.0001)
+    return false;
+
+  unit.posX = Math.max(minX, Math.min(maxX, Number(unit.posX) + (lateralAxis.x * (clampedOffset - lateralOffset))));
+  unit.posY = Math.max(minY, Math.min(maxY, Number(unit.posY) + (lateralAxis.y * (clampedOffset - lateralOffset))));
+  syncMovedUnitPathState(unit);
+  return true;
 }
 
 function getPairLateralAxis(a, b) {
@@ -6143,6 +6979,8 @@ function applySeparation2D(units, minSpacing, minX, maxX, minY, maxY) {
             clampLaneControlledUnitToCombatLeash(negative, minX, maxX, minY, maxY);
           if (positive.movementMode !== UNIT_MOVEMENT_MODES.COMBAT_ENGAGE)
             clampLaneControlledUnitToCombatLeash(positive, minX, maxX, minY, maxY);
+          clampLaneControlledUnitToFormationDrift(negative, minX, maxX, minY, maxY);
+          clampLaneControlledUnitToFormationDrift(positive, minX, maxX, minY, maxY);
           continue;
         }
         a.posX = Math.max(minX, Math.min(maxX, a.posX - (dx / d) * push));
@@ -6150,11 +6988,13 @@ function applySeparation2D(units, minSpacing, minX, maxX, minY, maxY) {
         syncMovedUnitPathState(a);
         if (a.movementMode !== UNIT_MOVEMENT_MODES.COMBAT_ENGAGE)
           clampLaneControlledUnitToCombatLeash(a, minX, maxX, minY, maxY);
+        clampLaneControlledUnitToFormationDrift(a, minX, maxX, minY, maxY);
         b.posX = Math.max(minX, Math.min(maxX, b.posX + (dx / d) * push));
         b.posY = Math.max(minY, Math.min(maxY, b.posY + (dy / d) * push));
         syncMovedUnitPathState(b);
         if (b.movementMode !== UNIT_MOVEMENT_MODES.COMBAT_ENGAGE)
           clampLaneControlledUnitToCombatLeash(b, minX, maxX, minY, maxY);
+        clampLaneControlledUnitToFormationDrift(b, minX, maxX, minY, maxY);
       }
     }
   }
@@ -6680,6 +7520,13 @@ function _spawnWaveUnit(game, lane, waveDef) {
     isHero: !!waveDef.isHero,
     heroKey: waveDef.heroKey || null,
     heroVisualStyleKey: waveDef.heroVisualStyleKey || null,
+    groupId: waveDef.groupId || null,
+    groupSpawnTick: Number.isFinite(Number(waveDef.groupSpawnTick)) ? Number(waveDef.groupSpawnTick) : Math.floor(Number(game && game.tick) || 0),
+    groupSpawnOrdinal: Number.isFinite(Number(waveDef.groupSpawnOrdinal)) ? Number(waveDef.groupSpawnOrdinal) : null,
+    rosterKey: waveDef.rosterKey || null,
+    role: waveDef.role || null,
+    combatRole: waveDef.combatRole || null,
+    preferredBand: waveDef.preferredBand || null,
     pathIdx: 0,
     hp,
     maxHp: hp,
@@ -6700,8 +7547,10 @@ function _spawnWaveUnit(game, lane, waveDef) {
     combatTarget: null,
     combatTargetId: null,
     combatTargetLockedUntilTick: 0,
+    currentTargetId: null,
     regroupUntilTick: 0,
     combatState: WAVE_UNIT_STATES.IDLE,
+    state: WAVE_UNIT_STATES.IDLE,
     movementMode: UNIT_MOVEMENT_MODES.LANE_TRAVEL,
     hasBreachedTownCore: false,
     spawnIndex: spawnValidation.resolvedSpawnIndex,  // position in wave formation rectangle
@@ -7155,6 +8004,8 @@ function mlTick(game) {
       }
 
       const traceTarget = u.combatTarget ? resolveWaveCombatTarget(game, lane, u.combatTarget) : null;
+      u.state = u.combatState || u.routeState || u.state || WAVE_UNIT_STATES.IDLE;
+      u.currentTargetId = u.combatTargetId || (u.combatTarget && u.combatTarget.unitId) || null;
       traceWaveUnitTick(game, lane, u, traceTarget, {
         movementAdvanced,
         coreDamageApplied,
@@ -7281,6 +8132,13 @@ function createMLSnapshot(game) {
     resolveUnitPathContractType,
     resolveUnitSourceBarracksId,
     resolveUnitStance,
+    LANE_COMMAND_STATES,
+    UNIT_MOVEMENT_MODES,
+    LANE_FORMATION_ARRIVAL_DEAD_ZONE,
+    CONTACT_SLOT_TOLERANCE,
+    resolveWaveCombatTarget,
+    getWaveUnitTargetDistance,
+    getUnitStopDistance,
   });
 }
 

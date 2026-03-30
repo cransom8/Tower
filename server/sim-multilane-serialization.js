@@ -84,6 +84,160 @@ function getSerializedLaneBuildValue(lane, barracksRoster, deps) {
   return total;
 }
 
+function equalsIgnoreCase(left, right) {
+  return String(left || "").toLowerCase() === String(right || "").toLowerCase();
+}
+
+function getSnapshotUnitAnchorDistance(unit) {
+  const posX = Number(unit && unit.posX);
+  const posY = Number(unit && unit.posY);
+  const anchorX = Number(unit && unit.anchorTargetX);
+  const anchorY = Number(unit && unit.anchorTargetY);
+  if (!Number.isFinite(posX) || !Number.isFinite(posY) || !Number.isFinite(anchorX) || !Number.isFinite(anchorY))
+    return Infinity;
+
+  const dx = posX - anchorX;
+  const dy = posY - anchorY;
+  return Math.sqrt((dx * dx) + (dy * dy));
+}
+
+function resolveSnapshotCombatMetadata(game, lane, unit, deps) {
+  const {
+    resolveWaveCombatTarget,
+    getWaveUnitTargetDistance,
+    getUnitStopDistance,
+    CONTACT_SLOT_TOLERANCE,
+  } = deps;
+
+  const fallbackKind = unit && unit.combatTarget && unit.combatTarget.kind
+    ? unit.combatTarget.kind
+    : null;
+  if (!unit || !unit.combatTarget || !unit.combatTarget.unitId || typeof resolveWaveCombatTarget !== "function") {
+    return {
+      combatTargetKind: fallbackKind,
+      combatContact: false,
+    };
+  }
+
+  const resolvedTarget = resolveWaveCombatTarget(game, lane, unit.combatTarget);
+  if (!resolvedTarget) {
+    return {
+      combatTargetKind: fallbackKind,
+      combatContact: false,
+    };
+  }
+
+  const distance = typeof getWaveUnitTargetDistance === "function"
+    ? getWaveUnitTargetDistance(unit, resolvedTarget)
+    : Infinity;
+  const stopDistance = typeof getUnitStopDistance === "function"
+    ? getUnitStopDistance(unit.type, resolvedTarget.type)
+    : Infinity;
+  const contactTolerance = Number.isFinite(Number(CONTACT_SLOT_TOLERANCE))
+    ? Number(CONTACT_SLOT_TOLERANCE)
+    : 0;
+
+  return {
+    combatTargetKind: resolvedTarget.kind || fallbackKind,
+    combatContact: Number.isFinite(distance)
+      && Number.isFinite(stopDistance)
+      && distance <= stopDistance + contactTolerance,
+  };
+}
+
+function resolveSnapshotPresentationState(game, lane, unit, deps) {
+  const {
+    LANE_COMMAND_STATES,
+    UNIT_MOVEMENT_MODES,
+    LANE_FORMATION_ARRIVAL_DEAD_ZONE,
+  } = deps;
+
+  const currentTick = Math.floor(Number(game && game.tick) || 0);
+  const movementMode = unit && unit.movementMode ? unit.movementMode : null;
+  const commandState = unit && unit.commandState ? unit.commandState : null;
+  const anchorDistance = getSnapshotUnitAnchorDistance(unit);
+  const arrivalDeadZone = Number.isFinite(Number(LANE_FORMATION_ARRIVAL_DEAD_ZONE))
+    ? Number(LANE_FORMATION_ARRIVAL_DEAD_ZONE)
+    : 0.2;
+  const settledAtAnchor = Number.isFinite(anchorDistance) && anchorDistance <= arrivalDeadZone;
+  const regroupTicksRemaining = Math.max(
+    0,
+    Math.floor(Number(unit && unit.regroupUntilTick) || 0) - currentTick
+  );
+  const combatLockTicksRemaining = Math.max(
+    0,
+    Math.floor(Number(unit && unit.combatTargetLockedUntilTick) || 0) - currentTick
+  );
+  const combatMetadata = resolveSnapshotCombatMetadata(game, lane, unit, deps);
+  const isDefending = equalsIgnoreCase(commandState, LANE_COMMAND_STATES && LANE_COMMAND_STATES.DEFEND || "DEFEND");
+  const isRetreating = equalsIgnoreCase(commandState, LANE_COMMAND_STATES && LANE_COMMAND_STATES.RETREAT || "RETREAT");
+
+  let presentationPhase = "Idle";
+  if (Number(unit && unit.hp) <= 0) {
+    presentationPhase = "Dead";
+  } else if (unit && unit.combatTarget && unit.combatTarget.unitId) {
+    presentationPhase = combatMetadata.combatContact ? "CombatResolve" : "CombatCommit";
+  } else if (isRetreating) {
+    presentationPhase = "Retreat";
+  } else if (regroupTicksRemaining > 0) {
+    presentationPhase = "CombatRegroup";
+  } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR || "ReturnToAnchor")) {
+    presentationPhase = "ReturnToSlot";
+  } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.FORMATION_JOIN || "FormationJoin")) {
+    presentationPhase = settledAtAnchor ? "FormationHold" : "FormationJoin";
+  } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.LANE_TRAVEL || "LaneTravel")) {
+    presentationPhase = "LaneTravel";
+  } else if (settledAtAnchor) {
+    presentationPhase = "FormationHold";
+  }
+
+  let presentationIntent = "Idle";
+  switch (presentationPhase) {
+    case "Dead":
+      presentationIntent = "Death";
+      break;
+    case "Retreat":
+      presentationIntent = "Retreat";
+      break;
+    case "CombatCommit":
+      presentationIntent = "Move";
+      break;
+    case "CombatResolve":
+      presentationIntent = isDefending ? "Defend" : "Idle";
+      break;
+    case "CombatRegroup":
+      if (settledAtAnchor)
+        presentationIntent = isDefending ? "Defend" : "Idle";
+      else
+        presentationIntent = isRetreating ? "Retreat" : "Move";
+      break;
+    case "ReturnToSlot":
+      presentationIntent = settledAtAnchor
+        ? (isDefending ? "Defend" : "Idle")
+        : (isRetreating ? "Retreat" : "Move");
+      break;
+    case "FormationHold":
+      presentationIntent = isDefending ? "Defend" : "Idle";
+      break;
+    case "FormationJoin":
+    case "LaneTravel":
+      presentationIntent = isRetreating ? "Retreat" : "Move";
+      break;
+    default:
+      presentationIntent = isDefending && settledAtAnchor ? "Defend" : "Idle";
+      break;
+  }
+
+  return {
+    presentationPhase,
+    presentationIntent,
+    combatTargetKind: combatMetadata.combatTargetKind,
+    combatContact: combatMetadata.combatContact,
+    regroupTicksRemaining,
+    combatLockTicksRemaining,
+  };
+}
+
 function createMLSnapshot(game, deps) {
   const {
     WAVE_TIMER_TICKS,
@@ -113,6 +267,13 @@ function createMLSnapshot(game, deps) {
     resolveUnitPathContractType,
     resolveUnitSourceBarracksId,
     resolveUnitStance,
+    LANE_COMMAND_STATES,
+    UNIT_MOVEMENT_MODES,
+    LANE_FORMATION_ARRIVAL_DEAD_ZONE,
+    CONTACT_SLOT_TOLERANCE,
+    resolveWaveCombatTarget,
+    getWaveUnitTargetDistance,
+    getUnitStopDistance,
   } = deps;
   const survivalTicks = game.continuedIntoSurvival && Number.isInteger(game.survivalStartedAtTick)
     ? Math.max(0, game.tick - game.survivalStartedAtTick)
@@ -164,6 +325,15 @@ function createMLSnapshot(game, deps) {
       syncLegacyBarracksAggregate(lane);
       const barracksRoster = createBarracksRosterSnapshot(game, lane);
       const mapSnapshotUnit = (u) => {
+        const presentation = resolveSnapshotPresentationState(game, lane, u, {
+          LANE_COMMAND_STATES,
+          UNIT_MOVEMENT_MODES,
+          LANE_FORMATION_ARRIVAL_DEAD_ZONE,
+          CONTACT_SLOT_TOLERANCE,
+          resolveWaveCombatTarget,
+          getWaveUnitTargetDistance,
+          getUnitStopDistance,
+        });
         const canonicalTargetLaneIndex = typeof resolveUnitTargetLaneIndex === "function"
           ? resolveUnitTargetLaneIndex(game, lane, u)
           : (Number.isInteger(u.targetLaneIndex) ? u.targetLaneIndex : lane.laneIndex);
@@ -220,6 +390,9 @@ function createMLSnapshot(game, deps) {
           isHero: !!u.isHero,
           heroKey: u.heroKey || null,
           heroVisualStyleKey: u.heroVisualStyleKey || null,
+          groupId: u.groupId || null,
+          combatRole: u.combatRole || null,
+          preferredBand: u.preferredBand || null,
           pathIdx: u.pathIdx,
           gridX: gx,
           gridY: gy,
@@ -237,6 +410,8 @@ function createMLSnapshot(game, deps) {
           movementMode: u.movementMode || null,
           movementState: u.routeState || u.combatState || null,
           state: u.routeState || u.combatState || null,
+          presentationPhase: presentation.presentationPhase,
+          presentationIntent: presentation.presentationIntent,
           blockedByStructure: !!u.blockedByStructure,
           blockedByStructureId: u.blockedByStructureId || null,
           routeWorldX: Number.isFinite(Number(u.routeWorldX)) ? Number(u.routeWorldX) : gx,
@@ -245,6 +420,13 @@ function createMLSnapshot(game, deps) {
           anchorTargetX: Number.isFinite(Number(u.anchorTargetX)) ? Number(u.anchorTargetX) : null,
           anchorTargetY: Number.isFinite(Number(u.anchorTargetY)) ? Number(u.anchorTargetY) : null,
           anchorTargetProgress: Number.isFinite(Number(u.anchorTargetProgress)) ? Number(u.anchorTargetProgress) : null,
+          groupCenterX: Number.isFinite(Number(u.groupCenterX)) ? Number(u.groupCenterX) : null,
+          groupCenterY: Number.isFinite(Number(u.groupCenterY)) ? Number(u.groupCenterY) : null,
+          cohesionRadius: Number.isFinite(Number(u.cohesionRadius)) ? Number(u.cohesionRadius) : null,
+          leashFromGroupCenter: Number.isFinite(Number(u.leashFromGroupCenter)) ? Number(u.leashFromGroupCenter) : null,
+          currentWaypointTargetX: Number.isFinite(Number(u.currentWaypointTargetX)) ? Number(u.currentWaypointTargetX) : null,
+          currentWaypointTargetY: Number.isFinite(Number(u.currentWaypointTargetY)) ? Number(u.currentWaypointTargetY) : null,
+          currentWaypointTargetKind: u.currentWaypointTargetKind || null,
           combatLeashRadius: Number.isFinite(Number(u.combatLeashRadius)) ? Number(u.combatLeashRadius) : null,
           canEngage: !!u.canEngage,
           hp: u.hp,
@@ -252,7 +434,12 @@ function createMLSnapshot(game, deps) {
           moveSpeed: Number(u.baseSpeed) || 0,
           isWaveUnit: !!(typeof isScheduledWaveUnit === "function" ? isScheduledWaveUnit(u) : u.isWaveUnit),
           isAttacking: !!(u.combatTarget && u.combatTarget.unitId),
+          combatTargetKind: presentation.combatTargetKind,
           combatTargetId: u.combatTargetId || (u.combatTarget && u.combatTarget.unitId ? u.combatTarget.unitId : null),
+          currentTargetId: u.currentTargetId || u.combatTargetId || (u.combatTarget && u.combatTarget.unitId ? u.combatTarget.unitId : null),
+          combatContact: presentation.combatContact,
+          regroupTicksRemaining: presentation.regroupTicksRemaining,
+          combatLockTicksRemaining: presentation.combatLockTicksRemaining,
           attackPulse: Number(u.attackPulse) || 0,
           level: getUnitSnapshotBarracksLevel(game, lane, u, deps),
         };
@@ -273,6 +460,24 @@ function createMLSnapshot(game, deps) {
         commandState: lane.commandState || null,
         commandTargetLaneIndex: Number.isInteger(lane.commandTargetLaneIndex) ? lane.commandTargetLaneIndex : lane.laneIndex,
         commandAnchorProgress: Number.isFinite(Number(lane.commandAnchorProgress)) ? Number(lane.commandAnchorProgress) : 0,
+        insideGateAnchor: lane.insideGateAnchor
+          ? {
+              x: Number(lane.insideGateAnchor.x) || 0,
+              y: Number(lane.insideGateAnchor.y) || 0,
+            }
+          : null,
+        outsideGateAnchor: lane.outsideGateAnchor
+          ? {
+              x: Number(lane.outsideGateAnchor.x) || 0,
+              y: Number(lane.outsideGateAnchor.y) || 0,
+            }
+          : null,
+        enemyCoreAnchor: lane.enemyCoreAnchor
+          ? {
+              x: Number(lane.enemyCoreAnchor.x) || 0,
+              y: Number(lane.enemyCoreAnchor.y) || 0,
+            }
+          : null,
         formationAnchor: lane.formationAnchor
           ? {
               x: Number(lane.formationAnchor.x) || 0,
@@ -294,6 +499,42 @@ function createMLSnapshot(game, deps) {
             }))
           : [],
         assignedUnits: Array.isArray(lane.assignedUnits) ? lane.assignedUnits.slice() : [],
+        packets: Array.isArray(lane.packetStates)
+          ? lane.packetStates.map((packet) => ({
+              groupId: packet && packet.groupId ? packet.groupId : null,
+              laneId: Number.isInteger(packet && packet.laneId) ? packet.laneId : null,
+              sourceLaneIndex: Number.isInteger(packet && packet.sourceLaneIndex) ? packet.sourceLaneIndex : null,
+              sourceBarracksId: packet && packet.sourceBarracksId ? packet.sourceBarracksId : null,
+              stance: packet && packet.stance ? packet.stance : null,
+              currentWaypointTarget: packet && packet.currentWaypointTarget
+                ? {
+                    kind: packet.currentWaypointTarget.kind || null,
+                    laneIndex: Number.isInteger(packet.currentWaypointTarget.laneIndex) ? packet.currentWaypointTarget.laneIndex : null,
+                    x: Number(packet.currentWaypointTarget.x) || 0,
+                    y: Number(packet.currentWaypointTarget.y) || 0,
+                  }
+                : null,
+              groupCenter: packet && packet.groupCenter
+                ? {
+                    x: Number(packet.groupCenter.x) || 0,
+                    y: Number(packet.groupCenter.y) || 0,
+                  }
+                : null,
+              cohesionRadius: Number(packet && packet.cohesionRadius) || 0,
+              movementMode: packet && packet.movementMode ? packet.movementMode : null,
+              packetIndex: Number.isInteger(packet && packet.packetIndex) ? packet.packetIndex : -1,
+              assignedUnits: Array.isArray(packet && packet.assignedUnits) ? packet.assignedUnits.slice() : [],
+              formationSlots: Array.isArray(packet && packet.formationSlots)
+                ? packet.formationSlots.map((slot) => ({
+                    slotIndex: Number.isInteger(slot && slot.slotIndex) ? slot.slotIndex : -1,
+                    unitId: slot && slot.unitId ? slot.unitId : null,
+                    band: slot && slot.band ? slot.band : null,
+                    x: Number(slot && slot.x) || 0,
+                    y: Number(slot && slot.y) || 0,
+                  }))
+                : [],
+            }))
+          : [],
         engagementRadius: Number.isFinite(Number(lane.engagementRadius)) ? Number(lane.engagementRadius) : 0,
         combatEnabled: !!lane.combatEnabled,
         gold: lane.gold,

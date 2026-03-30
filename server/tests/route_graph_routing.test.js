@@ -87,18 +87,23 @@ function createAttacker(overrides = {}) {
   const isDungeonWave = spawnSourceType === "dungeon_wave" || spawnSourceType === "scheduled_wave";
   const canonicalSourceTeam = overrides.sourceTeam === "gold" ? "yellow" : (overrides.sourceTeam ?? null);
   const ownerLaneIndex = overrides.ownerLaneIndex ?? overrides.ownerLane ?? (isDungeonWave ? -1 : (overrides.sourceLaneIndex ?? -1));
+  const targetLaneIndex = overrides.targetLaneIndex ?? overrides.laneId ?? ownerLaneIndex;
+  const defaultGroupId = !isDungeonWave && ownerLaneIndex >= 0
+    ? `test_packet:${ownerLaneIndex}:${overrides.sourceBarracksId ?? "center"}:${targetLaneIndex}`
+    : null;
   return {
     id: overrides.id || "route_attacker",
     unitId: overrides.id || "route_attacker",
     ownerLaneIndex,
     ownerLane: ownerLaneIndex,
-    targetLaneIndex: overrides.targetLaneIndex,
-    laneId: overrides.laneId,
+    targetLaneIndex,
+    laneId: overrides.laneId ?? targetLaneIndex,
     sourceLaneIndex: overrides.sourceLaneIndex ?? -1,
     sourceTeam: canonicalSourceTeam,
     sourceBarracksId: overrides.sourceBarracksId ?? null,
     sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? null,
     spawnSourceType,
+    groupId: overrides.groupId ?? defaultGroupId,
     type: "raider",
     unitTypeKey: "raider",
     allegianceKey: overrides.allegianceKey ?? (isDungeonWave ? "dungeon" : canonicalSourceTeam),
@@ -146,6 +151,29 @@ function getTownCoreTargetPosition(lane) {
   const target = simMl.getLaneTownCoreCombatTarget(lane);
   assert.ok(target, `expected lane ${lane && lane.laneIndex} to expose a Town Core combat target`);
   return target;
+}
+
+function primeDefendAnchor(game, lane) {
+  tick(game, 1);
+  assert.ok(lane.outsideGateAnchor, `expected lane ${lane && lane.laneIndex} to expose an outside gate anchor`);
+  return lane.outsideGateAnchor;
+}
+
+function getDefendAnchorPosition(lane, forwardOffset = 0, lateralOffset = 0) {
+  const anchor = lane && lane.outsideGateAnchor
+    ? lane.outsideGateAnchor
+    : lane && lane.formationAnchor;
+  assert.ok(anchor, `expected lane ${lane && lane.laneIndex} to have a defend anchor`);
+
+  const facing = lane && lane.formationFacing
+    ? lane.formationFacing
+    : { x: 0, y: -1 };
+  const lateral = { x: -Number(facing.y) || 0, y: Number(facing.x) || 0 };
+
+  return {
+    posX: Number(anchor.x) + (Number(facing.x) * forwardOffset) + (lateral.x * lateralOffset),
+    posY: Number(anchor.y) + (Number(facing.y) * forwardOffset) + (lateral.y * lateralOffset),
+  };
 }
 
 test("lane command state controls barracks destinations regardless of barracks site", () => {
@@ -247,8 +275,8 @@ test("defend mode stages same-lane formations into spaced slots around the home 
 
   assert.deepEqual(firstRow.routeSegments, ["ACTR_A", "A_M", "M_B"]);
   assert.deepEqual(secondRow.routeSegments, ["ACTR_A", "A_M", "M_B"]);
-  assert.equal(firstRow.stance, "HOLD");
-  assert.equal(secondRow.stance, "HOLD");
+  assert.equal(firstRow.stance, "DEFEND");
+  assert.equal(secondRow.stance, "DEFEND");
   assert.equal(firstRow.pathContractType, "guard_anchor");
   assert.equal(secondRow.pathContractType, "guard_anchor");
   assert.ok(secondRow.routeLongitudinalOffset < firstRow.routeLongitudinalOffset);
@@ -365,7 +393,13 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
   assert.equal(snapUnit.currentWaypointIndex, 0);
   assert.equal(snapUnit.nextWaypoint, "A");
   assert.equal(snapUnit.movementState, "MOVING");
+  assert.equal(snapUnit.presentationPhase, "LaneTravel");
+  assert.equal(snapUnit.presentationIntent, "Move");
   assert.equal(snapUnit.currentSegment, "ACTR_A");
+  assert.equal(snapUnit.combatTargetKind, null);
+  assert.equal(snapUnit.combatContact, false);
+  assert.equal(snapUnit.regroupTicksRemaining, 0);
+  assert.equal(snapUnit.combatLockTicksRemaining, 0);
   assert.equal(typeof snapUnit.routeWorldX, "number");
   assert.equal(typeof snapUnit.routeWorldY, "number");
 });
@@ -654,7 +688,10 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
-  const coreTarget = getTownCoreTargetPosition(lane);
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.6, 0);
+  const firstWavePoint = getDefendAnchorPosition(lane, 0.1, 0);
+  const secondWavePoint = getDefendAnchorPosition(lane, 0.2, 1.2);
   const defender = createAttacker({
     id: "regroup_defender",
     sourceLaneIndex: lane.laneIndex,
@@ -667,8 +704,8 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
     atkCd: 0,
     baseDmg: 10,
     baseSpeed: 1.0,
-    posX: coreTarget.posX,
-    posY: coreTarget.posY - 1.4,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
   });
   const firstWave = createAttacker({
     id: "regroup_wave_1",
@@ -682,8 +719,8 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
     maxHp: 6,
     atkCd: 999,
     baseSpeed: 0,
-    posX: coreTarget.posX,
-    posY: coreTarget.posY - 0.5,
+    posX: firstWavePoint.posX,
+    posY: firstWavePoint.posY,
   });
   const secondWave = createAttacker({
     id: "regroup_wave_2",
@@ -697,8 +734,8 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
     maxHp: 30,
     atkCd: 999,
     baseSpeed: 0,
-    posX: coreTarget.posX + 1.2,
-    posY: coreTarget.posY - 0.7,
+    posX: secondWavePoint.posX,
+    posY: secondWavePoint.posY,
   });
 
   lane.units.push(defender, firstWave, secondWave);
@@ -738,11 +775,174 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
   }
 });
 
+test("redirecting an attack lane reprojects existing attackers onto the new route instead of preserving a map-wide offset", () => {
+  const game = createGame();
+  const sourceLane = game.lanes[0];
+  const originalTargetLane = game.lanes[1];
+  const redirectedLane = game.lanes[3];
+  const originalCore = getTownCoreTargetPosition(originalTargetLane);
+  const attacker = createAttacker({
+    id: "redirect_projection_attacker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: originalTargetLane.laneIndex,
+    objectiveLaneIndex: originalTargetLane.laneIndex,
+    laneId: originalTargetLane.laneIndex,
+    posX: originalCore.posX - 0.5,
+    posY: originalCore.posY - 1.2,
+    routeWorldX: originalCore.posX - 0.5,
+    routeWorldY: originalCore.posY - 1.2,
+    routeSegments: ["ACTR_A", "A_M", "M_B"],
+    routeSegmentIndex: 2,
+    segmentProgress: 0.92,
+    currentSegment: "M_B",
+    atkCd: 999,
+  });
+
+  originalTargetLane.units.push(attacker);
+
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: redirectedLane.laneIndex });
+  tick(game, 1);
+
+  assert.ok(redirectedLane.units.includes(attacker), "redirected attackers should transfer into the newly targeted lane container.");
+  assert.equal(attacker.routeTargetNode, "D");
+  assert.equal(attacker.objectiveLaneIndex, redirectedLane.laneIndex);
+  assert.ok(
+    Math.abs(Number(attacker.routeLateralOffset) || 0) < 8,
+    "redirecting an active attacker should reproject it near the new route instead of preserving a fortress-wide lateral offset."
+  );
+});
+
+test("snapshot contract exposes combat resolve state for lane-controlled contact fights", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.5, 0);
+  const wavePoint = getDefendAnchorPosition(lane, 0.15, 0);
+  const defender = createAttacker({
+    id: "resolve_snapshot_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 999,
+    baseDmg: 8,
+    baseSpeed: 0.2,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+  });
+  const wave = createAttacker({
+    id: "resolve_snapshot_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: wavePoint.posX,
+    posY: wavePoint.posY,
+  });
+
+  lane.units.push(defender, wave);
+
+  tick(game, 1);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const snapLane = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  const snapDefender = snapLane.units.find((entry) => entry && entry.id === defender.id);
+
+  assert.ok(snapDefender, "expected the defender to appear in the snapshot.");
+  assert.equal(snapDefender.presentationPhase, "CombatResolve");
+  assert.equal(snapDefender.presentationIntent, "Defend");
+  assert.equal(snapDefender.combatTargetKind, "unit");
+  assert.equal(snapDefender.combatContact, true);
+  assert.ok(snapDefender.combatLockTicksRemaining > 0, "the snapshot should carry the short target-lock window while contact is active.");
+});
+
+test("snapshot contract exposes combat regroup after a lane-controlled kill", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.6, 0);
+  const firstWavePoint = getDefendAnchorPosition(lane, 0.1, 0);
+  const secondWavePoint = getDefendAnchorPosition(lane, 0.2, 1.2);
+  const defender = createAttacker({
+    id: "regroup_snapshot_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 0,
+    baseDmg: 10,
+    baseSpeed: 1.0,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+  });
+  const firstWave = createAttacker({
+    id: "regroup_snapshot_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 6,
+    maxHp: 6,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: firstWavePoint.posX,
+    posY: firstWavePoint.posY,
+  });
+  const secondWave = createAttacker({
+    id: "regroup_snapshot_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 30,
+    maxHp: 30,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: secondWavePoint.posX,
+    posY: secondWavePoint.posY,
+  });
+
+  lane.units.push(defender, firstWave, secondWave);
+
+  tick(game, 2);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const snapLane = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  const snapDefender = snapLane.units.find((entry) => entry && entry.id === defender.id);
+
+  assert.ok(snapDefender, "expected the regrouping defender to appear in the snapshot.");
+  assert.equal(snapDefender.presentationPhase, "CombatRegroup");
+  assert.equal(snapDefender.combatTargetId, null);
+  assert.equal(snapDefender.combatContact, false);
+  assert.ok(snapDefender.regroupTicksRemaining > 0, "the regroup timer should remain visible to the client while the unit reforms.");
+});
+
 test("lane-controlled formations keep surround movement inside their combat leash", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
-  const coreTarget = getTownCoreTargetPosition(lane);
+  primeDefendAnchor(game, lane);
   const defenders = Array.from({ length: 8 }, (_, index) => createAttacker({
     id: `combat_pocket_defender_${index}`,
     sourceLaneIndex: lane.laneIndex,
@@ -752,8 +952,7 @@ test("lane-controlled formations keep surround movement inside their combat leas
     laneId: lane.laneIndex,
     atkCd: 999,
     baseSpeed: 0.55,
-    posX: coreTarget.posX + ((index % 2) * 0.4),
-    posY: coreTarget.posY - 0.8 - (index * 0.15),
+    ...getDefendAnchorPosition(lane, -0.8 - (index * 0.15), ((index % 2) * 0.4)),
   }));
 
   lane.units.push(...defenders);
@@ -768,19 +967,15 @@ test("lane-controlled formations keep surround movement inside their combat leas
     spawnSourceType: "dungeon_wave",
     targetLaneIndex: lane.laneIndex,
     laneId: lane.laneIndex,
-    routeSegments: ["WA_A"],
-    routeSegmentIndex: 0,
-    segmentProgress: 0.95,
     hp: 300,
     maxHp: 300,
     atkCd: 999,
     baseSpeed: 0,
-    posX: lane.formationAnchor.x + lane.engagementRadius - 0.35,
-    posY: lane.formationAnchor.y,
+    ...getDefendAnchorPosition(lane, 2.6, 0),
   });
 
   lane.units.push(hostileWave);
-  tick(game, 12);
+  tick(game, 16);
 
   const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("combat_pocket_defender_"));
   assert.equal(liveDefenders.length, defenders.length);
@@ -889,24 +1084,9 @@ test("settled lane formations separate with small lateral nudges instead of bein
   );
 });
 
-test("red center barracks units intercept center-spawn waves before they reach the red Town Core", () => {
+test("center-spawn waves travel through the red front gate approach before they reach the Town Core", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const redLane = game.lanes[0];
-  const yellowLane = game.lanes[1];
-
-  const redAttacker = createAttacker({
-    id: "red_center_interceptor",
-    ownerLane: redLane.laneIndex,
-    targetLaneIndex: yellowLane.laneIndex,
-    laneId: yellowLane.laneIndex,
-    sourceLaneIndex: redLane.laneIndex,
-    sourceTeam: "red",
-    sourceBarracksId: "center",
-    sourceBarracksKey: "center",
-    atkCd: 0,
-    baseDmg: 12,
-    baseSpeed: 1.5,
-  });
   const incomingWave = createAttacker({
     id: "center_spawn_wave",
     ownerLane: -1,
@@ -924,36 +1104,23 @@ test("red center barracks units intercept center-spawn waves before they reach t
     baseSpeed: 1.5,
   });
 
-  assert.equal(simMl.initializeMovingUnitRouteState(game, yellowLane, redAttacker, { x: 5, y: 0 }).ok, true);
   assert.equal(simMl.initializeMovingUnitRouteState(game, redLane, incomingWave, { x: 5, y: 0 }).ok, true);
-
-  yellowLane.units.push(redAttacker);
   redLane.units.push(incomingWave);
 
-  tick(game, 12);
+  tick(game, 18);
 
   const serverWave = redLane.units.find((unit) => unit.id === incomingWave.id);
-  if (serverWave) {
-    assert.equal(serverWave.allegianceKey, "dungeon");
-    assert.equal(serverWave.pathContractType, "wave_lane");
-    assert.ok(
-      serverWave.combatState === "COMBAT" || serverWave.hp <= 0,
-      "the intercepted wave should still be fighting or already be dead from the interceptor's hit."
-    );
-    assert.ok(
-      serverWave.combatTarget?.unitId === redAttacker.id || serverWave.hp <= 0,
-      "the wave should either still be targeting the interceptor or already be dead."
-    );
-    assert.ok(
-      redAttacker.combatTarget?.unitId === incomingWave.id || serverWave.hp <= 0,
-      "the interceptor should keep the wave targeted until the kill lands."
-    );
-  } else {
-    assert.ok(redAttacker.attackPulse > 0, "the interceptor should have landed a real hit before the wave could reach the Town Core.");
-  }
+  assert.ok(serverWave, "the routed wave should still be alive while approaching the fortress gate.");
+  assert.equal(serverWave.allegianceKey, "dungeon");
+  assert.equal(serverWave.pathContractType, "wave_lane");
+  assert.equal(serverWave.combatTarget, null, "the wave should not reach the Town Core before it reaches the front gate approach.");
+  assert.ok(redLane.outsideGateAnchor, "the lane should expose a front-gate defend anchor.");
   assert.ok(
-    redAttacker.combatState === "COMBAT" || redAttacker.attackPulse > 0,
-    "the interceptor should still be engaged or have just finished the kill."
+    Math.hypot(
+      Number(serverWave.posX) - Number(redLane.outsideGateAnchor.x),
+      Number(serverWave.posY) - Number(redLane.outsideGateAnchor.y)
+    ) <= 1.5,
+    "center-spawn wave routing should now bend through the front-gate approach instead of cutting diagonally into the Town Core."
   );
   assert.equal(game.teamHp.left, 20, "the red Town Core should stay untouched while the interception is happening.");
   assert.equal(game.lanes[0].eliminated, false);
@@ -999,7 +1166,7 @@ test("same-lane hold units do not aggro their own defenders while staging at the
   tick(game, 1);
 
   assert.deepEqual(stagingUnit.routeSegments, ["ACTR_A", "A_M", "M_B"]);
-  assert.equal(stagingUnit.stance, "HOLD");
+  assert.equal(stagingUnit.stance, "DEFEND");
   assert.equal(stagingUnit.pathContractType, "guard_anchor");
   assert.equal(defender.combatTarget, null);
   assert.equal(stagingUnit.combatTarget, null);
@@ -1007,11 +1174,11 @@ test("same-lane hold units do not aggro their own defenders while staging at the
   assert.equal(stagingUnit.hp, def.hp);
 });
 
-test("defend-mode formations fan around an intercepted wave instead of collapsing into one point", () => {
+test("defend-mode formations fan around an intercepted wave at the gate instead of collapsing into one point", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
-  const coreTarget = getTownCoreTargetPosition(lane);
+  primeDefendAnchor(game, lane);
   const defenders = [
     createAttacker({
       id: "defend_ring_left",
@@ -1023,8 +1190,7 @@ test("defend-mode formations fan around an intercepted wave instead of collapsin
       atkCd: 0,
       baseDmg: 3,
       baseSpeed: 1.1,
-      posX: coreTarget.posX - 0.3,
-      posY: coreTarget.posY - 1.7,
+      ...getDefendAnchorPosition(lane, -0.8, -0.3),
     }),
     createAttacker({
       id: "defend_ring_center",
@@ -1036,8 +1202,7 @@ test("defend-mode formations fan around an intercepted wave instead of collapsin
       atkCd: 0,
       baseDmg: 3,
       baseSpeed: 1.1,
-      posX: coreTarget.posX,
-      posY: coreTarget.posY - 2.3,
+      ...getDefendAnchorPosition(lane, -1.4, 0),
     }),
     createAttacker({
       id: "defend_ring_right",
@@ -1049,8 +1214,7 @@ test("defend-mode formations fan around an intercepted wave instead of collapsin
       atkCd: 0,
       baseDmg: 3,
       baseSpeed: 1.1,
-      posX: coreTarget.posX + 0.3,
-      posY: coreTarget.posY - 2.9,
+      ...getDefendAnchorPosition(lane, -2.0, 0.3),
     }),
   ];
   const hostileWave = createAttacker({
@@ -1065,8 +1229,7 @@ test("defend-mode formations fan around an intercepted wave instead of collapsin
     maxHp: 120,
     atkCd: 999,
     baseSpeed: 0,
-    posX: coreTarget.posX,
-    posY: coreTarget.posY - 0.6,
+    ...getDefendAnchorPosition(lane, 0.15, 0),
   });
 
   lane.units.push(...defenders, hostileWave);
@@ -1153,4 +1316,8 @@ test("attackers stay on the destroyed forward objective until the player explici
   assert.equal(attacker.stance, "RETREAT");
   assert.equal(attacker.pathContractType, "retreat_anchor");
   assert.equal(attacker.combatTarget, null);
+  assert.ok(
+    Math.abs(Number(attacker.routeLateralOffset) || 0) < 8,
+    "recalling a forward attacker should keep it close to its live route instead of preserving a map-wide offset from the route start."
+  );
 });

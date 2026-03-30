@@ -123,9 +123,13 @@ namespace CastleDefender.UI
         RectTransform _progressionButtonRoot;
         RectTransform _progressionOverlayRoot;
         RectTransform _premiumTypeStack;
+        RectTransform _premiumStageRoot;
+        RectTransform _premiumMainColumn;
+        RectTransform _premiumRailColumn;
         TMP_Text _premiumScreenTitle;
         TMP_Text _premiumScreenSubtitle;
         bool _premiumPresentationApplied;
+        bool _premiumCompactLayout;
         LoadoutPhaseManager _progressionViewer;
         TMP_Text _txtSettingsTiltValue;
         TMP_Text _txtSettingsZoomValue;
@@ -737,19 +741,6 @@ namespace CastleDefender.UI
             button.onClick.RemoveAllListeners();
             button.onClick.AddListener(OpenProgressionViewer);
 
-            var trigger = root.GetComponent<EventTrigger>();
-            if (trigger == null)
-                trigger = root.AddComponent<EventTrigger>();
-            trigger.triggers = new List<EventTrigger.Entry>();
-
-            var pointerClickEntry = new EventTrigger.Entry { eventID = EventTriggerType.PointerClick };
-            pointerClickEntry.callback.AddListener(_ => OpenProgressionViewer());
-            trigger.triggers.Add(pointerClickEntry);
-
-            var submitEntry = new EventTrigger.Entry { eventID = EventTriggerType.Submit };
-            submitEntry.callback.AddListener(_ => OpenProgressionViewer());
-            trigger.triggers.Add(submitEntry);
-
             var templateText = joinButton.GetComponentInChildren<TMP_Text>(true);
             if (templateText != null)
             {
@@ -852,15 +843,36 @@ namespace CastleDefender.UI
             if (_canvasRect == null)
                 return;
 
-            ClassicRpgUiRuntime.ApplyCanvasScaler(_canvasRect.GetComponent<CanvasScaler>(), new Vector2(1920f, 1080f));
+            ClassicRpgUiRuntime.ApplyCanvasScaler(_canvasRect.GetComponent<CanvasScaler>(), ClassicRpgUiRuntime.ReferenceResolution);
+            _premiumCompactLayout = ClassicRpgUiRuntime.IsCompactLayout(_canvasRect);
             DestroyCanvasChild("PremiumLobbyBackdrop");
-            DestroyCanvasChild("PremiumLobbyHeader");
-            DestroyCanvasChild("PremiumLobbyRail");
+            DestroyCanvasChild("PremiumLobbySafeArea");
+            DestroyCanvasChild("PremiumLobbyStage");
 
-            BuildPremiumBackdrop();
-            BuildPremiumHeader();
-            BuildPremiumRail();
-            StyleStepPanels();
+            BuildPremiumBackdrop(_premiumCompactLayout);
+
+            var safeArea = CreateUiRect("PremiumLobbySafeArea", _canvasRect);
+            ClassicRpgUiRuntime.ApplySafeArea(
+                safeArea,
+                _canvasRect,
+                _premiumCompactLayout ? 18f : 42f,
+                _premiumCompactLayout ? 18f : 34f,
+                _premiumCompactLayout ? 20f : 28f);
+
+            _premiumStageRoot = CreateUiRect("PremiumLobbyStage", safeArea);
+            Stretch(_premiumStageRoot);
+            var stageLayout = _premiumStageRoot.gameObject.AddComponent<VerticalLayoutGroup>();
+            stageLayout.childAlignment = TextAnchor.UpperCenter;
+            stageLayout.childControlWidth = true;
+            stageLayout.childControlHeight = true;
+            stageLayout.childForceExpandWidth = true;
+            stageLayout.childForceExpandHeight = false;
+            stageLayout.spacing = _premiumCompactLayout ? 14f : 18f;
+
+            BuildPremiumHeader(_premiumStageRoot, _premiumCompactLayout);
+            BuildPremiumBody(_premiumStageRoot, _premiumCompactLayout);
+            BuildPremiumRail(_premiumRailColumn, _premiumCompactLayout);
+            StyleStepPanels(_premiumMainColumn, _premiumCompactLayout);
             StyleLobbyButtons();
             StyleLeaderboardPanel();
 
@@ -871,7 +883,7 @@ namespace CastleDefender.UI
                 Panel_Step2_Format != null && Panel_Step2_Format.activeSelf ? 3 : 2);
         }
 
-        void BuildPremiumBackdrop()
+        void BuildPremiumBackdrop(bool compact)
         {
             var root = CreateUiRect("PremiumLobbyBackdrop", _canvasRect);
             Stretch(root);
@@ -880,20 +892,24 @@ namespace CastleDefender.UI
             var background = root.gameObject.AddComponent<Image>();
             ClassicRpgUiRuntime.ApplyPanel(background, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.22f));
 
-            CreateBackdropBar(root, "TopBanner", new Vector2(0.44f, 1f), new Vector2(0.44f, 1f), new Vector2(0f, -44f), new Vector2(1060f, 112f), new Color(1f, 1f, 1f, 0.74f));
-            CreateBackdropBar(root, "BottomBanner", new Vector2(0.44f, 0f), new Vector2(0.44f, 0f), new Vector2(0f, 44f), new Vector2(1060f, 112f), new Color(1f, 1f, 1f, 0.30f));
-            CreateBackdropFlag(root, "LeftHeraldry", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(128f, 0f), new Vector2(240f, 332f), new Color(1f, 1f, 1f, 0.18f), false);
-            CreateBackdropFlag(root, "RightHeraldry", new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-374f, 18f), new Vector2(220f, 308f), new Color(1f, 1f, 1f, 0.14f), true);
+            CreateBackdropBar(root, "TopBanner", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, compact ? -34f : -44f), new Vector2(compact ? 780f : 1060f, compact ? 86f : 112f), new Color(1f, 1f, 1f, 0.74f));
+            CreateBackdropBar(root, "BottomBanner", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 34f : 44f), new Vector2(compact ? 780f : 1060f, compact ? 88f : 112f), new Color(1f, 1f, 1f, 0.30f));
+
+            if (compact)
+            {
+                CreateBackdropFlag(root, "TopHeraldry", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -128f), new Vector2(190f, 260f), new Color(1f, 1f, 1f, 0.13f), false);
+            }
+            else
+            {
+                CreateBackdropFlag(root, "LeftHeraldry", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(128f, 0f), new Vector2(240f, 332f), new Color(1f, 1f, 1f, 0.18f), false);
+                CreateBackdropFlag(root, "RightHeraldry", new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-374f, 18f), new Vector2(220f, 308f), new Color(1f, 1f, 1f, 0.14f), true);
+            }
         }
 
-        void BuildPremiumHeader()
+        void BuildPremiumHeader(Transform parent, bool compact)
         {
-            var header = CreateUiRect("PremiumLobbyHeader", _canvasRect);
-            header.anchorMin = new Vector2(0.07f, 1f);
-            header.anchorMax = new Vector2(0.74f, 1f);
-            header.pivot = new Vector2(0.5f, 1f);
-            header.anchoredPosition = new Vector2(0f, -60f);
-            header.sizeDelta = new Vector2(0f, 176f);
+            var header = CreateUiRect("PremiumLobbyHeader", parent);
+            header.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 152f : 176f;
 
             var layout = header.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
@@ -908,78 +924,156 @@ namespace CastleDefender.UI
 
             var titlePlate = CreateUiImage("TitlePlate", header, ClassicRpgPanelSkin.TitleLong, Color.white, false);
             var titlePlateLayout = titlePlate.gameObject.AddComponent<LayoutElement>();
-            titlePlateLayout.preferredWidth = 520f;
-            titlePlateLayout.preferredHeight = 96f;
+            titlePlateLayout.preferredWidth = compact ? 460f : 520f;
+            titlePlateLayout.preferredHeight = compact ? 86f : 96f;
 
-            _premiumScreenTitle = CreateUiText("Title", titlePlate.transform, "Choose Your Match", 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
+            _premiumScreenTitle = CreateUiText("Title", titlePlate.transform, "Choose Your Match", compact ? 30f : 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
             Stretch(_premiumScreenTitle.rectTransform, new Vector2(26f, 16f), new Vector2(-26f, -18f));
 
             _premiumScreenSubtitle = CreateUiText(
                 "Subtitle",
                 header,
-                "Assemble your session, inspect progression, and step into battle with a stronger front-end presence.",
-                18f,
+                compact
+                    ? "Queue, inspect progression, and ready the match from a cleaner command hub."
+                    : "Assemble your session, inspect progression, and step into battle with a stronger front-end presence.",
+                compact ? 16f : 18f,
                 ClassicRpgTextTone.Body,
                 ClassicRpgUiRuntime.BrightText);
             _premiumScreenSubtitle.textWrappingMode = TextWrappingModes.Normal;
             _premiumScreenSubtitle.alignment = TextAlignmentOptions.Center;
-            _premiumScreenSubtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = 44f;
+            _premiumScreenSubtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 36f : 44f;
         }
 
-        void BuildPremiumRail()
+        void BuildPremiumBody(Transform parent, bool compact)
         {
-            var rail = CreateUiRect("PremiumLobbyRail", _canvasRect);
-            rail.anchorMin = new Vector2(0.77f, 0.10f);
-            rail.anchorMax = new Vector2(0.97f, 0.90f);
-            rail.offsetMin = Vector2.zero;
-            rail.offsetMax = Vector2.zero;
+            var body = CreateUiRect("PremiumLobbyBody", parent);
+            var bodyLayoutElement = body.gameObject.AddComponent<LayoutElement>();
+            bodyLayoutElement.flexibleHeight = 1f;
+            bodyLayoutElement.flexibleWidth = 1f;
 
-            var layout = rail.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.childAlignment = TextAnchor.UpperCenter;
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            layout.childForceExpandHeight = false;
-            layout.spacing = 14f;
-            layout.padding = new RectOffset(6, 6, 6, 6);
+            if (compact)
+            {
+                var layout = body.gameObject.AddComponent<VerticalLayoutGroup>();
+                layout.childAlignment = TextAnchor.UpperCenter;
+                layout.childControlWidth = true;
+                layout.childControlHeight = false;
+                layout.childForceExpandWidth = true;
+                layout.childForceExpandHeight = false;
+                layout.spacing = 14f;
+            }
+            else
+            {
+                var layout = body.gameObject.AddComponent<HorizontalLayoutGroup>();
+                layout.childAlignment = TextAnchor.UpperCenter;
+                layout.childControlWidth = true;
+                layout.childControlHeight = true;
+                layout.childForceExpandWidth = false;
+                layout.childForceExpandHeight = false;
+                layout.spacing = 18f;
+            }
 
-            var commandCard = CreateCard(rail, "CommanderCard", 122f);
+            _premiumMainColumn = CreateUiRect("MainColumn", body);
+            var mainLayout = _premiumMainColumn.gameObject.AddComponent<LayoutElement>();
+            mainLayout.flexibleWidth = 1f;
+            mainLayout.flexibleHeight = 1f;
+            mainLayout.minWidth = 0f;
+            var mainStack = _premiumMainColumn.gameObject.AddComponent<VerticalLayoutGroup>();
+            mainStack.childAlignment = compact ? TextAnchor.UpperCenter : TextAnchor.MiddleCenter;
+            mainStack.childControlWidth = true;
+            mainStack.childControlHeight = false;
+            mainStack.childForceExpandWidth = true;
+            mainStack.childForceExpandHeight = false;
+            mainStack.spacing = 0f;
+
+            _premiumRailColumn = CreateUiRect("RailColumn", body);
+            var railLayout = _premiumRailColumn.gameObject.AddComponent<LayoutElement>();
+            railLayout.preferredWidth = compact ? 0f : 312f;
+            railLayout.flexibleWidth = compact ? 1f : 0f;
+            railLayout.minWidth = 0f;
+        }
+
+        void BuildPremiumRail(Transform parent, bool compact)
+        {
+            if (parent == null)
+                return;
+
+            if (compact)
+            {
+                var compactLayout = parent.gameObject.AddComponent<HorizontalLayoutGroup>();
+                compactLayout.childAlignment = TextAnchor.MiddleCenter;
+                compactLayout.childControlWidth = true;
+                compactLayout.childControlHeight = true;
+                compactLayout.childForceExpandWidth = true;
+                compactLayout.childForceExpandHeight = false;
+                compactLayout.spacing = 10f;
+            }
+            else
+            {
+                var layout = parent.gameObject.AddComponent<VerticalLayoutGroup>();
+                layout.childAlignment = TextAnchor.MiddleCenter;
+                layout.childControlWidth = true;
+                layout.childControlHeight = false;
+                layout.childForceExpandWidth = true;
+                layout.childForceExpandHeight = false;
+                layout.spacing = 14f;
+                layout.padding = new RectOffset(6, 6, 6, 6);
+            }
+
+            var commandCard = CreateCard(parent, "CommanderCard", compact ? 132f : 122f);
+            if (compact) commandCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var commandHeader = CreateUiText("Header", commandCard.transform, "COMMANDER", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
             commandHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
-            if (Txt_DisplayName != null)
-            {
-                Txt_DisplayName.transform.SetParent(commandCard.transform, false);
-                PrepareForLayout(Txt_DisplayName.rectTransform, 42f);
-                ClassicRpgUiRuntime.ApplyText(Txt_DisplayName, ClassicRpgTextTone.Title, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
-                Txt_DisplayName.fontSize = 24f;
-            }
+            string commanderName = !string.IsNullOrWhiteSpace(Txt_DisplayName?.text)
+                ? Txt_DisplayName.text
+                : (AuthManager.IsAuthenticated ? AuthManager.DisplayName : "Guest");
+            HideLegacyText(Txt_DisplayName);
+            Txt_DisplayName = CreateCardValueText(
+                commandCard,
+                "CommanderValue",
+                commanderName,
+                42f,
+                24f,
+                ClassicRpgTextTone.Title,
+                ClassicRpgUiRuntime.WarmGold,
+                TextAlignmentOptions.Center,
+                allowWrap: false);
 
-            var seasonCard = CreateCard(rail, "SeasonCard", 136f);
+            var seasonCard = CreateCard(parent, "SeasonCard", compact ? 132f : 136f);
+            if (compact) seasonCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var seasonHeader = CreateUiText("Header", seasonCard.transform, "SEASON", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
             seasonHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
-            if (Txt_SeasonInfo != null)
-            {
-                Txt_SeasonInfo.transform.SetParent(seasonCard.transform, false);
-                PrepareForLayout(Txt_SeasonInfo.rectTransform, 72f);
-                Txt_SeasonInfo.textWrappingMode = TextWrappingModes.Normal;
-                ClassicRpgUiRuntime.ApplyText(Txt_SeasonInfo, ClassicRpgTextTone.Body, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText);
-            }
+            string seasonSummary = Txt_SeasonInfo != null ? Txt_SeasonInfo.text : string.Empty;
+            HideLegacyText(Txt_SeasonInfo);
+            Txt_SeasonInfo = CreateCardValueText(
+                seasonCard,
+                "SeasonValue",
+                seasonSummary,
+                72f,
+                compact ? 16f : 18f,
+                ClassicRpgTextTone.Body,
+                ClassicRpgUiRuntime.BrightText,
+                TextAlignmentOptions.Center);
 
-            var statusCard = CreateCard(rail, "StatusCard", 220f);
+            var statusCard = CreateCard(parent, "StatusCard", compact ? 154f : 220f);
+            if (compact) statusCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var statusHeader = CreateUiText("Header", statusCard.transform, "STATUS", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
             statusHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
-            if (TxtStatus != null)
-            {
-                TxtStatus.transform.SetParent(statusCard.transform, false);
-                PrepareForLayout(TxtStatus.rectTransform, 116f);
-                TxtStatus.textWrappingMode = TextWrappingModes.Normal;
-                ClassicRpgUiRuntime.ApplyText(TxtStatus, ClassicRpgTextTone.Body, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText);
-            }
+            string statusSummary = TxtStatus != null ? TxtStatus.text : string.Empty;
+            HideLegacyText(TxtStatus);
+            TxtStatus = CreateCardValueText(
+                statusCard,
+                "StatusValue",
+                statusSummary,
+                compact ? 62f : 116f,
+                compact ? 15f : 18f,
+                ClassicRpgTextTone.Body,
+                ClassicRpgUiRuntime.BrightText,
+                TextAlignmentOptions.TopLeft);
 
             if (Btn_ToggleLeaderboard != null)
             {
                 Btn_ToggleLeaderboard.transform.SetParent(statusCard.transform, false);
-                PrepareButton(Btn_ToggleLeaderboard, 46f, 240f);
+                PrepareButton(Btn_ToggleLeaderboard, 46f, compact ? 0f : 240f);
                 SetButtonLabel(Btn_ToggleLeaderboard, "Show Leaderboard");
                 ClassicRpgUiRuntime.ApplyButton(Btn_ToggleLeaderboard, ClassicRpgButtonSkin.MiniGold);
             }
@@ -1002,11 +1096,15 @@ namespace CastleDefender.UI
             return rect;
         }
 
-        void StyleStepPanels()
+        void StyleStepPanels(Transform host, bool compact)
         {
+            if (host == null)
+                return;
+
             if (Panel_Step3_Type != null)
             {
-                StylePanelShell(Panel_Step3_Type, new Vector2(720f, 544f), new Vector2(-168f, -6f));
+                Panel_Step3_Type.transform.SetParent(host, false);
+                StylePanelShell(Panel_Step3_Type, compact ? 386f : 544f, flexibleHeight: true);
                 _premiumTypeStack = EnsureContentRoot(Panel_Step3_Type.transform as RectTransform, "PremiumTypeStack");
                 var typeLayout = _premiumTypeStack.GetComponent<VerticalLayoutGroup>() ?? _premiumTypeStack.gameObject.AddComponent<VerticalLayoutGroup>();
                 typeLayout.childAlignment = TextAnchor.MiddleCenter;
@@ -1015,12 +1113,13 @@ namespace CastleDefender.UI
                 typeLayout.childForceExpandWidth = true;
                 typeLayout.childForceExpandHeight = false;
                 typeLayout.spacing = 12f;
-                typeLayout.padding = new RectOffset(32, 32, 42, 32);
+                typeLayout.padding = compact ? new RectOffset(24, 24, 26, 24) : new RectOffset(32, 32, 42, 32);
             }
 
             if (Panel_Step4A_Queue != null)
             {
-                StylePanelShell(Panel_Step4A_Queue, new Vector2(640f, 280f), new Vector2(-168f, 0f));
+                Panel_Step4A_Queue.transform.SetParent(host, false);
+                StylePanelShell(Panel_Step4A_Queue, compact ? 248f : 280f);
                 var content = EnsureContentRoot(Panel_Step4A_Queue.transform as RectTransform, "QueueContent");
                 var layout = content.GetComponent<VerticalLayoutGroup>() ?? content.gameObject.AddComponent<VerticalLayoutGroup>();
                 layout.childAlignment = TextAnchor.MiddleCenter;
@@ -1029,15 +1128,16 @@ namespace CastleDefender.UI
                 layout.childForceExpandWidth = true;
                 layout.childForceExpandHeight = false;
                 layout.spacing = 16f;
-                layout.padding = new RectOffset(32, 32, 34, 30);
+                layout.padding = compact ? new RectOffset(24, 24, 24, 24) : new RectOffset(32, 32, 34, 30);
 
-                ReparentTo(content, Txt_QueueStatus?.rectTransform, 110f);
+                ReparentTo(content, Txt_QueueStatus?.rectTransform, compact ? 92f : 110f);
                 ReparentTo(content, Btn_CancelQueue?.transform as RectTransform, 48f, 220f);
             }
 
             if (Panel_Step4B_Lobby != null)
             {
-                StylePanelShell(Panel_Step4B_Lobby, new Vector2(820f, 610f), new Vector2(-168f, -8f));
+                Panel_Step4B_Lobby.transform.SetParent(host, false);
+                StylePanelShell(Panel_Step4B_Lobby, compact ? 420f : 610f, flexibleHeight: true);
                 var content = EnsureContentRoot(Panel_Step4B_Lobby.transform as RectTransform, "LobbyContent");
                 var layout = content.GetComponent<VerticalLayoutGroup>() ?? content.gameObject.AddComponent<VerticalLayoutGroup>();
                 layout.childAlignment = TextAnchor.UpperCenter;
@@ -1046,10 +1146,10 @@ namespace CastleDefender.UI
                 layout.childForceExpandWidth = true;
                 layout.childForceExpandHeight = false;
                 layout.spacing = 14f;
-                layout.padding = new RectOffset(32, 32, 34, 26);
+                layout.padding = compact ? new RectOffset(24, 24, 24, 22) : new RectOffset(32, 32, 34, 26);
 
                 ReparentTo(content, Txt_LobbyCode?.rectTransform, 44f);
-                ReparentTo(content, Txt_MemberList?.rectTransform, 192f);
+                ReparentTo(content, Txt_MemberList?.rectTransform, compact ? 152f : 192f);
 
                 var actionRow = CreateUiRect("PrimaryActions", content);
                 actionRow.gameObject.AddComponent<LayoutElement>().preferredHeight = 52f;
@@ -1081,11 +1181,12 @@ namespace CastleDefender.UI
 
             if (Panel_Step2_Format != null)
             {
-                StylePanelShell(Panel_Step2_Format, new Vector2(620f, 220f), new Vector2(-168f, 0f));
+                Panel_Step2_Format.transform.SetParent(host, false);
+                StylePanelShell(Panel_Step2_Format, compact ? 196f : 220f);
             }
         }
 
-        void StylePanelShell(GameObject panel, Vector2 size, Vector2 anchoredPosition)
+        void StylePanelShell(GameObject panel, float preferredHeight, bool flexibleHeight = false)
         {
             if (panel == null)
                 return;
@@ -1094,15 +1195,21 @@ namespace CastleDefender.UI
             if (rect == null)
                 return;
 
-            rect.anchorMin = new Vector2(0.43f, 0.49f);
-            rect.anchorMax = new Vector2(0.43f, 0.49f);
-            rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.sizeDelta = size;
-            rect.anchoredPosition = anchoredPosition;
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = Vector2.zero;
+            rect.sizeDelta = new Vector2(0f, preferredHeight);
+
+            var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
+            layoutElement.minHeight = preferredHeight;
+            layoutElement.preferredHeight = preferredHeight;
+            layoutElement.flexibleHeight = flexibleHeight ? 1f : 0f;
+            layoutElement.flexibleWidth = 1f;
 
             var image = panel.GetComponent<Image>();
             if (image != null)
-                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PaperMedium, true, new Color(0.16f, 0.14f, 0.10f, 0.96f));
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.16f, 0.14f, 0.10f, 0.96f));
 
             EnsureDecorativeFrame(rect);
         }
@@ -1189,20 +1296,61 @@ namespace CastleDefender.UI
             if (rect == null)
                 return;
 
-            rect.anchorMin = new Vector2(0.17f, 0.12f);
-            rect.anchorMax = new Vector2(0.83f, 0.88f);
+            rect.anchorMin = _premiumCompactLayout ? new Vector2(0.04f, 0.08f) : new Vector2(0.17f, 0.12f);
+            rect.anchorMax = _premiumCompactLayout ? new Vector2(0.96f, 0.92f) : new Vector2(0.83f, 0.88f);
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
 
             var image = Panel_Leaderboard.GetComponent<Image>();
             if (image != null)
-                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PaperMedium, true, new Color(0.16f, 0.13f, 0.10f, 0.97f));
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.16f, 0.13f, 0.10f, 0.97f));
 
             EnsureDecorativeFrame(rect);
-            StyleTextBlock(Txt_LeaderboardList, ClassicRpgTextTone.Body, 18f, ClassicRpgUiRuntime.BrightText);
+
+            string leaderboardText = Txt_LeaderboardList != null ? Txt_LeaderboardList.text : "<b>Leaderboard</b>";
+            HideLegacyText(Txt_LeaderboardList);
+
+            var content = EnsureContentRoot(rect, "LeaderboardContent");
+            Stretch(content, new Vector2(28f, 30f), new Vector2(-28f, -90f));
+            content.SetAsLastSibling();
+
+            var leaderboardValue = content.Find("LeaderboardValue") as RectTransform;
+            if (leaderboardValue == null)
+                leaderboardValue = CreateUiRect("LeaderboardValue", content);
+
+            Stretch(leaderboardValue);
+            var leaderboardLabel = leaderboardValue.GetComponent<TextMeshProUGUI>();
+            if (leaderboardLabel == null)
+                leaderboardLabel = leaderboardValue.gameObject.AddComponent<TextMeshProUGUI>();
+
+            Txt_LeaderboardList = leaderboardLabel;
+            Txt_LeaderboardList.text = leaderboardText;
+            Txt_LeaderboardList.fontSize = _premiumCompactLayout ? 16f : 18f;
+            Txt_LeaderboardList.enableAutoSizing = false;
+            Txt_LeaderboardList.textWrappingMode = TextWrappingModes.Normal;
+            Txt_LeaderboardList.overflowMode = TextOverflowModes.Overflow;
+            Txt_LeaderboardList.raycastTarget = false;
+            ClassicRpgUiRuntime.ApplyText(Txt_LeaderboardList, ClassicRpgTextTone.Body, TextAlignmentOptions.TopLeft, ClassicRpgUiRuntime.BrightText);
+            Txt_LeaderboardList.overflowMode = TextOverflowModes.Overflow;
+
             ApplyButtonStyle(Btn_HideLeaderboard, ClassicRpgButtonSkin.MiniBrown, 42f);
             if (Btn_HideLeaderboard != null)
+            {
                 SetButtonLabel(Btn_HideLeaderboard, "Close");
+                var closeRect = Btn_HideLeaderboard.transform as RectTransform;
+                if (closeRect != null)
+                {
+                    closeRect.SetParent(rect, false);
+                    closeRect.anchorMin = new Vector2(1f, 1f);
+                    closeRect.anchorMax = new Vector2(1f, 1f);
+                    closeRect.pivot = new Vector2(1f, 1f);
+                    closeRect.anchoredPosition = new Vector2(-28f, -26f);
+                    closeRect.sizeDelta = new Vector2(154f, 42f);
+                    closeRect.localScale = Vector3.one;
+                    closeRect.localRotation = Quaternion.identity;
+                    closeRect.SetAsLastSibling();
+                }
+            }
         }
 
         void RefreshPremiumStepCopy(int step)
@@ -1315,6 +1463,35 @@ namespace CastleDefender.UI
             ClassicRpgUiRuntime.ApplyText(text, tone, text.alignment, color);
         }
 
+        TMP_Text CreateCardValueText(
+            RectTransform parent,
+            string name,
+            string value,
+            float preferredHeight,
+            float fontSize,
+            ClassicRpgTextTone tone,
+            Color color,
+            TextAlignmentOptions alignment,
+            bool allowWrap = true)
+        {
+            var text = CreateUiText(name, parent, value, fontSize, tone, color);
+            PrepareForLayout(text.rectTransform, preferredHeight);
+            text.enableAutoSizing = false;
+            text.textWrappingMode = allowWrap ? TextWrappingModes.Normal : TextWrappingModes.NoWrap;
+            text.overflowMode = allowWrap ? TextOverflowModes.Truncate : TextOverflowModes.Ellipsis;
+            text.alignment = alignment;
+            ClassicRpgUiRuntime.ApplyText(text, tone, alignment, color);
+            return text;
+        }
+
+        static void HideLegacyText(TMP_Text text)
+        {
+            if (text == null)
+                return;
+
+            text.gameObject.SetActive(false);
+        }
+
         static void PrepareForLayout(RectTransform rect, float preferredHeight)
         {
             if (rect == null)
@@ -1324,6 +1501,8 @@ namespace CastleDefender.UI
             rect.anchorMax = new Vector2(1f, 1f);
             rect.pivot = new Vector2(0.5f, 1f);
             rect.anchoredPosition = Vector2.zero;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
             rect.sizeDelta = new Vector2(0f, preferredHeight);
             var layout = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
             layout.preferredHeight = preferredHeight;
@@ -1394,6 +1573,8 @@ namespace CastleDefender.UI
             rect.offsetMin = offsetMin ?? Vector2.zero;
             rect.offsetMax = offsetMax ?? Vector2.zero;
             rect.anchoredPosition = Vector2.zero;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
         }
 
         static void AddTypePanelRect(List<RectTransform> orderedRects, Component component)
@@ -1436,20 +1617,19 @@ namespace CastleDefender.UI
                 return;
             }
 
-            if (_progressionViewer != null)
+            if (LoadingScreen.IsTransitionInProgress)
             {
-                _progressionOverlayRoot?.SetAsLastSibling();
+                SetStatus("The war room is already shifting to another screen.");
+                Play(AudioManager.SFX.Error);
                 return;
             }
 
             Play(AudioManager.SFX.ButtonClick);
-            SetStatus("Viewing Tech Tree.");
-            EnsureProgressionOverlay();
-            _progressionViewer = LoadoutPhaseManager.AttachEmbeddedViewer(
-                _progressionOverlayRoot,
-                requestedRaceId: RaceProgressionCatalog.DefaultRaceId,
-                onClose: CloseProgressionViewer);
-            _progressionOverlayRoot?.SetAsLastSibling();
+            SetStatus("Opening Tech Tree.");
+            ProgressionViewerLaunchContext.OpenLobbyViewer(RaceProgressionCatalog.DefaultRaceId);
+            LoadingScreen.LoadSceneWithRemoteContentGate(
+                "Loadout",
+                portraitKeys: RaceProgressionCatalog.GetPortraitWarmupKeys(null));
         }
 
         void EnsureProgressionOverlay()

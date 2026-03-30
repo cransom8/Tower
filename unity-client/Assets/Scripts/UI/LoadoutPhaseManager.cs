@@ -22,6 +22,9 @@ namespace CastleDefender.UI
             public Button Button;
             public TMP_Text Title;
             public TMP_Text Subtitle;
+            public TMP_Text Summary;
+            public Image StatusBackground;
+            public TMP_Text Status;
             public RawImage Portrait;
         }
 
@@ -74,6 +77,24 @@ namespace CastleDefender.UI
             public Image Background;
             public Button Button;
             public TMP_Text Label;
+        }
+
+        readonly struct DetailRowData
+        {
+            public readonly string IconResourcePath;
+            public readonly string Label;
+            public readonly string Value;
+            public readonly Color ValueColor;
+            public readonly Color IconColor;
+
+            public DetailRowData(string iconResourcePath, string label, string value, Color valueColor, Color? iconColor = null)
+            {
+                IconResourcePath = iconResourcePath;
+                Label = label;
+                Value = value;
+                ValueColor = valueColor;
+                IconColor = iconColor ?? ClassicRpgUiRuntime.WarmGold;
+            }
         }
 
         enum PhaseState
@@ -138,30 +159,35 @@ namespace CastleDefender.UI
         [SerializeField] Color timerNormalColor = new Color(1f, 0.92f, 0.38f, 1f);
         [SerializeField] Color timerUrgentColor = new Color(1f, 0.38f, 0.32f, 1f);
 
-        const float PortraitFrameHeight = 118f;
-        const float UnitCardWidth = 216f;
-        const float UnitCardHeight = 252f;
-        const float BuildingCardHeight = 264f;
+        const float PortraitFrameHeight = 132f;
+        const float UnitCardWidth = 236f;
+        const float UnitCardHeight = 278f;
+        const float BuildingCardHeight = 286f;
+        const float BuildingTierCardWidth = 272f;
         const float BuildingImageFrameHeight = 84f;
-        const float RequirementCardWidth = 160f;
+        const float RequirementCardWidth = 168f;
         const float RequirementCardHeight = 126f;
         const float CompactRequirementCardHeight = 116f;
-        const float LaneRowHeight = 308f;
-        const float BuildingLaneRowHeight = 352f;
-        const float CivicLaneRowHeight = 548f;
+        const float LaneRowHeight = 332f;
+        const float BuildingLaneRowHeight = 374f;
+        const float CivicLaneRowHeight = 564f;
         const float ChainArrowWidth = 34f;
         const float CompactArrowWidth = 28f;
-        const float RaceCardHeight = 112f;
-        const float RaceCardWidth = 220f;
-        const float MinLaneRowWidth = 760f;
+        const float RaceCardHeight = 404f;
+        const float RaceCardWidth = 316f;
+        const float CompactRaceCardHeight = 332f;
+        const float CompactRaceCardWidth = 264f;
+        const int PlaceholderRaceCardCount = 3;
+        const float MinLaneRowWidth = 960f;
         const float UnitCardFlexWidth = 4.6f;
         const float BuildingCardFlexWidth = 5.2f;
-        const float HeroOutcomeCardWidth = 216f;
-        const float UpgradeStepCardWidth = 212f;
-        const float UpgradeStepCardHeight = 206f;
+        const float HeroOutcomeCardWidth = 236f;
+        const float UpgradeStepCardWidth = 252f;
+        const float UpgradeStepCardHeight = 216f;
         const float RequirementCardFlexWidth = 2.7f;
         const float CompactRequirementCardFlexWidth = 2.1f;
         const float ArrowFlexWidth = 0.45f;
+        const float RequiredRaceSelectionPortraitTimeoutSeconds = 10f;
 
         PhaseState _state = PhaseState.Idle;
         ProgressionViewerMode _mode = ProgressionViewerMode.LobbyViewer;
@@ -196,6 +222,7 @@ namespace CastleDefender.UI
         TMP_Text _txtDetailsState;
         TMP_Text _txtDetailsRequirement;
         TMP_Text _txtDetailsMoves;
+        TMP_Text _txtDetailsCustomization;
         TMP_Text _txtDetailsAudioStatus;
         TMP_Text _txtDetailsBody;
         TMP_Text _txtDetailsPreviewStatus;
@@ -220,13 +247,19 @@ namespace CastleDefender.UI
         TMP_Text _txtPreviewHit;
         Button _btnPreviewDeath;
         TMP_Text _txtPreviewDeath;
+        Transform _detailsStatsRowsRoot;
+        Transform _detailsRequirementRowsRoot;
+        Transform _detailsMovesRowsRoot;
+        ScrollRect _raceCarouselScroll;
+        Button _btnRaceCarouselPrev;
+        Button _btnRaceCarouselNext;
+        int _raceCarouselItemCount;
 
         RaceProgressionDefinition _selectedRace;
         RaceProgressionUnitDefinition _selectedUnit;
         string[] _availableRaceIds = Array.Empty<string>();
         float _timerRemaining;
         float _phaseStartTime;
-        bool _detailsModalOpen;
 
         readonly List<RaceCardView> _raceCards = new();
         readonly Dictionary<string, UnitCardView> _unitCards = new(StringComparer.OrdinalIgnoreCase);
@@ -236,6 +269,7 @@ namespace CastleDefender.UI
         readonly HashSet<string> _missingCatalogLogs = new(StringComparer.OrdinalIgnoreCase);
         readonly HashSet<string> _missingPreparationStateLogs = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Sprite> _buildingIconCache = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, Sprite> _detailIconCache = new(StringComparer.OrdinalIgnoreCase);
 
         readonly Dictionary<string, Texture2D> _portraitCache = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, List<RawImage>> _pendingPortraitTargets = new(StringComparer.OrdinalIgnoreCase);
@@ -244,6 +278,7 @@ namespace CastleDefender.UI
         Coroutine _portraitWarmupRoutine;
         Coroutine _criticalWarmupRoutine;
         Coroutine _environmentWarmupRoutine;
+        Coroutine _raceSelectionGateRoutine;
         GameObject _runtimePortraitRoot;
         RenderTexture _runtimePortraitTexture;
         RenderTexture _runtimePreviewTexture;
@@ -251,6 +286,7 @@ namespace CastleDefender.UI
         UnitPortraitCamera _detailsPreviewCam;
         Coroutine _detailsPreviewResetRoutine;
         string _detailsPreviewStagedKey;
+        int _raceSelectionGateVersion;
 
         bool _loadoutReadyEmitted;
         bool _criticalWarmupDone;
@@ -334,6 +370,7 @@ namespace CastleDefender.UI
             _captureQueue.Clear();
             _buildingIconCache.Clear();
             StopWarmupRoutines();
+            StopRaceSelectionGate();
             StopDetailsPreviewResetRoutine();
             DestroyRuntimePortraitStudio();
         }
@@ -414,12 +451,11 @@ namespace CastleDefender.UI
             _availableRaceIds = GetAvailableRaceIds(null);
             string resolvedRaceId = RaceProgressionCatalog.ResolveAllowedRaceId(_availableRaceIds, requestedRaceId, "lobby viewer");
             _selectedRace = RaceProgressionCatalog.GetOrDefault(resolvedRaceId, "lobby viewer");
-            _selectedUnit = GetDefaultUnit(_selectedRace);
+            _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
             _timerRemaining = 0f;
             _phaseStartTime = Time.unscaledTime;
-            HidePrepOverlay();
-            RebuildPanel();
             StartViewerWarmup();
+            BeginRaceSelectionPresentationGate("Preparing War Council", BuildRequiredRaceSelectionLoadingDetail());
         }
 
         void OpenEmbeddedViewer()
@@ -430,11 +466,11 @@ namespace CastleDefender.UI
             _availableRaceIds = GetAvailableRaceIds(_embeddedAvailableRaceIds);
             string resolvedRaceId = RaceProgressionCatalog.ResolveAllowedRaceId(_availableRaceIds, _embeddedRequestedRaceId, "embedded viewer");
             _selectedRace = RaceProgressionCatalog.GetOrDefault(resolvedRaceId, "embedded viewer");
-            _selectedUnit = GetDefaultUnit(_selectedRace);
+            _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
             _timerRemaining = 0f;
             _phaseStartTime = Time.unscaledTime;
-            RebuildPanel();
             StartViewerWarmup();
+            BeginRaceSelectionPresentationGate("Preparing War Council", BuildRequiredRaceSelectionLoadingDetail());
         }
 
         void HandlePhaseStart(MLLoadoutPhaseStartPayload payload)
@@ -456,11 +492,10 @@ namespace CastleDefender.UI
                 : RaceProgressionCatalog.DefaultRaceId;
             string resolvedRaceId = RaceProgressionCatalog.ResolveAllowedRaceId(_availableRaceIds, requestedRaceId, "ml_loadout_phase_start");
             _selectedRace = RaceProgressionCatalog.GetOrDefault(resolvedRaceId, "ml_loadout_phase_start");
-            _selectedUnit = GetDefaultUnit(_selectedRace);
+            _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
 
-            HidePrepOverlay();
-            RebuildPanel();
             StartPreMatchWarmup();
+            BeginRaceSelectionPresentationGate("Preparing Race Progression", BuildRequiredRaceSelectionLoadingDetail());
 
             if (payload != null && string.Equals(payload.selectionMode, "random", StringComparison.OrdinalIgnoreCase))
                 StartCoroutine(AutoConfirmDelayed(0.75f));
@@ -561,6 +596,141 @@ namespace CastleDefender.UI
             TryEmitLoadoutReady();
         }
 
+        void BeginRaceSelectionPresentationGate(string status, string detail)
+        {
+            StopRaceSelectionGate();
+
+            if (!_isEmbeddedViewer)
+                SetPrepOverlayText(status, detail);
+
+            int gateVersion = ++_raceSelectionGateVersion;
+            _raceSelectionGateRoutine = StartCoroutine(WaitForRaceSelectionPresentationReady(gateVersion));
+        }
+
+        void StopRaceSelectionGate()
+        {
+            _raceSelectionGateVersion++;
+            if (_raceSelectionGateRoutine == null)
+                return;
+
+            StopCoroutine(_raceSelectionGateRoutine);
+            _raceSelectionGateRoutine = null;
+        }
+
+        IEnumerator WaitForRaceSelectionPresentationReady(int gateVersion)
+        {
+            string portraitKey = _selectedRace?.FeaturedPortraitKey;
+            if (!string.IsNullOrWhiteSpace(portraitKey))
+            {
+                string blockingIssue = null;
+                yield return EnsureRequiredRaceSelectionPortraitReady(portraitKey, issue => blockingIssue = issue);
+
+                if (gateVersion != _raceSelectionGateVersion)
+                    yield break;
+
+                if (!string.IsNullOrWhiteSpace(blockingIssue))
+                {
+                    Debug.LogError($"[RaceProgression] {blockingIssue}");
+                    if (!_isEmbeddedViewer)
+                        SetPrepOverlayText("Race Selection Blocked", blockingIssue);
+                    _raceSelectionGateRoutine = null;
+                    yield break;
+                }
+            }
+
+            RebuildPanel();
+            if (!_isEmbeddedViewer)
+                HidePrepOverlay();
+            _raceSelectionGateRoutine = null;
+        }
+
+        IEnumerator EnsureRequiredRaceSelectionPortraitReady(string key, Action<string> onFailure)
+        {
+            if (TryGetReadyPortraitTexture(key, out _))
+                yield break;
+
+            if (ShouldUseRuntimeSkinPortrait(key))
+            {
+                string sourceIssue = ValidateRequiredRuntimePortraitSource(key);
+                if (!string.IsNullOrWhiteSpace(sourceIssue))
+                {
+                    onFailure?.Invoke(sourceIssue);
+                    yield break;
+                }
+
+                if (EnsurePortraitCamera() == null)
+                {
+                    onFailure?.Invoke($"Could not create the runtime portrait camera for required featured portrait '{key}'.");
+                    yield break;
+                }
+
+                QueueRuntimePortraitCapture(key);
+                float timeoutAt = Time.unscaledTime + RequiredRaceSelectionPortraitTimeoutSeconds;
+                while (!TryGetReadyPortraitTexture(key, out _))
+                {
+                    if (Time.unscaledTime >= timeoutAt && !_capturePending.Contains(key) && !_isCapturingPortraits)
+                    {
+                        onFailure?.Invoke($"Timed out waiting for required featured portrait '{key}' to finish rendering.");
+                        yield break;
+                    }
+
+                    yield return null;
+                }
+
+                yield break;
+            }
+
+            string portraitLookupKey = ResolvePortraitLookupKey(key);
+            if (string.IsNullOrWhiteSpace(portraitLookupKey))
+            {
+                onFailure?.Invoke($"Portrait lookup key for required featured portrait '{key}' is invalid.");
+                yield break;
+            }
+
+            var remoteContent = RemoteContentManager.EnsureInstance();
+            if (remoteContent == null)
+            {
+                onFailure?.Invoke($"Remote content manager is unavailable, so required featured portrait '{key}' could not be loaded.");
+                yield break;
+            }
+
+            yield return remoteContent.EnsurePortraitsReady(
+                new[] { portraitLookupKey },
+                requester: _mode == ProgressionViewerMode.PreMatchConfirm
+                    ? "RaceProgression.RequiredPreMatchPortrait"
+                    : "RaceProgression.RequiredLobbyPortrait");
+
+            if (!TryGetReadyPortraitTexture(key, out _))
+                onFailure?.Invoke($"Required featured portrait '{key}' did not finish loading.");
+        }
+
+        string BuildRequiredRaceSelectionLoadingDetail()
+        {
+            if (_selectedRace == null)
+                return "Loading featured race presentation...";
+
+            string featuredTitle = string.IsNullOrWhiteSpace(_selectedRace.FeaturedTitle)
+                ? _selectedRace.DisplayName
+                : _selectedRace.FeaturedTitle;
+            return $"Loading required featured portrait for {featuredTitle}...";
+        }
+
+        string ValidateRequiredRuntimePortraitSource(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                return "Required featured portrait key is missing.";
+
+            var registry = ResolvePortraitRegistry();
+            if (registry == null)
+                return $"Portrait registry is missing, so required featured portrait '{key}' cannot be staged.";
+
+            if (registry.TryGetRenderableExactSkinPrefab(key, out _, out string issue))
+                return null;
+
+            string normalizedIssue = string.IsNullOrWhiteSpace(issue) ? "exact skin prefab could not be resolved" : issue;
+            return $"Required featured portrait '{key}' is unavailable because its exact prefab is not renderable ({normalizedIssue}). Race selection cannot open until this is fixed.";
+        }
+
         void RebuildPanel()
         {
             DestroyPanel();
@@ -584,22 +754,28 @@ namespace CastleDefender.UI
                 return;
             }
 
+            var hostCanvas = parent.GetComponentInParent<Canvas>();
+            var canvasRect = hostCanvas != null ? hostCanvas.GetComponent<RectTransform>() : null;
+            if (hostCanvas != null)
+                ClassicRpgUiRuntime.ApplyCanvasScaler(hostCanvas.GetComponent<CanvasScaler>(), ClassicRpgUiRuntime.ReferenceResolution);
+
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(canvasRect);
+
             _panelRoot = new GameObject("Panel_RaceProgression");
             _panelRoot.transform.SetParent(parent, false);
             var rootRect = _panelRoot.AddComponent<RectTransform>();
             if (_isEmbeddedViewer)
             {
-                rootRect.anchorMin = Vector2.zero;
-                rootRect.anchorMax = Vector2.one;
-                rootRect.offsetMin = Vector2.zero;
-                rootRect.offsetMax = Vector2.zero;
+                ClassicRpgUiRuntime.Stretch(rootRect);
             }
             else
             {
-                rootRect.anchorMin = new Vector2(0.015f, 0.025f);
-                rootRect.anchorMax = new Vector2(0.985f, 0.975f);
-                rootRect.offsetMin = Vector2.zero;
-                rootRect.offsetMax = Vector2.zero;
+                ClassicRpgUiRuntime.ApplySafeArea(
+                    rootRect,
+                    canvasRect,
+                    compact ? 16f : 26f,
+                    compact ? 16f : 24f,
+                    compact ? 18f : 24f);
             }
             var rootImage = _panelRoot.AddComponent<Image>();
             rootImage.color = ClassicRpgUiRuntime.BackdropColor;
@@ -616,35 +792,73 @@ namespace CastleDefender.UI
             rootFrameImage.raycastTarget = false;
             ClassicRpgUiRuntime.ApplyPanel(rootFrameImage, ClassicRpgPanelSkin.Frame, true, new Color(1f, 1f, 1f, 0.92f));
 
-            var layout = _panelRoot.AddComponent<VerticalLayoutGroup>();
+            var stage = new GameObject("Stage", typeof(RectTransform), typeof(VerticalLayoutGroup));
+            stage.transform.SetParent(_panelRoot.transform, false);
+            var stageRect = stage.GetComponent<RectTransform>();
+            ClassicRpgUiRuntime.Stretch(stageRect, new Vector2(12f, 12f), new Vector2(-12f, -12f));
+            var layout = stage.GetComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 10f;
-            layout.padding = new RectOffset(14, 14, 14, 14);
+            layout.spacing = compact ? 10f : 14f;
+            layout.padding = compact ? new RectOffset(12, 12, 12, 12) : new RectOffset(18, 18, 18, 18);
 
-            _txtTitle = MakeLabel(_panelRoot.transform, "Txt_Title", "Race Progression", 28, Color.white, 34f);
-            _txtTitle.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(_txtTitle, true, true);
+            var headerPlate = new GameObject("HeaderPlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            headerPlate.transform.SetParent(stage.transform, false);
+            var headerLayout = headerPlate.GetComponent<LayoutElement>();
+            headerLayout.preferredHeight = compact ? 124f : 144f;
+            var headerImage = headerPlate.GetComponent<Image>();
+            ClassicRpgUiRuntime.ApplyPanel(headerImage, ClassicRpgPanelSkin.TitleLong, false, Color.white);
+            var headerGroup = headerPlate.AddComponent<VerticalLayoutGroup>();
+            headerGroup.childAlignment = TextAnchor.MiddleCenter;
+            headerGroup.childControlWidth = true;
+            headerGroup.childControlHeight = true;
+            headerGroup.childForceExpandWidth = true;
+            headerGroup.childForceExpandHeight = false;
+            headerGroup.spacing = 2f;
+            headerGroup.padding = new RectOffset(28, 28, compact ? 18 : 20, compact ? 14 : 18);
 
-            _txtSubtitle = MakeLabel(_panelRoot.transform, "Txt_Subtitle", "", 16, new Color(0.82f, 0.85f, 0.92f), 28f);
+            _txtTitle = MakeLabel(headerPlate.transform, "Txt_Title", "Choose Your Race", compact ? 20 : 22, Color.white, compact ? 34f : 40f);
+            ApplyPlateTitleStyle(_txtTitle, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center);
+            SetResponsiveSingleLine(_txtTitle, compact ? 16f : 18f, compact ? 20f : 22f);
+
+            _txtSubtitle = MakeLabel(headerPlate.transform, "Txt_Subtitle", "", compact ? 13 : 15, new Color(0.82f, 0.85f, 0.92f), compact ? 22f : 24f);
             _txtSubtitle.alignment = TextAlignmentOptions.Center;
-            ApplyClassicRpgLabelTheme(_txtSubtitle, false, true);
+            ApplyReadableTextStyle(_txtSubtitle, new Color(0.82f, 0.85f, 0.92f), TextAlignmentOptions.Center);
 
-            _txtTimer = MakeLabel(_panelRoot.transform, "Txt_Timer", "", 20, timerNormalColor, 26f);
+            _txtTimer = MakeLabel(headerPlate.transform, "Txt_Timer", "", compact ? 18 : 20, timerNormalColor, 26f);
             _txtTimer.gameObject.SetActive(_mode == ProgressionViewerMode.PreMatchConfirm);
-            ApplyClassicRpgLabelTheme(_txtTimer, false, true);
+            ApplyReadableTextStyle(_txtTimer, timerNormalColor, TextAlignmentOptions.Center, FontStyles.Bold);
 
-            _txtStatus = MakeLabel(_panelRoot.transform, "Txt_Status", "", 16, new Color(0.74f, 0.78f, 0.85f), 26f);
+            var bodyRoot = new GameObject("BodyRoot", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            bodyRoot.transform.SetParent(stage.transform, false);
+            var bodyLayoutElement = bodyRoot.GetComponent<LayoutElement>();
+            bodyLayoutElement.flexibleHeight = 1f;
+            bodyLayoutElement.flexibleWidth = 1f;
+            var bodyLayout = bodyRoot.GetComponent<VerticalLayoutGroup>();
+            bodyLayout.childAlignment = TextAnchor.UpperCenter;
+            bodyLayout.childControlWidth = true;
+            bodyLayout.childControlHeight = true;
+            bodyLayout.childForceExpandWidth = true;
+            bodyLayout.childForceExpandHeight = true;
+            bodyLayout.spacing = 0f;
+            bodyLayout.padding = new RectOffset(0, 0, 0, 0);
+
+            BuildCurrentPage(bodyRoot.transform);
+
+            var footer = CreateSectionPanel(stage.transform, "FooterStrip", ClassicRpgUiRuntime.PanelFill, compact ? 132f : 118f, flexibleHeight: 0f);
+            footer.GetComponent<LayoutElement>().preferredHeight = _mode == ProgressionViewerMode.PreMatchConfirm ? (compact ? 172f : 146f) : (compact ? 132f : 118f);
+
+            _txtStatus = MakeLabel(footer.transform, "Txt_Status", "", compact ? 14 : 16, new Color(0.74f, 0.78f, 0.85f), compact ? 46f : 34f);
             _txtStatus.alignment = TextAlignmentOptions.Center;
-            ApplyClassicRpgLabelTheme(_txtStatus, false, true);
-
-            BuildCurrentPage(_panelRoot.transform);
+            ApplyReadableTextStyle(_txtStatus, new Color(0.78f, 0.82f, 0.90f), TextAlignmentOptions.Center);
 
             if (_mode == ProgressionViewerMode.PreMatchConfirm)
-                BuildPlayerPanel();
+                BuildPlayerPanel(footer.transform);
 
-            BuildActionRow(_panelRoot.transform);
+            BuildActionRow(footer.transform);
             RefreshCopy();
             RefreshVisuals();
         }
@@ -673,6 +887,10 @@ namespace CastleDefender.UI
             _txtDetailsState = null;
             _txtDetailsRequirement = null;
             _txtDetailsMoves = null;
+            _detailsStatsRowsRoot = null;
+            _detailsRequirementRowsRoot = null;
+            _detailsMovesRowsRoot = null;
+            _txtDetailsCustomization = null;
             _txtDetailsAudioStatus = null;
             _txtDetailsBody = null;
             _btnDetailsClose = null;
@@ -696,6 +914,10 @@ namespace CastleDefender.UI
             _txtPreviewHit = null;
             _btnPreviewDeath = null;
             _txtPreviewDeath = null;
+            _raceCarouselScroll = null;
+            _btnRaceCarouselPrev = null;
+            _btnRaceCarouselNext = null;
+            _raceCarouselItemCount = 0;
             _btnPrimaryAction = null;
             _txtPrimaryAction = null;
             _btnSecondaryAction = null;
@@ -714,89 +936,314 @@ namespace CastleDefender.UI
                     BuildRaceSelector(parent);
                     break;
                 case WizardPage.ProgressionTree:
-                    BuildProgressionTree(parent);
-                    BuildDetailsPanel(_treeSectionRoot != null ? _treeSectionRoot.transform : parent);
+                    BuildProgressionWorkspace(parent);
                     break;
                 case WizardPage.UnitDetails:
                     _activePage = WizardPage.ProgressionTree;
-                    _detailsModalOpen = true;
-                    BuildProgressionTree(parent);
-                    BuildDetailsPanel(_treeSectionRoot != null ? _treeSectionRoot.transform : parent);
+                    BuildProgressionWorkspace(parent);
                     break;
             }
+        }
+
+        void BuildProgressionWorkspace(Transform parent)
+        {
+            SyncSelectedUnitToCurrentTab();
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            var workspace = new GameObject(
+                "ProgressionWorkspace",
+                typeof(RectTransform),
+                typeof(LayoutElement),
+                compact ? typeof(VerticalLayoutGroup) : typeof(HorizontalLayoutGroup));
+            workspace.transform.SetParent(parent, false);
+            var workspaceLayout = workspace.GetComponent<LayoutElement>();
+            workspaceLayout.flexibleWidth = 1f;
+            workspaceLayout.flexibleHeight = 1f;
+
+            if (compact)
+            {
+                var layout = workspace.GetComponent<VerticalLayoutGroup>();
+                layout.childAlignment = TextAnchor.UpperCenter;
+                layout.childControlWidth = true;
+                layout.childControlHeight = false;
+                layout.childForceExpandWidth = true;
+                layout.childForceExpandHeight = false;
+                layout.spacing = 12f;
+            }
+            else
+            {
+                var layout = workspace.GetComponent<HorizontalLayoutGroup>();
+                layout.childAlignment = TextAnchor.UpperCenter;
+                layout.childControlWidth = true;
+                layout.childControlHeight = true;
+                layout.childForceExpandWidth = false;
+                layout.childForceExpandHeight = false;
+                layout.spacing = 14f;
+            }
+
+            var summaryColumn = new GameObject("SummaryColumn", typeof(RectTransform), typeof(LayoutElement));
+            summaryColumn.transform.SetParent(workspace.transform, false);
+            var summaryLayout = summaryColumn.GetComponent<LayoutElement>();
+            summaryLayout.preferredWidth = compact ? 0f : 272f;
+            summaryLayout.flexibleWidth = compact ? 1f : 0f;
+            summaryLayout.flexibleHeight = compact ? 0f : 1f;
+            summaryLayout.minWidth = compact ? 0f : 248f;
+            summaryLayout.preferredHeight = compact ? 242f : 0f;
+            BuildRaceSummarySidebar(summaryColumn.transform, compact);
+
+            var treeColumn = new GameObject("TreeColumn", typeof(RectTransform), typeof(LayoutElement));
+            treeColumn.transform.SetParent(workspace.transform, false);
+            var treeLayout = treeColumn.GetComponent<LayoutElement>();
+            treeLayout.flexibleWidth = 1f;
+            treeLayout.flexibleHeight = 1f;
+            treeLayout.minWidth = compact ? 0f : 640f;
+            treeLayout.minHeight = compact ? 320f : 0f;
+            BuildProgressionTree(treeColumn.transform);
+
+            var detailColumn = new GameObject("DetailColumn", typeof(RectTransform), typeof(LayoutElement));
+            detailColumn.transform.SetParent(workspace.transform, false);
+            var detailLayout = detailColumn.GetComponent<LayoutElement>();
+            detailLayout.preferredWidth = compact ? 0f : 320f;
+            detailLayout.flexibleWidth = compact ? 1f : 0f;
+            detailLayout.flexibleHeight = compact ? 0f : 1f;
+            detailLayout.minWidth = compact ? 0f : 292f;
+            detailLayout.preferredHeight = compact ? 338f : 0f;
+            BuildDetailsPanel(detailColumn.transform);
+        }
+
+        void BuildRaceSummarySidebar(Transform parent, bool compact)
+        {
+            var section = CreateSectionPanel(parent, "Section_Summary", new Color(0.09f, 0.11f, 0.17f, 0.98f), compact ? 236f : 0f, flexibleHeight: compact ? 0f : 1f);
+            var title = MakeLabel(section.transform, "Txt_SummaryHeader", "Race Dossier", compact ? 18 : 20, Color.white, 28f);
+            title.fontStyle = FontStyles.Bold;
+            title.alignment = TextAlignmentOptions.Center;
+
+            if (_selectedRace != null)
+            {
+                var portraitCard = new GameObject("RacePortrait", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+                portraitCard.transform.SetParent(section.transform, false);
+                portraitCard.GetComponent<LayoutElement>().preferredHeight = compact ? 64f : 116f;
+                ClassicRpgUiRuntime.ApplyPanel(portraitCard.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.07f, 0.10f, 0.16f, 0.98f));
+
+                var portrait = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+                portrait.transform.SetParent(portraitCard.transform, false);
+                var portraitRect = portrait.GetComponent<RectTransform>();
+                ClassicRpgUiRuntime.Stretch(portraitRect, new Vector2(6f, 6f), new Vector2(-6f, -6f));
+                var portraitImage = portrait.GetComponent<RawImage>();
+                portraitImage.color = new Color(1f, 1f, 1f, 0f);
+                portraitImage.raycastTarget = false;
+                var portraitFitter = portrait.GetComponent<AspectRatioFitter>();
+                portraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+                portraitFitter.aspectRatio = 1f;
+                StartPortraitCapture(_selectedRace.FeaturedPortraitKey, portraitImage);
+
+                var raceName = MakeLabel(section.transform, "Txt_RaceName", _selectedRace.DisplayName, compact ? 22 : 24, ClassicRpgUiRuntime.WarmGold, 34f);
+                raceName.fontStyle = FontStyles.Bold;
+                raceName.alignment = TextAlignmentOptions.Center;
+
+                var raceTitle = MakeLabel(section.transform, "Txt_RaceTitle", _selectedRace.FeaturedTitle, compact ? 13 : 14, new Color(0.84f, 0.88f, 0.95f), 26f);
+                raceTitle.alignment = TextAlignmentOptions.Center;
+
+                var raceSummary = MakeLabel(section.transform, "Txt_RaceSummary", _selectedRace.Summary, compact ? 12 : 14, new Color(0.86f, 0.89f, 0.94f), compact ? 40f : 112f);
+                raceSummary.alignment = TextAlignmentOptions.TopLeft;
+                raceSummary.textWrappingMode = TextWrappingModes.Normal;
+                SetResponsiveWrappedText(raceSummary, compact ? 11f : 13f, compact ? 12f : 14f);
+            }
+
+            var tabsHeader = MakeLabel(section.transform, "Txt_TabHeader", compact ? "Categories" : "Progression Categories", 14, ClassicRpgUiRuntime.SoftGold, 24f);
+            tabsHeader.fontStyle = FontStyles.Bold;
+            tabsHeader.alignment = TextAlignmentOptions.Center;
+
+            BuildTreeTabBar(section.transform, vertical: !compact);
         }
 
         void BuildRaceSelector(Transform parent)
         {
-            var section = CreateSectionPanel(parent, "Section_RaceSelector", new Color(0.08f, 0.11f, 0.17f, 0.98f), 0f, flexibleHeight: 1f);
-            MakeLabel(section.transform, "Txt_RaceHeader", "Select Race", 16, Color.white, 24f).fontStyle = FontStyles.Bold;
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
+            float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
 
-            var row = new GameObject("RaceRow", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
-            row.transform.SetParent(section.transform, false);
-            row.GetComponent<LayoutElement>().preferredHeight = RaceCardHeight;
-            var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
-            rowLayout.childAlignment = TextAnchor.MiddleCenter;
-            rowLayout.childControlWidth = true;
-            rowLayout.childControlHeight = true;
-            rowLayout.childForceExpandWidth = false;
-            rowLayout.childForceExpandHeight = false;
-            rowLayout.spacing = 10f;
+            var section = CreateSectionPanel(parent, "Section_RaceSelector", new Color(0.08f, 0.11f, 0.17f, 0.98f), 0f, flexibleHeight: 1f);
+            var header = MakeLabel(section.transform, "Txt_RaceHeader", "Select Race", compact ? 18 : 20, Color.white, 28f);
+            header.fontStyle = FontStyles.Bold;
+            header.alignment = TextAlignmentOptions.Center;
+
+            var helper = MakeLabel(
+                section.transform,
+                "Txt_RaceHelper",
+                "Choose a banner from the war council. Swipe or use the side buttons to inspect upcoming factions.",
+                compact ? 12 : 13,
+                new Color(0.82f, 0.88f, 0.96f),
+                compact ? 40f : 28f);
+            helper.alignment = TextAlignmentOptions.Center;
+            SetResponsiveWrappedText(helper, compact ? 11f : 12f, compact ? 12f : 13f);
+
+            var carouselRow = new GameObject("RaceCarouselRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            carouselRow.transform.SetParent(section.transform, false);
+            carouselRow.GetComponent<LayoutElement>().preferredHeight = cardHeight + 18f;
+            carouselRow.GetComponent<LayoutElement>().flexibleWidth = 1f;
+            var carouselLayout = carouselRow.GetComponent<HorizontalLayoutGroup>();
+            carouselLayout.childAlignment = TextAnchor.MiddleCenter;
+            carouselLayout.childControlWidth = true;
+            carouselLayout.childControlHeight = true;
+            carouselLayout.childForceExpandWidth = false;
+            carouselLayout.childForceExpandHeight = false;
+            carouselLayout.spacing = compact ? 8f : 12f;
+
+            _btnRaceCarouselPrev = MakeButton(carouselRow.transform, "Btn_RacePrev", "<", compact ? 48f : 54f, new Color(0.18f, 0.24f, 0.35f, 1f));
+            var prevLayout = _btnRaceCarouselPrev.GetComponent<LayoutElement>();
+            if (prevLayout != null)
+            {
+                prevLayout.preferredWidth = compact ? 54f : 62f;
+                prevLayout.minWidth = compact ? 54f : 62f;
+            }
+            ApplyClassicRpgButtonTheme(_btnRaceCarouselPrev, ClassicRpgButtonSize.Medium);
+            _btnRaceCarouselPrev.onClick.AddListener(() => ShiftRaceCarousel(-1));
+
+            var scrollGo = new GameObject("RaceCarouselScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
+            scrollGo.transform.SetParent(carouselRow.transform, false);
+            ApplyReadablePanelStyle(scrollGo.GetComponent<Image>(), new Color(0.07f, 0.10f, 0.16f, 0.92f));
+            var scrollLayout = scrollGo.GetComponent<LayoutElement>();
+            scrollLayout.flexibleWidth = 1f;
+            scrollLayout.preferredHeight = cardHeight + 18f;
+            scrollLayout.minWidth = compact ? 0f : 720f;
+
+            var scrollRect = scrollGo.GetComponent<ScrollRect>();
+            scrollRect.horizontal = true;
+            scrollRect.vertical = false;
+            scrollRect.scrollSensitivity = 28f;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.inertia = true;
+
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollGo.transform, false);
+            var viewportRect = viewportGo.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = new Vector2(12f, 8f);
+            viewportRect.offsetMax = new Vector2(-12f, -8f);
+            viewportGo.GetComponent<Image>().color = Color.white;
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(viewportGo.transform, false);
+            var contentRect = contentGo.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 0.5f);
+            contentRect.anchorMax = new Vector2(0f, 0.5f);
+            contentRect.pivot = new Vector2(0f, 0.5f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = Vector2.zero;
+            var contentLayout = contentGo.GetComponent<HorizontalLayoutGroup>();
+            contentLayout.childAlignment = TextAnchor.MiddleLeft;
+            contentLayout.childControlWidth = true;
+            contentLayout.childControlHeight = true;
+            contentLayout.childForceExpandWidth = false;
+            contentLayout.childForceExpandHeight = false;
+            contentLayout.spacing = compact ? 14f : 18f;
+            contentLayout.padding = new RectOffset(4, 4, 4, 4);
+            var contentFitter = contentGo.GetComponent<ContentSizeFitter>();
+            contentFitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            contentFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = contentRect;
+            _raceCarouselScroll = scrollRect;
+            _raceCarouselItemCount = _availableRaceIds.Length + PlaceholderRaceCardCount;
 
             for (int i = 0; i < _availableRaceIds.Length; i++)
             {
                 var race = RaceProgressionCatalog.GetOrDefault(_availableRaceIds[i], "race selector");
-                _raceCards.Add(BuildRaceCard(row.transform, race));
+                _raceCards.Add(BuildRaceCard(contentGo.transform, race, compact));
             }
+
+            for (int i = 0; i < PlaceholderRaceCardCount; i++)
+                BuildComingSoonRaceCard(contentGo.transform, compact, i + 1);
+
+            _btnRaceCarouselNext = MakeButton(carouselRow.transform, "Btn_RaceNext", ">", compact ? 48f : 54f, new Color(0.18f, 0.24f, 0.35f, 1f));
+            var nextLayout = _btnRaceCarouselNext.GetComponent<LayoutElement>();
+            if (nextLayout != null)
+            {
+                nextLayout.preferredWidth = compact ? 54f : 62f;
+                nextLayout.minWidth = compact ? 54f : 62f;
+            }
+            ApplyClassicRpgButtonTheme(_btnRaceCarouselNext, ClassicRpgButtonSize.Medium);
+            _btnRaceCarouselNext.onClick.AddListener(() => ShiftRaceCarousel(1));
+
+            scrollRect.onValueChanged.AddListener(_ => RefreshRaceCarouselButtons());
+            Canvas.ForceUpdateCanvases();
+            ScrollRaceCarouselToIndex(GetSelectedRaceCarouselIndex());
+            RefreshRaceCarouselButtons();
         }
 
-        RaceCardView BuildRaceCard(Transform parent, RaceProgressionDefinition race)
+        RaceCardView BuildRaceCard(Transform parent, RaceProgressionDefinition race, bool compact)
         {
-            var cardGo = new GameObject($"Race_{race.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button));
+            float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
+            float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
+            var cardGo = new GameObject($"Race_{race.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button), typeof(VerticalLayoutGroup));
             cardGo.transform.SetParent(parent, false);
-            cardGo.GetComponent<LayoutElement>().preferredWidth = RaceCardWidth;
-            cardGo.GetComponent<LayoutElement>().preferredHeight = RaceCardHeight;
+            var cardLayout = cardGo.GetComponent<LayoutElement>();
+            cardLayout.preferredWidth = cardWidth;
+            cardLayout.preferredHeight = cardHeight;
+            cardLayout.minWidth = cardWidth;
+            cardLayout.minHeight = cardHeight;
 
             var background = cardGo.GetComponent<Image>();
-            background.color = lockedColor;
+            ApplyReadablePanelStyle(background, lockedColor);
 
             var button = cardGo.GetComponent<Button>();
             button.targetGraphic = background;
+            button.transition = Selectable.Transition.None;
             button.onClick.AddListener(() => OnRaceSelected(race.Id));
+
+            var layout = cardGo.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = compact ? 8f : 10f;
+            layout.padding = compact ? new RectOffset(14, 14, 14, 14) : new RectOffset(18, 18, 18, 18);
 
             var frame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image));
             frame.transform.SetParent(cardGo.transform, false);
-            var frameRect = frame.GetComponent<RectTransform>();
-            frameRect.anchorMin = new Vector2(0f, 0f);
-            frameRect.anchorMax = new Vector2(0f, 1f);
-            frameRect.pivot = new Vector2(0f, 0.5f);
-            frameRect.sizeDelta = new Vector2(92f, 0f);
-            frameRect.anchoredPosition = new Vector2(10f, 0f);
-            frame.GetComponent<Image>().color = new Color(0.11f, 0.15f, 0.24f, 1f);
+            ApplyReadablePanelStyle(frame.GetComponent<Image>(), new Color(0.09f, 0.12f, 0.20f, 0.98f));
+            frame.AddComponent<LayoutElement>().preferredHeight = compact ? 148f : 196f;
 
             var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
             portraitGo.transform.SetParent(frame.transform, false);
             var portraitRect = portraitGo.GetComponent<RectTransform>();
             portraitRect.anchorMin = Vector2.zero;
             portraitRect.anchorMax = Vector2.one;
-            portraitRect.offsetMin = new Vector2(6f, 6f);
-            portraitRect.offsetMax = new Vector2(-6f, -6f);
+            portraitRect.offsetMin = new Vector2(12f, 10f);
+            portraitRect.offsetMax = new Vector2(-12f, -10f);
             var portrait = portraitGo.GetComponent<RawImage>();
             portrait.color = new Color(1f, 1f, 1f, 0f);
             portrait.raycastTarget = false;
             portraitGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 1f;
+            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.88f;
             StartPortraitCapture(race.FeaturedPortraitKey, portrait);
 
-            var title = CreateAnchoredText(cardGo.transform, "Txt_Title", race.DisplayName, 22, Color.white, new Vector2(0f, 0.52f), new Vector2(1f, 0.88f), new Vector2(112f, 0f), new Vector2(-10f, 0f));
+            var title = MakeLabel(cardGo.transform, "Txt_Title", race.DisplayName, compact ? 22 : 26, Color.white, compact ? 34f : 40f);
             title.fontStyle = FontStyles.Bold;
-            title.alignment = TextAlignmentOptions.MidlineLeft;
-            title.textWrappingMode = TextWrappingModes.NoWrap;
-            title.overflowMode = TextOverflowModes.Ellipsis;
+            title.alignment = TextAlignmentOptions.Center;
+            SetResponsiveSingleLine(title, compact ? 18f : 20f, compact ? 22f : 26f);
 
-            var subtitle = CreateAnchoredText(cardGo.transform, "Txt_Subtitle", race.FeaturedTitle, 13, new Color(0.82f, 0.88f, 0.96f), new Vector2(0f, 0.18f), new Vector2(1f, 0.50f), new Vector2(112f, 0f), new Vector2(-10f, 0f));
-            subtitle.alignment = TextAlignmentOptions.TopLeft;
-            subtitle.textWrappingMode = TextWrappingModes.NoWrap;
-            subtitle.overflowMode = TextOverflowModes.Ellipsis;
+            var subtitle = MakeLabel(cardGo.transform, "Txt_Subtitle", NormalizeDossierValue(race.FeaturedTitle, "Faction ready"), compact ? 13 : 14, new Color(0.82f, 0.88f, 0.96f), 24f);
+            subtitle.alignment = TextAlignmentOptions.Center;
+            SetResponsiveSingleLine(subtitle, 11f, compact ? 13f : 14f);
+
+            var summary = MakeLabel(cardGo.transform, "Txt_Summary", BuildRaceCardSummary(race), compact ? 12 : 13, new Color(0.84f, 0.88f, 0.95f), compact ? 76f : 92f);
+            summary.alignment = TextAlignmentOptions.TopLeft;
+            SetResponsiveWrappedText(summary, compact ? 11f : 12f, compact ? 12f : 13f);
+
+            var statusGo = new GameObject("StatusChip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            statusGo.transform.SetParent(cardGo.transform, false);
+            var statusLayout = statusGo.GetComponent<LayoutElement>();
+            statusLayout.preferredHeight = 32f;
+            var statusBackground = statusGo.GetComponent<Image>();
+            ApplyReadablePanelStyle(statusBackground, new Color(0.18f, 0.23f, 0.33f, 0.98f));
+            var status = CreateAnchoredText(statusGo.transform, "Txt_Status", "Available Now", 12, ClassicRpgUiRuntime.WarmGold, Vector2.zero, Vector2.one, new Vector2(8f, 4f), new Vector2(-8f, -4f));
+            ApplyReadableTextStyle(status, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(status, 10f, 12f);
 
             return new RaceCardView
             {
@@ -805,22 +1252,91 @@ namespace CastleDefender.UI
                 Button = button,
                 Title = title,
                 Subtitle = subtitle,
+                Summary = summary,
+                StatusBackground = statusBackground,
+                Status = status,
                 Portrait = portrait,
             };
+        }
+
+        void BuildComingSoonRaceCard(Transform parent, bool compact, int slotIndex)
+        {
+            float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
+            float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
+            var cardGo = new GameObject($"RaceComingSoon_{slotIndex}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(CanvasGroup));
+            cardGo.transform.SetParent(parent, false);
+            var cardLayout = cardGo.GetComponent<LayoutElement>();
+            cardLayout.preferredWidth = cardWidth;
+            cardLayout.preferredHeight = cardHeight;
+            cardLayout.minWidth = cardWidth;
+            cardLayout.minHeight = cardHeight;
+            ApplyReadablePanelStyle(cardGo.GetComponent<Image>(), new Color(0.10f, 0.11f, 0.15f, 0.98f));
+            cardGo.GetComponent<CanvasGroup>().alpha = 0.94f;
+
+            var layout = cardGo.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = compact ? 8f : 10f;
+            layout.padding = compact ? new RectOffset(14, 14, 14, 14) : new RectOffset(18, 18, 18, 18);
+
+            var crestFrame = new GameObject("CrestFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            crestFrame.transform.SetParent(cardGo.transform, false);
+            crestFrame.GetComponent<LayoutElement>().preferredHeight = compact ? 148f : 196f;
+            ApplyReadablePanelStyle(crestFrame.GetComponent<Image>(), new Color(0.09f, 0.12f, 0.19f, 0.98f));
+
+            var crestGo = new GameObject("Crest", typeof(RectTransform), typeof(Image), typeof(AspectRatioFitter));
+            crestGo.transform.SetParent(crestFrame.transform, false);
+            ClassicRpgUiRuntime.Stretch(crestGo.GetComponent<RectTransform>(), new Vector2(22f, 16f), new Vector2(-22f, -16f));
+            var crestImage = crestGo.GetComponent<Image>();
+            crestImage.raycastTarget = false;
+            crestImage.preserveAspect = true;
+            crestImage.sprite = LoadDetailIcon("ClassicRpgIcons/Badge_Warrior");
+            crestImage.color = crestImage.sprite != null ? new Color(0.68f, 0.63f, 0.58f, 0.86f) : new Color(1f, 1f, 1f, 0f);
+            crestGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            crestGo.GetComponent<AspectRatioFitter>().aspectRatio = 1.28f;
+
+            var title = MakeLabel(cardGo.transform, "Txt_Title", "Coming Soon", compact ? 22 : 26, new Color(0.92f, 0.89f, 0.84f), compact ? 34f : 40f);
+            title.fontStyle = FontStyles.Bold;
+            title.alignment = TextAlignmentOptions.Center;
+            SetResponsiveSingleLine(title, compact ? 18f : 20f, compact ? 22f : 26f);
+
+            var subtitle = MakeLabel(cardGo.transform, "Txt_Subtitle", $"Future faction slot {slotIndex}", compact ? 13 : 14, new Color(0.76f, 0.81f, 0.90f), 24f);
+            subtitle.alignment = TextAlignmentOptions.Center;
+            SetResponsiveSingleLine(subtitle, 11f, compact ? 13f : 14f);
+
+            var summary = MakeLabel(
+                cardGo.transform,
+                "Txt_Summary",
+                "Reserved for a future kingdom with its own commander, progression tree, and battlefield roster.",
+                compact ? 12 : 13,
+                new Color(0.80f, 0.84f, 0.92f),
+                compact ? 90f : 112f);
+            summary.alignment = TextAlignmentOptions.TopLeft;
+            SetResponsiveWrappedText(summary, compact ? 11f : 12f, compact ? 12f : 13f);
+
+            var statusGo = new GameObject("StatusChip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            statusGo.transform.SetParent(cardGo.transform, false);
+            statusGo.GetComponent<LayoutElement>().preferredHeight = 32f;
+            ApplyReadablePanelStyle(statusGo.GetComponent<Image>(), new Color(0.16f, 0.18f, 0.24f, 0.98f));
+            var status = CreateAnchoredText(statusGo.transform, "Txt_Status", "Awaiting Banner", 12, new Color(0.90f, 0.82f, 0.60f), Vector2.zero, Vector2.one, new Vector2(8f, 4f), new Vector2(-8f, -4f));
+            ApplyReadableTextStyle(status, new Color(0.90f, 0.82f, 0.60f), TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(status, 10f, 12f);
         }
 
         void BuildProgressionTree(Transform parent)
         {
             var section = CreateSectionPanel(parent, "Section_Tree", new Color(0.07f, 0.10f, 0.16f, 0.98f), 0f, flexibleHeight: 1f);
             _treeSectionRoot = section;
-            var treeHeader = MakeLabel(section.transform, "Txt_TreeHeader", "Upgrade Progression Tree", 18, Color.white, 28f);
+            var treeHeader = MakeLabel(section.transform, "Txt_TreeHeader", "Upgrade Progression Tree", 20, Color.white, 32f);
             treeHeader.fontStyle = FontStyles.Bold;
-
-            BuildTreeTabBar(section.transform);
+            treeHeader.alignment = TextAlignmentOptions.Center;
 
             var scrollGo = new GameObject("TreeScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
             scrollGo.transform.SetParent(section.transform, false);
-            scrollGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
+            ApplyReadablePanelStyle(scrollGo.GetComponent<Image>(), new Color(0.08f, 0.11f, 0.17f, 0.88f));
             var scrollLayout = scrollGo.GetComponent<LayoutElement>();
             scrollLayout.minHeight = 0f;
             scrollLayout.preferredHeight = 0f;
@@ -828,7 +1344,7 @@ namespace CastleDefender.UI
             scrollLayout.flexibleWidth = 1f;
 
             var scrollRect = scrollGo.GetComponent<ScrollRect>();
-            scrollRect.horizontal = false;
+            scrollRect.horizontal = true;
             scrollRect.vertical = true;
             scrollRect.scrollSensitivity = 30f;
             scrollRect.movementType = ScrollRect.MovementType.Clamped;
@@ -847,23 +1363,23 @@ namespace CastleDefender.UI
             contentGo.transform.SetParent(viewportGo.transform, false);
             var contentRect = contentGo.GetComponent<RectTransform>();
             contentRect.anchorMin = new Vector2(0f, 1f);
-            contentRect.anchorMax = new Vector2(1f, 1f);
-            contentRect.pivot = new Vector2(0.5f, 1f);
-            contentRect.offsetMin = Vector2.zero;
-            contentRect.offsetMax = Vector2.zero;
+            contentRect.anchorMax = new Vector2(0f, 1f);
+            contentRect.pivot = new Vector2(0f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = Vector2.zero;
             var contentLayoutElement = contentGo.GetComponent<LayoutElement>();
-            contentLayoutElement.flexibleWidth = 1f;
+            contentLayoutElement.flexibleWidth = 0f;
             contentLayoutElement.flexibleHeight = 1f;
 
             var contentLayout = contentGo.GetComponent<VerticalLayoutGroup>();
-            contentLayout.childAlignment = TextAnchor.UpperCenter;
+            contentLayout.childAlignment = TextAnchor.UpperLeft;
             contentLayout.childControlWidth = true;
             contentLayout.childControlHeight = true;
-            contentLayout.childForceExpandWidth = true;
+            contentLayout.childForceExpandWidth = false;
             contentLayout.childForceExpandHeight = false;
-            contentLayout.spacing = 12f;
-            contentLayout.padding = new RectOffset(4, 4, 4, 4);
-            contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            contentLayout.spacing = 16f;
+            contentLayout.padding = new RectOffset(12, 12, 12, 12);
+            contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
             contentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             scrollRect.viewport = viewportRect;
@@ -889,16 +1405,23 @@ namespace CastleDefender.UI
             LayoutRebuilder.ForceRebuildLayoutImmediate(section.GetComponent<RectTransform>());
         }
 
-        void BuildTreeTabBar(Transform parent)
+        void BuildTreeTabBar(Transform parent, bool vertical = false)
         {
-            var tabBar = new GameObject("TreeTabBar", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            var tabBar = new GameObject(
+                "TreeTabBar",
+                typeof(RectTransform),
+                typeof(Image),
+                typeof(LayoutElement),
+                vertical ? typeof(VerticalLayoutGroup) : typeof(HorizontalLayoutGroup));
             tabBar.transform.SetParent(parent, false);
             tabBar.GetComponent<Image>().color = new Color(0.10f, 0.13f, 0.20f, 0.98f);
             var layoutElement = tabBar.GetComponent<LayoutElement>();
-            layoutElement.preferredHeight = 54f;
+            layoutElement.preferredHeight = vertical ? 214f : 54f;
             layoutElement.flexibleWidth = 1f;
 
-            var layout = tabBar.GetComponent<HorizontalLayoutGroup>();
+            var layout = vertical
+                ? (HorizontalOrVerticalLayoutGroup)tabBar.GetComponent<VerticalLayoutGroup>()
+                : tabBar.GetComponent<HorizontalLayoutGroup>();
             layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
@@ -918,7 +1441,7 @@ namespace CastleDefender.UI
             var buttonGo = new GameObject($"Tab_{tab}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button));
             buttonGo.transform.SetParent(parent, false);
             var layoutElement = buttonGo.GetComponent<LayoutElement>();
-            layoutElement.preferredHeight = 36f;
+            layoutElement.preferredHeight = 42f;
             layoutElement.flexibleWidth = 1f;
 
             var background = buttonGo.GetComponent<Image>();
@@ -960,12 +1483,12 @@ namespace CastleDefender.UI
 
             var laneGo = new GameObject($"Lane_{lane.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             laneGo.transform.SetParent(parent, false);
-            laneGo.GetComponent<Image>().color = new Color(0.09f, 0.12f, 0.19f, 0.92f);
+            ApplyReadablePanelStyle(laneGo.GetComponent<Image>(), new Color(0.08f, 0.11f, 0.18f, 0.97f));
             var laneLayoutElement = laneGo.GetComponent<LayoutElement>();
-            laneLayoutElement.minWidth = 0f;
-            laneLayoutElement.preferredWidth = 0f;
+            laneLayoutElement.minWidth = CalculateLaneRowWidth(lane);
+            laneLayoutElement.preferredWidth = CalculateLaneRowWidth(lane);
             laneLayoutElement.preferredHeight = ResolveLaneRowHeight(lane);
-            laneLayoutElement.flexibleWidth = 1f;
+            laneLayoutElement.flexibleWidth = 0f;
 
             var layout = laneGo.GetComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
@@ -973,13 +1496,13 @@ namespace CastleDefender.UI
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 10f;
-            layout.padding = new RectOffset(12, 12, 12, 12);
+            layout.spacing = 12f;
+            layout.padding = new RectOffset(16, 16, 16, 16);
 
             var headerRow = new GameObject("HeaderRow", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             headerRow.transform.SetParent(laneGo.transform, false);
             var headerLayoutElement = headerRow.GetComponent<LayoutElement>();
-            headerLayoutElement.preferredHeight = 26f;
+            headerLayoutElement.preferredHeight = 30f;
             headerLayoutElement.flexibleWidth = 1f;
             var headerLayout = headerRow.GetComponent<HorizontalLayoutGroup>();
             headerLayout.childAlignment = TextAnchor.MiddleLeft;
@@ -1001,6 +1524,12 @@ namespace CastleDefender.UI
                 FontStyles.Normal,
                 TextAlignmentOptions.MidlineLeft);
             SetResponsiveSingleLine(laneSummary, 11f, 13f);
+            var summaryLayout = laneSummary.GetComponent<LayoutElement>();
+            if (summaryLayout != null)
+            {
+                summaryLayout.flexibleWidth = 1f;
+                summaryLayout.minWidth = 0f;
+            }
 
             if (lane.Layout == RaceProgressionLaneLayout.BuildingStepsToOutcomeCards)
                 BuildCivicLaneRows(laneGo.transform, lane);
@@ -1201,7 +1730,7 @@ namespace CastleDefender.UI
             var sectionLayoutElement = section.GetComponent<LayoutElement>();
             sectionLayoutElement.minWidth = 0f;
             sectionLayoutElement.preferredWidth = 0f;
-            sectionLayoutElement.preferredHeight = 228f;
+            sectionLayoutElement.preferredHeight = UnitCardHeight + 86f;
             sectionLayoutElement.flexibleWidth = 1f;
 
             var sectionLayout = section.GetComponent<VerticalLayoutGroup>();
@@ -1251,19 +1780,20 @@ namespace CastleDefender.UI
 
         void BuildFeaturedUnitCard(Transform parent, RaceProgressionLaneDefinition lane, RaceProgressionUnitDefinition unit)
         {
+            bool isHeroOutcome = unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome;
             var cardGo = new GameObject($"Unit_{unit.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(CanvasGroup), typeof(Button));
             cardGo.transform.SetParent(parent, false);
             var layoutElement = cardGo.GetComponent<LayoutElement>();
             layoutElement.minWidth = 0f;
-            layoutElement.preferredWidth = unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome
+            layoutElement.preferredWidth = isHeroOutcome
                 ? HeroOutcomeCardWidth
                 : 0f;
             layoutElement.preferredHeight = UnitCardHeight;
-            layoutElement.flexibleWidth = unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome
+            layoutElement.flexibleWidth = isHeroOutcome
                 ? 0f
                 : UnitCardFlexWidth;
             var background = cardGo.GetComponent<Image>();
-            background.color = unlockedColor;
+            ApplyReadablePanelStyle(background, unlockedColor);
             var button = cardGo.GetComponent<Button>();
             button.targetGraphic = background;
             button.transition = Selectable.Transition.None;
@@ -1275,14 +1805,20 @@ namespace CastleDefender.UI
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 8f;
-            layout.padding = new RectOffset(10, 10, 10, 10);
+            layout.spacing = isHeroOutcome ? 6f : 8f;
+            layout.padding = isHeroOutcome
+                ? new RectOffset(12, 12, 12, 12)
+                : new RectOffset(10, 10, 10, 10);
 
             var stateStrip = new GameObject("StateStrip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             stateStrip.transform.SetParent(cardGo.transform, false);
-            stateStrip.GetComponent<LayoutElement>().preferredHeight = 28f;
+            stateStrip.GetComponent<LayoutElement>().preferredHeight = isHeroOutcome ? 26f : 28f;
             var stateBackground = stateStrip.GetComponent<Image>();
-            stateBackground.color = new Color(0.16f, 0.22f, 0.32f, 0.96f);
+            ApplyReadablePanelStyle(
+                stateBackground,
+                isHeroOutcome
+                    ? new Color(0.21f, 0.19f, 0.12f, 0.98f)
+                    : new Color(0.16f, 0.22f, 0.32f, 0.96f));
             var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 12f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var stateRect = state.rectTransform;
             stateRect.anchorMin = Vector2.zero;
@@ -1293,8 +1829,12 @@ namespace CastleDefender.UI
 
             var portraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             portraitFrame.transform.SetParent(cardGo.transform, false);
-            portraitFrame.GetComponent<Image>().color = new Color(0.10f, 0.14f, 0.22f, 0.98f);
-            portraitFrame.GetComponent<LayoutElement>().preferredHeight = PortraitFrameHeight;
+            ApplyReadablePanelStyle(
+                portraitFrame.GetComponent<Image>(),
+                isHeroOutcome
+                    ? new Color(0.11f, 0.12f, 0.18f, 0.99f)
+                    : new Color(0.10f, 0.14f, 0.22f, 0.98f));
+            portraitFrame.GetComponent<LayoutElement>().preferredHeight = isHeroOutcome ? 122f : PortraitFrameHeight;
 
             var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
             portraitGo.transform.SetParent(portraitFrame.transform, false);
@@ -1332,22 +1872,36 @@ namespace CastleDefender.UI
 
             ApplyFeatureCardArt(unit, portrait, icon, iconFallback);
 
+            if (isHeroOutcome)
+                CreateHeroOutcomeBadge(cardGo.transform, unit);
+
             var name = MakeLabel(cardGo.transform, "Txt_Name", unit.DisplayName, 17, Color.white, 24f);
             name.fontStyle = FontStyles.Bold;
             SetResponsiveSingleLine(name, 12f, 17f);
 
-            var stats = MakeLabel(cardGo.transform, "Txt_Stats", BuildUnitCardStatsText(unit), 13, new Color(0.86f, 0.88f, 0.92f), 28f);
+            var stats = MakeLabel(
+                cardGo.transform,
+                "Txt_Stats",
+                BuildUnitCardStatsText(unit),
+                13,
+                isHeroOutcome ? ClassicRpgUiRuntime.WarmGold : new Color(0.86f, 0.88f, 0.92f),
+                isHeroOutcome ? 24f : 28f);
             stats.alignment = TextAlignmentOptions.Center;
-            SetResponsiveSingleLine(stats, 12f, 13f);
+            stats.fontStyle = isHeroOutcome ? FontStyles.Bold : FontStyles.Normal;
+            SetResponsiveSingleLine(stats, 11f, 13f);
 
             var laneHint = MakeLabel(
                 cardGo.transform,
                 "Txt_LaneHint",
                 BuildUnitCardSubtitle(lane, unit),
-                12,
-                new Color(0.70f, 0.78f, 0.90f),
-                24f);
-            SetResponsiveSingleLine(laneHint, 12f, 12f);
+                isHeroOutcome ? 11 : 12,
+                isHeroOutcome ? new Color(0.86f, 0.90f, 0.96f) : new Color(0.70f, 0.78f, 0.90f),
+                isHeroOutcome ? 34f : 24f);
+            laneHint.alignment = TextAlignmentOptions.Center;
+            if (isHeroOutcome)
+                SetResponsiveWrappedText(laneHint, 10f, 11f);
+            else
+                SetResponsiveSingleLine(laneHint, 12f, 12f);
 
             _unitCards[unit.Id] = new UnitCardView
             {
@@ -1374,7 +1928,7 @@ namespace CastleDefender.UI
 
         void BuildBuildingTierCard(Transform parent, RaceProgressionLaneDefinition lane, RaceProgressionUnitDefinition unit)
         {
-            BuildBuildingProgressCard(parent, lane, unit, 0f, BuildingCardHeight, BuildingCardFlexWidth);
+            BuildBuildingProgressCard(parent, lane, unit, BuildingTierCardWidth, BuildingCardHeight, 0f);
         }
 
         void BuildRequirementStepCard(Transform parent, RaceProgressionLaneDefinition lane, RaceProgressionUnitDefinition unit)
@@ -1387,59 +1941,35 @@ namespace CastleDefender.UI
             var cardGo = new GameObject($"Unit_{unit.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(CanvasGroup), typeof(Button));
             cardGo.transform.SetParent(parent, false);
             var layoutElement = cardGo.GetComponent<LayoutElement>();
+            float resolvedWidth = preferredWidth > 0f ? preferredWidth : BuildingTierCardWidth;
             layoutElement.minWidth = 0f;
             layoutElement.minHeight = preferredHeight;
-            layoutElement.preferredWidth = preferredWidth;
+            layoutElement.preferredWidth = resolvedWidth;
             layoutElement.preferredHeight = preferredHeight;
             layoutElement.flexibleWidth = flexibleWidth;
 
             var background = cardGo.GetComponent<Image>();
-            background.color = unlockedColor;
+            ApplyReadablePanelStyle(background, unlockedColor);
             var button = cardGo.GetComponent<Button>();
             button.targetGraphic = background;
             button.transition = Selectable.Transition.None;
             button.onClick.AddListener(() => OnUnitSelected(unit.Id));
 
             var layout = cardGo.GetComponent<VerticalLayoutGroup>();
-            layout.childAlignment = TextAnchor.UpperLeft;
+            layout.childAlignment = TextAnchor.UpperCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 10f;
-            layout.padding = new RectOffset(10, 10, 10, 10);
-
-            var headerRow = new GameObject("HeaderRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
-            headerRow.transform.SetParent(cardGo.transform, false);
-            headerRow.GetComponent<LayoutElement>().preferredHeight = 44f;
-            var headerLayout = headerRow.GetComponent<HorizontalLayoutGroup>();
-            headerLayout.childAlignment = TextAnchor.MiddleLeft;
-            headerLayout.childControlWidth = true;
-            headerLayout.childControlHeight = true;
-            headerLayout.childForceExpandWidth = false;
-            headerLayout.childForceExpandHeight = true;
-            headerLayout.spacing = 10f;
-
-            var name = MakeLabel(headerRow.transform, "Txt_Name", BuildBuildingCardTitle(unit), 17, Color.white, 48f);
-            var nameLayout = name.GetComponent<LayoutElement>();
-            if (nameLayout != null)
-            {
-                nameLayout.flexibleWidth = 1f;
-                nameLayout.minWidth = 0f;
-            }
-            name.fontStyle = FontStyles.Bold;
-            name.alignment = TextAlignmentOptions.Left;
-            name.overflowMode = TextOverflowModes.Ellipsis;
-            SetResponsiveWrappedText(name, 12f, 17f);
+            layout.spacing = 8f;
+            layout.padding = new RectOffset(12, 12, 12, 12);
 
             var stateStrip = new GameObject("StateStrip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            stateStrip.transform.SetParent(headerRow.transform, false);
+            stateStrip.transform.SetParent(cardGo.transform, false);
             var stateStripLayout = stateStrip.GetComponent<LayoutElement>();
-            stateStripLayout.preferredWidth = 92f;
-            stateStripLayout.minWidth = 92f;
-            stateStripLayout.preferredHeight = 26f;
+            stateStripLayout.preferredHeight = 24f;
             var stateBackground = stateStrip.GetComponent<Image>();
-            stateBackground.color = new Color(0.16f, 0.22f, 0.32f, 0.96f);
+            ApplyReadablePanelStyle(stateBackground, new Color(0.18f, 0.23f, 0.34f, 0.98f));
             var state = CreateInlineText(stateStrip.transform, "Txt_State", "", 12f, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
             var stateRect = state.rectTransform;
             stateRect.anchorMin = Vector2.zero;
@@ -1448,27 +1978,11 @@ namespace CastleDefender.UI
             stateRect.offsetMax = new Vector2(-6f, -2f);
             SetResponsiveSingleLine(state, 12f, 12f);
 
-            float bodyHeight = Mathf.Max(132f, preferredHeight - 66f);
-            var bodyRow = new GameObject("BodyRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
-            bodyRow.transform.SetParent(cardGo.transform, false);
-            var bodyRowLayoutElement = bodyRow.GetComponent<LayoutElement>();
-            bodyRowLayoutElement.preferredHeight = bodyHeight;
-            bodyRowLayoutElement.flexibleHeight = 1f;
-            var bodyLayout = bodyRow.GetComponent<HorizontalLayoutGroup>();
-            bodyLayout.childAlignment = TextAnchor.UpperLeft;
-            bodyLayout.childControlWidth = true;
-            bodyLayout.childControlHeight = true;
-            bodyLayout.childForceExpandWidth = false;
-            bodyLayout.childForceExpandHeight = true;
-            bodyLayout.spacing = 10f;
-
             var imageFrame = new GameObject("ImageFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(RectMask2D));
-            imageFrame.transform.SetParent(bodyRow.transform, false);
-            imageFrame.GetComponent<Image>().color = new Color(0.09f, 0.13f, 0.20f, 0.98f);
+            imageFrame.transform.SetParent(cardGo.transform, false);
+            ApplyReadablePanelStyle(imageFrame.GetComponent<Image>(), new Color(0.09f, 0.13f, 0.20f, 0.98f));
             var imageLayout = imageFrame.GetComponent<LayoutElement>();
-            imageLayout.minWidth = preferredWidth > 0f ? preferredWidth * 0.74f : 140f;
-            imageLayout.flexibleWidth = 4f;
-            imageLayout.flexibleHeight = 1f;
+            imageLayout.preferredHeight = preferredHeight >= 260f ? 104f : 90f;
 
             var iconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image), typeof(AspectRatioFitter));
             iconGo.transform.SetParent(imageFrame.transform, false);
@@ -1493,39 +2007,60 @@ namespace CastleDefender.UI
             SetResponsiveSingleLine(iconFallback, 11f, 20f);
             ApplyBuildingCardArt(icon, iconFallback, unit);
 
-            var infoColumn = new GameObject("InfoColumn", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
-            infoColumn.transform.SetParent(bodyRow.transform, false);
-            var infoLayoutElement = infoColumn.GetComponent<LayoutElement>();
-            infoLayoutElement.minWidth = preferredWidth > 0f ? preferredWidth * 0.18f : 78f;
-            infoLayoutElement.preferredWidth = preferredWidth > 0f ? preferredWidth * 0.20f : 82f;
-            infoLayoutElement.flexibleWidth = 1f;
-            infoLayoutElement.flexibleHeight = 1f;
+            var infoColumn = new GameObject("InfoColumn", typeof(RectTransform), typeof(VerticalLayoutGroup));
+            infoColumn.transform.SetParent(cardGo.transform, false);
             var infoLayout = infoColumn.GetComponent<VerticalLayoutGroup>();
-            infoLayout.childAlignment = TextAnchor.UpperLeft;
+            infoLayout.childAlignment = TextAnchor.UpperCenter;
             infoLayout.childControlWidth = true;
             infoLayout.childControlHeight = true;
             infoLayout.childForceExpandWidth = true;
             infoLayout.childForceExpandHeight = false;
-            infoLayout.spacing = 6f;
+            infoLayout.spacing = 4f;
+
+            var name = MakeLabel(infoColumn.transform, "Txt_Name", BuildBuildingCardTitle(unit), 17, Color.white, 36f);
+            name.fontStyle = FontStyles.Bold;
+            name.alignment = TextAlignmentOptions.Center;
+            SetResponsiveWrappedText(name, 12f, 17f);
+
+            var laneHint = MakeLabel(
+                infoColumn.transform,
+                "Txt_LaneHint",
+                BuildUnitCardSubtitle(lane, unit),
+                12,
+                new Color(0.74f, 0.81f, 0.92f),
+                18f);
+            laneHint.alignment = TextAlignmentOptions.Center;
+            SetResponsiveSingleLine(laneHint, 11f, 12f);
+
+            var statsRow = new GameObject("StatsRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            statsRow.transform.SetParent(cardGo.transform, false);
+            statsRow.GetComponent<LayoutElement>().preferredHeight = preferredHeight >= 260f ? 48f : 44f;
+            var statsRowLayout = statsRow.GetComponent<HorizontalLayoutGroup>();
+            statsRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            statsRowLayout.childControlWidth = true;
+            statsRowLayout.childControlHeight = true;
+            statsRowLayout.childForceExpandWidth = true;
+            statsRowLayout.childForceExpandHeight = false;
+            statsRowLayout.spacing = 6f;
 
             var tier = CreateBuildingStatRow(
-                infoColumn.transform,
+                statsRow.transform,
                 "Tier",
                 BuildCompactBuildingTierValue(unit),
                 new Color(0.82f, 0.87f, 0.95f));
             var time = CreateBuildingStatRow(
-                infoColumn.transform,
+                statsRow.transform,
                 "Build",
                 BuildBuildingTimeValue(unit),
                 new Color(0.72f, 0.80f, 0.91f));
             var cost = CreateBuildingStatRow(
-                infoColumn.transform,
+                statsRow.transform,
                 "Gold",
                 BuildBuildingCostValue(unit),
                 new Color(0.98f, 0.87f, 0.56f));
             var requirement = CreateBuildingStatRow(
-                infoColumn.transform,
-                "Req",
+                statsRow.transform,
+                "Gate",
                 BuildBuildingRequirementValue(lane, unit),
                 new Color(0.77f, 0.82f, 0.90f));
 
@@ -1541,7 +2076,7 @@ namespace CastleDefender.UI
                 CanvasGroup = cardGo.GetComponent<CanvasGroup>(),
                 Name = name,
                 Stats = tier,
-                Subtitle = time,
+                Subtitle = laneHint,
                 Requirement = requirement,
                 Cost = cost,
                 State = state,
@@ -1552,29 +2087,33 @@ namespace CastleDefender.UI
 
         TMP_Text CreateBuildingStatRow(Transform parent, string labelText, string valueText, Color valueColor)
         {
-            var row = new GameObject($"Stat_{labelText}", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            var row = new GameObject($"Stat_{labelText}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             row.transform.SetParent(parent, false);
+            ApplyReadablePanelStyle(row.GetComponent<Image>(), new Color(0.11f, 0.15f, 0.24f, 0.98f));
             var rowLayoutElement = row.GetComponent<LayoutElement>();
-            rowLayoutElement.preferredHeight = 36f;
-            rowLayoutElement.minHeight = 36f;
+            rowLayoutElement.preferredHeight = 44f;
+            rowLayoutElement.minHeight = 44f;
+            rowLayoutElement.flexibleWidth = 1f;
+            rowLayoutElement.minWidth = 0f;
 
             var rowLayout = row.GetComponent<VerticalLayoutGroup>();
-            rowLayout.childAlignment = TextAnchor.UpperLeft;
+            rowLayout.childAlignment = TextAnchor.MiddleCenter;
             rowLayout.childControlWidth = true;
             rowLayout.childControlHeight = true;
             rowLayout.childForceExpandWidth = true;
             rowLayout.childForceExpandHeight = false;
             rowLayout.spacing = 0f;
+            rowLayout.padding = new RectOffset(4, 4, 5, 4);
 
-            var label = MakeLabel(row.transform, "Txt_Label", labelText.ToUpperInvariant(), 10, new Color(0.66f, 0.73f, 0.84f, 0.92f), 12f);
-            label.alignment = TextAlignmentOptions.MidlineLeft;
+            var label = MakeLabel(row.transform, "Txt_Label", labelText.ToUpperInvariant(), 9, new Color(0.66f, 0.73f, 0.84f, 0.92f), 10f);
+            label.alignment = TextAlignmentOptions.Center;
             label.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(label, 10f, 10f);
+            SetResponsiveSingleLine(label, 8f, 9f);
 
-            var value = MakeLabel(row.transform, "Txt_Value", valueText, 13, valueColor, 20f);
-            value.alignment = TextAlignmentOptions.MidlineLeft;
+            var value = MakeLabel(row.transform, "Txt_Value", valueText, 12, valueColor, 18f);
+            value.alignment = TextAlignmentOptions.Center;
             value.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(value, 12f, 13f);
+            SetResponsiveSingleLine(value, 10f, 12f);
             return value;
         }
 
@@ -1715,6 +2254,10 @@ namespace CastleDefender.UI
 
         void BuildDetailsPanel(Transform parent)
         {
+            BuildDetailsPanelLayout(parent);
+            return;
+
+#if false
             var overlayGo = new GameObject("Overlay_Details", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button));
             overlayGo.transform.SetParent(parent, false);
             var overlayLayout = overlayGo.GetComponent<LayoutElement>();
@@ -1737,8 +2280,8 @@ namespace CastleDefender.UI
             var modalLayoutElement = modalGo.GetComponent<LayoutElement>();
             modalLayoutElement.ignoreLayout = true;
             var modalRect = modalGo.GetComponent<RectTransform>();
-            modalRect.anchorMin = new Vector2(0.005f, 0.01f);
-            modalRect.anchorMax = new Vector2(0.995f, 0.992f);
+            modalRect.anchorMin = new Vector2(0.008f, 0.014f);
+            modalRect.anchorMax = new Vector2(0.992f, 0.988f);
             modalRect.offsetMin = Vector2.zero;
             modalRect.offsetMax = Vector2.zero;
             var modalImage = modalGo.GetComponent<Image>();
@@ -1752,8 +2295,8 @@ namespace CastleDefender.UI
             modalLayout.childControlHeight = true;
             modalLayout.childForceExpandWidth = true;
             modalLayout.childForceExpandHeight = false;
-            modalLayout.spacing = 16f;
-            modalLayout.padding = new RectOffset(38, 38, 22, 28);
+            modalLayout.spacing = 14f;
+            modalLayout.padding = new RectOffset(24, 24, 20, 20);
 
             var modalFrameArt = new GameObject("ModalFrameArt", typeof(RectTransform), typeof(Image));
             modalFrameArt.transform.SetParent(modalGo.transform, false);
@@ -1764,108 +2307,167 @@ namespace CastleDefender.UI
             modalFrameRect.offsetMax = Vector2.zero;
             var modalFrameImage = modalFrameArt.GetComponent<Image>();
             modalFrameImage.raycastTarget = false;
-            modalFrameImage.color = new Color(1f, 1f, 1f, 0.88f);
-            ApplyClassicRpgFrameTheme(modalFrameImage, "Assets/ClassicRPGUI2/UIElementsPNG/FrameForSlicing.png", true);
+            ApplyReadablePanelStyle(modalFrameImage, new Color(0.16f, 0.20f, 0.30f, 0.9f));
 
-            var controlRow = new GameObject("ControlRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
-            controlRow.transform.SetParent(modalGo.transform, false);
-            var controlLayoutElement = controlRow.GetComponent<LayoutElement>();
-            controlLayoutElement.preferredHeight = 60f;
-            var controlLayout = controlRow.GetComponent<HorizontalLayoutGroup>();
-            controlLayout.childAlignment = TextAnchor.MiddleRight;
-            controlLayout.childControlWidth = false;
-            controlLayout.childControlHeight = true;
-            controlLayout.childForceExpandWidth = false;
-            controlLayout.childForceExpandHeight = false;
-            controlLayout.spacing = 10f;
-
-            _btnDetailsClose = MakeButton(controlRow.transform, "Btn_DetailsClose", "Close", 60f, new Color(0.20f, 0.28f, 0.40f, 1f));
-            var closeLayout = _btnDetailsClose.GetComponent<LayoutElement>();
-            if (closeLayout != null)
-                closeLayout.preferredWidth = 220f;
-            var closeText = _btnDetailsClose.GetComponentInChildren<TMP_Text>();
-            if (closeText != null)
-            {
-                closeText.fontSize = 19f;
-                closeText.fontStyle = FontStyles.Bold;
-            }
-            ApplyClassicRpgButtonTheme(_btnDetailsClose, ClassicRpgButtonSize.Long);
-            ApplyClassicRpgLabelTheme(closeText, false, true);
-            _btnDetailsClose.onClick.AddListener(CloseDetailsModal);
+            var topRow = new GameObject("DetailsTopRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            topRow.transform.SetParent(modalGo.transform, false);
+            var topRowLayoutElement = topRow.GetComponent<LayoutElement>();
+            topRowLayoutElement.preferredHeight = 78f;
+            var topRowLayout = topRow.GetComponent<HorizontalLayoutGroup>();
+            topRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            topRowLayout.childControlWidth = true;
+            topRowLayout.childControlHeight = true;
+            topRowLayout.childForceExpandWidth = false;
+            topRowLayout.childForceExpandHeight = true;
+            topRowLayout.spacing = 14f;
 
             var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
-            titlePlate.transform.SetParent(modalGo.transform, false);
+            titlePlate.transform.SetParent(topRow.transform, false);
             var titlePlateLayoutElement = titlePlate.GetComponent<LayoutElement>();
-            titlePlateLayoutElement.preferredHeight = 76f;
-            titlePlateLayoutElement.preferredWidth = 560f;
+            titlePlateLayoutElement.preferredHeight = 78f;
+            titlePlateLayoutElement.flexibleWidth = 1f;
             var titlePlateLayout = titlePlate.GetComponent<HorizontalLayoutGroup>();
             titlePlateLayout.childAlignment = TextAnchor.MiddleCenter;
             titlePlateLayout.childControlWidth = true;
             titlePlateLayout.childControlHeight = true;
             titlePlateLayout.childForceExpandWidth = true;
             titlePlateLayout.childForceExpandHeight = true;
-            titlePlateLayout.padding = new RectOffset(18, 18, 10, 12);
+            titlePlateLayout.padding = new RectOffset(22, 22, 12, 14);
             var titlePlateImage = titlePlate.GetComponent<Image>();
-            titlePlateImage.color = Color.white;
-            ApplyClassicRpgFrameTheme(titlePlateImage, "Assets/ClassicRPGUI2/UIElementsPNG/TitleLong.png");
+            ApplyReadablePanelStyle(titlePlateImage, new Color(0.16f, 0.20f, 0.32f, 0.98f));
 
-            _txtDetailsTitle = MakeLabel(titlePlate.transform, "Txt_Title", "", 34, new Color(0.96f, 0.84f, 0.50f, 1f), 52f);
-            _txtDetailsTitle.alignment = TextAlignmentOptions.Center;
-            _txtDetailsTitle.fontStyle = FontStyles.Bold;
-            SetResponsiveSingleLine(_txtDetailsTitle, 22f, 34f);
-            ApplyClassicRpgLabelTheme(_txtDetailsTitle, true, true);
+            _txtDetailsTitle = MakeLabel(titlePlate.transform, "Txt_Title", "", 36, new Color(0.96f, 0.84f, 0.50f, 1f), 54f);
+            ApplyReadableTextStyle(_txtDetailsTitle, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(_txtDetailsTitle, 24f, 36f);
 
-            var portraitRow = new GameObject("PortraitRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
-            portraitRow.transform.SetParent(modalGo.transform, false);
-            var portraitRowLayoutElement = portraitRow.GetComponent<LayoutElement>();
-            portraitRowLayoutElement.preferredHeight = 292f;
-            var portraitRowLayout = portraitRow.GetComponent<HorizontalLayoutGroup>();
-            portraitRowLayout.childAlignment = TextAnchor.MiddleCenter;
-            portraitRowLayout.childControlWidth = false;
-            portraitRowLayout.childControlHeight = true;
-            portraitRowLayout.childForceExpandWidth = false;
-            portraitRowLayout.childForceExpandHeight = false;
+            _btnDetailsClose = MakeButton(topRow.transform, "Btn_DetailsClose", "Close", 58f, new Color(0.20f, 0.28f, 0.40f, 1f));
+            var closeLayout = _btnDetailsClose.GetComponent<LayoutElement>();
+            if (closeLayout != null)
+                closeLayout.preferredWidth = 196f;
+            var closeText = _btnDetailsClose.GetComponentInChildren<TMP_Text>();
+            if (closeText != null)
+                ApplyReadableTextStyle(closeText, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+            if (closeText != null)
+                closeText.fontSize = 18f;
+            _btnDetailsClose.onClick.AddListener(CloseDetailsModal);
+
+            var mainRow = new GameObject("DetailsMainRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            mainRow.transform.SetParent(modalGo.transform, false);
+            var mainRowLayoutElement = mainRow.GetComponent<LayoutElement>();
+            mainRowLayoutElement.flexibleHeight = 1f;
+            mainRowLayoutElement.minHeight = 0f;
+            var mainRowLayout = mainRow.GetComponent<HorizontalLayoutGroup>();
+            mainRowLayout.childAlignment = TextAnchor.UpperLeft;
+            mainRowLayout.childControlWidth = true;
+            mainRowLayout.childControlHeight = true;
+            mainRowLayout.childForceExpandWidth = false;
+            mainRowLayout.childForceExpandHeight = true;
+            mainRowLayout.spacing = 18f;
+
+            var infoScrollGo = new GameObject("DetailsInfoScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
+            infoScrollGo.transform.SetParent(mainRow.transform, false);
+            var infoScrollLayout = infoScrollGo.GetComponent<LayoutElement>();
+            infoScrollLayout.flexibleWidth = 1f;
+            infoScrollLayout.flexibleHeight = 1f;
+            infoScrollLayout.minWidth = 540f;
+            infoScrollGo.GetComponent<Image>().color = new Color(0.05f, 0.08f, 0.13f, 0.94f);
+            var infoScrollRect = infoScrollGo.GetComponent<ScrollRect>();
+            infoScrollRect.horizontal = false;
+            infoScrollRect.vertical = true;
+            infoScrollRect.scrollSensitivity = 28f;
+            infoScrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+            var infoViewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            infoViewportGo.transform.SetParent(infoScrollGo.transform, false);
+            var infoViewportRect = infoViewportGo.GetComponent<RectTransform>();
+            infoViewportRect.anchorMin = Vector2.zero;
+            infoViewportRect.anchorMax = Vector2.one;
+            infoViewportRect.offsetMin = Vector2.zero;
+            infoViewportRect.offsetMax = Vector2.zero;
+            infoViewportGo.GetComponent<Image>().color = Color.white;
+            infoViewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var infoContentGo = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            infoContentGo.transform.SetParent(infoViewportGo.transform, false);
+            var infoContentRect = infoContentGo.GetComponent<RectTransform>();
+            infoContentRect.anchorMin = new Vector2(0f, 1f);
+            infoContentRect.anchorMax = new Vector2(1f, 1f);
+            infoContentRect.pivot = new Vector2(0.5f, 1f);
+            infoContentRect.offsetMin = new Vector2(16f, 0f);
+            infoContentRect.offsetMax = new Vector2(-16f, 0f);
+            var infoContentLayout = infoContentGo.GetComponent<VerticalLayoutGroup>();
+            infoContentLayout.childAlignment = TextAnchor.UpperCenter;
+            infoContentLayout.childControlWidth = true;
+            infoContentLayout.childControlHeight = true;
+            infoContentLayout.childForceExpandWidth = true;
+            infoContentLayout.childForceExpandHeight = false;
+            infoContentLayout.spacing = 14f;
+            infoContentLayout.padding = new RectOffset(0, 0, 16, 16);
+            infoContentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            infoContentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            infoScrollRect.viewport = infoViewportRect;
+            infoScrollRect.content = infoContentRect;
+
+            var showcaseColumn = new GameObject("ShowcaseColumn", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            showcaseColumn.transform.SetParent(mainRow.transform, false);
+            var showcaseLayoutElement = showcaseColumn.GetComponent<LayoutElement>();
+            showcaseLayoutElement.preferredWidth = 612f;
+            showcaseLayoutElement.minWidth = 520f;
+            showcaseLayoutElement.flexibleHeight = 1f;
+            var showcaseLayout = showcaseColumn.GetComponent<VerticalLayoutGroup>();
+            showcaseLayout.childAlignment = TextAnchor.UpperCenter;
+            showcaseLayout.childControlWidth = true;
+            showcaseLayout.childControlHeight = true;
+            showcaseLayout.childForceExpandWidth = true;
+            showcaseLayout.childForceExpandHeight = false;
+            showcaseLayout.spacing = 14f;
+
+            var stageCard = CreateDetailsModalCard(showcaseColumn.transform, "StageCard", new Color(0.08f, 0.11f, 0.18f, 0.97f), 0f);
+            var stageLayout = stageCard.GetComponent<LayoutElement>();
+            stageLayout.preferredHeight = 0f;
+            stageLayout.flexibleHeight = 1f;
+
+            var stageHeader = MakeLabel(stageCard.transform, "Txt_StageHeader", "Preview Stage", 19, new Color(0.96f, 0.84f, 0.50f, 1f), 30f);
+            ApplyReadableTextStyle(stageHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
 
             var portraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            portraitFrame.transform.SetParent(portraitRow.transform, false);
+            portraitFrame.transform.SetParent(stageCard.transform, false);
             var portraitFrameImage = portraitFrame.GetComponent<Image>();
-            portraitFrameImage.color = Color.white;
-            ApplyClassicRpgFrameTheme(portraitFrameImage, "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrame.png", true);
+            ApplyReadablePanelStyle(portraitFrameImage, new Color(0.13f, 0.17f, 0.25f, 1f));
             var portraitLayout = portraitFrame.GetComponent<LayoutElement>();
-            portraitLayout.preferredWidth = 212f;
-            portraitLayout.preferredHeight = 276f;
+            portraitLayout.preferredHeight = 438f;
+            portraitLayout.flexibleHeight = 1f;
 
             var portraitInnerFrame = new GameObject("PortraitInnerFrame", typeof(RectTransform), typeof(Image));
             portraitInnerFrame.transform.SetParent(portraitFrame.transform, false);
             var innerRect = portraitInnerFrame.GetComponent<RectTransform>();
             innerRect.anchorMin = Vector2.zero;
             innerRect.anchorMax = Vector2.one;
-            innerRect.offsetMin = new Vector2(18f, 22f);
-            innerRect.offsetMax = new Vector2(-18f, -22f);
+            innerRect.offsetMin = new Vector2(18f, 18f);
+            innerRect.offsetMax = new Vector2(-18f, -18f);
             var portraitInnerImage = portraitInnerFrame.GetComponent<Image>();
-            portraitInnerImage.color = new Color(0.07f, 0.10f, 0.16f, 1f);
-            ApplyClassicRpgFrameTheme(portraitInnerImage, "Assets/ClassicRPGUI2/UIElementsPNG/HpBar_PortraitFrameBg.png");
+            ApplyReadablePanelStyle(portraitInnerImage, new Color(0.07f, 0.10f, 0.16f, 1f));
 
             var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
             portraitGo.transform.SetParent(portraitInnerFrame.transform, false);
             var portraitRect = portraitGo.GetComponent<RectTransform>();
             portraitRect.anchorMin = Vector2.zero;
             portraitRect.anchorMax = Vector2.one;
-            portraitRect.offsetMin = new Vector2(8f, 10f);
-            portraitRect.offsetMax = new Vector2(-8f, -10f);
+            portraitRect.offsetMin = new Vector2(14f, 14f);
+            portraitRect.offsetMax = new Vector2(-14f, -14f);
             _detailsPortrait = portraitGo.GetComponent<RawImage>();
             _detailsPortrait.color = new Color(1f, 1f, 1f, 0f);
             _detailsPortrait.raycastTarget = false;
             portraitGo.GetComponent<AspectRatioFitter>().aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.68f;
+            portraitGo.GetComponent<AspectRatioFitter>().aspectRatio = 0.82f;
 
             var detailsIconGo = new GameObject("BuildingIcon", typeof(RectTransform), typeof(Image));
             detailsIconGo.transform.SetParent(portraitInnerFrame.transform, false);
             var detailsIconRect = detailsIconGo.GetComponent<RectTransform>();
             detailsIconRect.anchorMin = Vector2.zero;
             detailsIconRect.anchorMax = Vector2.one;
-            detailsIconRect.offsetMin = new Vector2(18f, 20f);
-            detailsIconRect.offsetMax = new Vector2(-18f, -20f);
+            detailsIconRect.offsetMin = new Vector2(22f, 22f);
+            detailsIconRect.offsetMax = new Vector2(-22f, -22f);
             _detailsBuildingIcon = detailsIconGo.GetComponent<Image>();
             _detailsBuildingIcon.preserveAspect = true;
             _detailsBuildingIcon.enabled = false;
@@ -1885,15 +2487,23 @@ namespace CastleDefender.UI
             detailsFallbackRect.offsetMax = Vector2.zero;
             _detailsBuildingFallback.gameObject.SetActive(false);
 
+            _txtDetailsPreviewStatus = MakeLabel(stageCard.transform, "Txt_PreviewStatus", "", 16, new Color(0.84f, 0.88f, 0.95f), 84f);
+            ApplyReadableTextStyle(_txtDetailsPreviewStatus, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.Center);
+            SetResponsiveWrappedText(_txtDetailsPreviewStatus, 13f, 16f);
+
+            var previewGridCard = CreateDetailsModalCard(showcaseColumn.transform, "MotionCard", new Color(0.08f, 0.11f, 0.18f, 0.97f), 246f);
+            var previewHeader = MakeLabel(previewGridCard.transform, "Txt_PreviewHeader", "Motion Reels", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            ApplyReadableTextStyle(previewHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
+
             var previewGrid = new GameObject("MotionPreviewGrid", typeof(RectTransform), typeof(LayoutElement), typeof(GridLayoutGroup));
-            previewGrid.transform.SetParent(modalGo.transform, false);
+            previewGrid.transform.SetParent(previewGridCard.transform, false);
             var previewGridLayout = previewGrid.GetComponent<LayoutElement>();
-            previewGridLayout.preferredHeight = 220f;
+            previewGridLayout.preferredHeight = 176f;
             var previewGridGroup = previewGrid.GetComponent<GridLayoutGroup>();
-            previewGridGroup.cellSize = new Vector2(170f, 44f);
+            previewGridGroup.cellSize = new Vector2(134f, 54f);
             previewGridGroup.spacing = new Vector2(10f, 10f);
             previewGridGroup.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-            previewGridGroup.constraintCount = 2;
+            previewGridGroup.constraintCount = 4;
             previewGridGroup.childAlignment = TextAnchor.MiddleCenter;
             previewGridGroup.startAxis = GridLayoutGroup.Axis.Horizontal;
             previewGridGroup.startCorner = GridLayoutGroup.Corner.UpperLeft;
@@ -1907,116 +2517,61 @@ namespace CastleDefender.UI
             _btnPreviewHit = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewHit", "Hit React", PreviewHitMotion, out _txtPreviewHit);
             _btnPreviewDeath = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewDeath", "Death", PreviewDeathMotion, out _txtPreviewDeath);
 
-            _txtDetailsPreviewStatus = MakeLabel(modalGo.transform, "Txt_PreviewStatus", "", 15, new Color(0.84f, 0.88f, 0.95f), 28f);
-            _txtDetailsPreviewStatus.alignment = TextAlignmentOptions.Center;
-            SetResponsiveWrappedText(_txtDetailsPreviewStatus, 12f, 15f);
-            ApplyClassicRpgLabelTheme(_txtDetailsPreviewStatus, false, true);
-
-            var scrollGo = new GameObject("DetailsScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
-            scrollGo.transform.SetParent(modalGo.transform, false);
-            var scrollLayoutElement = scrollGo.GetComponent<LayoutElement>();
-            scrollLayoutElement.flexibleHeight = 1f;
-            scrollLayoutElement.minHeight = 220f;
-            scrollGo.GetComponent<Image>().color = new Color(0.06f, 0.09f, 0.14f, 0.92f);
-            var scrollRect = scrollGo.GetComponent<ScrollRect>();
-            scrollRect.horizontal = false;
-            scrollRect.vertical = true;
-            scrollRect.scrollSensitivity = 24f;
-            scrollRect.movementType = ScrollRect.MovementType.Clamped;
-
-            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
-            viewportGo.transform.SetParent(scrollGo.transform, false);
-            var viewportRect = viewportGo.GetComponent<RectTransform>();
-            viewportRect.anchorMin = Vector2.zero;
-            viewportRect.anchorMax = Vector2.one;
-            viewportRect.offsetMin = Vector2.zero;
-            viewportRect.offsetMax = Vector2.zero;
-            viewportGo.GetComponent<Image>().color = Color.white;
-            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
-
-            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
-            contentGo.transform.SetParent(viewportGo.transform, false);
-            var contentRect = contentGo.GetComponent<RectTransform>();
-            contentRect.anchorMin = new Vector2(0f, 1f);
-            contentRect.anchorMax = new Vector2(1f, 1f);
-            contentRect.pivot = new Vector2(0.5f, 1f);
-            contentRect.offsetMin = new Vector2(18f, 0f);
-            contentRect.offsetMax = new Vector2(-18f, 0f);
-            var contentLayout = contentGo.GetComponent<VerticalLayoutGroup>();
-            contentLayout.childAlignment = TextAnchor.UpperCenter;
-            contentLayout.childControlWidth = false;
-            contentLayout.childControlHeight = true;
-            contentLayout.childForceExpandWidth = false;
-            contentLayout.childForceExpandHeight = false;
-            contentLayout.spacing = 12f;
-            contentLayout.padding = new RectOffset(0, 0, 20, 20);
-            contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            contentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            scrollRect.viewport = viewportRect;
-            scrollRect.content = contentRect;
-
-            var contentColumn = new GameObject("ContentColumn", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
-            contentColumn.transform.SetParent(contentGo.transform, false);
-            var contentColumnLayout = contentColumn.GetComponent<LayoutElement>();
-            contentColumnLayout.preferredWidth = 760f;
-            var contentColumnGroup = contentColumn.GetComponent<VerticalLayoutGroup>();
-            contentColumnGroup.childAlignment = TextAnchor.UpperCenter;
-            contentColumnGroup.childControlWidth = true;
-            contentColumnGroup.childControlHeight = true;
-            contentColumnGroup.childForceExpandWidth = true;
-            contentColumnGroup.childForceExpandHeight = false;
-            contentColumnGroup.spacing = 12f;
-            contentColumnGroup.padding = new RectOffset(0, 0, 4, 8);
-            contentColumn.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            contentColumn.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            var stateCard = CreateDetailsModalCard(contentColumn.transform, "StateCard", new Color(0.09f, 0.12f, 0.19f, 0.96f), 104f);
+            var stateCard = CreateDetailsModalCard(infoContentGo.transform, "StateCard", new Color(0.09f, 0.12f, 0.19f, 0.96f), 112f);
             var stateHeader = MakeLabel(stateCard.transform, "Txt_StateHeader", "Battle Standing", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            stateHeader.alignment = TextAlignmentOptions.Center;
-            stateHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(stateHeader, true, true);
+            ApplyReadableTextStyle(stateHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             _txtDetailsState = MakeLabel(stateCard.transform, "Txt_State", "", 19, selectedColor, 56f);
-            _txtDetailsState.alignment = TextAlignmentOptions.Center;
-            _txtDetailsState.fontStyle = FontStyles.Bold;
+            ApplyReadableTextStyle(_txtDetailsState, selectedColor, TextAlignmentOptions.Center, FontStyles.Bold);
             SetResponsiveWrappedText(_txtDetailsState, 13f, 19f);
-            ApplyClassicRpgLabelTheme(_txtDetailsState, false, true);
 
-            var statsCard = CreateDetailsModalCard(contentColumn.transform, "StatsCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 220f);
+            var statsCard = CreateDetailsModalCard(infoContentGo.transform, "StatsCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 230f);
             var statsHeader = MakeLabel(statsCard.transform, "Txt_StatsHeader", "War Ledger", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            statsHeader.alignment = TextAlignmentOptions.Center;
-            statsHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(statsHeader, true, true);
+            ApplyReadableTextStyle(statsHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             _txtDetailsStats = MakeLabel(statsCard.transform, "Txt_Stats", "", 16, new Color(0.88f, 0.90f, 0.96f), 182f);
-            _txtDetailsStats.alignment = TextAlignmentOptions.TopLeft;
+            ApplyReadableTextStyle(_txtDetailsStats, new Color(0.88f, 0.90f, 0.96f), TextAlignmentOptions.TopLeft);
             SetResponsiveWrappedText(_txtDetailsStats, 13f, 16f);
-            ApplyClassicRpgLabelTheme(_txtDetailsStats);
 
-            var requirementCard = CreateDetailsModalCard(contentColumn.transform, "RequirementCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 132f);
+            var requirementCard = CreateDetailsModalCard(infoContentGo.transform, "RequirementCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 134f);
             var requirementHeader = MakeLabel(requirementCard.transform, "Txt_RequirementHeader", "Unlock Decree", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            requirementHeader.alignment = TextAlignmentOptions.Center;
-            requirementHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(requirementHeader, true, true);
+            ApplyReadableTextStyle(requirementHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             _txtDetailsRequirement = MakeLabel(requirementCard.transform, "Txt_Requirement", "", 15, new Color(0.82f, 0.86f, 0.92f), 102f);
-            _txtDetailsRequirement.alignment = TextAlignmentOptions.TopLeft;
+            ApplyReadableTextStyle(_txtDetailsRequirement, new Color(0.82f, 0.86f, 0.92f), TextAlignmentOptions.TopLeft);
             SetResponsiveWrappedText(_txtDetailsRequirement, 13f, 15f);
-            ApplyClassicRpgLabelTheme(_txtDetailsRequirement);
 
-            var movesCard = CreateDetailsModalCard(contentColumn.transform, "MovesCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 196f);
+            var movesCard = CreateDetailsModalCard(infoContentGo.transform, "MovesCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 204f);
             var movesHeader = MakeLabel(movesCard.transform, "Txt_MovesHeader", "Move Scroll", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            movesHeader.alignment = TextAlignmentOptions.Center;
-            movesHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(movesHeader, true, true);
+            ApplyReadableTextStyle(movesHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             _txtDetailsMoves = MakeLabel(movesCard.transform, "Txt_Moves", "", 15, new Color(0.84f, 0.88f, 0.95f), 160f);
-            _txtDetailsMoves.alignment = TextAlignmentOptions.TopLeft;
+            ApplyReadableTextStyle(_txtDetailsMoves, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
             SetResponsiveWrappedText(_txtDetailsMoves, 13f, 15f);
-            ApplyClassicRpgLabelTheme(_txtDetailsMoves);
 
-            var soundCard = CreateDetailsModalCard(contentColumn.transform, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 164f);
+            var customizationCard = CreateDetailsModalCard(infoContentGo.transform, "CustomizationCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 238f);
+            var customizationHeader = MakeLabel(customizationCard.transform, "Txt_CustomizationHeader", "Armory & Vanity Shop", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
+            ApplyReadableTextStyle(customizationHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var tagRow = new GameObject("CustomizationTags", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            tagRow.transform.SetParent(customizationCard.transform, false);
+            tagRow.GetComponent<LayoutElement>().preferredHeight = 40f;
+            var tagLayout = tagRow.GetComponent<HorizontalLayoutGroup>();
+            tagLayout.childAlignment = TextAnchor.MiddleCenter;
+            tagLayout.childControlWidth = false;
+            tagLayout.childControlHeight = true;
+            tagLayout.childForceExpandWidth = false;
+            tagLayout.childForceExpandHeight = false;
+            tagLayout.spacing = 8f;
+            CreateStoreBadge(tagRow.transform, "Abilities", new Color(0.27f, 0.35f, 0.54f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Skins", new Color(0.44f, 0.27f, 0.51f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Weapons", new Color(0.43f, 0.31f, 0.20f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Victory", new Color(0.20f, 0.39f, 0.32f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Formation", new Color(0.36f, 0.25f, 0.25f, 0.98f));
+
+            _txtDetailsCustomization = MakeLabel(customizationCard.transform, "Txt_Customization", "", 15, new Color(0.84f, 0.88f, 0.95f), 168f);
+            ApplyReadableTextStyle(_txtDetailsCustomization, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
+            SetResponsiveWrappedText(_txtDetailsCustomization, 13f, 15f);
+
+            var soundCard = CreateDetailsModalCard(infoContentGo.transform, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 172f);
             var soundHeader = MakeLabel(soundCard.transform, "Txt_SoundHeader", "Sound Hall", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            soundHeader.alignment = TextAlignmentOptions.Center;
-            soundHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(soundHeader, true, true);
+            ApplyReadableTextStyle(soundHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
 
             var soundRow = new GameObject("SoundPreviewRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
             soundRow.transform.SetParent(soundCard.transform, false);
@@ -2036,8 +2591,7 @@ namespace CastleDefender.UI
             _txtDetailsPreviewSfx = _btnDetailsPreviewSfx.GetComponentInChildren<TMP_Text>();
             if (_txtDetailsPreviewSfx != null)
                 _txtDetailsPreviewSfx.fontSize = 14f;
-            ApplyClassicRpgButtonTheme(_btnDetailsPreviewSfx, ClassicRpgButtonSize.Medium);
-            ApplyClassicRpgLabelTheme(_txtDetailsPreviewSfx, false, true);
+            ApplyReadableTextStyle(_txtDetailsPreviewSfx, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
             _btnDetailsPreviewSfx.onClick.AddListener(PreviewSelectedUnitSfx);
 
             _btnDetailsPreviewVoice = MakeButton(soundRow.transform, "Btn_PreviewVoice", "Voice Lines", 44f, new Color(0.19f, 0.24f, 0.34f, 1f));
@@ -2047,59 +2601,746 @@ namespace CastleDefender.UI
             _txtDetailsPreviewVoice = _btnDetailsPreviewVoice.GetComponentInChildren<TMP_Text>();
             if (_txtDetailsPreviewVoice != null)
                 _txtDetailsPreviewVoice.fontSize = 14f;
-            ApplyClassicRpgButtonTheme(_btnDetailsPreviewVoice, ClassicRpgButtonSize.Medium);
-            ApplyClassicRpgLabelTheme(_txtDetailsPreviewVoice, false, true);
+            ApplyReadableTextStyle(_txtDetailsPreviewVoice, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
             _btnDetailsPreviewVoice.onClick.AddListener(PreviewSelectedUnitVoice);
 
             _txtDetailsAudioStatus = MakeLabel(soundCard.transform, "Txt_AudioStatus", "", 14, new Color(0.80f, 0.84f, 0.92f), 72f);
-            _txtDetailsAudioStatus.alignment = TextAlignmentOptions.Center;
+            ApplyReadableTextStyle(_txtDetailsAudioStatus, new Color(0.80f, 0.84f, 0.92f), TextAlignmentOptions.Center);
             SetResponsiveWrappedText(_txtDetailsAudioStatus, 12f, 14f);
-            ApplyClassicRpgLabelTheme(_txtDetailsAudioStatus, false, true);
 
-            var bodyCard = CreateDetailsModalCard(contentColumn.transform, "BodyCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 276f);
+            var bodyCard = CreateDetailsModalCard(infoContentGo.transform, "BodyCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 284f);
             var bodyHeader = MakeLabel(bodyCard.transform, "Txt_BodyHeader", "Chronicle", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
-            bodyHeader.alignment = TextAlignmentOptions.Center;
-            bodyHeader.fontStyle = FontStyles.Bold;
-            ApplyClassicRpgLabelTheme(bodyHeader, true, true);
+            ApplyReadableTextStyle(bodyHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             _txtDetailsBody = MakeLabel(bodyCard.transform, "Txt_Body", "", 15, new Color(0.78f, 0.82f, 0.90f), 240f);
-            _txtDetailsBody.alignment = TextAlignmentOptions.TopLeft;
+            ApplyReadableTextStyle(_txtDetailsBody, new Color(0.78f, 0.82f, 0.90f), TextAlignmentOptions.TopLeft);
             SetResponsiveWrappedText(_txtDetailsBody, 13f, 15f);
-            ApplyClassicRpgLabelTheme(_txtDetailsBody);
+#endif
+        }
+
+        void BuildDetailsPanelLayout(Transform parent)
+        {
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            var section = CreateSectionPanel(parent, "Section_Details", new Color(0.08f, 0.11f, 0.18f, 0.98f), compact ? 338f : 0f, flexibleHeight: compact ? 0f : 1f);
+            _detailsOverlayRoot = section;
+            _btnDetailsClose = null;
+
+            var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            titlePlate.transform.SetParent(section.transform, false);
+            var titlePlateLayout = titlePlate.GetComponent<LayoutElement>();
+            titlePlateLayout.preferredHeight = compact ? 88f : 96f;
+            ClassicRpgUiRuntime.ApplyPanel(titlePlate.GetComponent<Image>(), ClassicRpgPanelSkin.TitleMedium, false, Color.white);
+
+            var titleLayout = titlePlate.GetComponent<VerticalLayoutGroup>();
+            titleLayout.childAlignment = TextAnchor.MiddleCenter;
+            titleLayout.childControlWidth = true;
+            titleLayout.childControlHeight = true;
+            titleLayout.childForceExpandWidth = true;
+            titleLayout.childForceExpandHeight = false;
+            titleLayout.spacing = 2f;
+            titleLayout.padding = new RectOffset(18, 18, compact ? 16 : 18, compact ? 12 : 14);
+
+            var detailLabel = MakeLabel(titlePlate.transform, "Txt_DetailLabel", "Selected Upgrade", compact ? 11 : 12, ClassicRpgUiRuntime.MutedText, 18f);
+            ApplyReadableTextStyle(detailLabel, ClassicRpgUiRuntime.MutedText, TextAlignmentOptions.Center);
+            SetResponsiveSingleLine(detailLabel, 10f, compact ? 11f : 12f);
+
+            _txtDetailsTitle = MakeLabel(titlePlate.transform, "Txt_Title", "", compact ? 18 : 20, ClassicRpgUiRuntime.WarmGold, 30f);
+            ApplyPlateTitleStyle(_txtDetailsTitle, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center);
+            SetResponsiveSingleLine(_txtDetailsTitle, 14f, compact ? 18f : 20f);
+
+            var scrollGo = new GameObject("DetailsScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
+            scrollGo.transform.SetParent(section.transform, false);
+            ClassicRpgUiRuntime.ApplyPanel(scrollGo.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.08f, 0.11f, 0.17f, 0.88f));
+            var scrollLayout = scrollGo.GetComponent<LayoutElement>();
+            scrollLayout.flexibleHeight = 1f;
+            scrollLayout.minHeight = compact ? 188f : 0f;
+
+            var scrollRect = scrollGo.GetComponent<ScrollRect>();
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.scrollSensitivity = 24f;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollGo.transform, false);
+            var viewportRect = viewportGo.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = new Vector2(8f, 8f);
+            viewportRect.offsetMax = new Vector2(-8f, -8f);
+            viewportGo.GetComponent<Image>().color = Color.white;
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(viewportGo.transform, false);
+            var contentRect = contentGo.GetComponent<RectTransform>();
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.offsetMin = Vector2.zero;
+            contentRect.offsetMax = Vector2.zero;
+
+            var contentLayout = contentGo.GetComponent<VerticalLayoutGroup>();
+            contentLayout.childAlignment = TextAnchor.UpperCenter;
+            contentLayout.childControlWidth = true;
+            contentLayout.childControlHeight = true;
+            contentLayout.childForceExpandWidth = true;
+            contentLayout.childForceExpandHeight = false;
+            contentLayout.spacing = 10f;
+            contentLayout.padding = new RectOffset(0, 0, 0, 4);
+            contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            contentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = contentRect;
+
+            BuildDetailsPreviewCard(contentGo.transform, compact);
+            _detailsStatsRowsRoot = CreateDetailsIconListCard(contentGo.transform, "StatsCard", "War Ledger", compact ? 170f : 182f, compact);
+            _txtDetailsState = CreateDetailsTextCard(contentGo.transform, "StateCard", "Unlock State", compact ? 78f : 84f, compact ? 15 : 16, selectedColor, 32f, compact, TextAlignmentOptions.Center, FontStyles.Bold);
+            _detailsRequirementRowsRoot = CreateDetailsIconListCard(contentGo.transform, "RequirementCard", "Unlock Requirements", compact ? 116f : 126f, compact);
+            _detailsMovesRowsRoot = CreateDetailsIconListCard(contentGo.transform, "MovesCard", "Combat Readout", compact ? 146f : 156f, compact);
+            _txtDetailsStats = null;
+            _txtDetailsRequirement = null;
+            _txtDetailsMoves = null;
+            _txtDetailsBody = CreateDetailsTextCard(contentGo.transform, "BodyCard", "Chronicle", compact ? 162f : 174f, compact ? 12 : 13, new Color(0.78f, 0.82f, 0.90f), compact ? 116f : 126f, compact);
+            if (_txtDetailsBody != null)
+            {
+                _txtDetailsBody.lineSpacing = 8f;
+                _txtDetailsBody.paragraphSpacing = 6f;
+            }
+        }
+
+        void BuildDetailsPreviewCard(Transform parent, bool compact)
+        {
+            var previewCard = CreateDetailsModalCard(parent, "PreviewCard", new Color(0.08f, 0.11f, 0.18f, 0.97f), compact ? 204f : 238f);
+            var previewHeader = MakeLabel(previewCard.transform, "Txt_PreviewHeader", "Preview", 16, ClassicRpgUiRuntime.WarmGold, 24f);
+            ApplyReadableTextStyle(previewHeader, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var portraitFrame = new GameObject("PortraitFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            portraitFrame.transform.SetParent(previewCard.transform, false);
+            ClassicRpgUiRuntime.ApplyPanel(portraitFrame.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitFrame, true, Color.white);
+            portraitFrame.GetComponent<LayoutElement>().preferredHeight = compact ? 122f : 144f;
+
+            var portraitInnerFrame = new GameObject("PortraitInnerFrame", typeof(RectTransform), typeof(Image));
+            portraitInnerFrame.transform.SetParent(portraitFrame.transform, false);
+            ClassicRpgUiRuntime.Stretch(portraitInnerFrame.GetComponent<RectTransform>(), new Vector2(12f, 12f), new Vector2(-12f, -12f));
+            ClassicRpgUiRuntime.ApplyPanel(portraitInnerFrame.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.08f, 0.11f, 0.18f, 0.98f));
+
+            var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+            portraitGo.transform.SetParent(portraitInnerFrame.transform, false);
+            ClassicRpgUiRuntime.Stretch(portraitGo.GetComponent<RectTransform>(), new Vector2(12f, 12f), new Vector2(-12f, -12f));
+            _detailsPortrait = portraitGo.GetComponent<RawImage>();
+            _detailsPortrait.color = new Color(1f, 1f, 1f, 0f);
+            _detailsPortrait.raycastTarget = false;
+            var portraitFitter = portraitGo.GetComponent<AspectRatioFitter>();
+            portraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+            portraitFitter.aspectRatio = compact ? 1.08f : 0.92f;
+
+            var detailsIconGo = new GameObject("BuildingIcon", typeof(RectTransform), typeof(Image));
+            detailsIconGo.transform.SetParent(portraitInnerFrame.transform, false);
+            ClassicRpgUiRuntime.Stretch(detailsIconGo.GetComponent<RectTransform>(), new Vector2(18f, 18f), new Vector2(-18f, -18f));
+            _detailsBuildingIcon = detailsIconGo.GetComponent<Image>();
+            _detailsBuildingIcon.preserveAspect = true;
+            _detailsBuildingIcon.enabled = false;
+
+            _detailsBuildingFallback = CreateInlineText(
+                portraitInnerFrame.transform,
+                "Txt_BuildingFallback",
+                "",
+                compact ? 30f : 36f,
+                Color.white,
+                FontStyles.Bold,
+                TextAlignmentOptions.Center);
+            var detailsFallbackRect = _detailsBuildingFallback.rectTransform;
+            detailsFallbackRect.anchorMin = Vector2.zero;
+            detailsFallbackRect.anchorMax = Vector2.one;
+            detailsFallbackRect.offsetMin = Vector2.zero;
+            detailsFallbackRect.offsetMax = Vector2.zero;
+            _detailsBuildingFallback.gameObject.SetActive(false);
+
+            _txtDetailsPreviewStatus = MakeLabel(previewCard.transform, "Txt_PreviewStatus", "", compact ? 12 : 13, new Color(0.84f, 0.88f, 0.95f), compact ? 34f : 40f);
+            ApplyReadableTextStyle(_txtDetailsPreviewStatus, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.Center);
+            SetResponsiveWrappedText(_txtDetailsPreviewStatus, 10f, compact ? 12f : 13f);
+        }
+
+        TMP_Text CreateDetailsTextCard(
+            Transform parent,
+            string cardName,
+            string headerText,
+            float preferredHeight,
+            int fontSize,
+            Color textColor,
+            float bodyHeight,
+            bool compact,
+            TextAlignmentOptions alignment = TextAlignmentOptions.TopLeft,
+            FontStyles fontStyle = FontStyles.Normal)
+        {
+            var card = CreateDetailsModalCard(parent, cardName, new Color(0.08f, 0.11f, 0.18f, 0.96f), preferredHeight);
+            var header = MakeLabel(card.transform, "Txt_Header", headerText, 15, ClassicRpgUiRuntime.WarmGold, 22f);
+            ApplyReadableTextStyle(header, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var body = MakeLabel(card.transform, "Txt_Body", "", fontSize, textColor, bodyHeight);
+            var bodyLayout = body.GetComponent<LayoutElement>();
+            if (bodyLayout != null)
+            {
+                bodyLayout.minHeight = bodyHeight;
+                bodyLayout.preferredHeight = -1f;
+                bodyLayout.flexibleHeight = 0f;
+            }
+            var bodyFitter = body.GetComponent<ContentSizeFitter>() ?? body.gameObject.AddComponent<ContentSizeFitter>();
+            bodyFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            bodyFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            ApplyReadableTextStyle(body, textColor, alignment, fontStyle);
+            SetResponsiveWrappedText(body, Mathf.Max(10f, fontSize - 2f), compact ? fontSize : fontSize + 1f);
+            return body;
+        }
+
+        Transform CreateDetailsIconListCard(Transform parent, string cardName, string headerText, float preferredHeight, bool compact)
+        {
+            var card = CreateDetailsModalCard(parent, cardName, new Color(0.08f, 0.11f, 0.18f, 0.96f), preferredHeight);
+            var header = MakeLabel(card.transform, "Txt_Header", headerText, 15, ClassicRpgUiRuntime.WarmGold, 22f);
+            ApplyReadableTextStyle(header, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var rowsRoot = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            rowsRoot.transform.SetParent(card.transform, false);
+            var rowsLayout = rowsRoot.GetComponent<VerticalLayoutGroup>();
+            rowsLayout.childAlignment = TextAnchor.UpperLeft;
+            rowsLayout.childControlWidth = true;
+            rowsLayout.childControlHeight = true;
+            rowsLayout.childForceExpandWidth = true;
+            rowsLayout.childForceExpandHeight = false;
+            rowsLayout.spacing = compact ? 6f : 8f;
+            var rowsFitter = rowsRoot.GetComponent<ContentSizeFitter>();
+            rowsFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            rowsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            return rowsRoot.transform;
+        }
+
+        static DetailRowData[] BuildPlaceholderDetailRows(params DetailRowData[] rows)
+        {
+            return rows ?? Array.Empty<DetailRowData>();
+        }
+
+        void PopulateDetailRows(Transform root, IReadOnlyList<DetailRowData> rows)
+        {
+            if (root == null)
+                return;
+
+            for (int i = root.childCount - 1; i >= 0; i--)
+                Destroy(root.GetChild(i).gameObject);
+
+            if (rows == null || rows.Count == 0)
+                return;
+
+            for (int i = 0; i < rows.Count; i++)
+                CreateDetailRow(root, rows[i]);
+        }
+
+        void CreateDetailRow(Transform parent, DetailRowData rowData)
+        {
+            var row = new GameObject("Row", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            row.transform.SetParent(parent, false);
+            ApplyReadablePanelStyle(row.GetComponent<Image>(), new Color(0.10f, 0.14f, 0.22f, 0.96f));
+            var rowLayoutElement = row.GetComponent<LayoutElement>();
+            bool hideLabel = string.IsNullOrWhiteSpace(rowData.Label);
+            rowLayoutElement.minHeight = hideLabel ? 38f : 48f;
+            rowLayoutElement.preferredHeight = -1f;
+            var rowFitter = row.GetComponent<ContentSizeFitter>();
+            rowFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            rowFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.MiddleLeft;
+            rowLayout.childControlWidth = true;
+            rowLayout.childControlHeight = true;
+            rowLayout.childForceExpandWidth = true;
+            rowLayout.childForceExpandHeight = false;
+            rowLayout.spacing = 8f;
+            rowLayout.padding = new RectOffset(10, 10, 5, 5);
+
+            var iconFrame = new GameObject("IconFrame", typeof(RectTransform), typeof(LayoutElement));
+            iconFrame.transform.SetParent(row.transform, false);
+            var iconFrameLayout = iconFrame.GetComponent<LayoutElement>();
+            iconFrameLayout.preferredWidth = 28f;
+            iconFrameLayout.preferredHeight = 28f;
+            iconFrameLayout.minWidth = 28f;
+            iconFrameLayout.minHeight = 28f;
+
+            var iconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+            iconGo.transform.SetParent(iconFrame.transform, false);
+            ClassicRpgUiRuntime.Stretch(iconGo.GetComponent<RectTransform>(), Vector2.zero, Vector2.zero);
+            var icon = iconGo.GetComponent<Image>();
+            icon.raycastTarget = false;
+            icon.preserveAspect = true;
+            icon.sprite = LoadDetailIcon(rowData.IconResourcePath);
+            icon.color = icon.sprite != null ? rowData.IconColor : new Color(1f, 1f, 1f, 0f);
+
+            var textColumn = new GameObject("TextColumn", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            textColumn.transform.SetParent(row.transform, false);
+            var textLayoutElement = textColumn.GetComponent<LayoutElement>();
+            textLayoutElement.flexibleWidth = 1f;
+            textLayoutElement.minWidth = 0f;
+            var textLayout = textColumn.GetComponent<VerticalLayoutGroup>();
+            textLayout.childAlignment = TextAnchor.MiddleLeft;
+            textLayout.childControlWidth = true;
+            textLayout.childControlHeight = true;
+            textLayout.childForceExpandWidth = true;
+            textLayout.childForceExpandHeight = false;
+            textLayout.spacing = 2f;
+
+            if (!hideLabel)
+            {
+                var label = MakeLabel(textColumn.transform, "Txt_Label", rowData.Label, 11, new Color(0.70f, 0.76f, 0.86f, 0.92f), 12f);
+                label.alignment = TextAlignmentOptions.MidlineLeft;
+                label.fontStyle = FontStyles.Bold;
+                SetResponsiveSingleLine(label, 10f, 11f);
+            }
+
+            var value = MakeLabel(textColumn.transform, "Txt_Value", rowData.Value, hideLabel ? 13 : 14, rowData.ValueColor, hideLabel ? 24f : 22f);
+            var valueLayout = value.GetComponent<LayoutElement>();
+            if (valueLayout != null)
+            {
+                valueLayout.minHeight = hideLabel ? 24f : 22f;
+                valueLayout.preferredHeight = -1f;
+                valueLayout.flexibleHeight = 0f;
+            }
+            var valueFitter = value.GetComponent<ContentSizeFitter>() ?? value.gameObject.AddComponent<ContentSizeFitter>();
+            valueFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            valueFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            value.alignment = hideLabel ? TextAlignmentOptions.MidlineLeft : TextAlignmentOptions.TopLeft;
+            value.fontStyle = hideLabel ? FontStyles.Bold : FontStyles.Normal;
+            value.lineSpacing = 3f;
+            SetResponsiveWrappedText(value, 11f, hideLabel ? 13f : 14f);
+        }
+
+        Sprite LoadDetailIcon(string resourcePath)
+        {
+            if (string.IsNullOrWhiteSpace(resourcePath))
+                return null;
+
+            if (_detailIconCache.TryGetValue(resourcePath, out var cached))
+                return cached;
+
+            var sprite = Resources.Load<Sprite>(resourcePath);
+            if (sprite == null)
+            {
+                var texture = Resources.Load<Texture2D>(resourcePath);
+                if (texture != null)
+                {
+                    sprite = Sprite.Create(
+                        texture,
+                        new Rect(0f, 0f, texture.width, texture.height),
+                        new Vector2(0.5f, 0.5f),
+                        100f);
+                    sprite.name = $"{texture.name}_RuntimeSprite";
+                }
+            }
+            _detailIconCache[resourcePath] = sprite;
+            return sprite;
+        }
+
+        static string NormalizeDossierValue(string value, string fallback = "--")
+        {
+            return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        }
+
+        static string BuildRaceCardSummary(RaceProgressionDefinition race)
+        {
+            string summary = NormalizeDossierValue(race?.Summary, "Faction dossier pending.");
+            const int maxLength = 124;
+            if (summary.Length <= maxLength)
+                return summary;
+
+            int cutoff = summary.LastIndexOf(' ', maxLength);
+            if (cutoff < 72)
+                cutoff = maxLength;
+
+            return $"{summary.Substring(0, cutoff).TrimEnd('.', ',', ';', ':')}...";
+        }
+
+        DetailRowData[] BuildWarLedgerRows(RaceProgressionUnitDefinition unit)
+        {
+            Color statIconColor = new Color(0.90f, 0.24f, 0.20f, 1f);
+            if (unit == null)
+            {
+                return BuildPlaceholderDetailRows(
+                    new DetailRowData("ClassicRpgIcons/Icon_Information", string.Empty, "Choose a node to reveal its ledger.", new Color(0.88f, 0.90f, 0.96f, 1f)));
+            }
+
+            if (unit.CardDisplay != null)
+            {
+                return new[]
+                {
+                    new DetailRowData("ClassicRpgIcons/Icon_Upgrade", string.Empty, NormalizeDossierValue(BuildCompactBuildingTierValue(unit)), new Color(0.88f, 0.90f, 0.96f, 1f)),
+                    new DetailRowData("ClassicRpgIcons/Icon_Craft", string.Empty, NormalizeDossierValue(BuildBuildingTimeValue(unit)), new Color(0.82f, 0.86f, 0.92f, 1f)),
+                    new DetailRowData("ClassicRpgIcons/Icon_Reward", string.Empty, NormalizeDossierValue(BuildBuildingCostValue(unit)), new Color(0.98f, 0.87f, 0.56f, 1f)),
+                    new DetailRowData("ClassicRpgIcons/Icon_Castle", string.Empty, NormalizeDossierValue(BuildBuildingRequirementValue(_selectedRace != null && _selectedRace.TryGetLane(unit.LaneId, out var lane) ? lane : null, unit)), new Color(0.82f, 0.86f, 0.92f, 1f)),
+                };
+            }
+
+            if (!TryGetCatalogEntry(unit, out var catalog))
+            {
+                string fallbackSignature = NormalizeDossierValue(
+                    BuildCompactSpecialTag(unit),
+                    NormalizeDossierValue(unit.StatsSummary, "Field report pending."));
+                return new[]
+                {
+                    new DetailRowData("ClassicRpgIcons/Badge_Warrior", string.Empty, NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit)), new Color(0.88f, 0.90f, 0.96f, 1f), statIconColor),
+                    new DetailRowData("ClassicRpgIcons/Icon_Character", string.Empty, BuildUnitRoleLabel(unit), new Color(0.82f, 0.86f, 0.92f, 1f)),
+                    new DetailRowData("ClassicRpgIcons/Stat_Guard", string.Empty, fallbackSignature, new Color(0.84f, 0.88f, 0.95f, 1f), statIconColor),
+                };
+            }
+
+            string rankValue = NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit));
+            string attackValue = $"{FormatStatNumber(catalog.attack_damage)} dmg at {Mathf.Max(0.01f, catalog.attack_speed):0.##}/s | {FormatStatNumber(catalog.range)} rng";
+            string vitalityValue = $"{FormatStatNumber(catalog.hp)} HP | {HumanizeLabel(catalog.armor_type)} {Mathf.Max(0f, catalog.damage_reduction_pct):0.#}%";
+
+            return new[]
+            {
+                new DetailRowData("ClassicRpgIcons/Badge_Warrior", string.Empty, rankValue, new Color(0.88f, 0.90f, 0.96f, 1f), statIconColor),
+                new DetailRowData("ClassicRpgIcons/Stat_Attack", string.Empty, attackValue, new Color(0.92f, 0.88f, 0.82f, 1f), statIconColor),
+                new DetailRowData("ClassicRpgIcons/Icon_Armor", string.Empty, vitalityValue, new Color(0.84f, 0.88f, 0.95f, 1f), statIconColor),
+            };
+        }
+
+        DetailRowData[] BuildRequirementRows(RaceProgressionUnitDefinition unit)
+        {
+            string gateValue = "Start unit";
+            if (unit != null && unit.CardStyle == RaceProgressionUnitCardStyle.UpgradeStep)
+                gateValue = unit.IsStartUnit
+                    ? "Starting civic tier"
+                    : NormalizeDossierValue(unit.UnlockRequirement?.Label, unit.UnlockRequirement == null ? "Unknown gate" : $"{unit.UnlockRequirement.BuildingName} T{unit.UnlockRequirement.RequiredTier}");
+            else if (unit != null && unit.CardStyle == RaceProgressionUnitCardStyle.BuildingTier)
+                gateValue = BuildBuildingRequirementValue(_selectedRace != null && _selectedRace.TryGetLane(unit.LaneId, out var lane) ? lane : null, unit);
+            else if (unit != null && !unit.IsStartUnit)
+                gateValue = unit.UnlockRequirement == null ? "Unknown gate" : $"{unit.UnlockRequirement.BuildingName} T{unit.UnlockRequirement.RequiredTier}";
+
+            return new[]
+            {
+                new DetailRowData("ClassicRpgIcons/Icon_Castle", string.Empty, gateValue, new Color(0.88f, 0.90f, 0.96f, 1f)),
+                new DetailRowData(
+                    unit != null && unit.CardDisplay != null ? "ClassicRpgIcons/Icon_Upgrade" : "ClassicRpgIcons/Badge_Warrior",
+                    string.Empty,
+                    unit != null && unit.CardDisplay != null
+                        ? HumanizeLabel(unit.LaneId)
+                        : NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit)),
+                    new Color(0.82f, 0.86f, 0.92f, 1f)),
+                new DetailRowData("ClassicRpgIcons/Icon_Character", string.Empty, BuildRequirementSourceText(unit), new Color(0.82f, 0.86f, 0.92f, 1f)),
+            };
+        }
+
+        DetailRowData[] BuildCombatRows(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+            {
+                return BuildPlaceholderDetailRows(
+                    new DetailRowData("ClassicRpgIcons/Icon_Battle", string.Empty, "Choose a node to reveal its battlefield role.", new Color(0.84f, 0.88f, 0.95f, 1f)));
+            }
+
+            string primaryValue = unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep
+                ? "Requirement marker only"
+                : unit.CardDisplay != null
+                    ? BuildBuildingMoveSetSummary(unit)
+                    : BuildUnitSpecialAttackText(unit);
+            string stanceValue = unit.CardDisplay != null ? "Structure or civic unlock rather than a combat formation." : BuildMoveStanceText(unit);
+            string deliveryValue = TryGetCatalogEntry(unit, out var catalog)
+                ? BuildUnitDeliveryText(unit, catalog)
+                : unit.CardDisplay != null
+                    ? "Unlocks new battlefield tools rather than a live attack."
+                    : "Catalog-backed attack delivery data is not available.";
+            string previewValue = BuildPreviewSummaryText(unit, catalog);
+
+            return new[]
+            {
+                new DetailRowData("ClassicRpgIcons/Stat_Attack", string.Empty, primaryValue, new Color(0.88f, 0.90f, 0.96f, 1f), new Color(0.90f, 0.24f, 0.20f, 1f)),
+                new DetailRowData("ClassicRpgIcons/Badge_Warrior", string.Empty, stanceValue, new Color(0.84f, 0.88f, 0.95f, 1f), new Color(0.90f, 0.24f, 0.20f, 1f)),
+                new DetailRowData("ClassicRpgIcons/Stat_Guard", string.Empty, deliveryValue, new Color(0.84f, 0.88f, 0.95f, 1f), new Color(0.90f, 0.24f, 0.20f, 1f)),
+                new DetailRowData("ClassicRpgIcons/Icon_Information", string.Empty, previewValue, new Color(0.80f, 0.84f, 0.92f, 1f)),
+            };
+        }
+
+        string BuildRequirementSourceText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Unavailable";
+
+            if (unit.CardDisplay != null)
+                return $"{HumanizeLabel(unit.LaneId)} branch";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return "Gate node";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome)
+                return "Castle outcome row";
+
+            return BuildCurrentSourceText(TryGetCatalogEntry(unit, out var catalog) ? catalog : null);
+        }
+
+        static string BuildBuildingMoveSetSummary(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "ballista" => "Heavy siege bolt volley",
+                "cannon" => "Explosive artillery blast",
+                _ => "Fortress upgrade or structure unlock",
+            };
+        }
+
+        string BuildPreviewSummaryText(RaceProgressionUnitDefinition unit, UnitCatalogEntry catalog)
+        {
+            if (unit == null)
+                return "Preview unavailable.";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return "Gate nodes do not have combat previews.";
+
+            if (unit.CardDisplay != null)
+                return TryResolvePreviewSfx(unit, out _, out var buildingSfxLabel)
+                    ? $"{buildingSfxLabel} SFX is ready in the preview hall."
+                    : "Structure audio appears here when it is wired.";
+
+            if (IsEconomyUnit(unit))
+                return "Route audio is ready below. Combat reels are not used for market runners.";
+
+            if (IsStableDisplayOnlyUnit(unit))
+                return "Display branch only until mounted combat is live.";
+
+            return TryResolvePreviewSfx(unit, out _, out var sfxLabel)
+                ? $"Motion reels are ready, and {sfxLabel} audio is wired."
+                : "Motion reels are ready. Dedicated audio is still pending.";
+        }
+
+        void BuildDetailsCustomizationCard(Transform parent, bool compact)
+        {
+            var customizationCard = CreateDetailsModalCard(parent, "CustomizationCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 188f);
+            var customizationHeader = MakeLabel(customizationCard.transform, "Txt_CustomizationHeader", "Armory & Vanity", 15, ClassicRpgUiRuntime.WarmGold, 22f);
+            ApplyReadableTextStyle(customizationHeader, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var tagRow = new GameObject("CustomizationTags", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            tagRow.transform.SetParent(customizationCard.transform, false);
+            tagRow.GetComponent<LayoutElement>().preferredHeight = 34f;
+            var tagLayout = tagRow.GetComponent<HorizontalLayoutGroup>();
+            tagLayout.childAlignment = TextAnchor.MiddleCenter;
+            tagLayout.childControlWidth = false;
+            tagLayout.childControlHeight = true;
+            tagLayout.childForceExpandWidth = false;
+            tagLayout.childForceExpandHeight = false;
+            tagLayout.spacing = 6f;
+            CreateStoreBadge(tagRow.transform, "Skins", new Color(0.44f, 0.27f, 0.51f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Weapons", new Color(0.43f, 0.31f, 0.20f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Victory", new Color(0.20f, 0.39f, 0.32f, 0.98f));
+
+            _txtDetailsCustomization = MakeLabel(customizationCard.transform, "Txt_Customization", "", compact ? 12 : 13, new Color(0.84f, 0.88f, 0.95f), 98f);
+            ApplyReadableTextStyle(_txtDetailsCustomization, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
+            SetResponsiveWrappedText(_txtDetailsCustomization, 10f, compact ? 12f : 13f);
+        }
+
+        void BuildDetailsSoundCard(Transform parent, bool compact)
+        {
+            var soundCard = CreateDetailsModalCard(parent, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 152f);
+            var soundHeader = MakeLabel(soundCard.transform, "Txt_SoundHeader", "Sound Hall", 15, ClassicRpgUiRuntime.WarmGold, 22f);
+            ApplyReadableTextStyle(soundHeader, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var soundRow = new GameObject("SoundPreviewRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            soundRow.transform.SetParent(soundCard.transform, false);
+            soundRow.GetComponent<LayoutElement>().preferredHeight = 44f;
+            var soundRowLayout = soundRow.GetComponent<HorizontalLayoutGroup>();
+            soundRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            soundRowLayout.childControlWidth = true;
+            soundRowLayout.childControlHeight = true;
+            soundRowLayout.childForceExpandWidth = true;
+            soundRowLayout.childForceExpandHeight = false;
+            soundRowLayout.spacing = 8f;
+
+            _btnDetailsPreviewSfx = MakeButton(soundRow.transform, "Btn_PreviewSfx", "Preview SFX", 42f, new Color(0.24f, 0.33f, 0.49f, 1f));
+            _txtDetailsPreviewSfx = _btnDetailsPreviewSfx.GetComponentInChildren<TMP_Text>();
+            if (_txtDetailsPreviewSfx != null)
+                _txtDetailsPreviewSfx.fontSize = compact ? 12f : 13f;
+            ApplyReadableTextStyle(_txtDetailsPreviewSfx, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+            _btnDetailsPreviewSfx.onClick.AddListener(PreviewSelectedUnitSfx);
+
+            _btnDetailsPreviewVoice = MakeButton(soundRow.transform, "Btn_PreviewVoice", "Voice Lines", 42f, new Color(0.19f, 0.24f, 0.34f, 1f));
+            _txtDetailsPreviewVoice = _btnDetailsPreviewVoice.GetComponentInChildren<TMP_Text>();
+            if (_txtDetailsPreviewVoice != null)
+                _txtDetailsPreviewVoice.fontSize = compact ? 12f : 13f;
+            ApplyReadableTextStyle(_txtDetailsPreviewVoice, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+            _btnDetailsPreviewVoice.onClick.AddListener(PreviewSelectedUnitVoice);
+
+            _txtDetailsAudioStatus = MakeLabel(soundCard.transform, "Txt_AudioStatus", "", compact ? 11 : 12, new Color(0.80f, 0.84f, 0.92f), 46f);
+            ApplyReadableTextStyle(_txtDetailsAudioStatus, new Color(0.80f, 0.84f, 0.92f), TextAlignmentOptions.Center);
+            SetResponsiveWrappedText(_txtDetailsAudioStatus, 10f, compact ? 11f : 12f);
+        }
+
+        void BuildDetailsMotionCard(Transform parent, bool compact)
+        {
+            var previewGridCard = CreateDetailsModalCard(parent, "MotionCard", new Color(0.08f, 0.11f, 0.18f, 0.97f), 196f);
+            var previewGridHeader = MakeLabel(previewGridCard.transform, "Txt_MotionHeader", "Motion Reels", 15, ClassicRpgUiRuntime.WarmGold, 22f);
+            ApplyReadableTextStyle(previewGridHeader, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+
+            var previewGrid = new GameObject("MotionPreviewGrid", typeof(RectTransform), typeof(LayoutElement), typeof(GridLayoutGroup));
+            previewGrid.transform.SetParent(previewGridCard.transform, false);
+            previewGrid.GetComponent<LayoutElement>().preferredHeight = 146f;
+            var previewGridGroup = previewGrid.GetComponent<GridLayoutGroup>();
+            previewGridGroup.cellSize = compact ? new Vector2(118f, 40f) : new Vector2(136f, 44f);
+            previewGridGroup.spacing = new Vector2(8f, 8f);
+            previewGridGroup.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            previewGridGroup.constraintCount = 2;
+            previewGridGroup.childAlignment = TextAnchor.MiddleCenter;
+            previewGridGroup.startAxis = GridLayoutGroup.Axis.Horizontal;
+            previewGridGroup.startCorner = GridLayoutGroup.Corner.UpperLeft;
+
+            _btnPreviewIdle = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewIdle", "Idle", PreviewIdleMotion, out _txtPreviewIdle);
+            _btnPreviewWalk = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewWalk", "Walk", PreviewWalkMotion, out _txtPreviewWalk);
+            _btnPreviewMarch = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewMarch", "March", PreviewMarchMotion, out _txtPreviewMarch);
+            _btnPreviewRun = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewRun", "Run", PreviewRunMotion, out _txtPreviewRun);
+            _btnPreviewStrike = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewStrike", "Strike", PreviewStrikeMotion, out _txtPreviewStrike);
+            _btnPreviewSpecial = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewSpecial", "Special", PreviewSpecialMotion, out _txtPreviewSpecial);
+            _btnPreviewHit = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewHit", "Hit React", PreviewHitMotion, out _txtPreviewHit);
+            _btnPreviewDeath = CreateMotionPreviewButton(previewGrid.transform, "Btn_PreviewDeath", "Death", PreviewDeathMotion, out _txtPreviewDeath);
         }
 
         GameObject CreateDetailsModalCard(Transform parent, string name, Color color, float preferredHeight)
         {
-            var card = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            var card = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             card.transform.SetParent(parent, false);
             var image = card.GetComponent<Image>();
-            image.color = color;
-            ApplyClassicRpgFrameTheme(image, "Assets/ClassicRPGUI2/UIElementsPNG/PaperMedium.png");
+            ApplyReadablePanelStyle(image, color);
             var layoutElement = card.GetComponent<LayoutElement>();
             layoutElement.flexibleWidth = 1f;
-            layoutElement.preferredHeight = preferredHeight;
+            layoutElement.minHeight = preferredHeight > 0f ? preferredHeight : 0f;
+            layoutElement.preferredHeight = -1f;
             var layout = card.GetComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 8f;
+            layout.spacing = 10f;
             layout.padding = new RectOffset(18, 18, 16, 16);
+            var fitter = card.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             return card;
         }
 
         Button CreateMotionPreviewButton(Transform parent, string name, string label, UnityEngine.Events.UnityAction onClick, out TMP_Text text)
         {
-            var button = MakeButton(parent, name, label, 44f, new Color(0.19f, 0.26f, 0.38f, 1f));
-            ApplyClassicRpgButtonTheme(button, ClassicRpgButtonSize.Medium);
+            var button = MakeButton(parent, name, label, 54f, new Color(0.19f, 0.26f, 0.38f, 1f));
             text = button.GetComponentInChildren<TMP_Text>();
             if (text != null)
             {
-                text.fontSize = 14f;
-                ApplyClassicRpgLabelTheme(text, false, true);
+                text.fontSize = 15f;
+                ApplyReadableTextStyle(text, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
             }
             button.onClick.AddListener(onClick);
             return button;
+        }
+
+        void CreateStoreBadge(Transform parent, string label, Color color)
+        {
+            var badge = new GameObject($"Badge_{label}", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            badge.transform.SetParent(parent, false);
+            var badgeImage = badge.GetComponent<Image>();
+            ApplyReadablePanelStyle(badgeImage, color);
+            var badgeLayout = badge.GetComponent<LayoutElement>();
+            badgeLayout.preferredWidth = 96f;
+            badgeLayout.preferredHeight = 32f;
+
+            var badgeLabel = CreateAnchoredText(
+                badge.transform,
+                "Txt_Badge",
+                label,
+                12,
+                Color.white,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(6f, 2f),
+                new Vector2(-6f, -2f));
+            ApplyReadableTextStyle(badgeLabel, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(badgeLabel, 10f, 12f);
+        }
+
+        void CreateHeroOutcomeBadge(Transform parent, RaceProgressionUnitDefinition unit)
+        {
+            var badgeRow = new GameObject("HeroBadgeRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            badgeRow.transform.SetParent(parent, false);
+            var badgeRowLayoutElement = badgeRow.GetComponent<LayoutElement>();
+            badgeRowLayoutElement.preferredHeight = 30f;
+
+            var badgeRowLayout = badgeRow.GetComponent<HorizontalLayoutGroup>();
+            badgeRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            badgeRowLayout.childControlWidth = false;
+            badgeRowLayout.childControlHeight = true;
+            badgeRowLayout.childForceExpandWidth = false;
+            badgeRowLayout.childForceExpandHeight = false;
+            badgeRowLayout.spacing = 0f;
+            badgeRowLayout.padding = new RectOffset(0, 0, 0, 0);
+
+            var badge = new GameObject("HeroBadge", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            badge.transform.SetParent(badgeRow.transform, false);
+            ApplyReadablePanelStyle(badge.GetComponent<Image>(), new Color(0.18f, 0.20f, 0.31f, 0.98f));
+            var badgeLayoutElement = badge.GetComponent<LayoutElement>();
+            badgeLayoutElement.preferredWidth = 138f;
+            badgeLayoutElement.preferredHeight = 28f;
+
+            var badgeLayout = badge.GetComponent<HorizontalLayoutGroup>();
+            badgeLayout.childAlignment = TextAnchor.MiddleCenter;
+            badgeLayout.childControlWidth = false;
+            badgeLayout.childControlHeight = true;
+            badgeLayout.childForceExpandWidth = false;
+            badgeLayout.childForceExpandHeight = false;
+            badgeLayout.spacing = 6f;
+            badgeLayout.padding = new RectOffset(10, 10, 4, 4);
+
+            var iconGo = new GameObject("BadgeIcon", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            iconGo.transform.SetParent(badge.transform, false);
+            var iconLayout = iconGo.GetComponent<LayoutElement>();
+            iconLayout.preferredWidth = 16f;
+            iconLayout.preferredHeight = 16f;
+            var icon = iconGo.GetComponent<Image>();
+            icon.raycastTarget = false;
+            icon.preserveAspect = true;
+            icon.sprite = LoadDetailIcon("ClassicRpgIcons/Icon_Castle");
+            icon.color = icon.sprite != null ? ClassicRpgUiRuntime.WarmGold : new Color(1f, 1f, 1f, 0f);
+
+            var badgeLabel = MakeLabel(badge.transform, "Txt_HeroBadge", BuildHeroOutcomeBadgeText(unit), 11, ClassicRpgUiRuntime.WarmGold, 18f);
+            ApplyReadableTextStyle(badgeLabel, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(badgeLabel, 10f, 11f);
+        }
+
+        static void ApplyReadableTextStyle(TMP_Text label, Color color, TextAlignmentOptions alignment, FontStyles fontStyle = FontStyles.Normal)
+        {
+            if (label == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyTextStyle(
+                label,
+                ClassicRpgTextStyle.Body,
+                alignment,
+                color);
+            label.fontStyle = fontStyle;
+            label.outlineWidth = 0f;
+        }
+
+        static void ApplyPlateTitleStyle(TMP_Text label, Color color, TextAlignmentOptions alignment)
+        {
+            if (label == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyTextStyle(
+                label,
+                ClassicRpgTextStyle.Body,
+                alignment,
+                color,
+                allowWrap: false);
+            label.fontStyle = FontStyles.Bold;
+            label.outlineWidth = 0f;
+        }
+
+        static void ApplyReadablePanelStyle(Image image, Color color)
+        {
+            if (image == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PaperMedium, true, color);
         }
 
         void BuildActionRow(Transform parent)
@@ -2133,29 +3374,59 @@ namespace CastleDefender.UI
         {
             string resolvedRaceId = RaceProgressionCatalog.ResolveAllowedRaceId(_availableRaceIds, raceId, "race button");
             _selectedRace = RaceProgressionCatalog.GetOrDefault(resolvedRaceId, "race button");
-            _selectedUnit = GetDefaultUnit(_selectedRace);
-            _detailsModalOpen = false;
-            NavigateToPage(WizardPage.ProgressionTree);
+            _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
+            ScrollRaceCarouselToIndex(GetSelectedRaceCarouselIndex());
+            RefreshCopy();
+            RefreshVisuals();
         }
 
         void OnUnitSelected(string unitId)
         {
-            if (_selectedRace == null || !_selectedRace.TryGetUnit(unitId, out var unit))
+            if (!TryResolveRaceUnit(unitId, out var unit))
                 return;
 
             _selectedUnit = unit;
-            _detailsModalOpen = true;
             _activePage = WizardPage.ProgressionTree;
             RefreshCopy();
             RefreshVisuals();
         }
 
+        bool TryResolveRaceUnit(string unitId, out RaceProgressionUnitDefinition unit)
+        {
+            unit = null;
+            if (_selectedRace == null || string.IsNullOrWhiteSpace(unitId))
+                return false;
+
+            if (_selectedRace.TryGetUnit(unitId, out unit))
+                return true;
+
+            for (int laneIndex = 0; laneIndex < _selectedRace.Lanes.Length; laneIndex++)
+            {
+                var lane = _selectedRace.Lanes[laneIndex];
+                if (lane == null)
+                    continue;
+
+                int unitIndex = GetUnitIndex(lane.Units, unitId);
+                if (unitIndex >= 0)
+                {
+                    unit = lane.Units[unitIndex];
+                    return unit != null;
+                }
+
+                int outcomeIndex = GetUnitIndex(lane.OutcomeUnits, unitId);
+                if (outcomeIndex >= 0)
+                {
+                    unit = lane.OutcomeUnits[outcomeIndex];
+                    return unit != null;
+                }
+            }
+
+            Debug.LogError($"[RaceProgression] Could not resolve selected unit '{unitId}' for race '{_selectedRace.Id}'.");
+            return false;
+        }
+
         void CloseDetailsModal()
         {
-            if (!_detailsModalOpen)
-                return;
-
-            _detailsModalOpen = false;
             RefreshCopy();
             RefreshVisuals();
         }
@@ -2166,18 +3437,16 @@ namespace CastleDefender.UI
                 return;
 
             _selectedTreeTab = tab;
-            _detailsModalOpen = false;
+            SyncSelectedUnitToCurrentTab();
             RebuildPanel();
         }
 
         void NavigateToPage(WizardPage page)
         {
             if (page == WizardPage.UnitDetails && _selectedUnit == null)
-                _selectedUnit = GetDefaultUnit(_selectedRace);
+                _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
 
             if (page != WizardPage.UnitDetails)
-                _detailsModalOpen = false;
-
             _activePage = page;
             RebuildPanel();
         }
@@ -2205,13 +3474,10 @@ namespace CastleDefender.UI
             switch (_activePage)
             {
                 case WizardPage.UnitDetails:
-                    CloseDetailsModal();
+                    NavigateToPage(WizardPage.ProgressionTree);
                     break;
                 case WizardPage.ProgressionTree:
-                    if (_detailsModalOpen)
-                        CloseDetailsModal();
-                    else
-                        NavigateToPage(WizardPage.RaceSelection);
+                    NavigateToPage(WizardPage.RaceSelection);
                     break;
                 case WizardPage.RaceSelection:
                     if (_mode == ProgressionViewerMode.LobbyViewer)
@@ -2245,6 +3511,73 @@ namespace CastleDefender.UI
             return null;
         }
 
+        RaceProgressionUnitDefinition GetDefaultUnitForTab(RaceProgressionDefinition race, RaceProgressionTab tab)
+        {
+            if (race == null || race.Lanes == null)
+                return null;
+
+            RaceProgressionUnitDefinition firstUnitInTab = null;
+            for (int laneIndex = 0; laneIndex < race.Lanes.Length; laneIndex++)
+            {
+                var lane = race.Lanes[laneIndex];
+                if (lane == null || lane.Tab != tab || lane.Units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.Units.Length; unitIndex++)
+                {
+                    var unit = lane.Units[unitIndex];
+                    if (unit == null)
+                        continue;
+
+                    firstUnitInTab ??= unit;
+                    if (unit.StartsUnlocked)
+                        return unit;
+                }
+            }
+
+            return firstUnitInTab ?? GetDefaultUnit(race);
+        }
+
+        bool IsSelectedUnitInCurrentTab()
+        {
+            if (_selectedRace == null || _selectedUnit == null || _selectedRace.Lanes == null)
+                return false;
+
+            for (int laneIndex = 0; laneIndex < _selectedRace.Lanes.Length; laneIndex++)
+            {
+                var lane = _selectedRace.Lanes[laneIndex];
+                if (lane == null
+                    || lane.Tab != _selectedTreeTab
+                    || lane.Units == null
+                    || !string.Equals(lane.Id, _selectedUnit.LaneId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (GetUnitIndex(lane.Units, _selectedUnit.Id) >= 0)
+                    return true;
+
+                if (GetOutcomeUnitIndex(lane, _selectedUnit.Id) >= 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        void SyncSelectedUnitToCurrentTab()
+        {
+            if (_selectedRace == null)
+            {
+                _selectedUnit = null;
+                return;
+            }
+
+            if (IsSelectedUnitInCurrentTab())
+                return;
+
+            _selectedUnit = GetDefaultUnitForTab(_selectedRace, _selectedTreeTab);
+        }
+
         string[] GetAvailableRaceIds(string[] payloadRaceIds)
         {
             if (payloadRaceIds != null && payloadRaceIds.Length > 0)
@@ -2258,6 +3591,9 @@ namespace CastleDefender.UI
 
         void RefreshCopy()
         {
+            if (_txtTitle != null)
+                _txtTitle.text = BuildPageTitle();
+
             if (_txtSubtitle != null)
                 _txtSubtitle.text = BuildPageSubtitle();
 
@@ -2283,11 +3619,20 @@ namespace CastleDefender.UI
             return _activePage switch
             {
                 WizardPage.RaceSelection => "Step 1 of 2. Choose a race to begin.",
-                WizardPage.ProgressionTree => _detailsModalOpen
-                    ? "Step 2 of 2. Review the selected unit in the readable popup."
-                    : "Step 2 of 2. Review the upgrade chain and tap any card for readable details.",
-                WizardPage.UnitDetails => "Step 2 of 2. Review the selected unit in the readable popup.",
+                WizardPage.ProgressionTree => "Step 2 of 2. Review the upgrade chain and inspect the dossier panel before confirming.",
+                WizardPage.UnitDetails => "Step 2 of 2. Review the upgrade chain and inspect the dossier panel before confirming.",
                 _ => "Review the race progression.",
+            };
+        }
+
+        string BuildPageTitle()
+        {
+            return _activePage switch
+            {
+                WizardPage.RaceSelection => "Choose Your Race",
+                WizardPage.ProgressionTree => "Faction Tech Tree",
+                WizardPage.UnitDetails => "Faction Tech Tree",
+                _ => "Race Progression",
             };
         }
 
@@ -2298,13 +3643,13 @@ namespace CastleDefender.UI
                 WizardPage.RaceSelection => _selectedRace != null
                     ? $"Open {_selectedRace.DisplayName} to review its upgrade chain."
                     : "Select a race to continue.",
-                WizardPage.ProgressionTree => _detailsModalOpen && _selectedUnit != null
-                    ? $"{_selectedUnit.DisplayName} is open. Tap outside the panel or press Close to return to the tree."
-                    : _selectedRace != null
-                        ? $"{_selectedRace.DisplayName} selected. Tap any card to open a larger readable detail popup."
-                        : "Select a race to continue.",
+                WizardPage.ProgressionTree => _selectedRace != null
+                    ? _selectedUnit != null
+                        ? $"{_selectedUnit.DisplayName} selected. Review its dossier and confirm when your build is ready."
+                        : $"{_selectedRace.DisplayName} selected. Tap any node to inspect it in the dossier panel."
+                    : "Select a race to continue.",
                 WizardPage.UnitDetails => _selectedUnit != null
-                    ? $"{_selectedUnit.DisplayName} is open. Tap outside the panel or press Close to return to the tree."
+                    ? $"{_selectedUnit.DisplayName} selected. Review its dossier and confirm when your build is ready."
                     : "Select a race to continue.",
                 _ => "Review the race progression.",
             };
@@ -2346,7 +3691,57 @@ namespace CastleDefender.UI
                 view.Background.color = selected ? selectedColor : new Color(0.13f, 0.17f, 0.26f, 0.98f);
                 view.Title.color = selected ? new Color(0.10f, 0.09f, 0.06f, 1f) : Color.white;
                 view.Subtitle.color = selected ? new Color(0.18f, 0.13f, 0.08f, 1f) : new Color(0.82f, 0.88f, 0.96f, 1f);
+                if (view.Summary != null)
+                    view.Summary.color = selected ? new Color(0.20f, 0.15f, 0.09f, 1f) : new Color(0.84f, 0.88f, 0.95f, 1f);
+                if (view.StatusBackground != null)
+                    view.StatusBackground.color = selected ? new Color(0.33f, 0.26f, 0.11f, 0.98f) : new Color(0.18f, 0.23f, 0.33f, 0.98f);
+                if (view.Status != null)
+                    view.Status.color = selected ? new Color(0.98f, 0.93f, 0.80f, 1f) : ClassicRpgUiRuntime.WarmGold;
             }
+
+            RefreshRaceCarouselButtons();
+        }
+
+        int GetSelectedRaceCarouselIndex()
+        {
+            if (_selectedRace == null || _availableRaceIds == null)
+                return 0;
+
+            for (int i = 0; i < _availableRaceIds.Length; i++)
+            {
+                if (string.Equals(_availableRaceIds[i], _selectedRace.Id, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            return 0;
+        }
+
+        void ScrollRaceCarouselToIndex(int index)
+        {
+            if (_raceCarouselScroll == null || _raceCarouselItemCount <= 1)
+                return;
+
+            float normalized = Mathf.Clamp01((float)Mathf.Clamp(index, 0, _raceCarouselItemCount - 1) / (_raceCarouselItemCount - 1));
+            _raceCarouselScroll.horizontalNormalizedPosition = normalized;
+            RefreshRaceCarouselButtons();
+        }
+
+        void ShiftRaceCarousel(int direction)
+        {
+            if (_raceCarouselScroll == null || _raceCarouselItemCount <= 1)
+                return;
+
+            float step = 1f / Mathf.Max(1, _raceCarouselItemCount - 1);
+            _raceCarouselScroll.horizontalNormalizedPosition = Mathf.Clamp01(_raceCarouselScroll.horizontalNormalizedPosition + (direction * step));
+            RefreshRaceCarouselButtons();
+        }
+
+        void RefreshRaceCarouselButtons()
+        {
+            if (_btnRaceCarouselPrev != null)
+                _btnRaceCarouselPrev.interactable = _raceCarouselScroll != null && _raceCarouselScroll.horizontalNormalizedPosition > 0.02f;
+            if (_btnRaceCarouselNext != null)
+                _btnRaceCarouselNext.interactable = _raceCarouselScroll != null && _raceCarouselScroll.horizontalNormalizedPosition < 0.98f;
         }
 
         void RefreshUnitCards()
@@ -2495,32 +3890,51 @@ namespace CastleDefender.UI
 
         void RefreshDetailsPanel()
         {
-            bool showModal = _detailsModalOpen
-                && _selectedUnit != null
-                && (_activePage == WizardPage.ProgressionTree || _activePage == WizardPage.UnitDetails);
+            bool showDetails = _activePage == WizardPage.ProgressionTree || _activePage == WizardPage.UnitDetails;
             if (_detailsOverlayRoot != null)
-                _detailsOverlayRoot.SetActive(showModal);
-            if (!showModal)
+                _detailsOverlayRoot.SetActive(showDetails);
+            if (!showDetails)
             {
                 ClearDetailsLivePreview();
                 return;
             }
 
+            SyncSelectedUnitToCurrentTab();
             if (_selectedUnit == null)
-                _selectedUnit = GetDefaultUnit(_selectedRace);
-            if (_selectedUnit == null)
+            {
+                if (_txtDetailsTitle != null)
+                    _txtDetailsTitle.text = "Select an Upgrade";
+                if (_txtDetailsState != null)
+                    _txtDetailsState.text = "Awaiting Selection";
+                PopulateDetailRows(_detailsStatsRowsRoot, BuildPlaceholderDetailRows(
+                    new DetailRowData("ClassicRpgIcons/Icon_Information", "Inspect", "Tap a large node to review role, lane, and cost.", new Color(0.88f, 0.90f, 0.96f, 1f))));
+                PopulateDetailRows(_detailsRequirementRowsRoot, BuildPlaceholderDetailRows(
+                    new DetailRowData("ClassicRpgIcons/Icon_Castle", "Gate", "Requirements appear when a node is selected.", new Color(0.82f, 0.86f, 0.92f, 1f))));
+                PopulateDetailRows(_detailsMovesRowsRoot, BuildPlaceholderDetailRows(
+                    new DetailRowData("ClassicRpgIcons/Icon_Battle", "Readout", "Combat and travel notes appear here.", new Color(0.84f, 0.88f, 0.95f, 1f))));
+                if (_txtDetailsCustomization != null)
+                    _txtDetailsCustomization.text = "Visual customization hooks will appear here.";
+                if (_txtDetailsAudioStatus != null)
+                    _txtDetailsAudioStatus.text = "Audio preview unlocks when a node is selected.";
+                if (_txtDetailsBody != null)
+                    _txtDetailsBody.text = "Choose a faction node to inspect the full dossier.";
+                if (_txtDetailsPreviewStatus != null)
+                    _txtDetailsPreviewStatus.text = "Portrait and building preview appear here.";
+
+                RefreshDetailsPreviewButtons(null);
+                RefreshDetailsPortrait(null);
                 return;
+            }
 
             if (_txtDetailsTitle != null)
                 _txtDetailsTitle.text = _selectedUnit.DisplayName;
-            if (_txtDetailsStats != null)
-                _txtDetailsStats.text = BuildUnitDetailStatsText(_selectedUnit);
             if (_txtDetailsState != null)
                 _txtDetailsState.text = BuildUnitDetailsStateText(_selectedUnit);
-            if (_txtDetailsRequirement != null)
-                _txtDetailsRequirement.text = BuildUnitDetailsRequirementText(_selectedUnit);
-            if (_txtDetailsMoves != null)
-                _txtDetailsMoves.text = BuildUnitMoveSetText(_selectedUnit);
+            PopulateDetailRows(_detailsStatsRowsRoot, BuildWarLedgerRows(_selectedUnit));
+            PopulateDetailRows(_detailsRequirementRowsRoot, BuildRequirementRows(_selectedUnit));
+            PopulateDetailRows(_detailsMovesRowsRoot, BuildCombatRows(_selectedUnit));
+            if (_txtDetailsCustomization != null)
+                _txtDetailsCustomization.text = BuildUnitCustomizationText(_selectedUnit);
             if (_txtDetailsAudioStatus != null)
                 _txtDetailsAudioStatus.text = BuildUnitAudioStatusText(_selectedUnit);
             if (_txtDetailsBody != null)
@@ -2826,15 +4240,72 @@ namespace CastleDefender.UI
 
         static float CalculateLaneRowWidth(RaceProgressionLaneDefinition lane)
         {
-            int unitCount = CountLaneUnits(lane);
-            if (unitCount <= 0)
+            if (lane == null)
                 return MinLaneRowWidth;
 
-            int linkCount = Mathf.Max(0, unitCount - 1);
-            int childCount = unitCount + (linkCount * 3);
-            float baseWidth = (unitCount * UnitCardWidth) + (linkCount * RequirementCardWidth) + (linkCount * ChainArrowWidth * 2f);
-            float spacingWidth = Mathf.Max(0, childCount - 1) * 8f;
-            return baseWidth + spacingWidth + 24f;
+            if (lane.Layout == RaceProgressionLaneLayout.BuildingStepsToOutcomeCards)
+            {
+                int unitCount = CountLaneUnits(lane);
+                int outcomeCount = CountOutcomeUnits(lane);
+                float progressionWidth = (unitCount * UpgradeStepCardWidth)
+                    + (Mathf.Max(0, unitCount - 1) * CompactArrowWidth)
+                    + (Mathf.Max(0, unitCount - 1) * 8f)
+                    + 48f;
+                float heroWidth = (outcomeCount * HeroOutcomeCardWidth)
+                    + (Mathf.Max(0, outcomeCount - 1) * 10f)
+                    + 24f;
+                return Mathf.Max(MinLaneRowWidth, progressionWidth, heroWidth);
+            }
+
+            float width = 32f;
+            int visibleElements = 0;
+            for (int unitIndex = 0; unitIndex < lane.Units.Length; unitIndex++)
+            {
+                var unit = lane.Units[unitIndex];
+                if (unit == null)
+                    continue;
+
+                width += ResolveTreeNodeWidth(unit);
+                visibleElements++;
+
+                if (unitIndex >= lane.Units.Length - 1)
+                    continue;
+
+                var nextUnit = lane.Units[unitIndex + 1];
+                if (nextUnit == null)
+                    continue;
+
+                if (lane.ShowRequirementCards
+                    && nextUnit.UnlockRequirement != null
+                    && !nextUnit.SuppressInlineRequirementCard)
+                {
+                    width += ChainArrowWidth + RequirementCardWidth + ChainArrowWidth;
+                    visibleElements += 3;
+                }
+                else
+                {
+                    width += ChainArrowWidth;
+                    visibleElements++;
+                }
+            }
+
+            width += Mathf.Max(0, visibleElements - 1) * 8f;
+            return Mathf.Max(MinLaneRowWidth, width);
+        }
+
+        static float ResolveTreeNodeWidth(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return UnitCardWidth;
+
+            return unit.CardStyle switch
+            {
+                RaceProgressionUnitCardStyle.RequirementStep => RequirementCardWidth,
+                RaceProgressionUnitCardStyle.UpgradeStep => UpgradeStepCardWidth,
+                RaceProgressionUnitCardStyle.BuildingTier => BuildingTierCardWidth,
+                RaceProgressionUnitCardStyle.HeroOutcome => HeroOutcomeCardWidth,
+                _ => UnitCardWidth,
+            };
         }
 
         static string BuildBuildingTierLabel(RaceProgressionUnitDefinition unit)
@@ -3504,12 +4975,12 @@ namespace CastleDefender.UI
                 return null;
 
             if (_runtimePreviewRoot == null)
-                _detailsPreviewCam = RuntimePortraitStudio.Create("RaceProgressionDetailsPreviewStudio", registry, out _runtimePreviewRoot, out _runtimePreviewTexture, textureSize: 512);
+                _detailsPreviewCam = RuntimePortraitStudio.Create("RaceProgressionDetailsPreviewStudio", registry, out _runtimePreviewRoot, out _runtimePreviewTexture, textureSize: 768);
 
             _detailsPreviewCam.Registry = registry;
             _detailsPreviewCam.transform.position = new Vector3(0f, 0f, 80f);
-            _detailsPreviewCam.FitHeight = 2.2f;
-            _detailsPreviewCam.FrameFill = 0.78f;
+            _detailsPreviewCam.FitHeight = 2.25f;
+            _detailsPreviewCam.FrameFill = 0.86f;
             _detailsPreviewCam.VerticalFocus = 0.54f;
             _detailsPreviewCam.CameraHeightBias = -0.02f;
             _detailsPreviewCam.LookAtHeightBias = 0.02f;
@@ -3812,6 +5283,9 @@ namespace CastleDefender.UI
             if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
                 return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Building requirement";
 
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome)
+                return string.IsNullOrWhiteSpace(BuildCompactSpecialTag(unit)) ? "Castle reward" : BuildCompactSpecialTag(unit);
+
             if (IsStableDisplayOnlyUnit(unit))
             {
                 return "Mount Unlock";
@@ -3827,6 +5301,9 @@ namespace CastleDefender.UI
         {
             if (unit == null)
                 return lane?.Label ?? "Unit";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome)
+                return $"{BuildUnitRoleLabel(unit)} | {BuildCompactFormationTag(unit) ?? "Castle reward"}";
 
             if (IsStableDisplayOnlyUnit(unit))
                 return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Future stable branch";
@@ -4023,6 +5500,17 @@ namespace CastleDefender.UI
             };
         }
 
+        static string BuildHeroOutcomeBadgeText(RaceProgressionUnitDefinition unit)
+        {
+            return NormalizeTechTreeKey(unit?.Id) switch
+            {
+                "king" => "Castle Hero",
+                "paladin" => "Castle Champion",
+                "bishop" => "Castle Oracle",
+                _ => "Castle Reward",
+            };
+        }
+
         static string BuildUnitRoleLabel(RaceProgressionUnitDefinition unit)
         {
             return NormalizeTechTreeKey(unit?.Id) switch
@@ -4048,9 +5536,9 @@ namespace CastleDefender.UI
                 "peasant" => "Economy runner",
                 "settler" => "Economy runner",
                 "trader" => "Economy runner",
-                "king" => "Hero commander",
-                "paladin" => "Hero vanguard",
-                "bishop" => "Hero support",
+                "king" => "Royal commander",
+                "paladin" => "Holy champion",
+                "bishop" => "Sacred support",
                 "colt" => "Mount unlock",
                 "stallion" => "Mount unlock",
                 "dark_stallion" => "Mount unlock",
@@ -4428,6 +5916,50 @@ namespace CastleDefender.UI
             return builder.ToString();
         }
 
+        string BuildUnitCustomizationText(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null)
+                return "Customization catalog unavailable.";
+
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+            {
+                return
+                    "[Store Surface] This slot is reserved for a build requirement card, not a purchasable unit cosmetic.\n" +
+                    "[Future Use] Requirement cards can still advertise banners, construction finishers, and branch-wide flair later.";
+            }
+
+            if (unit.CardDisplay != null)
+            {
+                return
+                    "[Skins] Alternate fortress trims, banners, glow treatments, and upgrade VFX can live here.\n" +
+                    "[Victory] Branch-wide fanfares, town speeches, and castle celebrations fit this store lane.\n" +
+                    "[Status] The showcase layout is ready for store hooks, but purchase wiring is still pending.";
+            }
+
+            if (IsEconomyUnit(unit))
+            {
+                return
+                    "[Abilities] Route flourish variants, coin toss finishers, and delivery callouts can be sold here.\n" +
+                    "[Skins] Wagon colors, heraldry, worker outfits, and cargo props fit this unit family.\n" +
+                    "[Formation] Route emotes and arrival celebrations can surface once the store data is wired.";
+            }
+
+            if (IsStableDisplayOnlyUnit(unit))
+            {
+                return
+                    "[Skins] Saddle kits, barding, horse armor, and elite stable dyes fit this branch.\n" +
+                    "[Abilities] Mounted charges, rear kicks, and cavalry flourish reels can be merchandised here later.\n" +
+                    "[Status] Stable store slots are layout-ready even though live mounted combat is still pending.";
+            }
+
+            string signatureMove = BuildSpecialPreviewButtonLabel(unit);
+            return
+                $"[Abilities] {signatureMove}, whirlwind strikes, backflip slashes, shield crashes, and other alternate move reels can live here.\n" +
+                "[Skins] Armor variants, cloaks, helmets, heraldry, weapon swaps, and material dyes fit the showcase.\n" +
+                "[Victory] Defeat monologues, taunts, dances, and formation finishers can be sold per unit line.\n" +
+                "[Formation] Banner calls, synchronized emotes, and squad formations can sit beside the combat loadout once store hooks are live.";
+        }
+
         bool TryResolvePreviewSfx(RaceProgressionUnitDefinition unit, out AudioManager.SFX sfx, out string label)
         {
             sfx = default;
@@ -4510,32 +6042,46 @@ namespace CastleDefender.UI
             if (unit == null)
                 return "Tech tree entry unavailable.";
 
-            if (unit.CardDisplay != null || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
-                return $"{unit.Description}\n{BuildUnitDetailsBodySuffix(unit)}";
+            if (unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+            {
+                return
+                    $"{NormalizeDossierValue(unit.Description, "This tile marks a branch requirement.")}\n\n" +
+                    "Field note: This node exists to show the gate for the next unlock.\n\n" +
+                    BuildUnitDetailsBodySuffix(unit);
+            }
 
-            var builder = new StringBuilder();
-            builder.AppendLine($"Tech tree note: {unit.Description}");
+            if (unit.CardDisplay != null)
+            {
+                return
+                    $"{NormalizeDossierValue(unit.Description, "Fortress upgrade dossier pending.")}\n\n" +
+                    $"Branch: {HumanizeLabel(unit.LaneId)} {NormalizeDossierValue(BuildCompactBuildingTierValue(unit))}.\n\n" +
+                    BuildUnitDetailsBodySuffix(unit);
+            }
+
+            var sections = new List<string>
+            {
+                NormalizeDossierValue(unit.Description, "Chronicle note pending."),
+                $"Origin: {BuildUnitOriginText(unit)}",
+                $"Battlefield role: {BuildUnitSkillText(unit)}",
+            };
 
             if (TryGetCatalogEntry(unit, out var catalog)
                 && !string.IsNullOrWhiteSpace(catalog.description)
                 && !string.Equals(catalog.description.Trim(), unit.Description?.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                builder.AppendLine($"Current catalog note: {catalog.description.Trim()}");
+                sections.Add($"Current field note: {catalog.description.Trim()}");
             }
-
-            builder.AppendLine($"Origin: {BuildUnitOriginText(unit)}");
-            builder.AppendLine($"Role note: {BuildUnitSkillText(unit)}");
 
             string runtimeStatus = BuildUnitRuntimeStatusText(unit);
             if (!string.IsNullOrWhiteSpace(runtimeStatus))
-                builder.AppendLine(runtimeStatus);
+                sections.Add(runtimeStatus.Replace("Runtime note: ", "Field note: "));
 
             string progressionAudit = BuildUnitProgressionAuditText(unit);
             if (!string.IsNullOrWhiteSpace(progressionAudit))
-                builder.AppendLine(progressionAudit);
+                sections.Add(progressionAudit);
 
-            builder.Append(BuildUnitDetailsBodySuffix(unit));
-            return builder.ToString().TrimEnd();
+            sections.Add(BuildUnitDetailsBodySuffix(unit));
+            return string.Join("\n\n", sections);
         }
 
         string BuildUnitRuntimeStatusText(RaceProgressionUnitDefinition unit)
@@ -4580,7 +6126,7 @@ namespace CastleDefender.UI
 
             return issues.Count > 0
                 ? $"Progression warning: {string.Join(" ", issues)}"
-                : $"Progression check: No numeric regression detected versus {previousUnit.DisplayName}.";
+                : null;
         }
 
         static bool ShouldAuditRangeProgression(RaceProgressionUnitDefinition unit)
@@ -4639,9 +6185,7 @@ namespace CastleDefender.UI
                 _btnSecondaryAction.interactable = showSecondary;
                 if (_txtSecondaryAction != null)
                 {
-                    _txtSecondaryAction.text = _activePage == WizardPage.ProgressionTree && _detailsModalOpen
-                        ? "Close Details"
-                        : _activePage == WizardPage.RaceSelection
+                    _txtSecondaryAction.text = _activePage == WizardPage.RaceSelection
                         ? "Back to Lobby"
                         : "Back";
                 }
@@ -4738,12 +6282,39 @@ namespace CastleDefender.UI
             return null;
         }
 
+        bool TryGetReadyPortraitTexture(string key, out Texture2D portrait)
+        {
+            portrait = null;
+            if (string.IsNullOrWhiteSpace(key))
+                return false;
+
+            if (_portraitCache.TryGetValue(key, out portrait) && portrait != null)
+                return true;
+
+            if (ShouldUseRuntimeSkinPortrait(key))
+                return false;
+
+            var remoteContent = RemoteContentManager.Instance;
+            string portraitLookupKey = ResolvePortraitLookupKey(key);
+            if (remoteContent != null
+                && !string.IsNullOrWhiteSpace(portraitLookupKey)
+                && remoteContent.TryGetLoadedPortraitTexture(portraitLookupKey, out portrait)
+                && portrait != null)
+            {
+                _portraitCache[key] = portrait;
+                return true;
+            }
+
+            portrait = null;
+            return false;
+        }
+
         void StartPortraitCapture(string key, RawImage target)
         {
             if (target == null || string.IsNullOrWhiteSpace(key))
                 return;
 
-            if (_portraitCache.TryGetValue(key, out var cached) && cached != null)
+            if (TryGetReadyPortraitTexture(key, out var cached))
             {
                 target.texture = cached;
                 target.color = Color.white;
@@ -4756,16 +6327,6 @@ namespace CastleDefender.UI
                 target.color = new Color(1f, 1f, 1f, 0f);
                 TrackPendingPortraitTarget(key, target);
                 QueueRuntimePortraitCapture(key);
-                return;
-            }
-
-            var remoteContent = RemoteContentManager.Instance;
-            string portraitLookupKey = ResolvePortraitLookupKey(key);
-            if (remoteContent != null && remoteContent.TryGetLoadedPortraitTexture(portraitLookupKey, out var portrait) && portrait != null)
-            {
-                _portraitCache[key] = portrait;
-                target.texture = portrait;
-                target.color = Color.white;
                 return;
             }
 
@@ -5011,15 +6572,11 @@ namespace CastleDefender.UI
             if (string.IsNullOrWhiteSpace(key))
                 yield break;
 
-            var remoteContent = RemoteContentManager.Instance;
-            if (remoteContent != null && remoteContent.TryGetLoadedPrefabForSkin(key, out var loadedSkinPrefab) && loadedSkinPrefab != null)
+            string blockingIssue = ValidateRequiredRuntimePortraitSource(key);
+            if (string.IsNullOrWhiteSpace(blockingIssue))
                 yield break;
 
-            var registry = RuntimePortraitStudio.ResolveRegistry(PortraitRegistry);
-            if (registry != null && registry.GetPrefabForSkin(null, key) != null)
-                yield break;
-
-            Debug.LogWarning($"[RaceProgression] Runtime skin portrait source for '{key}' is unavailable.");
+            Debug.LogError($"[RaceProgression] {blockingIssue}");
         }
 
         UnitPortraitCamera EnsurePortraitCamera()
@@ -5166,43 +6723,47 @@ namespace CastleDefender.UI
                 _prepOverlay.SetActive(true);
         }
 
+        void SetPrepOverlayText(string status, string detail)
+        {
+            ShowPrepOverlay();
+            if (_txtPrepStatus != null && !string.IsNullOrWhiteSpace(status))
+                _txtPrepStatus.text = status;
+            if (_txtPrepDetail != null && !string.IsNullOrWhiteSpace(detail))
+                _txtPrepDetail.text = detail;
+        }
+
         void UpdatePrepOverlayStatus(string detail)
         {
             if (_mode != ProgressionViewerMode.PreMatchConfirm)
                 return;
 
-            ShowPrepOverlay();
-            if (_txtPrepDetail != null)
-                _txtPrepDetail.text = detail;
+            SetPrepOverlayText(null, detail);
         }
 
         void ShowWaitingForMatchOverlay()
         {
-            ShowPrepOverlay();
-            if (_txtPrepStatus != null)
-                _txtPrepStatus.text = "Preparing Battlefield";
-            if (_txtPrepDetail != null)
-                _txtPrepDetail.text = "Waiting for players...";
+            SetPrepOverlayText("Preparing Battlefield", "Waiting for players...");
         }
 
-        void BuildPlayerPanel()
+        void BuildPlayerPanel(Transform parent)
         {
-            if (_playerPanelRoot != null || _panelRoot == null)
+            if (_playerPanelRoot != null || parent == null)
                 return;
 
             _playerPanelRoot = new GameObject("Panel_Players", typeof(RectTransform), typeof(LayoutElement), typeof(Image), typeof(HorizontalLayoutGroup));
-            _playerPanelRoot.transform.SetParent(_panelRoot.transform, false);
-            _playerPanelRoot.GetComponent<LayoutElement>().preferredHeight = 36f;
-            _playerPanelRoot.GetComponent<Image>().color = new Color(0.07f, 0.07f, 0.13f, 0.9f);
+            _playerPanelRoot.transform.SetParent(parent, false);
+            var panelLayoutElement = _playerPanelRoot.GetComponent<LayoutElement>();
+            panelLayoutElement.preferredHeight = 56f;
+            ClassicRpgUiRuntime.ApplyPanel(_playerPanelRoot.GetComponent<Image>(), ClassicRpgPanelSkin.MainMenuBar, false, new Color(1f, 1f, 1f, 0.92f));
 
             var layout = _playerPanelRoot.GetComponent<HorizontalLayoutGroup>();
             layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
             layout.childControlWidth = true;
-            layout.childControlHeight = false;
+            layout.childControlHeight = true;
             layout.spacing = 8f;
-            layout.padding = new RectOffset(8, 8, 4, 4);
+            layout.padding = new RectOffset(12, 12, 8, 8);
 
             _playerRows.Clear();
 
@@ -5356,6 +6917,8 @@ namespace CastleDefender.UI
         {
             var section = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             section.transform.SetParent(parent, false);
+            if (parent != null && parent.GetComponent<LayoutGroup>() == null)
+                ClassicRpgUiRuntime.Stretch(section.GetComponent<RectTransform>());
             var sectionImage = section.GetComponent<Image>();
             sectionImage.color = color;
             ClassicRpgUiRuntime.ApplyPanel(sectionImage, ClassicRpgPanelSkin.PaperMedium, true, color);
@@ -5473,12 +7036,14 @@ namespace CastleDefender.UI
             var go = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
             go.transform.SetParent(parent, false);
             var label = go.GetComponent<TextMeshProUGUI>();
-            label.font = TMP_Settings.defaultFontAsset;
             label.fontSize = fontSize;
             label.fontStyle = fontStyle;
-            label.color = color;
-            label.alignment = alignment;
-            label.textWrappingMode = TextWrappingModes.Normal;
+            ClassicRpgUiRuntime.ApplyTextStyle(
+                label,
+                fontStyle == FontStyles.Bold ? ClassicRpgTextStyle.SectionHeader : ClassicRpgTextStyle.Body,
+                alignment,
+                color);
+            label.fontStyle = fontStyle;
             label.text = text;
             return label;
         }
@@ -5520,7 +7085,7 @@ namespace CastleDefender.UI
             var go = new GameObject(goName, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
             go.transform.SetParent(parent, false);
             go.GetComponent<LayoutElement>().preferredHeight = height;
-            go.GetComponent<Image>().color = color;
+            ClassicRpgUiRuntime.ApplyPanel(go.GetComponent<Image>(), ClassicRpgPanelSkin.Frame, true, color);
             var button = go.GetComponent<Button>();
             button.targetGraphic = go.GetComponent<Image>();
 
@@ -5534,10 +7099,9 @@ namespace CastleDefender.UI
             var text = labelGo.GetComponent<TextMeshProUGUI>();
             text.text = label;
             text.fontSize = 16;
-            text.color = Color.white;
             text.alignment = TextAlignmentOptions.Center;
             text.fontStyle = FontStyles.Bold;
-            ClassicRpgUiRuntime.ApplyText(text, ClassicRpgTextTone.Heading, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+            ClassicRpgUiRuntime.ApplyTextStyle(text, ClassicRpgTextStyle.ButtonLabel, TextAlignmentOptions.Center, Color.white, allowWrap: false);
             return button;
         }
     }

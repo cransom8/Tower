@@ -164,6 +164,51 @@ namespace CastleDefender.Game
             return !string.IsNullOrWhiteSpace(unitType);
         }
 
+        public bool TryGetExactSkinPrefab(string skinKey, out GameObject prefab)
+        {
+            prefab = null;
+            if (string.IsNullOrWhiteSpace(skinKey))
+                return false;
+
+            string normalizedKey = skinKey.Trim();
+            var remoteContent = RemoteContentManager.Instance;
+            if (remoteContent != null
+                && remoteContent.TryGetLoadedPrefabForSkin(normalizedKey, out var remoteSkinPrefab)
+                && remoteSkinPrefab != null)
+            {
+                prefab = remoteSkinPrefab;
+                return true;
+            }
+
+            if (_skinDict == null)
+                Rebuild();
+
+            if (!_skinDict.TryGetValue(normalizedKey, out var entry) || entry.prefab == null)
+                return false;
+
+            prefab = entry.prefab;
+            return true;
+        }
+
+        public bool TryGetRenderableExactSkinPrefab(string skinKey, out GameObject prefab, out string issue)
+        {
+            prefab = null;
+            issue = null;
+
+            if (!TryGetExactSkinPrefab(skinKey, out var resolvedPrefab) || resolvedPrefab == null)
+            {
+                issue = $"missing exact skin prefab '{skinKey?.Trim() ?? "<empty>"}'";
+                return false;
+            }
+
+            if (!IsRenderablePrefab(resolvedPrefab, out issue))
+                return false;
+
+            prefab = resolvedPrefab;
+            issue = null;
+            return true;
+        }
+
         public static bool TryResolveUnitTypeForSkinFromLoadedRegistries(string skinKey, out string unitType)
         {
             unitType = null;

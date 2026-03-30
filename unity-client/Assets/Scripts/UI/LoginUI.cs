@@ -236,12 +236,15 @@ namespace CastleDefender.UI
                 return;
 
             var canvas = PanelLogin.GetComponentInParent<Canvas>();
+            var canvasRect = canvas != null ? canvas.GetComponent<RectTransform>() : null;
             if (canvas != null)
-                ClassicRpgUiRuntime.ApplyCanvasScaler(canvas.GetComponent<CanvasScaler>(), new Vector2(1920f, 1080f));
+                ClassicRpgUiRuntime.ApplyCanvasScaler(canvas.GetComponent<CanvasScaler>(), ClassicRpgUiRuntime.ReferenceResolution);
 
             var root = PanelLogin.transform as RectTransform;
             if (root == null)
                 return;
+
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(canvasRect);
 
             var rootImage = PanelLogin.GetComponent<Image>();
             if (rootImage != null)
@@ -251,143 +254,201 @@ namespace CastleDefender.UI
             }
 
             DestroyGeneratedChild(root, "PremiumLoginBackdrop");
+            DestroyGeneratedChild(root, "PremiumLoginSafeArea");
             DestroyGeneratedChild(root, "PremiumLoginStage");
             DisableLegacyCard(root);
 
-            BuildPremiumBackdrop(root);
+            BuildPremiumBackdrop(root, compact);
 
-            var stage = CreateUiRect("PremiumLoginStage", root);
-            stage.anchorMin = Vector2.zero;
-            stage.anchorMax = Vector2.one;
-            stage.offsetMin = new Vector2(84f, 72f);
-            stage.offsetMax = new Vector2(-84f, -72f);
+            var safeArea = CreateUiRect("PremiumLoginSafeArea", root);
+            ClassicRpgUiRuntime.ApplySafeArea(
+                safeArea,
+                canvasRect,
+                compact ? 20f : 48f,
+                compact ? 18f : 38f,
+                compact ? 18f : 34f);
 
-            var brandColumn = CreateUiRect("BrandColumn", stage);
-            brandColumn.anchorMin = new Vector2(0.03f, 0.08f);
-            brandColumn.anchorMax = new Vector2(0.53f, 0.92f);
-            brandColumn.offsetMin = Vector2.zero;
-            brandColumn.offsetMax = Vector2.zero;
+            var stage = CreateUiRect("PremiumLoginStage", safeArea);
+            ClassicRpgUiRuntime.Stretch(stage);
+
+            RectTransform brandColumn;
+            RectTransform cardColumn;
+            if (compact)
+                BuildCompactLoginStage(stage, out brandColumn, out cardColumn);
+            else
+                BuildWideLoginStage(stage, out brandColumn, out cardColumn);
 
             var brandGroup = brandColumn.gameObject.AddComponent<CanvasGroup>();
-            BuildBrandColumn(brandColumn);
-
-            var cardColumn = CreateUiRect("CardColumn", stage);
-            cardColumn.anchorMin = new Vector2(0.58f, 0.11f);
-            cardColumn.anchorMax = new Vector2(0.95f, 0.89f);
-            cardColumn.offsetMin = Vector2.zero;
-            cardColumn.offsetMax = Vector2.zero;
-
             var cardGroup = cardColumn.gameObject.AddComponent<CanvasGroup>();
-            var cardContent = BuildLoginCardShell(cardColumn);
-            PopulateLoginCard(cardContent);
-            StyleDevicePanel(root);
+            BuildBrandColumn(brandColumn, compact);
+            var cardContent = BuildLoginCardShell(cardColumn, compact);
+            PopulateLoginCard(cardContent, compact);
+            StyleDevicePanel(root, canvasRect, compact);
 
             StartCoroutine(AnimatePremiumPresentation(brandGroup, brandColumn, cardGroup, cardColumn));
         }
 
-        void BuildPremiumBackdrop(RectTransform root)
+        void BuildWideLoginStage(RectTransform stage, out RectTransform brandColumn, out RectTransform cardColumn)
+        {
+            var layout = stage.gameObject.AddComponent<HorizontalLayoutGroup>();
+            layout.childAlignment = TextAnchor.MiddleCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = false;
+            layout.childForceExpandHeight = true;
+            layout.spacing = 28f;
+            layout.padding = new RectOffset(10, 10, 10, 10);
+
+            brandColumn = CreateUiRect("BrandColumn", stage);
+            var brandLayout = brandColumn.gameObject.AddComponent<LayoutElement>();
+            brandLayout.flexibleWidth = 1f;
+            brandLayout.flexibleHeight = 1f;
+            brandLayout.minWidth = 0f;
+
+            cardColumn = CreateUiRect("CardColumn", stage);
+            var cardLayout = cardColumn.gameObject.AddComponent<LayoutElement>();
+            cardLayout.preferredWidth = 560f;
+            cardLayout.minWidth = 520f;
+            cardLayout.flexibleHeight = 1f;
+        }
+
+        void BuildCompactLoginStage(RectTransform stage, out RectTransform brandColumn, out RectTransform cardColumn)
+        {
+            var layout = stage.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = 16f;
+            layout.padding = new RectOffset(0, 0, 0, 0);
+
+            brandColumn = CreateUiRect("BrandColumn", stage);
+            var brandLayout = brandColumn.gameObject.AddComponent<LayoutElement>();
+            brandLayout.preferredHeight = 264f;
+            brandLayout.flexibleWidth = 1f;
+
+            cardColumn = CreateUiRect("CardColumn", stage);
+            var cardLayout = cardColumn.gameObject.AddComponent<LayoutElement>();
+            cardLayout.flexibleWidth = 1f;
+            cardLayout.flexibleHeight = 1f;
+            cardLayout.minHeight = 456f;
+        }
+
+        void BuildPremiumBackdrop(RectTransform root, bool compact)
         {
             var backdrop = CreateUiRect("PremiumLoginBackdrop", root);
-            Stretch(backdrop);
+            ClassicRpgUiRuntime.Stretch(backdrop);
             backdrop.SetSiblingIndex(0);
 
             var shadow = backdrop.gameObject.AddComponent<Image>();
             ClassicRpgUiRuntime.ApplyPanel(shadow, ClassicRpgPanelSkin.Shadow, false, new Color(1f, 1f, 1f, 0.30f));
 
-            CreateBackdropBar(backdrop, "TopBar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -46f), new Vector2(1040f, 104f), new Color(0.46f, 0.34f, 0.17f, 0.58f));
-            CreateBackdropBar(backdrop, "BottomBar", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 48f), new Vector2(1040f, 96f), new Color(0.20f, 0.16f, 0.11f, 0.44f));
+            CreateBackdropBar(backdrop, "TopBar", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, compact ? -36f : -46f), new Vector2(compact ? 760f : 1040f, compact ? 82f : 104f), new Color(0.46f, 0.34f, 0.17f, 0.58f));
+            CreateBackdropBar(backdrop, "BottomBar", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 34f : 48f), new Vector2(compact ? 760f : 1040f, compact ? 78f : 96f), new Color(0.20f, 0.16f, 0.11f, 0.44f));
 
-            CreateBackdropFlag(backdrop, "LeftFlag", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(130f, -140f), new Vector2(260f, 340f), new Color(1f, 1f, 1f, 0.20f), false);
-            CreateBackdropFlag(backdrop, "RightFlag", new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-130f, 150f), new Vector2(240f, 320f), new Color(1f, 1f, 1f, 0.15f), true);
+            if (compact)
+            {
+                CreateBackdropFlag(backdrop, "TopFlag", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -138f), new Vector2(180f, 240f), new Color(1f, 1f, 1f, 0.16f), false);
+            }
+            else
+            {
+                CreateBackdropFlag(backdrop, "LeftFlag", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(130f, -140f), new Vector2(260f, 340f), new Color(1f, 1f, 1f, 0.20f), false);
+                CreateBackdropFlag(backdrop, "RightFlag", new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-130f, 150f), new Vector2(240f, 320f), new Color(1f, 1f, 1f, 0.15f), true);
+            }
         }
 
-        void BuildBrandColumn(RectTransform parent)
+        void BuildBrandColumn(RectTransform parent, bool compact)
         {
             var layout = parent.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.childAlignment = TextAnchor.MiddleLeft;
+            layout.childAlignment = compact ? TextAnchor.UpperCenter : TextAnchor.MiddleLeft;
             layout.childControlWidth = true;
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 16f;
-            layout.padding = new RectOffset(28, 20, 54, 54);
+            layout.spacing = compact ? 12f : 16f;
+            layout.padding = compact ? new RectOffset(12, 12, 12, 12) : new RectOffset(28, 20, 54, 54);
 
             var crest = CreateUiImage("Crest", parent, ClassicRpgPanelSkin.FlagClassic, new Color(1f, 1f, 1f, 0.95f), false);
             var crestLayout = crest.gameObject.AddComponent<LayoutElement>();
-            crestLayout.preferredWidth = 280f;
-            crestLayout.preferredHeight = 114f;
-            crest.rectTransform.pivot = new Vector2(0f, 0.5f);
+            crestLayout.preferredWidth = compact ? 190f : 280f;
+            crestLayout.preferredHeight = compact ? 86f : 114f;
+            crest.rectTransform.pivot = compact ? new Vector2(0.5f, 0.5f) : new Vector2(0f, 0.5f);
             crest.gameObject.AddComponent<UiAmbientMotion>();
 
             var titlePlate = CreateUiImage("TitlePlate", parent, ClassicRpgPanelSkin.TitleLong, Color.white, false);
             var titlePlateLayout = titlePlate.gameObject.AddComponent<LayoutElement>();
-            titlePlateLayout.preferredWidth = 520f;
-            titlePlateLayout.preferredHeight = 108f;
+            titlePlateLayout.preferredWidth = compact ? 420f : 520f;
+            titlePlateLayout.preferredHeight = compact ? 90f : 108f;
 
-            var titleText = CreateUiText("BrandTitle", titlePlate.transform, "RANSOMFORGE\nCASTLE DEFENDER", 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
+            var titleText = CreateUiText("BrandTitle", titlePlate.transform, "RANSOMFORGE\nCASTLE DEFENDER", compact ? 27f : 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
             Stretch(titleText.rectTransform, new Vector2(30f, 18f), new Vector2(-30f, -20f));
             titleText.textWrappingMode = TextWrappingModes.Normal;
-            titleText.lineSpacing = -18f;
+            titleText.lineSpacing = compact ? -10f : -18f;
+            titleText.alignment = TextAlignmentOptions.Center;
 
             var subtitle = CreateUiText(
                 "BrandSubtitle",
                 parent,
-                "First impressions matter. Command the fortress with confidence from the very first screen.",
-                23f,
+                compact
+                    ? "A clearer front door for the fortress, built for phones and framed like the RPG kit."
+                    : "First impressions matter. Command the fortress with confidence from the very first screen.",
+                compact ? 17f : 23f,
                 ClassicRpgTextTone.Heading,
                 ClassicRpgUiRuntime.BrightText);
-            subtitle.alignment = TextAlignmentOptions.TopLeft;
+            subtitle.alignment = compact ? TextAlignmentOptions.Center : TextAlignmentOptions.TopLeft;
             subtitle.textWrappingMode = TextWrappingModes.Normal;
             var subtitleLayout = subtitle.gameObject.AddComponent<LayoutElement>();
-            subtitleLayout.preferredHeight = 86f;
+            subtitleLayout.preferredHeight = compact ? 58f : 86f;
 
             var bodyCard = CreateUiImage("BodyCard", parent, ClassicRpgPanelSkin.PaperMedium, new Color(0.16f, 0.14f, 0.10f, 0.95f), true);
             var bodyCardLayout = bodyCard.gameObject.AddComponent<LayoutElement>();
-            bodyCardLayout.preferredHeight = 244f;
+            bodyCardLayout.preferredHeight = compact ? 112f : 244f;
             var bodyCardGroup = bodyCard.gameObject.AddComponent<VerticalLayoutGroup>();
-            bodyCardGroup.childAlignment = TextAnchor.UpperLeft;
+            bodyCardGroup.childAlignment = compact ? TextAnchor.UpperCenter : TextAnchor.UpperLeft;
             bodyCardGroup.childControlWidth = true;
             bodyCardGroup.childControlHeight = false;
             bodyCardGroup.childForceExpandWidth = true;
             bodyCardGroup.childForceExpandHeight = false;
-            bodyCardGroup.spacing = 8f;
-            bodyCardGroup.padding = new RectOffset(28, 28, 24, 24);
+            bodyCardGroup.spacing = compact ? 4f : 8f;
+            bodyCardGroup.padding = compact ? new RectOffset(18, 18, 16, 16) : new RectOffset(28, 28, 24, 24);
 
-            var bodyHeader = CreateUiText("BodyHeader", bodyCard.transform, "WAR ROOM BRIEF", 20f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
-            bodyHeader.alignment = TextAlignmentOptions.TopLeft;
+            var bodyHeader = CreateUiText("BodyHeader", bodyCard.transform, compact ? "WAR ROOM NOTES" : "WAR ROOM BRIEF", compact ? 17f : 20f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
+            bodyHeader.alignment = compact ? TextAlignmentOptions.Center : TextAlignmentOptions.TopLeft;
             bodyHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 28f;
 
-            AddBrandBullet(bodyCard.transform, "Premium presentation with classic fantasy craftsmanship.");
-            AddBrandBullet(bodyCard.transform, "Clear hierarchy, larger targets, and stronger motion for confidence.");
-            AddBrandBullet(bodyCard.transform, "A front door that feels intentional instead of placeholder.");
+            AddBrandBullet(bodyCard.transform, "Premium presentation with classic fantasy craftsmanship.", compact);
+            AddBrandBullet(bodyCard.transform, compact ? "Clear hierarchy and larger mobile targets." : "Clear hierarchy, larger targets, and stronger motion for confidence.", compact);
+            if (!compact)
+                AddBrandBullet(bodyCard.transform, "A front door that feels intentional instead of placeholder.", compact);
         }
 
-        void AddBrandBullet(Transform parent, string copy)
+        void AddBrandBullet(Transform parent, string copy, bool compact)
         {
             var row = CreateUiRect("Bullet", parent);
             var rowLayout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
-            rowLayout.childAlignment = TextAnchor.UpperLeft;
+            rowLayout.childAlignment = compact ? TextAnchor.MiddleCenter : TextAnchor.UpperLeft;
             rowLayout.childControlWidth = false;
             rowLayout.childControlHeight = true;
             rowLayout.childForceExpandWidth = false;
             rowLayout.childForceExpandHeight = false;
-            rowLayout.spacing = 10f;
-            row.gameObject.AddComponent<LayoutElement>().preferredHeight = 42f;
+            rowLayout.spacing = compact ? 8f : 10f;
+            row.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 28f : 42f;
 
             var icon = CreateUiImage("Icon", row, ClassicRpgPanelSkin.FlagClassic, new Color(1f, 1f, 1f, 0.8f), false);
-            icon.rectTransform.sizeDelta = new Vector2(18f, 18f);
+            icon.rectTransform.sizeDelta = compact ? new Vector2(14f, 14f) : new Vector2(18f, 18f);
             icon.rectTransform.pivot = new Vector2(0.5f, 0.5f);
 
-            var text = CreateUiText("Copy", row, copy, 16f, ClassicRpgTextTone.Body, new Color(0.92f, 0.89f, 0.82f, 1f));
-            text.alignment = TextAlignmentOptions.TopLeft;
+            var text = CreateUiText("Copy", row, copy, compact ? 13f : 16f, ClassicRpgTextTone.Body, new Color(0.92f, 0.89f, 0.82f, 1f));
+            text.alignment = compact ? TextAlignmentOptions.Center : TextAlignmentOptions.TopLeft;
             text.textWrappingMode = TextWrappingModes.Normal;
             text.gameObject.AddComponent<LayoutElement>().preferredWidth = 0f;
         }
 
-        RectTransform BuildLoginCardShell(RectTransform parent)
+        RectTransform BuildLoginCardShell(RectTransform parent, bool compact)
         {
             var shell = CreateUiRect("LoginShell", parent);
-            Stretch(shell);
+            ClassicRpgUiRuntime.Stretch(shell);
 
             var shadow = CreateUiImage("Shadow", shell, ClassicRpgPanelSkin.Shadow, new Color(1f, 1f, 1f, 0.28f), false);
             Stretch(shadow.rectTransform, new Vector2(-18f, -22f), new Vector2(24f, 24f));
@@ -399,19 +460,19 @@ namespace CastleDefender.UI
             Stretch(innerPanel.rectTransform, new Vector2(20f, 20f), new Vector2(-20f, -20f));
 
             var content = CreateUiRect("Content", innerPanel.transform);
-            Stretch(content, new Vector2(34f, 32f), new Vector2(-34f, -32f));
+            Stretch(content, compact ? new Vector2(24f, 24f) : new Vector2(34f, 32f), compact ? new Vector2(-24f, -26f) : new Vector2(-34f, -32f));
             var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 14f;
+            layout.spacing = compact ? 12f : 14f;
 
             return content;
         }
 
-        void PopulateLoginCard(RectTransform content)
+        void PopulateLoginCard(RectTransform content, bool compact)
         {
             var title = FindDescendant(PanelLogin.transform, "Txt_Title") as RectTransform;
             var rowTabs = FindDescendant(PanelLogin.transform, "Row_Tabs") as RectTransform;
@@ -427,7 +488,7 @@ namespace CastleDefender.UI
                 if (titleText != null)
                 {
                     titleText.text = "Sign In";
-                    titleText.fontSize = 34f;
+                    titleText.fontSize = compact ? 28f : 34f;
                     titleText.fontStyle = FontStyles.Bold;
                     ClassicRpgUiRuntime.ApplyText(titleText, ClassicRpgTextTone.Title, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
                 }
@@ -447,20 +508,20 @@ namespace CastleDefender.UI
                 tabsLayout.padding = new RectOffset(0, 0, 0, 0);
             }
 
-            StyleTabButton(Btn_TabSignIn, 210f);
-            StyleTabButton(Btn_TabRegister, 210f);
+            StyleTabButton(Btn_TabSignIn, compact ? 0f : 210f);
+            StyleTabButton(Btn_TabRegister, compact ? 0f : 210f);
 
             if (Input_Email != null) Input_Email.transform.SetParent(content, false);
             if (Input_DisplayName != null) Input_DisplayName.transform.SetParent(content, false);
             if (Input_Password != null) Input_Password.transform.SetParent(content, false);
 
-            PrepareField(Input_Email, 64f, "Email address");
-            PrepareField(Input_DisplayName, 64f, "Display name");
-            PrepareField(Input_Password, 64f, "Password");
+            PrepareField(Input_Email, compact ? 60f : 64f, "Email address");
+            PrepareField(Input_DisplayName, compact ? 60f : 64f, "Display name");
+            PrepareField(Input_Password, compact ? 60f : 64f, "Password");
 
             if (Btn_Submit != null)
             {
-                PrepareButton(Btn_Submit, 64f, 0f);
+                PrepareButton(Btn_Submit, compact ? 60f : 64f, 0f);
                 Btn_Submit.transform.SetParent(content, false);
                 ClassicRpgUiRuntime.ApplyButton(Btn_Submit, ClassicRpgButtonSkin.LongGold, TxtSubmitBtn);
             }
@@ -481,7 +542,7 @@ namespace CastleDefender.UI
 
             if (Btn_Google != null)
             {
-                PrepareButton(Btn_Google, 58f, 0f);
+                PrepareButton(Btn_Google, compact ? 54f : 58f, 0f);
                 Btn_Google.transform.SetParent(content, false);
                 ClassicRpgUiRuntime.ApplyButton(Btn_Google, ClassicRpgButtonSkin.MediumGold);
                 var googleText = Btn_Google.GetComponentInChildren<TMP_Text>(true);
@@ -491,7 +552,7 @@ namespace CastleDefender.UI
 
             if (Btn_Browser != null)
             {
-                PrepareButton(Btn_Browser, 42f, 220f);
+                PrepareButton(Btn_Browser, 44f, compact ? 0f : 220f);
                 Btn_Browser.transform.SetParent(content, false);
                 ClassicRpgUiRuntime.ApplyButton(Btn_Browser, ClassicRpgButtonSkin.MiniBrown);
             }
@@ -513,7 +574,7 @@ namespace CastleDefender.UI
             }
         }
 
-        void StyleDevicePanel(RectTransform root)
+        void StyleDevicePanel(RectTransform root, RectTransform canvasRect, bool compact)
         {
             if (Obj_DevicePanel == null)
                 return;
@@ -526,7 +587,7 @@ namespace CastleDefender.UI
             panelRect.anchorMin = new Vector2(0.5f, 0.5f);
             panelRect.anchorMax = new Vector2(0.5f, 0.5f);
             panelRect.pivot = new Vector2(0.5f, 0.5f);
-            panelRect.sizeDelta = new Vector2(560f, 340f);
+            panelRect.sizeDelta = compact ? new Vector2(460f, 320f) : new Vector2(560f, 340f);
             panelRect.anchoredPosition = Vector2.zero;
 
             var panelImage = Obj_DevicePanel.GetComponent<Image>();
@@ -546,7 +607,7 @@ namespace CastleDefender.UI
 
             if (Btn_DeviceCancel != null)
             {
-                PrepareButton(Btn_DeviceCancel, 46f, 200f);
+                PrepareButton(Btn_DeviceCancel, 46f, compact ? 0f : 200f);
                 ClassicRpgUiRuntime.ApplyButton(Btn_DeviceCancel, ClassicRpgButtonSkin.MiniBrown);
             }
         }
@@ -625,13 +686,13 @@ namespace CastleDefender.UI
             if (brandGroup != null)
             {
                 brandGroup.alpha = 0f;
-                brandColumn.anchoredPosition += new Vector2(-26f, 0f);
+                brandColumn.localScale = Vector3.one * 0.965f;
             }
 
             if (cardGroup != null)
             {
                 cardGroup.alpha = 0f;
-                cardColumn.anchoredPosition += new Vector2(38f, 0f);
+                cardColumn.localScale = Vector3.one * 0.96f;
             }
 
             float elapsed = 0f;
@@ -645,7 +706,7 @@ namespace CastleDefender.UI
                 if (brandGroup != null)
                 {
                     brandGroup.alpha = eased;
-                    brandColumn.anchoredPosition = Vector2.Lerp(new Vector2(-26f, 0f), Vector2.zero, eased);
+                    brandColumn.localScale = Vector3.Lerp(Vector3.one * 0.965f, Vector3.one, eased);
                 }
 
                 if (cardGroup != null)
@@ -653,7 +714,7 @@ namespace CastleDefender.UI
                     float delayed = Mathf.Clamp01((elapsed - 0.08f) / duration);
                     float delayedEase = 1f - Mathf.Pow(1f - delayed, 3f);
                     cardGroup.alpha = delayedEase;
-                    cardColumn.anchoredPosition = Vector2.Lerp(new Vector2(38f, 0f), Vector2.zero, delayedEase);
+                    cardColumn.localScale = Vector3.Lerp(Vector3.one * 0.96f, Vector3.one, delayedEase);
                 }
 
                 yield return null;

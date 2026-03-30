@@ -148,15 +148,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4092cf65d8534b443abdd36a10344a9a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: CastleDefender.UI::CastleDefender.UI.LoadoutPhaseManager
-  ColorSelected: {r: 0.2, g: 0.7, b: 0.3, a: 1}
-  ColorUnselected: {r: 0.22, g: 0.22, b: 0.28, a: 1}
-  ColorTimerNormal: {r: 1, g: 0.9, b: 0.3, a: 1}
-  ColorTimerUrgent: {r: 1, g: 0.3, b: 0.3, a: 1}
-  CardWidth: 130
-  CardHeight: 72
-  CardSpacing: 6
-  CardColumns: 4
   PortraitRegistry: {fileID: 11400000, guid: d8e76b66acabc8e4f9b7621cb636c96c, type: 2}
+  PortraitCam: {fileID: 0}
+  selectedColor: {r: 0.84, g: 0.67, b: 0.28, a: 1}
+  highlightedColor: {r: 0.25, g: 0.4, b: 0.65, a: 1}
+  unlockedColor: {r: 0.12, g: 0.18, b: 0.28, a: 0.98}
+  lockedColor: {r: 0.12, g: 0.12, b: 0.14, a: 0.92}
+  timerNormalColor: {r: 1, g: 0.92, b: 0.38, a: 1}
+  timerUrgentColor: {r: 1, g: 0.38, b: 0.32, a: 1}
 --- !u!4 &528488670
 Transform:
   m_ObjectHideFlags: 0
@@ -220,12 +219,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.CanvasScaler
-  m_UiScaleMode: 0
+  m_UiScaleMode: 1
   m_ReferencePixelsPerUnit: 100
   m_ScaleFactor: 1
-  m_ReferenceResolution: {x: 800, y: 600}
+  m_ReferenceResolution: {x: 1920, y: 1080}
   m_ScreenMatchMode: 0
-  m_MatchWidthOrHeight: 0
+  m_MatchWidthOrHeight: 0.5
   m_PhysicalUnit: 3
   m_FallbackScreenDPI: 96
   m_DefaultSpriteDPI: 96
@@ -263,16 +262,16 @@ RectTransform:
   m_GameObject: {fileID: 669599631}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalScale: {x: 0, y: 0, z: 0}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0.5, y: 0.5}
-  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 0, y: 0}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 100, y: 100}
-  m_Pivot: {x: 0.5, y: 0.5}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0, y: 0}
 --- !u!1 &1553143739
 GameObject:
   m_ObjectHideFlags: 0

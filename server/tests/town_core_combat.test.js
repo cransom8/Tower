@@ -97,6 +97,29 @@ function getCoreApproachPosition(lane, stepsBack = 0) {
   };
 }
 
+function primeDefendAnchor(game, lane) {
+  tick(game, 1);
+  assert.ok(lane.outsideGateAnchor, `expected lane ${lane && lane.laneIndex} to expose an outside gate anchor`);
+  return lane.outsideGateAnchor;
+}
+
+function getDefendAnchorPosition(lane, forwardOffset = 0, lateralOffset = 0) {
+  const anchor = lane && lane.outsideGateAnchor
+    ? lane.outsideGateAnchor
+    : lane && lane.formationAnchor;
+  assert.ok(anchor, `expected lane ${lane && lane.laneIndex} to have a defend anchor`);
+
+  const facing = lane && lane.formationFacing
+    ? lane.formationFacing
+    : { x: 0, y: -1 };
+  const lateral = { x: -Number(facing.y) || 0, y: Number(facing.x) || 0 };
+
+  return {
+    posX: Number(anchor.x) + (Number(facing.x) * forwardOffset) + (lateral.x * lateralOffset),
+    posY: Number(anchor.y) + (Number(facing.y) * forwardOffset) + (lateral.y * lateralOffset),
+  };
+}
+
 function createWaveUnit(typeKey, overrides = {}) {
   const def = simMl.resolveUnitDef(typeKey);
   const id = overrides.id || `wu_test_${nextUnitId++}`;
@@ -153,19 +176,25 @@ function createWaveUnit(typeKey, overrides = {}) {
 function createDefender(typeKey, overrides = {}) {
   const def = simMl.resolveUnitDef(typeKey);
   const id = overrides.id || `def_test_${nextUnitId++}`;
+  const ownerLaneIndex = overrides.ownerLane ?? 0;
+  const targetLaneIndex = overrides.targetLaneIndex ?? ownerLaneIndex;
+  const sourceBarracksId = overrides.sourceBarracksId ?? "center";
+  const sourceBarracksKey = overrides.sourceBarracksKey ?? sourceBarracksId;
+  const spawnSourceType = overrides.spawnSourceType ?? "barracks_roster";
   return {
     id,
     unitId: id,
     unitTypeKey: typeKey,
     allegianceKey: overrides.allegianceKey ?? "red",
-    ownerLaneIndex: overrides.ownerLane ?? 0,
-    ownerLane: overrides.ownerLane ?? 0,
-    targetLaneIndex: overrides.targetLaneIndex ?? (overrides.ownerLane ?? 0),
+    ownerLaneIndex,
+    ownerLane: ownerLaneIndex,
+    targetLaneIndex,
     sourceLaneIndex: overrides.sourceLaneIndex ?? 0,
     sourceTeam: overrides.sourceTeam ?? "red",
-    sourceBarracksId: overrides.sourceBarracksId ?? "center",
-    sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? "center",
-    spawnSourceType: overrides.spawnSourceType ?? "barracks_roster",
+    sourceBarracksId,
+    sourceBarracksKey,
+    spawnSourceType,
+    groupId: overrides.groupId ?? `test_packet:${ownerLaneIndex}:${sourceBarracksId}:${targetLaneIndex}`,
     type: typeKey,
     skinKey: null,
     isHero: false,
@@ -404,22 +433,22 @@ test("defenders can kill attackers before the Town Core is destroyed", () => {
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const corePad = getTownCorePad(lane);
-  const coreApproach = getCoreApproachPosition(lane, 1);
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.6, -0.8);
+  const attackerPoint = getDefendAnchorPosition(lane, 0.1, 0);
   const attacker = createWaveUnit("raider", {
     hp: 12,
     maxHp: 12,
     baseDmg: 4,
     atkCd: 0,
-    posX: coreApproach.posX,
-    posY: coreApproach.posY,
-    pathIdx: coreApproach.pathIdx,
+    posX: attackerPoint.posX,
+    posY: attackerPoint.posY,
   });
   const defender = createDefender("guardian", {
-    posX: coreApproach.posX - 1,
-    posY: coreApproach.posY - 1,
-    pathIdx: coreApproach.pathIdx - 1,
-    guardAnchorX: coreApproach.posX - 1,
-    guardAnchorY: coreApproach.posY - 1,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+    guardAnchorX: defenderPoint.posX,
+    guardAnchorY: defenderPoint.posY,
     homeTx: 4,
     homeTy: 24,
   });
@@ -438,8 +467,10 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
   const game = createGame(20);
   const lane = game.lanes[0];
   const corePad = getTownCorePad(lane);
-  const coreApproach = getCoreApproachPosition(lane, 1);
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.5, 0);
+  const attackerPoint = getDefendAnchorPosition(lane, 0.15, 0);
   const defender = createDefender("guardian", {
     id: "stance_guard_test",
     isDefender: false,
@@ -448,11 +479,10 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
     sourceBarracksKey: "center",
     stance: null,
     pathContractType: null,
-    posX: coreApproach.posX - 0.8,
-    posY: coreApproach.posY - 0.8,
-    pathIdx: coreApproach.pathIdx - 0.8,
-    guardAnchorX: coreApproach.posX - 0.8,
-    guardAnchorY: coreApproach.posY - 0.8,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+    guardAnchorX: defenderPoint.posX,
+    guardAnchorY: defenderPoint.posY,
     homeTx: 4,
     homeTy: 24,
   });
@@ -462,9 +492,8 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
     maxHp: 24,
     baseDmg: 4,
     atkCd: 0,
-    posX: coreApproach.posX,
-    posY: coreApproach.posY,
-    pathIdx: coreApproach.pathIdx,
+    posX: attackerPoint.posX,
+    posY: attackerPoint.posY,
   });
 
   lane.units.push(defender, attacker);
@@ -477,29 +506,236 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
   assert.ok(serverDefender, "the DEFEND stance barracks unit should remain alive during interception");
   assert.ok(serverAttacker, "the wave unit should still be alive during initial interception");
   assert.equal(serverDefender.isDefender, false, "lane-command defenders should stay as barracks units instead of becoming legacy defender entities");
-  assert.equal(serverDefender.stance, "HOLD", "defend-mode barracks units should publish HOLD stance");
+  assert.equal(serverDefender.stance, "DEFEND", "defend-mode barracks units should publish DEFEND stance");
   assert.equal(serverDefender.pathContractType, "intercept", "engaged DEFEND units should publish the intercept path contract");
   assert.equal(serverDefender.combatTarget?.unitId, attacker.id, "the DEFEND stance unit should acquire the incoming wave");
   assert.equal(serverAttacker.combatTarget?.unitId, defender.id, "the wave unit should retaliate against the intercepting defender");
   assert.equal(corePad.hp, 20, "the Town Core should stay untouched while the DEFEND stance unit owns interception");
 });
 
+test("lane snapshots keep barracks sends as separate packets with explicit stance anchors", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const coreApproach = getCoreApproachPosition(lane, 2);
+  const townCoreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  const frontGatePadDef = simMl.FORTRESS_PAD_DEFS.find((pad) => pad && pad.padId === "gate_front_pad");
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+
+  const leftPacket = createDefender("guardian", {
+    id: "packet_left_guard",
+    sourceBarracksId: "left",
+    sourceBarracksKey: "left",
+    posX: coreApproach.posX - 1.4,
+    posY: coreApproach.posY - 1.4,
+    pathIdx: coreApproach.pathIdx - 1.4,
+    guardAnchorX: coreApproach.posX - 1.4,
+    guardAnchorY: coreApproach.posY - 1.4,
+    homeTx: 4,
+    homeTy: 24,
+  });
+  const rightPacket = createDefender("guardian", {
+    id: "packet_right_guard",
+    sourceBarracksId: "right",
+    sourceBarracksKey: "right",
+    posX: coreApproach.posX + 1.4,
+    posY: coreApproach.posY - 1.4,
+    pathIdx: coreApproach.pathIdx - 1.4,
+    guardAnchorX: coreApproach.posX + 1.4,
+    guardAnchorY: coreApproach.posY - 1.4,
+    homeTx: 4,
+    homeTy: 24,
+  });
+
+  lane.units.push(leftPacket, rightPacket);
+  tick(game, 1);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const laneSnap = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  const leftSnap = laneSnap.units.find((entry) => entry && entry.id === leftPacket.id);
+  const rightSnap = laneSnap.units.find((entry) => entry && entry.id === rightPacket.id);
+
+  assert.ok(laneSnap.insideGateAnchor, "lane snapshots should expose the retreat anchor");
+  assert.ok(laneSnap.outsideGateAnchor, "lane snapshots should expose the defend anchor");
+  assert.ok(laneSnap.enemyCoreAnchor, "lane snapshots should expose the attack anchor");
+  const retreatAnchorDistance = Math.hypot(
+    laneSnap.insideGateAnchor.x - townCoreTarget.posX,
+    laneSnap.insideGateAnchor.y - townCoreTarget.posY
+  );
+  const defendAnchorDistance = Math.hypot(
+    laneSnap.outsideGateAnchor.x - townCoreTarget.posX,
+    laneSnap.outsideGateAnchor.y - townCoreTarget.posY
+  );
+  assert.ok(
+    defendAnchorDistance > retreatAnchorDistance,
+    "the defend anchor should sit in front of the gate, farther from the Town Core than the retreat anchor"
+  );
+  assert.ok(
+    defendAnchorDistance >= Math.max(7.5, Number(frontGatePadDef?.combatOffsetY) - 1.5),
+    "the defend anchor should stage close to the fortress front gate instead of clustering around the Town Core"
+  );
+  assert.equal(laneSnap.packets.length, 2, "separate barracks sends should remain separate packet snapshots");
+  assert.ok(leftSnap && rightSnap, "packet units should remain present in the lane snapshot");
+  assert.notEqual(leftSnap.groupId, rightSnap.groupId, "different barracks sends should not collapse into one shared group");
+  assert.equal(leftSnap.currentWaypointTargetKind, "outsideGateAnchor");
+  assert.equal(rightSnap.currentWaypointTargetKind, "outsideGateAnchor");
+  assert.ok(
+    Math.abs(leftSnap.groupCenterX - rightSnap.groupCenterX) > 0.1
+      || Math.abs(leftSnap.groupCenterY - rightSnap.groupCenterY) > 0.1,
+    "packet group centers should stay distinct instead of collapsing into one lane-wide anchor"
+  );
+  assert.deepEqual(
+    laneSnap.packets.map((packet) => packet.groupId).sort(),
+    [leftSnap.groupId, rightSnap.groupId].sort(),
+    "lane packet snapshots should track the spawned packet ids"
+  );
+});
+
+test("defend staging pushes later packets forward from the gate instead of back toward the core", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const coreApproach = getCoreApproachPosition(lane, 2);
+  const townCoreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+
+  lane.units.push(
+    createDefender("guardian", {
+      id: "left_packet_a",
+      groupId: "packet:0:left:a",
+      sourceBarracksId: "left",
+      sourceBarracksKey: "left",
+      posX: coreApproach.posX - 1.6,
+      posY: coreApproach.posY - 1.2,
+      pathIdx: coreApproach.pathIdx - 1.2,
+    }),
+    createDefender("guardian", {
+      id: "left_packet_b",
+      groupId: "packet:0:left:b",
+      sourceBarracksId: "left",
+      sourceBarracksKey: "left",
+      posX: coreApproach.posX - 1.0,
+      posY: coreApproach.posY - 1.8,
+      pathIdx: coreApproach.pathIdx - 1.8,
+    }),
+    createDefender("guardian", {
+      id: "right_packet_a",
+      groupId: "packet:0:right:a",
+      sourceBarracksId: "right",
+      sourceBarracksKey: "right",
+      posX: coreApproach.posX + 1.6,
+      posY: coreApproach.posY - 1.2,
+      pathIdx: coreApproach.pathIdx - 1.2,
+    })
+  );
+
+  tick(game, 1);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const laneSnap = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  assert.ok(laneSnap?.outsideGateAnchor, "lane snapshots should expose the defend anchor for packet staging");
+
+  const outsideAnchor = laneSnap.outsideGateAnchor;
+  const forwardDx = outsideAnchor.x - townCoreTarget.posX;
+  const forwardDy = outsideAnchor.y - townCoreTarget.posY;
+  const forwardDistance = Math.hypot(forwardDx, forwardDy) || 1;
+  const forwardX = forwardDx / forwardDistance;
+  const forwardY = forwardDy / forwardDistance;
+  const packetById = new Map((laneSnap.packets || []).map((packet) => [packet.groupId, packet]));
+  const leftA = packetById.get("packet:0:left:a");
+  const leftB = packetById.get("packet:0:left:b");
+  const rightA = packetById.get("packet:0:right:a");
+  assert.ok(leftA && leftB && rightA, "all defend packets should remain visible in the lane snapshot");
+
+  const projectForward = (packet) => {
+    const dx = packet.groupCenter.x - townCoreTarget.posX;
+    const dy = packet.groupCenter.y - townCoreTarget.posY;
+    return (dx * forwardX) + (dy * forwardY);
+  };
+
+  const leftAForward = projectForward(leftA);
+  const leftBForward = projectForward(leftB);
+  const rightAForward = projectForward(rightA);
+  const anchorForward = projectForward({ groupCenter: outsideAnchor });
+
+  assert.ok(
+    Math.abs(rightAForward - anchorForward) <= 1.25,
+    "a fresh packet from another barracks should still stage at the gate instead of being pushed deep behind older packets"
+  );
+  assert.ok(
+    leftBForward > leftAForward && leftAForward >= anchorForward - 0.25,
+    "repeat packets from the same barracks should stack outward from the gate instead of collapsing back toward the Town Core"
+  );
+});
+
+test("large defend packets fill outward from the gate instead of spilling behind it", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const coreApproach = getCoreApproachPosition(lane, 2);
+  const townCoreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+
+  for (let index = 0; index < 12; index += 1) {
+    lane.units.push(createDefender("guardian", {
+      id: `bulk_defend_${index}`,
+      groupId: "packet:0:center:bulk",
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      posX: coreApproach.posX + ((index % 3) - 1) * 0.8,
+      posY: coreApproach.posY - (index * 0.18),
+      pathIdx: coreApproach.pathIdx - (index * 0.2),
+    }));
+  }
+
+  tick(game, 1);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const laneSnap = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  assert.ok(laneSnap?.outsideGateAnchor, "lane snapshots should expose the defend anchor for packet slot staging");
+
+  const outsideAnchor = laneSnap.outsideGateAnchor;
+  const forwardDx = outsideAnchor.x - townCoreTarget.posX;
+  const forwardDy = outsideAnchor.y - townCoreTarget.posY;
+  const forwardDistance = Math.hypot(forwardDx, forwardDy) || 1;
+  const forwardX = forwardDx / forwardDistance;
+  const forwardY = forwardDy / forwardDistance;
+  const anchorForward = (forwardDx * forwardX) + (forwardDy * forwardY);
+  const stagedUnits = lane.units.filter((unit) => unit.groupId === "packet:0:center:bulk");
+  assert.equal(stagedUnits.length, 12, "the large defend packet should remain intact after staging");
+
+  const stagedForwardValues = stagedUnits.map((unit) => {
+    const dx = Number(unit.anchorTargetX) - townCoreTarget.posX;
+    const dy = Number(unit.anchorTargetY) - townCoreTarget.posY;
+    return (dx * forwardX) + (dy * forwardY);
+  });
+  const minForward = Math.min(...stagedForwardValues);
+  const maxForward = Math.max(...stagedForwardValues);
+
+  assert.ok(
+    minForward >= anchorForward - 0.25,
+    "the rearmost slot of a defend packet should stay at the gate anchor instead of slipping back behind it"
+  );
+  assert.ok(
+    maxForward >= anchorForward + 2.0,
+    "as a defend packet grows, additional rows should extend outward into the lane instead of piling back toward the fortress interior"
+  );
+});
+
 test("wave units already in defender contact range do not backpedal to a slot before attacking", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
-  const coreApproach = getCoreApproachPosition(lane, 0);
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.4, 0);
+  const attackerPoint = getDefendAnchorPosition(lane, -0.95, 0);
   const defender = createDefender("guardian", {
     hp: 80,
     maxHp: 80,
     baseDmg: 0,
     atkCd: 999,
     atkCdTicks: 999,
-    posX: coreApproach.posX,
-    posY: coreApproach.posY - 2,
-    pathIdx: coreApproach.pathIdx - 2,
-    guardAnchorX: coreApproach.posX,
-    guardAnchorY: coreApproach.posY - 2,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+    guardAnchorX: defenderPoint.posX,
+    guardAnchorY: defenderPoint.posY,
     homeTx: 4,
     homeTy: 24,
   });
@@ -508,9 +744,8 @@ test("wave units already in defender contact range do not backpedal to a slot be
     maxHp: 24,
     baseDmg: 4,
     atkCd: 0,
-    posX: coreApproach.posX,
-    posY: coreApproach.posY - 3,
-    pathIdx: coreApproach.pathIdx - 3,
+    posX: attackerPoint.posX,
+    posY: attackerPoint.posY,
   });
 
   const initialAttackerY = attacker.posY;
@@ -531,23 +766,25 @@ test("wave units already in defender contact range do not backpedal to a slot be
   assert.ok(serverDefender.hp < 80, "the defender should take the opening hit instead of kiting the attacker backward");
 });
 
-test("wave units intercepted near the town square do not damage the Town Core until defenders fall", () => {
+test("wave units intercepted near the front gate do not damage the Town Core until defenders fall", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const corePad = getTownCorePad(lane);
-  const coreApproach = getCoreApproachPosition(lane, 1);
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.4, 0);
+  const leftWavePoint = getDefendAnchorPosition(lane, 0.1, -0.2);
+  const rightWavePoint = getDefendAnchorPosition(lane, 0.1, 0.2);
   const defender = createDefender("guardian", {
     hp: 18,
     maxHp: 18,
     baseDmg: 0,
     atkCd: 999,
     atkCdTicks: 999,
-    posX: coreApproach.posX,
-    posY: coreApproach.posY - 0.8,
-    pathIdx: coreApproach.pathIdx - 0.8,
-    guardAnchorX: coreApproach.posX,
-    guardAnchorY: coreApproach.posY - 0.8,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+    guardAnchorX: defenderPoint.posX,
+    guardAnchorY: defenderPoint.posY,
     homeTx: 4,
     homeTy: 24,
     defState: "merge_guard",
@@ -557,18 +794,34 @@ test("wave units intercepted near the town square do not damage the Town Core un
       baseDmg: 3,
       atkCd: 0,
       atkCdTicks: 4,
-      posX: coreApproach.posX - 0.2,
-      posY: coreApproach.posY,
-      pathIdx: coreApproach.pathIdx,
+      posX: leftWavePoint.posX,
+      posY: leftWavePoint.posY,
+      routeType: simMl.ROUTE_TYPES.WAVE_LANE,
+      routeStartNode: "WA",
+      routeTargetNode: "A",
+      routeSegments: ["WA_A"],
+      routeSegmentIndex: 0,
+      segmentProgress: 0.5,
+      currentSegment: "WA_A",
+      routeWorldX: leftWavePoint.posX,
+      routeWorldY: leftWavePoint.posY,
       spawnIndex: 0,
     }),
     createWaveUnit("raider", {
       baseDmg: 3,
       atkCd: 0,
       atkCdTicks: 4,
-      posX: coreApproach.posX + 0.2,
-      posY: coreApproach.posY,
-      pathIdx: coreApproach.pathIdx,
+      posX: rightWavePoint.posX,
+      posY: rightWavePoint.posY,
+      routeType: simMl.ROUTE_TYPES.WAVE_LANE,
+      routeStartNode: "WA",
+      routeTargetNode: "A",
+      routeSegments: ["WA_A"],
+      routeSegmentIndex: 0,
+      segmentProgress: 0.5,
+      currentSegment: "WA_A",
+      routeWorldX: rightWavePoint.posX,
+      routeWorldY: rightWavePoint.posY,
       spawnIndex: 1,
     }),
   ];
@@ -595,7 +848,7 @@ test("wave units intercepted near the town square do not damage the Town Core un
   tick(game, 1);
 
   let damageApplied = false;
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     tick(game, 1);
     if (corePad.hp < 20) {
       damageApplied = true;

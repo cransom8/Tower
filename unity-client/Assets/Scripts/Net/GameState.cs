@@ -420,10 +420,14 @@ namespace CastleDefender.Net
         public string         commandState;
         public int            commandTargetLaneIndex;
         public float          commandAnchorProgress;
+        public MLGridPos      insideGateAnchor;
+        public MLGridPos      outsideGateAnchor;
+        public MLGridPos      enemyCoreAnchor;
         public MLGridPos      formationAnchor;
         public MLGridPos      formationFacing;
         public MLLaneFormationSlot[] formationSlots;
         public string[]       assignedUnits;
+        public MLLanePacketSnap[] packets;
         public float          engagementRadius;
         public bool           combatEnabled;
         public float          gold;
@@ -452,6 +456,42 @@ namespace CastleDefender.Net
     {
         public int    slotIndex;
         public string unitId;
+        public float  x;
+        public float  y;
+    }
+
+    [Serializable]
+    public class MLLanePacketSnap
+    {
+        public string                     groupId;
+        public int                        laneId;
+        public int                        sourceLaneIndex;
+        public string                     sourceBarracksId;
+        public string                     stance;
+        public MLWaypointTarget           currentWaypointTarget;
+        public MLGridPos                  groupCenter;
+        public float                      cohesionRadius;
+        public string                     movementMode;
+        public int                        packetIndex;
+        public string[]                   assignedUnits;
+        public MLLanePacketFormationSlot[] formationSlots;
+    }
+
+    [Serializable]
+    public class MLWaypointTarget
+    {
+        public string kind;
+        public int    laneIndex;
+        public float  x;
+        public float  y;
+    }
+
+    [Serializable]
+    public class MLLanePacketFormationSlot
+    {
+        public int    slotIndex;
+        public string unitId;
+        public string band;
         public float  x;
         public float  y;
     }
@@ -670,6 +710,9 @@ namespace CastleDefender.Net
         public bool   isHero;
         public string heroKey;
         public string heroVisualStyleKey;
+        public string groupId;
+        public string combatRole;
+        public string preferredBand;
         public float  pathIdx;
         public float  gridX;        // float: 2D tile X for defenders; path-derived for wave units
         public float  gridY;        // float: 2D tile Y for defenders; path-derived for wave units
@@ -687,6 +730,8 @@ namespace CastleDefender.Net
         public string movementMode;
         public string movementState;
         public string state;
+        public string presentationPhase;
+        public string presentationIntent;
         public bool   blockedByStructure;
         public string blockedByStructureId;
         public float  routeWorldX;
@@ -695,6 +740,13 @@ namespace CastleDefender.Net
         public float  anchorTargetX;
         public float  anchorTargetY;
         public float  anchorTargetProgress;
+        public float  groupCenterX;
+        public float  groupCenterY;
+        public float  cohesionRadius;
+        public float  leashFromGroupCenter;
+        public float  currentWaypointTargetX;
+        public float  currentWaypointTargetY;
+        public string currentWaypointTargetKind;
         public float  combatLeashRadius;
         public bool   canEngage;
         public float  hp;
@@ -702,7 +754,12 @@ namespace CastleDefender.Net
         public float  moveSpeed;    // authoritative server path speed for combat visuals
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
         public bool   isAttacking;  // true when unit has a combat target (stops advancing)
+        public string combatTargetKind;
         public string combatTargetId; // unit id or fortress pad id
+        public string currentTargetId;
+        public bool   combatContact;
+        public int    regroupTicksRemaining;
+        public int    combatLockTicksRemaining;
         public int    attackPulse;  // increments on each real strike in the sim
         public int    level;        // barracks level (1–4 for player units, 1 for wave units)
     }

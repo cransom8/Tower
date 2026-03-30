@@ -85,6 +85,9 @@ public static class HitEffectPool
 
     public static HitEffect Get()
     {
+        if (_prefab == null)
+            return null;
+
         while (_pool.Count > 0)
         {
             var e = _pool.Dequeue();
@@ -103,6 +106,9 @@ public static class HitEffectPool
 
     static HitEffect CreateNew()
     {
+        if (_prefab == null)
+            return null;
+
         var go = Object.Instantiate(_prefab.gameObject);
         go.SetActive(false);
         Object.DontDestroyOnLoad(go);

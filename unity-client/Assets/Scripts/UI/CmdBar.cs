@@ -1244,9 +1244,8 @@ namespace CastleDefender.UI
             if (positionSamples.Count <= 0)
                 return false;
 
-            if (ownerLane?.formationAnchor != null && IsFinite(ownerLane.formationAnchor.x) && IsFinite(ownerLane.formationAnchor.y))
+            if (TryGetLaneTacticalAnchor(ownerLane, out var anchor))
             {
-                var anchor = new Vector2(ownerLane.formationAnchor.x, ownerLane.formationAnchor.y);
                 positionSamples.Sort((left, right) =>
                 {
                     float leftDistance = (new Vector2(left.gridX, left.gridY) - anchor).sqrMagnitude;
@@ -1274,10 +1273,74 @@ namespace CastleDefender.UI
             return true;
         }
 
+        static bool TryGetLaneTacticalAnchor(MLLaneSnap lane, out Vector2 anchor)
+        {
+            anchor = Vector2.zero;
+            if (lane == null)
+                return false;
+
+            MLGridPos preferredAnchor = string.Equals(lane.commandState, "RETREAT", StringComparison.OrdinalIgnoreCase)
+                ? lane.insideGateAnchor
+                : string.Equals(lane.commandState, "ATTACK", StringComparison.OrdinalIgnoreCase)
+                    ? lane.enemyCoreAnchor
+                    : lane.outsideGateAnchor;
+            if (preferredAnchor != null && IsFinite(preferredAnchor.x) && IsFinite(preferredAnchor.y))
+            {
+                anchor = new Vector2(preferredAnchor.x, preferredAnchor.y);
+                return true;
+            }
+
+            if (lane.packets != null && lane.packets.Length > 0)
+            {
+                var sum = Vector2.zero;
+                int count = 0;
+                for (int i = 0; i < lane.packets.Length; i++)
+                {
+                    var packet = lane.packets[i];
+                    if (packet?.groupCenter == null || !IsFinite(packet.groupCenter.x) || !IsFinite(packet.groupCenter.y))
+                        continue;
+                    sum += new Vector2(packet.groupCenter.x, packet.groupCenter.y);
+                    count += 1;
+                }
+                if (count > 0)
+                {
+                    anchor = sum / count;
+                    return true;
+                }
+            }
+
+            if (lane.formationAnchor != null && IsFinite(lane.formationAnchor.x) && IsFinite(lane.formationAnchor.y))
+            {
+                anchor = new Vector2(lane.formationAnchor.x, lane.formationAnchor.y);
+                return true;
+            }
+
+            return false;
+        }
+
         static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
         static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
         {
+            if (lane?.packets != null && lane.packets.Length > 0)
+            {
+                var packetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int packetIndex = 0; packetIndex < lane.packets.Length; packetIndex++)
+                {
+                    var packet = lane.packets[packetIndex];
+                    if (packet?.assignedUnits == null || packet.assignedUnits.Length <= 0)
+                        continue;
+                    for (int unitIndex = 0; unitIndex < packet.assignedUnits.Length; unitIndex++)
+                    {
+                        var id = packet.assignedUnits[unitIndex];
+                        if (!string.IsNullOrWhiteSpace(id))
+                            packetIds.Add(id);
+                    }
+                }
+                if (packetIds.Count > 0)
+                    return packetIds;
+            }
+
             if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
                 return null;
 
@@ -1468,6 +1531,25 @@ namespace CastleDefender.UI
 
         static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
         {
+            if (lane?.packets != null && lane.packets.Length > 0)
+            {
+                var packetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int packetIndex = 0; packetIndex < lane.packets.Length; packetIndex++)
+                {
+                    var packet = lane.packets[packetIndex];
+                    if (packet?.assignedUnits == null || packet.assignedUnits.Length <= 0)
+                        continue;
+                    for (int unitIndex = 0; unitIndex < packet.assignedUnits.Length; unitIndex++)
+                    {
+                        var id = packet.assignedUnits[unitIndex];
+                        if (!string.IsNullOrWhiteSpace(id))
+                            packetIds.Add(id);
+                    }
+                }
+                if (packetIds.Count > 0)
+                    return packetIds;
+            }
+
             if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
                 return null;
 

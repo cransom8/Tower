@@ -22,6 +22,12 @@ namespace CastleDefender.Editor
         {
             if (state == PlayModeStateChange.ExitingEditMode)
             {
+                if (ClassicRpgUiScreenshotAutomation.IsCaptureBatchRunning)
+                {
+                    EditorSceneManager.playModeStartScene = null;
+                    return;
+                }
+
                 // Save any unsaved changes in the current scene first.
                 EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo();
 

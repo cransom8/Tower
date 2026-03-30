@@ -16,6 +16,16 @@ namespace CastleDefender.UI
         Error,
     }
 
+    public enum ClassicRpgTextStyle
+    {
+        Title,
+        SectionHeader,
+        Body,
+        SmallBody,
+        ButtonLabel,
+        HelperText,
+    }
+
     public enum ClassicRpgButtonSkin
     {
         LongGold,
@@ -48,6 +58,8 @@ namespace CastleDefender.UI
     public static class ClassicRpgUiRuntime
     {
         const string ResourcePath = "ClassicRpgRuntimeTheme";
+        const float CompactWidthThreshold = 1320f;
+        const float CompactAspectThreshold = 1.34f;
 
         struct SpriteSwapSet
         {
@@ -58,6 +70,14 @@ namespace CastleDefender.UI
         }
 
         static ClassicRpgRuntimeThemeAsset _theme;
+
+        public static readonly Vector2 ReferenceResolution = new(1920f, 1080f);
+
+        public static float MinimumTouchTarget => 48f;
+        public static float LargeTouchTarget => 56f;
+        public static float CompactPadding => 18f;
+        public static float StandardPadding => 28f;
+        public static float LargePadding => 36f;
 
         public static Color BackdropColor => new(0.03f, 0.04f, 0.08f, 1f);
         public static Color BackdropOverlayColor => new(0.10f, 0.07f, 0.03f, 0.56f);
@@ -72,6 +92,9 @@ namespace CastleDefender.UI
         public static Color DeepBluePanel => new(0.09f, 0.12f, 0.19f, 0.96f);
         public static Color InkBlue => new(0.12f, 0.16f, 0.24f, 0.98f);
         public static Color PaperInk => new(0.18f, 0.14f, 0.07f, 1f);
+        public static Color PanelFill => new(0.15f, 0.13f, 0.09f, 0.96f);
+        public static Color DetailFill => new(0.10f, 0.12f, 0.18f, 0.98f);
+        public static Color FooterTint => new(1f, 1f, 1f, 0.92f);
 
         public static ClassicRpgRuntimeThemeAsset Theme
         {
@@ -84,49 +107,129 @@ namespace CastleDefender.UI
             }
         }
 
-        public static void ApplyCanvasScaler(CanvasScaler scaler, Vector2 referenceResolution)
+        public static void ApplyCanvasScaler(CanvasScaler scaler, Vector2? referenceResolution = null)
         {
             if (scaler == null)
                 return;
 
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = referenceResolution;
+            scaler.referenceResolution = referenceResolution ?? ReferenceResolution;
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight = 0.5f;
         }
 
+        public static bool IsCompactLayout(RectTransform canvasRect)
+        {
+            float width = canvasRect != null && canvasRect.rect.width > 0f ? canvasRect.rect.width : Screen.width;
+            float height = canvasRect != null && canvasRect.rect.height > 0f ? canvasRect.rect.height : Screen.height;
+            if (height <= 0f)
+                height = 1f;
+
+            float aspect = width / height;
+            return width <= CompactWidthThreshold || aspect <= CompactAspectThreshold;
+        }
+
+        public static float PickByLayout(RectTransform canvasRect, float wideValue, float compactValue)
+        {
+            return IsCompactLayout(canvasRect) ? compactValue : wideValue;
+        }
+
+        public static void Stretch(RectTransform rect, Vector2? offsetMin = null, Vector2? offsetMax = null)
+        {
+            if (rect == null)
+                return;
+
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = offsetMin ?? Vector2.zero;
+            rect.offsetMax = offsetMax ?? Vector2.zero;
+            rect.anchoredPosition = Vector2.zero;
+        }
+
+        public static void ApplySafeArea(
+            RectTransform rect,
+            RectTransform canvasRect,
+            float horizontalPadding,
+            float topPadding,
+            float bottomPadding,
+            float? leftPadding = null,
+            float? rightPadding = null)
+        {
+            if (rect == null)
+                return;
+
+            float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f ? canvasRect.rect.width : ReferenceResolution.x;
+            float canvasHeight = canvasRect != null && canvasRect.rect.height > 0f ? canvasRect.rect.height : ReferenceResolution.y;
+            float screenWidth = Mathf.Max(1f, Screen.width);
+            float screenHeight = Mathf.Max(1f, Screen.height);
+
+            var safeArea = Screen.safeArea;
+            float widthScale = canvasWidth / screenWidth;
+            float heightScale = canvasHeight / screenHeight;
+
+            float leftInset = safeArea.xMin * widthScale;
+            float rightInset = (screenWidth - safeArea.xMax) * widthScale;
+            float topInset = (screenHeight - safeArea.yMax) * heightScale;
+            float bottomInset = safeArea.yMin * heightScale;
+
+            Stretch(
+                rect,
+                new Vector2(leftInset + (leftPadding ?? horizontalPadding), bottomInset + bottomPadding),
+                new Vector2(-(rightInset + (rightPadding ?? horizontalPadding)), -(topInset + topPadding)));
+        }
+
         public static void ApplyText(TMP_Text label, ClassicRpgTextTone tone, TextAlignmentOptions? alignment = null, Color? color = null)
+        {
+            ApplyTextStyle(label, MapToneToStyle(tone), alignment, color ?? GetTextColor(tone));
+
+            if (label == null)
+                return;
+
+            switch (tone)
+            {
+                case ClassicRpgTextTone.Title:
+                    label.fontStyle = FontStyles.Bold;
+                    break;
+                case ClassicRpgTextTone.Heading:
+                case ClassicRpgTextTone.BodyStrong:
+                case ClassicRpgTextTone.Accent:
+                    label.fontStyle = FontStyles.Bold;
+                    break;
+                case ClassicRpgTextTone.Muted:
+                    label.fontStyle = FontStyles.Normal;
+                    break;
+            }
+        }
+
+        public static void ApplyTextStyle(
+            TMP_Text label,
+            ClassicRpgTextStyle style,
+            TextAlignmentOptions? alignment = null,
+            Color? color = null,
+            bool allowWrap = true)
         {
             if (label == null)
                 return;
 
-            var theme = Theme;
-            var font = tone switch
-            {
-                ClassicRpgTextTone.Title => theme != null ? theme.TitleFont : null,
-                ClassicRpgTextTone.Heading => theme != null ? theme.HeaderFont : null,
-                _ => theme != null ? theme.BodyFont : null,
-            };
-
+            var font = GetFont(style) ?? TMP_Settings.defaultFontAsset;
             if (font != null)
+            {
                 label.font = font;
+                TryAssignSharedMaterial(label, font.material);
+            }
 
-            label.color = color ?? GetTextColor(tone);
+            label.color = color ?? GetTextColor(style);
+            label.fontStyle = GetFontStyle(style);
+            label.richText = true;
+            label.textWrappingMode = allowWrap ? TextWrappingModes.Normal : TextWrappingModes.NoWrap;
+            label.overflowMode = allowWrap ? TextOverflowModes.Truncate : TextOverflowModes.Ellipsis;
+            label.margin = Vector4.zero;
+
             if (alignment.HasValue)
                 label.alignment = alignment.Value;
 
-            try
-            {
-                if (label.fontSharedMaterial != null)
-                {
-                    label.outlineWidth = tone == ClassicRpgTextTone.Title ? 0.28f : 0.18f;
-                    label.outlineColor = new Color(0.11f, 0.06f, 0.02f, tone == ClassicRpgTextTone.Title ? 0.95f : 0.72f);
-                }
-            }
-            catch
-            {
-                // Some runtime-created TMP instances do not have a ready outline material yet.
-            }
+            ApplyOutline(label, style);
         }
 
         public static void ApplyPanel(Image image, ClassicRpgPanelSkin skin, bool sliced = true, Color? tint = null)
@@ -144,6 +247,11 @@ namespace CastleDefender.UI
 
             if (tint.HasValue)
                 image.color = tint.Value;
+        }
+
+        public static void ApplyFooterStrip(Image image, Color? tint = null)
+        {
+            ApplyPanel(image, ClassicRpgPanelSkin.MainMenuBar, false, tint ?? FooterTint);
         }
 
         public static void ApplyButton(Button button, ClassicRpgButtonSkin skin, TMP_Text label = null, string overrideText = null)
@@ -184,19 +292,17 @@ namespace CastleDefender.UI
             if (!string.IsNullOrEmpty(overrideText))
                 label.text = overrideText;
 
-            ApplyText(
+            ApplyTextStyle(
                 label,
-                skin is ClassicRpgButtonSkin.LongGold or ClassicRpgButtonSkin.MediumGold
-                    ? ClassicRpgTextTone.Heading
-                    : ClassicRpgTextTone.BodyStrong,
+                ClassicRpgTextStyle.ButtonLabel,
                 TextAlignmentOptions.Center,
                 skin switch
                 {
                     ClassicRpgButtonSkin.MiniGreen => new Color(0.86f, 0.95f, 0.82f, 1f),
                     ClassicRpgButtonSkin.MiniBrown => BrightText,
                     _ => WarmGold,
-                });
-            label.fontStyle = FontStyles.Bold;
+                },
+                allowWrap: false);
             label.raycastTarget = false;
         }
 
@@ -207,9 +313,7 @@ namespace CastleDefender.UI
 
             var image = input.GetComponent<Image>();
             if (image != null)
-            {
                 ApplyPanel(image, ClassicRpgPanelSkin.Frame, true, new Color(1f, 1f, 1f, 0.98f));
-            }
 
             var backing = EnsureChildImage(input.transform, "PremiumBacking");
             backing.transform.SetAsFirstSibling();
@@ -218,10 +322,7 @@ namespace CastleDefender.UI
 
             if (backing.rectTransform != null)
             {
-                backing.rectTransform.anchorMin = Vector2.zero;
-                backing.rectTransform.anchorMax = Vector2.one;
-                backing.rectTransform.offsetMin = new Vector2(10f, 9f);
-                backing.rectTransform.offsetMax = new Vector2(-10f, -9f);
+                Stretch(backing.rectTransform, new Vector2(10f, 9f), new Vector2(-10f, -9f));
             }
 
             if (input.textViewport != null)
@@ -232,7 +333,7 @@ namespace CastleDefender.UI
 
             if (input.textComponent != null)
             {
-                ApplyText(input.textComponent, ClassicRpgTextTone.BodyStrong, TextAlignmentOptions.MidlineLeft, BrightText);
+                ApplyTextStyle(input.textComponent, ClassicRpgTextStyle.Body, TextAlignmentOptions.MidlineLeft, BrightText);
                 input.textComponent.margin = Vector4.zero;
             }
 
@@ -241,7 +342,11 @@ namespace CastleDefender.UI
                 if (!string.IsNullOrWhiteSpace(placeholderText))
                     placeholder.text = placeholderText;
 
-                ApplyText(placeholder, ClassicRpgTextTone.Muted, TextAlignmentOptions.MidlineLeft, new Color(0.62f, 0.59f, 0.55f, 0.98f));
+                ApplyTextStyle(
+                    placeholder,
+                    ClassicRpgTextStyle.HelperText,
+                    TextAlignmentOptions.MidlineLeft,
+                    new Color(0.62f, 0.59f, 0.55f, 0.98f));
                 placeholder.fontStyle = FontStyles.Italic;
                 placeholder.margin = Vector4.zero;
             }
@@ -268,6 +373,98 @@ namespace CastleDefender.UI
             return go.GetComponent<Image>();
         }
 
+        static ClassicRpgTextStyle MapToneToStyle(ClassicRpgTextTone tone)
+        {
+            return tone switch
+            {
+                ClassicRpgTextTone.Title => ClassicRpgTextStyle.Title,
+                ClassicRpgTextTone.Heading => ClassicRpgTextStyle.SectionHeader,
+                ClassicRpgTextTone.BodyStrong => ClassicRpgTextStyle.Body,
+                ClassicRpgTextTone.Muted => ClassicRpgTextStyle.HelperText,
+                ClassicRpgTextTone.Accent => ClassicRpgTextStyle.SectionHeader,
+                _ => ClassicRpgTextStyle.Body,
+            };
+        }
+
+        static TMP_FontAsset GetFont(ClassicRpgTextStyle style)
+        {
+            var theme = Theme;
+            if (theme == null)
+                return TMP_Settings.defaultFontAsset;
+
+            return style switch
+            {
+                ClassicRpgTextStyle.Title => theme.TitleFont != null ? theme.TitleFont : theme.HeaderFont,
+                ClassicRpgTextStyle.SectionHeader => theme.HeaderFont != null ? theme.HeaderFont : theme.BodyFont,
+                ClassicRpgTextStyle.ButtonLabel => theme.HeaderFont != null ? theme.HeaderFont : theme.BodyFont,
+                ClassicRpgTextStyle.Body => theme.BodyFont != null ? theme.BodyFont : TMP_Settings.defaultFontAsset,
+                ClassicRpgTextStyle.SmallBody => theme.BodyFont != null ? theme.BodyFont : TMP_Settings.defaultFontAsset,
+                ClassicRpgTextStyle.HelperText => theme.BodyFont != null ? theme.BodyFont : TMP_Settings.defaultFontAsset,
+                _ => theme.BodyFont != null ? theme.BodyFont : TMP_Settings.defaultFontAsset,
+            };
+        }
+
+        static FontStyles GetFontStyle(ClassicRpgTextStyle style)
+        {
+            return style switch
+            {
+                ClassicRpgTextStyle.Title => FontStyles.Bold,
+                ClassicRpgTextStyle.SectionHeader => FontStyles.Bold,
+                ClassicRpgTextStyle.ButtonLabel => FontStyles.Bold,
+                _ => FontStyles.Normal,
+            };
+        }
+
+        static void TryAssignSharedMaterial(TMP_Text label, Material material)
+        {
+            if (label == null || material == null)
+                return;
+
+            try
+            {
+                label.fontSharedMaterial = material;
+                label.fontMaterial = material;
+                label.UpdateMeshPadding();
+            }
+            catch
+            {
+                // Some runtime-created TMP instances are not ready for a material swap yet.
+            }
+        }
+
+        static void ApplyOutline(TMP_Text label, ClassicRpgTextStyle style)
+        {
+            if (label == null)
+                return;
+
+            try
+            {
+                if (label.fontSharedMaterial == null)
+                    return;
+
+                switch (style)
+                {
+                    case ClassicRpgTextStyle.Title:
+                        label.outlineWidth = 0.22f;
+                        label.outlineColor = new Color(0.11f, 0.06f, 0.02f, 0.94f);
+                        break;
+                    case ClassicRpgTextStyle.SectionHeader:
+                    case ClassicRpgTextStyle.ButtonLabel:
+                        label.outlineWidth = 0.16f;
+                        label.outlineColor = new Color(0.11f, 0.07f, 0.03f, 0.76f);
+                        break;
+                    default:
+                        label.outlineWidth = 0.08f;
+                        label.outlineColor = new Color(0.05f, 0.04f, 0.02f, 0.48f);
+                        break;
+                }
+            }
+            catch
+            {
+                // Runtime material creation can lag one frame behind on some TMP instances.
+            }
+        }
+
         static Color GetTextColor(ClassicRpgTextTone tone)
         {
             return tone switch
@@ -280,6 +477,20 @@ namespace CastleDefender.UI
                 ClassicRpgTextTone.Success => SuccessText,
                 ClassicRpgTextTone.Error => ErrorText,
                 _ => new Color(0.85f, 0.87f, 0.91f, 1f),
+            };
+        }
+
+        static Color GetTextColor(ClassicRpgTextStyle style)
+        {
+            return style switch
+            {
+                ClassicRpgTextStyle.Title => WarmGold,
+                ClassicRpgTextStyle.SectionHeader => BrightText,
+                ClassicRpgTextStyle.Body => new Color(0.88f, 0.90f, 0.94f, 1f),
+                ClassicRpgTextStyle.SmallBody => new Color(0.82f, 0.84f, 0.89f, 1f),
+                ClassicRpgTextStyle.ButtonLabel => WarmGold,
+                ClassicRpgTextStyle.HelperText => MutedText,
+                _ => BrightText,
             };
         }
 

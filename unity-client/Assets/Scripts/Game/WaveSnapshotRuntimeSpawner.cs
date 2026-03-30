@@ -11,6 +11,13 @@ namespace CastleDefender.Game
     {
         const float TargetFollowSharpness = 18f;
         const float AttackVisualHoldSeconds = 0.32f;
+        const float HitReactVisualHoldSeconds = 0.18f;
+        const float AttackVisualMinHoldSeconds = 0.22f;
+        const float AttackVisualMaxHoldSeconds = 0.58f;
+        const float HitReactVisualMinHoldSeconds = 0.10f;
+        const float HitReactVisualMaxHoldSeconds = 0.30f;
+        const float CombatSfxCooldownSeconds = 0.06f;
+        const float ImpactFxPerTargetCooldownSeconds = 0.08f;
         const float GroundProbeHeight = 32f;
         const float GroundProbeDistance = 96f;
         const float GroundClearance = 0.04f;
@@ -36,6 +43,7 @@ namespace CastleDefender.Game
         const float CombatFacingTurnSharpness = 20f;
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
+        static readonly bool EnableVerboseSpawnAuditLogs = false;
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
         static readonly Dictionary<string, Vector2[]> RouteSegmentSimPolylines = BuildRouteSegmentSimPolylines();
         static readonly Vector2[] LaneCombatCoreSimPositions =
@@ -75,6 +83,7 @@ namespace CastleDefender.Game
             public float timeSinceSnap;
             public float lastAttackAt = float.MinValue;
             public float lastVisualAttackUntil;
+            public float lastHitReactUntil;
             public int lastServerAttackPulse;
             public bool hadSnapshot;
             public bool lockCombatFacing;
@@ -103,6 +112,8 @@ namespace CastleDefender.Game
         readonly Dictionary<string, Vector3> _battlefieldBarracksByLaneAndId = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldRouteNodeWorldByNode = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, string> _battlefieldRouteNodeLaneByNode = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, float> _lastImpactFxAtByTarget = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<AudioManager.SFX, float> _lastCombatSfxAt = new();
         readonly List<FortressPadAnchor> _fortressAnchorScratch = new();
         readonly List<BarracksSiteView> _barracksSiteScratch = new();
         Transform _battlefieldMineAnchor;
@@ -221,25 +232,30 @@ namespace CastleDefender.Game
                     new Vector2(-24f, -24f),
                 },
                 // Keep wave-lane route-space identical to the authoritative server
-                // graph so routeWorldX/Y offsets resolve around the mine center.
+                // graph so routeWorldX/Y offsets resolve around the mine center and
+                // the fortress front gate instead of cutting a straight diagonal to core.
                 [ "WA_A" ] = new[]
                 {
                     new Vector2(0f, 0f),
+                    new Vector2(-24f, 13.8f),
                     new Vector2(-24f, 24f),
                 },
                 [ "WB_B" ] = new[]
                 {
                     new Vector2(0f, 0f),
+                    new Vector2(24f, 13.8f),
                     new Vector2(24f, 24f),
                 },
                 [ "WC_C" ] = new[]
                 {
                     new Vector2(0f, 0f),
+                    new Vector2(24f, -13.8f),
                     new Vector2(24f, -24f),
                 },
                 [ "WD_D" ] = new[]
                 {
                     new Vector2(0f, 0f),
+                    new Vector2(-24f, -13.8f),
                     new Vector2(-24f, -24f),
                 },
             };
@@ -361,10 +377,15 @@ namespace CastleDefender.Game
                 bool moving = flatDelta.sqrMagnitude > 0.0004f;
                 bool attacking = now <= view.lastVisualAttackUntil
                     || (view.combatant != null && now - view.combatant.LastAttackAt <= AttackVisualHoldSeconds);
+                bool hitReacting = !attacking
+                    && now <= view.lastHitReactUntil
+                    && view.latestSnapshotUnit != null
+                    && view.latestSnapshotUnit.hp > 0f;
 
-                SetVisualState(
-                    view,
-                    UnitAnimationResolver.ResolveRuntimeIntent(view.latestSnapshotUnit, moving, attacking));
+                UnitAnimationStateIntent desiredState = hitReacting
+                    ? UnitAnimationStateIntent.HitReact
+                    : UnitAnimationResolver.ResolveRuntimeIntent(view.latestSnapshotUnit, moving, attacking);
+                SetVisualState(view, desiredState);
                 view.lastFramePosition = currentPosition;
             }
         }
@@ -479,6 +500,7 @@ namespace CastleDefender.Game
                     if (createdNow)
                         instantiatedUnitCount++;
 
+                    MLUnit previousSnapshotUnit = view.latestSnapshotUnit;
                     view.combatant.ApplySnapshot(defenderTeamKey, ownerTeamKey, unit.hp, unit.maxHp, unit.moveSpeed);
 
                     bool hadPreviousSnapshot = view.hadSnapshot;
@@ -516,11 +538,15 @@ namespace CastleDefender.Game
                     if (!view.hasDesiredFacing && view.snapshotVelocity.sqrMagnitude > 0.01f)
                         FaceDirection(view.go.transform, view.snapshotVelocity);
 
+                    if (hadPreviousSnapshot && previousSnapshotUnit != null && unit.hp + 0.01f < previousSnapshotUnit.hp)
+                        PlayHitReactFeedback(view, now);
+
                     if (unit.attackPulse > 0 && unit.attackPulse != view.lastServerAttackPulse)
                     {
                         view.lastAttackAt = now;
-                        view.lastVisualAttackUntil = now + AttackVisualHoldSeconds;
+                        view.combatant?.NotifyAttack(now);
                         PlayAttackAnimation(view);
+                        PlayAttackFeedback(snap, lane, unit, previousSnapshotUnit, now);
                     }
 
                     view.lastServerAttackPulse = unit.attackPulse;
@@ -574,7 +600,7 @@ namespace CastleDefender.Game
             else if (shouldLogInformationalSummary && _lastSnapshotSummaryLog != snapshotSummary)
             {
                 _lastSnapshotSummaryLog = snapshotSummary;
-                Debug.Log(snapshotSummary, this);
+                LogVerboseSpawnAudit(snapshotSummary);
             }
         }
 
@@ -641,7 +667,7 @@ namespace CastleDefender.Game
             string sourceBarracksKey = ResolveSourceBarracksKey(unit);
             if (!string.IsNullOrWhiteSpace(sourceBarracksKey))
             {
-                Debug.Log(
+                LogVerboseSpawnAudit(
                     $"[BarracksTrace][ClientSpawn] unit='{unit.id}' type='{unit.type}' " +
                     $"sourceLane={unit.sourceLaneIndex} barracksId='{sourceBarracksKey}' " +
                     $"spatialLane={spatialLane}");
@@ -664,6 +690,9 @@ namespace CastleDefender.Game
                 var animator = animators[i];
                 if (animator == null)
                     continue;
+
+                _ = animator.GetComponent<SnapshotAnimationEventRelay>()
+                    ?? animator.gameObject.AddComponent<SnapshotAnimationEventRelay>();
 
                 animator.Rebind();
                 animator.Update(0f);
@@ -700,9 +729,9 @@ namespace CastleDefender.Game
             };
 
             _views[unit.id] = view;
-            SetVisualState(view, UnitAnimationStateIntent.Move);
+            SetVisualState(view, UnitAnimationResolver.ResolveRuntimeIntent(unit, moving: false, attacking: false));
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, 0.25f);
-            Debug.Log(
+            LogVerboseSpawnAudit(
                 $"[SpawnAudit][ClientInstantiate] unitId='{unit.id}' unitType='{unit.type}' " +
                 $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
                 $"archetypeKey='{identity.ArchetypeKey ?? "<null>"}' presentationKey='{identity.PresentationKey ?? "<null>"}' " +
@@ -710,8 +739,7 @@ namespace CastleDefender.Game
                 $"isWaveUnit={unit.isWaveUnit.ToString().ToLowerInvariant()} stance='{unit.stance ?? "<null>"}' " +
                 $"resolvedPrefab='{prefab.name}' animationProfile='{animationProfile.ProfileId}' animationSource='{animationProfile.DebugSource}' " +
                 $"spawnedName='{go.name}' worldPos=({spawnPos.x:0.###},{spawnPos.y:0.###},{spawnPos.z:0.###}) " +
-                $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'",
-                this);
+                $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'");
             return view;
         }
 
@@ -720,11 +748,13 @@ namespace CastleDefender.Game
             if (!_views.TryGetValue(id, out var view))
                 return;
 
+            DestroyImpactFxHistory(id);
+            DestroyImpactFxHistory(view.latestSnapshotUnit != null ? view.latestSnapshotUnit.combatTargetId : null);
             if (view.go != null)
                 Destroy(view.go);
 
             _views.Remove(id);
-            Debug.Log($"[SpawnAudit][ClientRemove] unitId='{id}' presenterRemoved=true", this);
+            LogVerboseSpawnAudit($"[SpawnAudit][ClientRemove] unitId='{id}' presenterRemoved=true");
         }
 
         bool ShouldMaterializeUnit(MLUnit unit, out string rejectionReason)
@@ -1041,6 +1071,7 @@ namespace CastleDefender.Game
         bool TryResolveLiveCombatWorldPosition(
             MLUnit unit,
             MLLaneSnap lane,
+            int spatialLane,
             out Vector3 worldPos,
             out Vector3 routeForward,
             out string resolvedRouteSource)
@@ -1056,16 +1087,27 @@ namespace CastleDefender.Game
                 return false;
             if (!ShouldUseLiveCombatProjection(unit, lane))
                 return false;
-            if (!TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode))
-                return false;
 
-            int targetLaneIndex = ResolveLaneIndexForRouteNode(routeTargetNode);
+            int targetLaneIndex = spatialLane;
+            string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
+            bool usePacketLaneProjection = ShouldUsePacketLaneCombatProjection(unit);
+
+            if (!ShouldUseStanceAnchorProjection(unit) && !usePacketLaneProjection)
+            {
+                if (!TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode))
+                    return false;
+
+                targetLaneIndex = ResolveLaneIndexForRouteNode(routeTargetNode);
+                if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
+                    return false;
+
+                if (!_battlefieldRouteNodeLaneByNode.TryGetValue(routeTargetNode, out laneKey) || string.IsNullOrWhiteSpace(laneKey))
+                    return false;
+            }
+
             if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
                 return false;
 
-            string laneKey = null;
-            if (!_battlefieldRouteNodeLaneByNode.TryGetValue(routeTargetNode, out laneKey) || string.IsNullOrWhiteSpace(laneKey))
-                laneKey = ResolveFixedLaneKeyForLaneIndex(targetLaneIndex);
             laneKey = NormalizeBattlefieldLaneKey(laneKey);
             if (string.IsNullOrWhiteSpace(laneKey))
                 return false;
@@ -1092,6 +1134,15 @@ namespace CastleDefender.Game
                 return false;
 
             return TryResolveFortressPadWorldPosition(unit.combatTargetId, lane, out _);
+        }
+
+        static bool ShouldUsePacketLaneCombatProjection(MLUnit unit)
+        {
+            if (unit == null || string.IsNullOrWhiteSpace(unit.groupId))
+                return false;
+
+            return string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase);
         }
 
         bool TryResolveLaneCombatSimWorldPosition(
@@ -1168,6 +1219,9 @@ namespace CastleDefender.Game
             if (unit == null)
                 return false;
 
+            bool authoritativeCombatPhase =
+                string.Equals(unit.presentationPhase, "CombatCommit", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.presentationPhase, "CombatResolve", StringComparison.OrdinalIgnoreCase);
             bool isCombatState =
                 string.Equals(unit.movementState, "COMBAT", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(unit.state, "COMBAT", StringComparison.OrdinalIgnoreCase);
@@ -1177,7 +1231,7 @@ namespace CastleDefender.Game
                 || unit.blockedByStructure
                 || unit.isAttacking;
 
-            return isCombatState || hasCombatTarget;
+            return authoritativeCombatPhase || isCombatState || hasCombatTarget;
         }
 
         bool TryResolveDesiredFacing(
@@ -1357,15 +1411,11 @@ namespace CastleDefender.Game
                 if (lane?.units == null)
                     continue;
 
-                string targetLaneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
                 for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
                 {
                     MLUnit unit = lane.units[unitIndex];
                     if (unit == null)
                         continue;
-
-                    if (TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode) && !string.IsNullOrWhiteSpace(targetLaneKey))
-                        _battlefieldRouteNodeLaneByNode[routeTargetNode] = targetLaneKey;
 
                     if (!TryNormalizeRouteNodeId(unit.routeStartNode, out string routeStartNode))
                         continue;
@@ -1403,6 +1453,7 @@ namespace CastleDefender.Game
             if (TryResolveBattlefieldRouteWorldPosition(
                 unit,
                 lane,
+                spatialLane,
                 out worldPos,
                 out Vector3 routeForward,
                 out string resolvedRouteSource,
@@ -1411,7 +1462,7 @@ namespace CastleDefender.Game
                 RuntimeFailureMarker.Clear(transform, $"wave_failure_{laneFailureKey}");
                 worldPos = ProjectToVisibleGround(worldPos);
                 failureReason = "resolved_via_battlefield_routes";
-                Debug.Log(
+                LogVerboseSpawnAudit(
                     $"[SpawnAudit][ClientSnapshot] spawnType='{ResolveSpawnType(unit)}' unitId='{unit?.id ?? "<null>"}' unitType='{unit?.type ?? "<null>"}' " +
                     $"skinKey='{unit?.skinKey ?? "<default>"}' sourceTeam='{unit?.sourceTeam ?? "<none>"}' " +
                     $"ownerLane={unit?.ownerLane ?? -1} isWaveUnit={(unit != null && unit.isWaveUnit).ToString().ToLowerInvariant()} " +
@@ -1421,8 +1472,7 @@ namespace CastleDefender.Game
                     $"routeType='{unit?.routeType ?? "<null>"}' currentSegment='{unit?.currentSegment ?? "<null>"}' " +
                     $"segmentProgress={(unit != null ? unit.segmentProgress : float.NaN):0.###} " +
                     $"routeWorld=({(unit != null ? unit.routeWorldX : float.NaN):0.###},{(unit != null ? unit.routeWorldY : float.NaN):0.###}) " +
-                    $"resolvedLookupKey='{resolvedRouteSource ?? "<unknown>"}' worldPos=({worldPos.x:0.###},{worldPos.y:0.###},{worldPos.z:0.###})",
-                    this);
+                    $"resolvedLookupKey='{resolvedRouteSource ?? "<unknown>"}' worldPos=({worldPos.x:0.###},{worldPos.y:0.###},{worldPos.z:0.###})");
                 return true;
             }
 
@@ -1518,6 +1568,7 @@ namespace CastleDefender.Game
             if (TryResolveBattlefieldRouteWorldPosition(
                 unit,
                 lane,
+                spatialLane,
                 out _,
                 out Vector3 routeForward,
                 out _,
@@ -1533,6 +1584,7 @@ namespace CastleDefender.Game
         bool TryResolveBattlefieldRouteWorldPosition(
             MLUnit unit,
             MLLaneSnap lane,
+            int spatialLane,
             out Vector3 worldPos,
             out Vector3 routeForward,
             out string resolvedRouteSource,
@@ -1549,7 +1601,10 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (TryResolveLiveCombatWorldPosition(unit, lane, out worldPos, out routeForward, out resolvedRouteSource))
+            if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
+                return true;
+
+            if (TryResolveLiveCombatWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
                 return true;
 
             if (!TryResolveBattlefieldSegment(unit, lane, out string fromNode, out string toNode, out string segmentId, out failureReason))
@@ -1658,6 +1713,79 @@ namespace CastleDefender.Game
             resolvedRouteSource =
                 $"battlefield_routes:{segmentShape}:{segmentId}:from={fromLaneKey}:to={toLaneKey}";
             return true;
+        }
+
+        bool TryResolveStanceAnchorWorldPosition(
+            MLUnit unit,
+            MLLaneSnap lane,
+            int spatialLane,
+            out Vector3 worldPos,
+            out Vector3 routeForward,
+            out string resolvedRouteSource)
+        {
+            worldPos = default;
+            routeForward = Vector3.forward;
+            resolvedRouteSource = null;
+
+            if (unit == null || lane == null)
+                return false;
+            if (!ShouldUseStanceAnchorProjection(unit))
+                return false;
+
+            string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
+            if (string.IsNullOrWhiteSpace(laneKey))
+                return false;
+
+            if (float.IsFinite(unit.routeWorldX) && float.IsFinite(unit.routeWorldY)
+                && TryResolveLaneCombatSimWorldPosition(
+                    unit.routeWorldX,
+                    unit.routeWorldY,
+                    spatialLane,
+                    laneKey,
+                    out worldPos,
+                    out routeForward,
+                    out resolvedRouteSource))
+            {
+                resolvedRouteSource = $"stance_anchor_route_world:{resolvedRouteSource}";
+                return true;
+            }
+
+            if (float.IsFinite(unit.anchorTargetX) && float.IsFinite(unit.anchorTargetY)
+                && TryResolveLaneCombatSimWorldPosition(
+                    unit.anchorTargetX,
+                    unit.anchorTargetY,
+                    spatialLane,
+                    laneKey,
+                    out worldPos,
+                    out routeForward,
+                    out resolvedRouteSource))
+            {
+                resolvedRouteSource = $"stance_anchor_slot:{resolvedRouteSource}";
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool ShouldUseStanceAnchorProjection(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            bool isBarracksUnit =
+                string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase);
+            if (!isBarracksUnit)
+                return false;
+
+            if (string.Equals(unit.currentWaypointTargetKind, "outsideGateAnchor", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.currentWaypointTargetKind, "insideGateAnchor", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return string.Equals(unit.commandState, "DEFEND", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.commandState, "RETREAT", StringComparison.OrdinalIgnoreCase);
         }
 
         bool TryResolveBattlefieldSegment(
@@ -2342,11 +2470,10 @@ namespace CastleDefender.Game
             if (!_loggedPathModeKeys.Add(key))
                 return;
 
-            Debug.Log(
+            LogVerboseSpawnAudit(
                 $"[SpawnAudit][PathMode] using {mode} method={methodName} unitId='{unitId}' " +
                 $"unitType='{unit?.type ?? "<null>"}' lane={lane?.laneIndex ?? -1} spatialLane={spatialLane} " +
-                $"branch='{branch ?? "<none>"}'",
-                this);
+                $"branch='{branch ?? "<none>"}'");
         }
 
         void LogWorldPositionFailure(MLLaneSnap lane, MLUnit unit, int spatialLane, string reason)
@@ -2354,6 +2481,7 @@ namespace CastleDefender.Game
             Debug.LogError(
                 $"[SpawnAudit][ClientPositionFail] lane={lane?.laneIndex ?? -1} spatialLane={spatialLane} " +
                 $"unitId='{unit?.id ?? "<null>"}' unitType='{unit?.type ?? "<null>"}' team='{lane?.team ?? "<null>"}' " +
+                $"groupId='{unit?.groupId ?? "<null>"}' waypointKind='{unit?.currentWaypointTargetKind ?? "<null>"}' " +
                 $"sourceBarracksKey='{ResolveSourceBarracksKey(unit)}' " +
                 $"routeType='{unit?.routeType ?? "<null>"}' currentSegment='{unit?.currentSegment ?? "<null>"}' " +
                 $"segmentProgress={(unit != null ? unit.segmentProgress : float.NaN):0.###} " +
@@ -2362,6 +2490,14 @@ namespace CastleDefender.Game
                 $"routeWorld=({(unit != null ? unit.routeWorldX : float.NaN):0.###},{(unit != null ? unit.routeWorldY : float.NaN):0.###}) " +
                 $"reason='{reason ?? "<unknown>"}'",
                 this);
+        }
+
+        void LogVerboseSpawnAudit(string message)
+        {
+            if (!EnableVerboseSpawnAuditLogs)
+                return;
+
+            Debug.Log(message, this);
         }
 
         static float GetLevelScale(int level)
@@ -2590,19 +2726,140 @@ namespace CastleDefender.Game
             UnitAnimationResolver.CrossFadeFirstAvailable(view.animators, states, transitionSeconds);
         }
 
+        void PlayAttackFeedback(MLSnapshot snap, MLLaneSnap lane, MLUnit unit, MLUnit previousSnapshotUnit, float now)
+        {
+            if (unit == null)
+                return;
+
+            UnitAnimationAttackFamily family = UnitAnimationResolver.ResolveRuntimeAttackFamily(unit);
+            TryPlayCombatSfx(AttackSfxFor(family), 0.28f, now);
+
+            string targetId = !string.IsNullOrWhiteSpace(unit.combatTargetId)
+                ? unit.combatTargetId
+                : previousSnapshotUnit != null ? previousSnapshotUnit.combatTargetId : null;
+            if (string.IsNullOrWhiteSpace(targetId))
+                return;
+
+            if (!_lastImpactFxAtByTarget.TryGetValue(targetId, out float lastImpactAt)
+                || now - lastImpactAt >= ImpactFxPerTargetCooldownSeconds)
+            {
+                if (TryResolveCombatTargetWorldPosition(snap, targetId, lane, out Vector3 targetWorld))
+                {
+                    var hitEffect = HitEffectPool.Get();
+                    if (hitEffect != null)
+                        hitEffect.Play(targetWorld, ImpactTowerTypeFor(family));
+                    _lastImpactFxAtByTarget[targetId] = now;
+                }
+            }
+        }
+
+        void PlayHitReactFeedback(WaveView view, float now)
+        {
+            if (view == null || view.latestSnapshotUnit == null || view.latestSnapshotUnit.hp <= 0f)
+                return;
+
+            float holdSeconds = PlayIntentAnimation(
+                view,
+                UnitAnimationStateIntent.HitReact,
+                HitReactVisualHoldSeconds,
+                HitReactVisualMinHoldSeconds,
+                HitReactVisualMaxHoldSeconds);
+            view.lastHitReactUntil = Mathf.Max(view.lastHitReactUntil, now + holdSeconds);
+        }
+
         static void PlayAttackAnimation(WaveView view)
         {
             if (view == null)
                 return;
 
-            view.lastVisualAttackUntil = Time.time + AttackVisualHoldSeconds;
-            UnitAnimationResolver.PlayIntent(
+            float holdSeconds = PlayIntentAnimation(
+                view,
+                UnitAnimationStateIntent.Attack,
+                AttackVisualHoldSeconds,
+                AttackVisualMinHoldSeconds,
+                AttackVisualMaxHoldSeconds);
+            view.lastVisualAttackUntil = Time.time + holdSeconds;
+        }
+
+        static float PlayIntentAnimation(
+            WaveView view,
+            UnitAnimationStateIntent intent,
+            float fallbackHoldSeconds,
+            float minHoldSeconds,
+            float maxHoldSeconds)
+        {
+            if (view == null)
+                return fallbackHoldSeconds;
+
+            float holdSeconds = Mathf.Clamp(fallbackHoldSeconds, minHoldSeconds, maxHoldSeconds);
+            bool played = UnitAnimationResolver.PlayIntent(
                 view.animators,
                 view.animationProfile,
-                UnitAnimationStateIntent.Attack,
+                intent,
                 fixedTime: false,
-                out _);
-            view.visualState = UnitAnimationStateIntent.Attack;
+                out string playedState);
+            if (played)
+            {
+                float clipLength = ResolvePlayedClipLength(view, playedState);
+                if (clipLength > 0f)
+                    holdSeconds = Mathf.Clamp(clipLength, minHoldSeconds, maxHoldSeconds);
+                view.visualState = intent;
+            }
+
+            return holdSeconds;
+        }
+
+        static float ResolvePlayedClipLength(WaveView view, string playedState)
+        {
+            if (view == null || view.animators == null || string.IsNullOrWhiteSpace(playedState))
+                return 0f;
+
+            for (int i = 0; i < view.animators.Length; i++)
+            {
+                float clipLength = UnitAnimationResolver.ResolveClipLength(view.animators[i], playedState);
+                if (clipLength > 0f)
+                    return clipLength;
+            }
+
+            return 0f;
+        }
+
+        void TryPlayCombatSfx(AudioManager.SFX sfx, float volumeScale, float now)
+        {
+            if (_lastCombatSfxAt.TryGetValue(sfx, out float lastPlayedAt)
+                && now - lastPlayedAt < CombatSfxCooldownSeconds)
+            {
+                return;
+            }
+
+            _lastCombatSfxAt[sfx] = now;
+            AudioManager.I?.Play(sfx, volumeScale);
+        }
+
+        static AudioManager.SFX AttackSfxFor(UnitAnimationAttackFamily family) => family switch
+        {
+            UnitAnimationAttackFamily.Ranged => AudioManager.SFX.ArcherShoot,
+            UnitAnimationAttackFamily.Magic => AudioManager.SFX.MageShoot,
+            UnitAnimationAttackFamily.Support => AudioManager.SFX.MageShoot,
+            UnitAnimationAttackFamily.Siege => AudioManager.SFX.BallistaShoot,
+            _ => AudioManager.SFX.FighterSlash,
+        };
+
+        static HitEffect.TowerType ImpactTowerTypeFor(UnitAnimationAttackFamily family) => family switch
+        {
+            UnitAnimationAttackFamily.Ranged => HitEffect.TowerType.Archer,
+            UnitAnimationAttackFamily.Magic => HitEffect.TowerType.Mage,
+            UnitAnimationAttackFamily.Support => HitEffect.TowerType.Mage,
+            UnitAnimationAttackFamily.Siege => HitEffect.TowerType.Ballista,
+            _ => HitEffect.TowerType.Fighter,
+        };
+
+        void DestroyImpactFxHistory(string targetId)
+        {
+            if (string.IsNullOrWhiteSpace(targetId))
+                return;
+
+            _lastImpactFxAtByTarget.Remove(targetId);
         }
     }
 }
