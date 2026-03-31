@@ -1272,6 +1272,7 @@ namespace CastleDefender.Net
         public string kind;
         public string key;
         public string content_key;
+        public string content_hash;
         public string tier;
         public string address;
         public string reason;

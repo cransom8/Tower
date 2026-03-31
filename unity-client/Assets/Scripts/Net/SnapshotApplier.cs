@@ -6,6 +6,7 @@
 //   (Recommend attaching to the NetworkManager GO so it persists across scenes.)
 
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using CastleDefender.Net;
 
@@ -21,6 +22,11 @@ namespace CastleDefender.Net
         public ClassicSnapshot LatestClassic { get; private set; }
         public MLMatchReadyPayload LatestMLMatchReady { get; private set; }
         public MLMatchConfig       LatestMLMatchConfig { get; private set; }
+#if UNITY_EDITOR
+        public int LastDebugSnapshotListenerCount { get; private set; }
+        public int LastDebugSnapshotFailureCount { get; private set; }
+        public string LastDebugSnapshotListeners { get; private set; }
+#endif
 
         // My lane and viewing lane (ML mode)
         public int MyLaneIndex  { get; set; } = 0;
@@ -28,9 +34,15 @@ namespace CastleDefender.Net
         public int TotalLanes   { get; set; } = 1;
         float _nextDebugLogAt;
         string _lastBarracksTraceSignature;
+        string _lastMatchConfigSummary;
+        string _lastBattlefieldLayoutReadySignature;
+        bool _loggedFirstMLSnapshot;
         NetworkManager _boundNetworkManager;
 
         // ── Events ────────────────────────────────────────────────────────────
+        public event Action<MLMatchConfig>      OnMLMatchConfigApplied;
+        public event Action<MLBattlefieldLayout> OnBattlefieldLayoutReady;
+        public event Action<MLSnapshot>      OnFirstMLSnapshotApplied;
         public event Action<MLSnapshot>      OnMLSnapshotApplied;
         public event Action<ClassicSnapshot> OnClassicSnapshotApplied;
 
@@ -43,6 +55,13 @@ namespace CastleDefender.Net
 
         void OnEnable()
         {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
+            Instance = this;
             TryBindNetworkManager();
         }
 
@@ -55,6 +74,8 @@ namespace CastleDefender.Net
         void OnDisable()
         {
             UnbindNetworkManager();
+            if (Instance == this)
+                Instance = null;
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -65,20 +86,15 @@ namespace CastleDefender.Net
             TotalLanes  = p.playerCount;
             LatestMLMatchReady = p;
             LatestML    = null;
+            LatestMLMatchConfig = null;
+            _lastMatchConfigSummary = string.Empty;
+            _loggedFirstMLSnapshot = false;
+            _lastBattlefieldLayoutReadySignature = string.Empty;
         }
 
         void HandleMLMatchConfig(MLMatchConfig config)
         {
-            if (config == null)
-                return;
-
-            if (LatestMLMatchConfig == null)
-            {
-                LatestMLMatchConfig = config;
-                return;
-            }
-
-            MergeMLMatchConfig(LatestMLMatchConfig, config);
+            ApplyMLMatchConfig(config, "NetworkManager event");
         }
 
         static void MergeMLMatchConfig(MLMatchConfig target, MLMatchConfig incoming)
@@ -119,6 +135,15 @@ namespace CastleDefender.Net
         {
             SyncLaneStateFromNetworkManager(NetworkManager.Instance);
             LatestML = snap;
+            if (!_loggedFirstMLSnapshot)
+            {
+                _loggedFirstMLSnapshot = true;
+                Debug.Log(
+                    $"[SnapshotApplier] First ml_state_snapshot round={snap?.roundNumber ?? 0} " +
+                    $"matchState={snap?.matchState ?? "<null>"} lanes={snap?.lanes?.Length ?? 0} " +
+                    $"layoutReady={(LatestMLMatchConfig?.battlefieldLayout != null)}");
+                OnFirstMLSnapshotApplied?.Invoke(snap);
+            }
             if (GetLane(MyLaneIndex)?.eliminated == true)
             {
                 var firstActive = FindFirstActiveLane();
@@ -147,7 +172,56 @@ namespace CastleDefender.Net
             ViewingLane = viewingLane >= 0 ? Mathf.Clamp(viewingLane, 0, Mathf.Max(0, totalLanes - 1)) : MyLaneIndex;
             TotalLanes = Mathf.Max(1, totalLanes);
             LatestML = snap;
-            OnMLSnapshotApplied?.Invoke(snap);
+            DispatchDebugMLSnapshotApplied(snap);
+        }
+
+        void DispatchDebugMLSnapshotApplied(MLSnapshot snap)
+        {
+            var handlers = OnMLSnapshotApplied?.GetInvocationList();
+            LastDebugSnapshotListenerCount = handlers?.Length ?? 0;
+            LastDebugSnapshotFailureCount = 0;
+            LastDebugSnapshotListeners = handlers == null || handlers.Length == 0
+                ? "<none>"
+                : string.Join(
+                    ", ",
+                    Array.ConvertAll(
+                        handlers,
+                        handler =>
+                        {
+                            string targetType = handler.Target != null ? handler.Target.GetType().FullName : "<static>";
+                            return $"{targetType}.{handler.Method.Name}";
+                        }));
+            if (handlers == null || handlers.Length == 0)
+                return;
+
+            List<Exception> failures = null;
+            for (int i = 0; i < handlers.Length; i++)
+            {
+                if (handlers[i] is not Action<MLSnapshot> handler)
+                    continue;
+
+                try
+                {
+                    handler.Invoke(snap);
+                }
+                catch (Exception ex)
+                {
+                    failures ??= new List<Exception>();
+                    failures.Add(ex);
+                    LastDebugSnapshotFailureCount = failures.Count;
+                    var targetType = handler.Target != null ? handler.Target.GetType().FullName : "<static>";
+                    Debug.LogError(
+                        $"[SnapshotApplier][DebugApplyMLSnapshot] Snapshot listener '{targetType}.{handler.Method.Name}' threw while applying a debug snapshot. " +
+                        $"Continuing other listeners so validation can surface every strict dependency. {ex}");
+                }
+            }
+
+            if (failures != null && failures.Count > 0)
+            {
+                throw new AggregateException(
+                    $"DebugApplyMLSnapshot hit {failures.Count} listener failure(s). See console for the exact subscribers.",
+                    failures);
+            }
         }
 #endif
 
@@ -220,6 +294,9 @@ namespace CastleDefender.Net
                 else
                     MergeMLMatchConfig(LatestMLMatchConfig, cachedConfig);
             }
+
+            if (nm.LastMLMatchConfig != null)
+                ApplyMLMatchConfig(nm.LastMLMatchConfig, "NetworkManager cache sync");
         }
 
         void HandleMLSpectatorJoin(MLSpectatorJoinPayload _)
@@ -466,6 +543,69 @@ namespace CastleDefender.Net
         public MLBattlefieldLayout GetBattlefieldLayout()
         {
             return LatestMLMatchConfig?.battlefieldLayout;
+        }
+
+        public bool HasAuthoritativeBattlefieldLayout()
+        {
+            return LatestMLMatchConfig?.battlefieldLayout != null;
+        }
+
+        void ApplyMLMatchConfig(MLMatchConfig config, string source)
+        {
+            if (config == null)
+            {
+                Debug.LogError($"[SnapshotApplier] Cannot apply null MLMatchConfig from {source}.");
+                return;
+            }
+
+            if (LatestMLMatchConfig == null)
+                LatestMLMatchConfig = config;
+            else
+                MergeMLMatchConfig(LatestMLMatchConfig, config);
+
+            string summary = DescribeMLMatchConfig(LatestMLMatchConfig);
+            if (!string.Equals(_lastMatchConfigSummary, summary, StringComparison.Ordinal))
+            {
+                _lastMatchConfigSummary = summary;
+                Debug.Log($"[SnapshotApplier] Applied {summary} via {source}.");
+            }
+
+            OnMLMatchConfigApplied?.Invoke(LatestMLMatchConfig);
+            TryNotifyBattlefieldLayoutReady(source);
+        }
+
+        void TryNotifyBattlefieldLayoutReady(string source)
+        {
+            var layout = LatestMLMatchConfig?.battlefieldLayout;
+            if (layout == null)
+                return;
+
+            string signature =
+                $"{layout.layoutId ?? "<null>"}|{layout.contentHash ?? "<null>"}|" +
+                $"{layout.lanes?.Length ?? 0}|{layout.routeNodes?.Length ?? 0}|{layout.routeSegments?.Length ?? 0}";
+            if (string.Equals(_lastBattlefieldLayoutReadySignature, signature, StringComparison.Ordinal))
+                return;
+
+            _lastBattlefieldLayoutReadySignature = signature;
+            Debug.Log(
+                $"[SnapshotApplier] Battlefield layout ready via {source}: " +
+                $"layoutId={layout.layoutId ?? "<null>"} contentHash={layout.contentHash ?? "<null>"} " +
+                $"lanes={layout.lanes?.Length ?? 0} routeNodes={layout.routeNodes?.Length ?? 0} routeSegments={layout.routeSegments?.Length ?? 0}");
+            OnBattlefieldLayoutReady?.Invoke(layout);
+        }
+
+        static string DescribeMLMatchConfig(MLMatchConfig config)
+        {
+            if (config == null)
+                return "ml_match_config=<null>";
+
+            int loadoutCount = config.loadout != null ? config.loadout.Length : 0;
+            int slotCount = config.slotDefinitions != null ? config.slotDefinitions.Length : 0;
+            var layout = config.battlefieldLayout;
+            return
+                $"ml_match_config loadout={loadoutCount} raceId={config.raceId ?? "<null>"} slots={slotCount} " +
+                $"layoutId={layout?.layoutId ?? "<none>"} layoutHash={layout?.contentHash ?? "<none>"} " +
+                $"layoutLanes={layout?.lanes?.Length ?? 0}";
         }
 
         public MLLaneAssignment GetLaneAssignment(int index)

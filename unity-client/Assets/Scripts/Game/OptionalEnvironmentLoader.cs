@@ -4,6 +4,8 @@ using UnityEngine;
 
 public class OptionalEnvironmentLoader : MonoBehaviour
 {
+    const string DisabledAddressToken = "none";
+
     [Header("Optional Dressing")]
     public string optionalEnvironmentAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
     public Transform instantiateParent;
@@ -51,10 +53,16 @@ public class OptionalEnvironmentLoader : MonoBehaviour
             }
         }
 
+        string configuredAddress = optionalEnvironmentAddress != null
+            ? optionalEnvironmentAddress.Trim()
+            : string.Empty;
+        if (IsOptionalDressingDisabled(configuredAddress))
+            yield break;
+
         var remoteContent = RemoteContentManager.EnsureInstance();
-        string address = string.IsNullOrWhiteSpace(optionalEnvironmentAddress)
+        string address = string.IsNullOrWhiteSpace(configuredAddress)
             ? RemoteContentManager.GameMlEnvironmentDressingAddress
-            : optionalEnvironmentAddress.Trim();
+            : configuredAddress;
 
         yield return remoteContent.EnsureEnvironmentReady(
             address,
@@ -85,5 +93,12 @@ public class OptionalEnvironmentLoader : MonoBehaviour
 
         if (instantiatedRootScale > 0f)
             _instance.transform.localScale = Vector3.one * instantiatedRootScale;
+    }
+
+    static bool IsOptionalDressingDisabled(string address)
+    {
+        return string.Equals(address, DisabledAddressToken, System.StringComparison.OrdinalIgnoreCase)
+            || string.Equals(address, "disabled", System.StringComparison.OrdinalIgnoreCase)
+            || string.Equals(address, "off", System.StringComparison.OrdinalIgnoreCase);
     }
 }

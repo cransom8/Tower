@@ -156,6 +156,7 @@ function buildManifestContentEntry(kind, key, remoteContent, extra = {}) {
   const tier = normalizeTier(remoteContent.tier, 't2');
   const address = deriveManifestAddress(kind, remoteContent, extra);
   const reason = deriveManifestReason(kind, key, tier, remoteContent, extra);
+  const contentHash = normalizeString(extra.content_hash ?? remoteContent?.content_hash);
 
   if ((tier === 't0' || tier === 't1') && kind === 'environment' && !address) {
     return null;
@@ -165,13 +166,14 @@ function buildManifestContentEntry(kind, key, remoteContent, extra = {}) {
     kind,
     key,
     content_key: remoteContent.content_key,
+    content_hash: contentHash,
     tier,
     address,
     reason,
   };
 }
 
-function buildContentManifest({ unitTypes = [], skins = [] } = {}) {
+function buildContentManifest({ unitTypes = [], skins = [], environmentEntries = [] } = {}) {
   const unitUsageByKey = new Map();
   const allSkinEntries = skins
     .map((skin) => formatPublicSkin(skin))
@@ -241,16 +243,31 @@ function buildContentManifest({ unitTypes = [], skins = [] } = {}) {
   const loadoutSeen = new Set();
   const waveSeen = new Set();
 
-  const sharedT1Content = [
-    {
-      kind: 'environment',
-      key: 'game_ml',
-      content_key: 'environment_game_ml',
-      tier: 't1',
-      address: 'environment/game_ml',
-      reason: 'Required before the first playable match starts so match geometry is present.',
-    },
-  ];
+  const sharedT1Content = Array.isArray(environmentEntries) && environmentEntries.length > 0
+    ? environmentEntries
+        .map((entry) => ({
+          kind: 'environment',
+          key: normalizeString(entry?.key) ?? 'game_ml',
+          content_key: normalizeString(entry?.content_key) ?? 'environment_game_ml',
+          content_hash: normalizeString(entry?.content_hash),
+          tier: normalizeTier(entry?.tier, 't1') ?? 't1',
+          address: normalizeString(entry?.address) ?? 'environment/game_ml',
+          reason:
+            normalizeString(entry?.reason)
+            ?? 'Required before the first playable match starts so match geometry is present.',
+        }))
+        .filter((entry) => entry.content_key && entry.address)
+    : [
+        {
+          kind: 'environment',
+          key: 'game_ml',
+          content_key: 'environment_game_ml',
+          content_hash: null,
+          tier: 't1',
+          address: 'environment/game_ml',
+          reason: 'Required before the first playable match starts so match geometry is present.',
+        },
+      ];
 
   for (const unit of units) {
     const entry = buildManifestContentEntry('unit', unit.key, unit.remote_content);

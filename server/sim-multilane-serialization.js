@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const { loadAuthoredEnvironmentLayout } = require("./authoredEnvironmentLayout");
 
 function getLaneBarracksSendTimerSnapshot(game, lane, deps) {
   const { ensureBarracksSiteStates, BARRACKS_SITE_DEFS, getBarracksSiteSendIntervalTicks } = deps;
@@ -617,6 +618,8 @@ function createMLPublicConfig(options, deps) {
     getWaveSpawnNodeId,
     getBarracksRouteStartNodeId,
     getLaneCombatAxes,
+    getDefaultSlotDefinitions,
+    defaultEnvironmentPlayerCount,
     normalizeAllegianceKey,
     FRONT_GATE_COMBAT_OFFSET,
   } = deps;
@@ -630,53 +633,113 @@ function createMLPublicConfig(options, deps) {
     };
   }
 
-  function buildBattlefieldLayout() {
-    const slotDefinitions = Array.isArray(opt.battlefieldTopology?.slotDefinitions)
-      ? opt.battlefieldTopology.slotDefinitions
+  function createWorldPointFromAuthored(entry, contextLabel) {
+    if (!entry || !Number.isFinite(Number(entry.x)) || !Number.isFinite(Number(entry.y))) {
+      throw new Error(
+        `[sim-multilane-serialization] Missing authored world point for ${contextLabel}.`
+      );
+    }
+
+    return createWorldPoint(entry.x, entry.y);
+  }
+
+  function normalizeLaneLayoutKey(slot) {
+    return normalizeAllegianceKey(slot && (slot.slotColor || slot.team || slot.side))
+      || (slot && (slot.slotColor || slot.team))
+      || "";
+  }
+
+  function buildBattlefieldLayoutForSlotDefinitions(slotDefinitionsInput) {
+    const slotDefinitions = Array.isArray(slotDefinitionsInput)
+      ? slotDefinitionsInput
       : [];
+    const authoredEnvironmentLayout = loadAuthoredEnvironmentLayout();
     const laneCount = slotDefinitions.length;
     const routeNodes = [];
     const routeSegments = [];
     const lanes = [];
-    const liveLaneKeys = new Set();
     const slotByLaneIndex = new Map();
+    const nodeLaneKeyByNodeId = new Map();
+    const nodeWorldByNodeId = new Map();
+    const laneFrontGateByLaneKey = new Map();
+    const waveNodeIds = new Set();
 
     for (let laneIndex = 0; laneIndex < slotDefinitions.length; laneIndex += 1) {
       const slot = slotDefinitions[laneIndex];
       if (!slot)
         continue;
 
-      const slotColor = normalizeAllegianceKey(slot.slotColor || slot.team || slot.side) || slot.slotColor || slot.team || `lane_${laneIndex}`;
-      liveLaneKeys.add(slotColor);
       slotByLaneIndex.set(laneIndex, slot);
     }
 
-    const mineWorld = getWaveSpawnWorldPosition(0) || createWorldPoint(0, 0);
+    const mineWorld = createWorldPointFromAuthored(
+      authoredEnvironmentLayout.mineCenter,
+      "WaveSpawnAnchor 'mine_center'"
+    );
     routeNodes.push({
       nodeId: "M",
       laneIndex: -1,
       laneKey: "mine_center",
       world: createWorldPoint(mineWorld.x, mineWorld.y),
     });
+    nodeWorldByNodeId.set("M", createWorldPoint(mineWorld.x, mineWorld.y));
+    nodeLaneKeyByNodeId.set("M", "mine_center");
 
     for (let laneIndex = 0; laneIndex < laneCount; laneIndex += 1) {
       const slot = slotByLaneIndex.get(laneIndex);
       if (!slot)
         continue;
 
-      const laneKey = normalizeAllegianceKey(slot.slotColor || slot.team || slot.side) || slot.slotColor || slot.team || `lane_${laneIndex}`;
+      const laneKey = normalizeLaneLayoutKey(slot) || `lane_${laneIndex}`;
+      const authoredLane = authoredEnvironmentLayout.lanes[laneKey];
+      if (!authoredLane) {
+        throw new Error(
+          `[sim-multilane-serialization] Missing authored environment lane '${laneKey}' while building battlefield layout.`
+        );
+      }
+
       const coreNodeId = getLaneNodeId(laneIndex);
       const waveNodeId = getWaveSpawnNodeId(laneIndex);
-      const coreWorld = ROUTE_GRAPH_NODE_POSITIONS[coreNodeId] || createWorldPoint(0, 0);
-      const waveWorld = getWaveSpawnWorldPosition(laneIndex) || mineWorld;
-      const axes = typeof getLaneCombatAxes === "function"
-        ? getLaneCombatAxes(laneIndex)
-        : null;
-      const frontGateWorld = axes
-        ? createWorldPoint(
-            Number(axes.core.x) + (Number(axes.forward.x) * Number(FRONT_GATE_COMBAT_OFFSET || 0)),
-            Number(axes.core.y) + (Number(axes.forward.y) * Number(FRONT_GATE_COMBAT_OFFSET || 0)))
-        : createWorldPoint(coreWorld.x, coreWorld.y);
+      const fortressPads = FORTRESS_PAD_DEFS.map((pad) => {
+        const authoredPad = authoredLane.pads[pad.padId];
+        if (!authoredPad) {
+          throw new Error(
+            `[sim-multilane-serialization] Authored environment lane '${laneKey}' is missing fortress pad '${pad.padId}'.`
+          );
+        }
+
+        const authoredPadWorld = createWorldPointFromAuthored(
+          authoredPad,
+          `fortress pad '${pad.padId}' on lane '${laneKey}'`
+        );
+        return {
+          padId: pad.padId,
+          buildingType: pad.buildingType,
+          displayName: pad.displayName,
+          gridX: pad.gridX,
+          gridY: pad.gridY,
+          world: authoredPadWorld,
+          combatWorld: createWorldPoint(authoredPadWorld.x, authoredPadWorld.y),
+        };
+      });
+
+      const townCorePad = fortressPads.find((entry) => entry && entry.padId === "town_core_pad") || null;
+      if (!townCorePad) {
+        throw new Error(
+          `[sim-multilane-serialization] Authored environment lane '${laneKey}' is missing required pad 'town_core_pad'.`
+        );
+      }
+
+      const frontGatePad = fortressPads.find((entry) => entry && entry.padId === "gate_front_pad") || null;
+      if (!frontGatePad) {
+        throw new Error(
+          `[sim-multilane-serialization] Authored environment lane '${laneKey}' is missing required pad 'gate_front_pad'.`
+        );
+      }
+
+      const coreWorld = createWorldPoint(townCorePad.world.x, townCorePad.world.y);
+      const waveWorld = createWorldPoint(mineWorld.x, mineWorld.y);
+      const frontGateWorld = createWorldPoint(frontGatePad.world.x, frontGatePad.world.y);
 
       routeNodes.push({
         nodeId: coreNodeId,
@@ -690,28 +753,25 @@ function createMLPublicConfig(options, deps) {
         laneKey,
         world: createWorldPoint(waveWorld.x, waveWorld.y),
       });
-
-      const fortressPads = FORTRESS_PAD_DEFS.map((pad) => {
-        const world = getPadWorldPosition(laneIndex, pad.gridX, pad.gridY) || createWorldPoint(0, 0);
-        const combatWorld = Number.isFinite(Number(pad.combatOffsetX)) && Number.isFinite(Number(pad.combatOffsetY)) && axes
-          ? createWorldPoint(
-              Number(axes.core.x) + (Number(axes.lateral.x) * Number(pad.combatOffsetX)) + (Number(axes.forward.x) * Number(pad.combatOffsetY)),
-              Number(axes.core.y) + (Number(axes.lateral.y) * Number(pad.combatOffsetX)) + (Number(axes.forward.y) * Number(pad.combatOffsetY)))
-          : createWorldPoint(world.x, world.y);
-
-        return {
-          padId: pad.padId,
-          buildingType: pad.buildingType,
-          displayName: pad.displayName,
-          gridX: pad.gridX,
-          gridY: pad.gridY,
-          world: createWorldPoint(world.x, world.y),
-          combatWorld,
-        };
-      });
+      nodeWorldByNodeId.set(coreNodeId, createWorldPoint(coreWorld.x, coreWorld.y));
+      nodeLaneKeyByNodeId.set(coreNodeId, laneKey);
+      nodeWorldByNodeId.set(waveNodeId, createWorldPoint(waveWorld.x, waveWorld.y));
+      nodeLaneKeyByNodeId.set(waveNodeId, laneKey);
+      laneFrontGateByLaneKey.set(laneKey, createWorldPoint(frontGateWorld.x, frontGateWorld.y));
+      waveNodeIds.add(waveNodeId);
 
       const barracksSites = BARRACKS_SITE_DEFS.map((siteDef) => {
-        const world = getBarracksSiteWorldPosition(laneIndex, siteDef.barracksId) || createWorldPoint(0, 0);
+        const authoredBarracks = authoredLane.barracks[siteDef.barracksId];
+        if (!authoredBarracks) {
+          throw new Error(
+            `[sim-multilane-serialization] Authored environment lane '${laneKey}' is missing barracks '${siteDef.barracksId}'.`
+          );
+        }
+
+        const world = createWorldPointFromAuthored(
+          authoredBarracks,
+          `barracks '${siteDef.barracksId}' on lane '${laneKey}'`
+        );
         const routeNodeId = getBarracksRouteStartNodeId(laneIndex, siteDef.barracksId);
         routeNodes.push({
           nodeId: routeNodeId,
@@ -719,6 +779,8 @@ function createMLPublicConfig(options, deps) {
           laneKey,
           world: createWorldPoint(world.x, world.y),
         });
+        nodeWorldByNodeId.set(routeNodeId, createWorldPoint(world.x, world.y));
+        nodeLaneKeyByNodeId.set(routeNodeId, laneKey);
 
         return {
           barracksId: siteDef.barracksId,
@@ -729,8 +791,6 @@ function createMLPublicConfig(options, deps) {
           routeNodeId,
         };
       });
-
-      const townCorePad = fortressPads.find((entry) => entry && entry.padId === "town_core_pad") || null;
 
       lanes.push({
         laneIndex,
@@ -746,8 +806,8 @@ function createMLPublicConfig(options, deps) {
       });
     }
 
-    for (const [segmentId, points] of Object.entries(ROUTE_SEGMENT_POLYLINES || {})) {
-      if (!Array.isArray(points) || points.length < 2)
+    for (const [segmentId, segmentPoints] of Object.entries(ROUTE_SEGMENT_POLYLINES || {})) {
+      if (!Array.isArray(segmentPoints) || segmentPoints.length < 2)
         continue;
 
       const splitIndex = segmentId.indexOf("_");
@@ -756,33 +816,69 @@ function createMLPublicConfig(options, deps) {
 
       const fromNodeId = segmentId.slice(0, splitIndex);
       const toNodeId = segmentId.slice(splitIndex + 1);
-      const fromLaneKey = normalizeAllegianceKey((slotByLaneIndex.get(routeNodes.find((entry) => entry && entry.nodeId === fromNodeId)?.laneIndex)?.slotColor) || null);
-      const toLaneKey = normalizeAllegianceKey((slotByLaneIndex.get(routeNodes.find((entry) => entry && entry.nodeId === toNodeId)?.laneIndex)?.slotColor) || null);
+      const fromWorld = nodeWorldByNodeId.get(fromNodeId);
+      const toWorld = nodeWorldByNodeId.get(toNodeId);
+      if (!fromWorld || !toWorld)
+        continue;
+
+      const fromLaneKey = nodeLaneKeyByNodeId.get(fromNodeId) || null;
+      const toLaneKey = nodeLaneKeyByNodeId.get(toNodeId) || null;
+      const segmentLaneKey = (fromLaneKey && fromLaneKey !== "mine_center")
+        ? fromLaneKey
+        : ((toLaneKey && toLaneKey !== "mine_center") ? toLaneKey : null);
+      const frontGatePoint = segmentLaneKey
+        ? laneFrontGateByLaneKey.get(segmentLaneKey) || null
+        : null;
+      const authoredSegmentPoints = [];
+
+      authoredSegmentPoints.push(createWorldPoint(fromWorld.x, fromWorld.y));
+      if (waveNodeIds.has(fromNodeId) && frontGatePoint) {
+        authoredSegmentPoints.push(createWorldPoint(frontGatePoint.x, frontGatePoint.y));
+      }
+      authoredSegmentPoints.push(createWorldPoint(toWorld.x, toWorld.y));
 
       routeSegments.push({
         segmentId,
         fromNodeId,
         toNodeId,
-        laneKey: fromLaneKey || toLaneKey || null,
-        points: points.map((point) => createWorldPoint(point.x, point.y)),
+        laneKey: segmentLaneKey,
+        points: authoredSegmentPoints,
       });
     }
 
-    const canonicalLayout = {
+    return {
       mapType: opt.battlefieldTopology?.mapType || "unknown",
       playerCount: laneCount,
       lanes,
       routeNodes,
       routeSegments,
     };
+  }
+
+  function buildBattlefieldLayout() {
+    const activeSlotDefinitions = Array.isArray(opt.battlefieldTopology?.slotDefinitions)
+      ? opt.battlefieldTopology.slotDefinitions
+      : [];
+    const canonicalLayout = buildBattlefieldLayoutForSlotDefinitions(activeSlotDefinitions);
+
+    const authoredEnvironmentPlayerCount = Number.isFinite(Number(defaultEnvironmentPlayerCount))
+      ? Math.max(1, Math.floor(Number(defaultEnvironmentPlayerCount)))
+      : Math.max(1, activeSlotDefinitions.length);
+    const authoredSlotDefinitions = typeof getDefaultSlotDefinitions === "function"
+      ? getDefaultSlotDefinitions(authoredEnvironmentPlayerCount, [])
+      : activeSlotDefinitions;
+    const environmentLayout = buildBattlefieldLayoutForSlotDefinitions(
+      Array.isArray(authoredSlotDefinitions) && authoredSlotDefinitions.length > 0
+        ? authoredSlotDefinitions
+        : activeSlotDefinitions);
 
     const contentHash = crypto
       .createHash("sha256")
-      .update(JSON.stringify(canonicalLayout))
+      .update(JSON.stringify(environmentLayout))
       .digest("hex");
 
     return {
-      layoutId: `${canonicalLayout.mapType}:server_v1`,
+      layoutId: `${canonicalLayout.mapType}:server_v2`,
       mapType: canonicalLayout.mapType,
       playerCount: canonicalLayout.playerCount,
       contentHash,

@@ -223,14 +223,14 @@ namespace CastleDefender.Game
             if (unit != null && unit.hp <= 0f)
                 return UnitAnimationStateIntent.Death;
 
+            if (TryResolveServerPresentationIntent(unit, out UnitAnimationStateIntent authoritativeIntent))
+                return authoritativeIntent;
+
             if (attacking)
                 return UnitAnimationStateIntent.Attack;
 
             if (IsCombatContactHold(unit))
                 return UnitAnimationStateIntent.Attack;
-
-            if (TryResolveServerPresentationIntent(unit, out UnitAnimationStateIntent authoritativeIntent))
-                return authoritativeIntent;
 
             if (IsRetreating(unit) && moving)
                 return UnitAnimationStateIntent.Retreat;

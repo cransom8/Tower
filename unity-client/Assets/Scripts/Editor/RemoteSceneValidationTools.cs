@@ -105,7 +105,8 @@ namespace CastleDefender.Editor
                 $"[RemoteSceneValidation] Active='{SceneManager.GetActiveScene().name}', " +
                 $"Loaded=[{string.Join(", ", loadedScenes)}], " +
                 $"TrackedHandles=[{trackedHandles}], TransitionInProgress={transitionInProgress}, " +
-                $"AddressablesReady={addressablesReady}, LoadingLabel='{loadingLabel}', RetryVisible={retryVisible}, Tip='{tipLabel}'");
+                $"AddressablesReady={addressablesReady}, LoadingLabel='{loadingLabel}', RetryVisible={retryVisible}, Tip='{tipLabel}', " +
+                $"{BuildNetworkManagerReadinessDetail()}");
         }
 
         [MenuItem("Castle Defender/Remote Scene Validation/Transition/Login")]
@@ -136,7 +137,7 @@ namespace CastleDefender.Editor
             var nm = NetworkManager.Instance;
             if (nm == null || !nm.IsConnected)
             {
-                Debug.LogWarning("[RemoteSceneValidation] NetworkManager is not connected.");
+                Debug.LogWarning($"[RemoteSceneValidation] NetworkManager is not connected. {BuildNetworkManagerReadinessDetail()}");
                 return;
             }
 
@@ -168,7 +169,7 @@ namespace CastleDefender.Editor
             var nm = NetworkManager.Instance;
             if (nm == null || !nm.IsConnected)
             {
-                Debug.LogWarning("[RemoteSceneValidation] NetworkManager is not connected.");
+                Debug.LogWarning($"[RemoteSceneValidation] NetworkManager is not connected. {BuildNetworkManagerReadinessDetail()}");
                 return;
             }
 
@@ -241,7 +242,7 @@ namespace CastleDefender.Editor
             var nm = NetworkManager.Instance;
             if (nm == null || !nm.IsConnected)
             {
-                Debug.LogWarning("[RemoteSceneValidation] NetworkManager is not connected.");
+                Debug.LogWarning($"[RemoteSceneValidation] NetworkManager is not connected. {BuildNetworkManagerReadinessDetail()}");
                 return;
             }
 
@@ -489,9 +490,9 @@ namespace CastleDefender.Editor
                 preloadEnvironment: needEnvironment);
 
             yield return WaitForCondition(
-                () => SceneManager.GetActiveScene().name == "Game_ML" && SnapshotApplier.Instance != null && SnapshotApplier.Instance.LatestML != null,
+                IsGameMlAuthoritativeGameplayReady,
                 40f,
-                "Timed out waiting for live gameplay snapshots in Game_ML.");
+                $"Timed out waiting for authoritative live gameplay in Game_ML. {BuildGameMlReadinessDetail()}");
             if (!Application.isPlaying)
                 yield break;
 
@@ -586,9 +587,9 @@ namespace CastleDefender.Editor
 
                 bool gameplayReady = false;
                 yield return WaitForCondition(
-                    () => gameplayReady = SceneManager.GetActiveScene().name == "Game_ML" && SnapshotApplier.Instance != null && SnapshotApplier.Instance.LatestML != null,
+                    () => gameplayReady = IsGameMlAuthoritativeGameplayReady(),
                     40f,
-                    "Timed out waiting for continue-validation gameplay snapshots in Game_ML.");
+                    $"Timed out waiting for continue-validation authoritative gameplay in Game_ML. {BuildGameMlReadinessDetail()}");
                 if (!Application.isPlaying || !gameplayReady)
                     yield break;
 
@@ -733,6 +734,50 @@ namespace CastleDefender.Editor
 
             s_liveSoloValidationRunning = false;
             s_liveContinueValidationRunning = false;
+        }
+
+        static bool IsGameMlAuthoritativeGameplayReady()
+        {
+            return SceneManager.GetActiveScene().name == "Game_ML"
+                && SnapshotApplier.Instance != null
+                && SnapshotApplier.Instance.HasAuthoritativeBattlefieldLayout()
+                && SnapshotApplier.Instance.LatestML != null;
+        }
+
+        static string BuildNetworkManagerReadinessDetail()
+        {
+            var nm = NetworkManager.Instance;
+            if (nm == null)
+            {
+                return
+                    $"scene={SceneManager.GetActiveScene().name} networkManager=<null> " +
+                    $"authAuthenticated={AuthManager.IsAuthenticated} remoteContentReady={RemoteContentManager.Instance != null}.";
+            }
+
+            string resolvedUrl = string.IsNullOrWhiteSpace(nm.ResolvedServerUrl) ? "<empty>" : nm.ResolvedServerUrl;
+            string socketId = string.IsNullOrWhiteSpace(nm.MySocketId) ? "<none>" : nm.MySocketId;
+            string roomCode = string.IsNullOrWhiteSpace(nm.MyRoomCode) ? "<none>" : nm.MyRoomCode;
+            string pendingLoadout = nm.PendingLoadoutPhase != null ? "true" : "false";
+            string matchConfig = nm.LastMLMatchConfig != null ? "true" : "false";
+            return
+                $"scene={SceneManager.GetActiveScene().name} networkManagerConnected={nm.IsConnected} " +
+                $"resolvedUrl='{resolvedUrl}' socketId='{socketId}' roomCode='{roomCode}' " +
+                $"pendingLoadout={pendingLoadout} hasMatchConfig={matchConfig} authAuthenticated={AuthManager.IsAuthenticated}.";
+        }
+
+        static string BuildGameMlReadinessDetail()
+        {
+            var snapshotApplier = SnapshotApplier.Instance;
+            string sceneName = SceneManager.GetActiveScene().name;
+            bool hasSnapshotApplier = snapshotApplier != null;
+            bool hasMatchReady = snapshotApplier?.LatestMLMatchReady != null;
+            bool hasMatchConfig = snapshotApplier?.LatestMLMatchConfig != null;
+            bool hasLayout = snapshotApplier?.HasAuthoritativeBattlefieldLayout() == true;
+            bool hasSnapshot = snapshotApplier?.LatestML != null;
+            string layoutId = snapshotApplier?.LatestMLMatchConfig?.battlefieldLayout?.layoutId ?? "<none>";
+            return
+                $"scene={sceneName} hasSnapshotApplier={hasSnapshotApplier} hasMatchReady={hasMatchReady} " +
+                $"hasMatchConfig={hasMatchConfig} hasLayout={hasLayout} layoutId={layoutId} hasSnapshot={hasSnapshot}.";
         }
 
         static System.Collections.IEnumerator WaitForFrames(int frameCount)
@@ -1101,11 +1146,42 @@ namespace CastleDefender.Editor
             string combatTargetId,
             int attackPulse)
         {
+            bool useBarracksSpawn = !isWaveUnit;
+            string laneKey = ownerLane switch
+            {
+                0 => "red",
+                1 => "yellow",
+                2 => "blue",
+                3 => "green",
+                _ => "red",
+            };
+
             return new MLUnit
             {
                 id = id,
+                unitId = id,
+                laneId = ownerLane,
                 ownerLane = ownerLane,
+                ownerLaneIndex = ownerLane,
+                targetLaneIndex = ownerLane,
+                objectiveLaneIndex = ownerLane,
                 type = "tt_peasant",
+                unitTypeKey = "tt_peasant",
+                catalogUnitKey = "tt_peasant",
+                allegianceKey = laneKey,
+                pathContractType = useBarracksSpawn ? "lane_branch" : "scheduled_wave",
+                pathId = $"mock_lane_{ownerLane}",
+                routeType = "combat_lane",
+                routeStartNode = "WA",
+                routeTargetNode = "A",
+                currentWaypointIndex = 0,
+                nextWaypoint = "A",
+                currentSegment = "WA_A",
+                segmentProgress = Mathf.Clamp01(normProgress),
+                routeWorldX = gridX,
+                routeWorldY = gridY,
+                spawnSourceType = useBarracksSpawn ? "barracks_roster" : "scheduled_wave",
+                barracksId = useBarracksSpawn ? "center" : null,
                 skinKey = null,
                 pathIdx = pathIdx,
                 gridX = gridX,
@@ -1115,8 +1191,17 @@ namespace CastleDefender.Editor
                 maxHp = 100f,
                 isWaveUnit = isWaveUnit,
                 stance = isDefender ? "DEFEND" : "ATTACK",
+                commandState = isDefender ? "DEFEND" : "ATTACK",
+                movementMode = isAttacking ? "Combat" : "Advance",
+                movementState = isAttacking ? "COMBAT" : "MOVING",
+                state = isAttacking ? "COMBAT" : "MOVING",
+                presentationPhase = isAttacking ? "CombatResolve" : "CombatCommit",
+                presentationIntent = isAttacking ? "Attack" : "Move",
                 isAttacking = isAttacking,
-                combatTargetId = combatTargetId,
+                combatTargetId = string.IsNullOrWhiteSpace(combatTargetId) ? "town_core_pad" : combatTargetId,
+                blockedByStructure = isAttacking,
+                blockedByStructureId = isAttacking ? "town_core_pad" : null,
+                canEngage = true,
                 attackPulse = attackPulse,
                 level = 1,
             };

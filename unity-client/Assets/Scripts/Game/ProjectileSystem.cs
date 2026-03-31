@@ -46,14 +46,16 @@ namespace CastleDefender.Game
 
         readonly Dictionary<string, ProjView> _projs = new();
         bool _subscribed;
+        SnapshotApplier _boundSnapshotApplier;
 
         // ─────────────────────────────────────────────────────────────────────
         void OnEnable()  => TrySubscribeSnapshots();
 
         void OnDisable()
         {
-            if (_subscribed && SnapshotApplier.Instance != null)
-                SnapshotApplier.Instance.OnMLSnapshotApplied -= OnSnapshot;
+            if (_boundSnapshotApplier != null)
+                _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
+            _boundSnapshotApplier = null;
             _subscribed = false;
         }
 
@@ -200,11 +202,21 @@ namespace CastleDefender.Game
 
         void TrySubscribeSnapshots()
         {
-            if (_subscribed) return;
             var sa = SnapshotApplier.Instance;
+            if (_subscribed && _boundSnapshotApplier == sa && sa != null) return;
+
+            if (_boundSnapshotApplier != null)
+            {
+                _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
+                _boundSnapshotApplier = null;
+                _subscribed = false;
+            }
+
             if (sa == null) return;
 
+            sa.OnMLSnapshotApplied -= OnSnapshot;
             sa.OnMLSnapshotApplied += OnSnapshot;
+            _boundSnapshotApplier = sa;
             _subscribed = true;
 
             if (sa.LatestML != null) OnSnapshot(sa.LatestML);

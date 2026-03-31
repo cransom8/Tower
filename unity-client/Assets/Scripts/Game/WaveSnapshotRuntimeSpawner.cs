@@ -50,6 +50,7 @@ namespace CastleDefender.Game
         const string BarracksRouteNodeRightSuffix = "RGT";
         const string UnitSelectionLayerName = "UnitSelection";
         const string UnitFootprintLayerName = "UnitFootprint";
+        const string SnapshotUnitNamePrefix = "SnapshotUnit_";
         const float CombatFacingTurnSharpness = 20f;
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
@@ -107,6 +108,8 @@ namespace CastleDefender.Game
         public GameObject HpBarPrefab;
 
         [SerializeField] float spawnSnapDistance = 4f;
+        [SerializeField] bool returnToLobbyOnContentFailure = true;
+        [SerializeField] float contentFailureLobbyReturnDelaySeconds = 1.5f;
 
         readonly Dictionary<string, WaveView> _views = new();
         readonly HashSet<string> _seenIds = new();
@@ -121,16 +124,18 @@ namespace CastleDefender.Game
         readonly Dictionary<string, Vector3> _battlefieldTownCoreByLaneKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldFrontGateByLaneKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldBarracksByLaneAndId = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, Vector3> _battlefieldFortressCombatWorldByLaneAndPadId = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldRouteNodeWorldByNode = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, string> _battlefieldRouteNodeLaneByNode = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, float> _lastImpactFxAtByTarget = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<AudioManager.SFX, float> _lastCombatSfxAt = new();
-        readonly List<FortressPadAnchor> _fortressAnchorScratch = new();
-        readonly List<BarracksSiteView> _barracksSiteScratch = new();
-        Transform _battlefieldMineAnchor;
+        Vector3 _battlefieldMineWorld;
+        bool _hasBattlefieldMineWorld;
         string _lastSnapshotSummaryLog;
         float _lastSnapTime = -1f;
         bool _subscribed;
+        bool _contentFailureTriggered;
+        SnapshotApplier _boundSnapshotApplier;
 
         public static WaveSnapshotRuntimeSpawner EnsureRuntimeSpawner()
         {
@@ -329,14 +334,17 @@ namespace CastleDefender.Game
         void OnEnable()
         {
             SyncDependenciesFromScene();
+            DestroyOrphanedRuntimePresenters();
             TrySubscribeSnapshots();
         }
 
         void OnDisable()
         {
-            if (_subscribed && SnapshotApplier.Instance != null)
-                SnapshotApplier.Instance.OnMLSnapshotApplied -= OnSnapshot;
+            if (_boundSnapshotApplier != null)
+                _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
+            _boundSnapshotApplier = null;
             _subscribed = false;
+            DestroyAllRuntimePresenters();
         }
 
         void Update()
@@ -407,14 +415,23 @@ namespace CastleDefender.Game
 
         void TrySubscribeSnapshots()
         {
-            if (_subscribed)
+            var sa = SnapshotApplier.Instance;
+            if (_subscribed && _boundSnapshotApplier == sa && sa != null)
                 return;
 
-            var sa = SnapshotApplier.Instance;
+            if (_boundSnapshotApplier != null)
+            {
+                _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
+                _boundSnapshotApplier = null;
+                _subscribed = false;
+            }
+
             if (sa == null)
                 return;
 
+            sa.OnMLSnapshotApplied -= OnSnapshot;
             sa.OnMLSnapshotApplied += OnSnapshot;
+            _boundSnapshotApplier = sa;
             _subscribed = true;
 
             if (sa.LatestML != null)
@@ -655,11 +672,14 @@ namespace CastleDefender.Game
 
             if (Registry == null)
             {
+                string detail =
+                    $"Missing UnitPrefabRegistry on '{name}'. " +
+                    $"Snapshot unit '{unit?.id ?? "<null>"}' type='{unit?.type ?? "<null>"}' lane={lane?.laneIndex ?? -1} cannot spawn.";
                 ReportWaveFailure(
                     $"registry_{lane?.laneIndex ?? -1}",
                     spawnPos,
-                    $"[WaveSnapshotRuntimeSpawner] Missing UnitPrefabRegistry on '{name}'. " +
-                    $"Snapshot unit '{unit?.id ?? "<null>"}' type='{unit?.type ?? "<null>"}' lane={lane?.laneIndex ?? -1} cannot spawn.");
+                    $"[WaveSnapshotRuntimeSpawner] {detail}");
+                HardFailMatchContent(detail);
                 return null;
             }
 
@@ -668,12 +688,15 @@ namespace CastleDefender.Game
             GameObject prefab = Registry.GetPrefabForSkin(resolvedCatalogUnitKey, resolvedSkinKey);
             if (prefab == null)
             {
+                string detail =
+                    $"Missing prefab for snapshot unit id='{unit?.id ?? "<null>"}' type='{unit?.type ?? "<null>"}' " +
+                    $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
+                    $"lane={lane?.laneIndex ?? -1} sourceBarracksKey='{ResolveSourceBarracksKey(unit)}'.";
                 ReportWaveFailure(
                     $"prefab_{unit?.id ?? "unknown"}",
                     spawnPos,
-                    $"[WaveSnapshotRuntimeSpawner] Missing prefab for snapshot unit id='{unit?.id ?? "<null>"}' type='{unit?.type ?? "<null>"}' " +
-                    $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
-                    $"lane={lane?.laneIndex ?? -1} sourceBarracksKey='{ResolveSourceBarracksKey(unit)}'.");
+                    $"[WaveSnapshotRuntimeSpawner] {detail}");
+                HardFailMatchContent(detail);
                 return null;
             }
 
@@ -892,10 +915,70 @@ namespace CastleDefender.Game
             DestroyImpactFxHistory(id);
             DestroyImpactFxHistory(view.latestSnapshotUnit != null ? view.latestSnapshotUnit.combatTargetId : null);
             if (view.go != null)
-                Destroy(view.go);
+                DestroyRuntimePresenter(view.go);
 
             _views.Remove(id);
             LogVerboseSpawnAudit($"[SpawnAudit][ClientRemove] unitId='{id}' presenterRemoved=true");
+        }
+
+        void DestroyAllRuntimePresenters()
+        {
+            if (_views.Count > 0)
+            {
+                _toRemove.Clear();
+                foreach (var pair in _views)
+                    _toRemove.Add(pair.Key);
+
+                for (int i = 0; i < _toRemove.Count; i++)
+                    DestroyWaveView(_toRemove[i]);
+            }
+
+            _toRemove.Clear();
+            DestroyOrphanedRuntimePresenters();
+        }
+
+        void DestroyOrphanedRuntimePresenters()
+        {
+            var combatants = GetComponentsInChildren<LaneSnapshotCombatant>(true);
+            int orphanCount = 0;
+
+            for (int i = 0; i < combatants.Length; i++)
+            {
+                var combatant = combatants[i];
+                if (combatant == null)
+                    continue;
+
+                var presenter = combatant.gameObject;
+                if (presenter == null || presenter == gameObject)
+                    continue;
+                if (!presenter.name.StartsWith(SnapshotUnitNamePrefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string combatantId = combatant.CombatantId;
+                if (_views.TryGetValue(combatantId, out var trackedView) && trackedView?.go == presenter)
+                    continue;
+
+                orphanCount++;
+                DestroyRuntimePresenter(presenter);
+            }
+
+            if (orphanCount > 0)
+            {
+                Debug.LogWarning(
+                    $"[WaveSnapshotRuntimeSpawner] Destroyed {orphanCount} orphaned runtime presenter(s) before rebuilding from authoritative snapshots.",
+                    this);
+            }
+        }
+
+        static void DestroyRuntimePresenter(GameObject presenter)
+        {
+            if (presenter == null)
+                return;
+
+            if (presenter.activeSelf)
+                presenter.SetActive(false);
+
+            Destroy(presenter);
         }
 
         bool ShouldMaterializeUnit(MLUnit unit, out string rejectionReason)
@@ -1014,278 +1097,153 @@ namespace CastleDefender.Game
             _battlefieldTownCoreByLaneKey.Clear();
             _battlefieldFrontGateByLaneKey.Clear();
             _battlefieldBarracksByLaneAndId.Clear();
-            _fortressAnchorScratch.Clear();
-            FortressPadAnchor.CollectAnchors(_fortressAnchorScratch);
+            _battlefieldFortressCombatWorldByLaneAndPadId.Clear();
 
-            for (int i = 0; i < _fortressAnchorScratch.Count; i++)
+            var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
+            if (layout == null)
             {
-                var anchor = _fortressAnchorScratch[i];
-                if (anchor == null || !anchor.isActiveAndEnabled)
-                    continue;
-                if (!string.Equals(anchor.BuildingType, "town_core", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                string laneKey = NormalizeBattlefieldLaneKey(
-                    FortressLaneResolver.ResolveLaneKey(anchor.transform, anchor.AnchorLaneColor));
-                if (string.IsNullOrWhiteSpace(laneKey))
-                    continue;
-
-                Vector3 anchorWorld = anchor.FocusTransform != null
-                    ? anchor.FocusTransform.position
-                    : anchor.transform.position;
-                _battlefieldTownCoreByLaneKey[laneKey] = anchorWorld;
-            }
-
-            string[] requiredLaneKeys = { "red", "yellow", "blue", "green" };
-            for (int i = 0; i < requiredLaneKeys.Length; i++)
-            {
-                string laneKey = requiredLaneKeys[i];
-                if (!_battlefieldTownCoreByLaneKey.ContainsKey(laneKey))
-                    LogBattlefieldRouteFailureOnce($"anchor:town_core:{laneKey}", $"Missing FortressPadAnchor town core for lane '{laneKey}'.");
-            }
-
-            var mineAnchor = WaveSpawnAnchor.FindAnchor("mine_center");
-            _battlefieldMineAnchor = mineAnchor != null ? mineAnchor.FocusTransform : null;
-
-            if (_battlefieldMineAnchor == null)
-                LogBattlefieldRouteFailureOnce("anchor:mine_missing", "Missing WaveSpawnAnchor(mine_center).");
-
-            BindNamedFrontGateAnchor("Red_Gate_Front", "red");
-            BindNamedFrontGateAnchor("Yellow_Gate_Front", "yellow");
-            BindNamedFrontGateAnchor("Blue_Gate_Front", "blue");
-            BindNamedFrontGateAnchor("Green_Gate_Front", "green");
-
-            string[] requiredFrontGateLaneKeys = { "red", "yellow", "blue", "green" };
-            for (int i = 0; i < requiredFrontGateLaneKeys.Length; i++)
-            {
-                string laneKey = requiredFrontGateLaneKeys[i];
-                if (_battlefieldFrontGateByLaneKey.ContainsKey(laneKey))
-                    continue;
-
-                string gateObjectName = ResolveFrontGateObjectNameForLaneKey(laneKey);
                 LogBattlefieldRouteFailureOnce(
-                    $"anchor:front_gate:{laneKey}",
-                    $"Missing front gate object '{gateObjectName}' for lane '{laneKey}'.");
+                    "layout:missing",
+                    "Missing ML battlefieldLayout. Unity route projection requires server-authored layout data.");
+                return;
             }
 
-            _barracksSiteScratch.Clear();
-            BarracksSiteView.CollectSites(_barracksSiteScratch);
-            for (int i = 0; i < _barracksSiteScratch.Count; i++)
+            if (layout.lanes == null || layout.lanes.Length == 0)
             {
-                var site = _barracksSiteScratch[i];
-                if (site == null || !site.isActiveAndEnabled)
-                    continue;
-
-                string laneKey = NormalizeBattlefieldLaneKey(
-                    FortressLaneResolver.ResolveLaneKey(site.transform, site.laneColor));
-                string barracksId = BarracksActivityUtility.NormalizeBarracksId(site.BarracksId);
-                if (string.IsNullOrWhiteSpace(laneKey) || string.IsNullOrWhiteSpace(barracksId))
-                    continue;
-
-                Vector3 anchorWorld = site.FocusTransform != null
-                    ? site.FocusTransform.position
-                    : site.transform.position;
-                _battlefieldBarracksByLaneAndId[BuildBattlefieldBarracksKey(laneKey, barracksId)] = anchorWorld;
+                LogBattlefieldRouteFailureOnce(
+                    "layout:lanes_missing",
+                    $"Battlefield layout '{layout.layoutId ?? "<null>"}' has no lanes.");
+                return;
             }
-        }
 
-        void BindNamedTownCoreAnchor(string objectName, string laneKey)
-        {
-            if (string.IsNullOrWhiteSpace(objectName) || string.IsNullOrWhiteSpace(laneKey))
-                return;
+            for (int i = 0; i < layout.lanes.Length; i++)
+            {
+                var lane = layout.lanes[i];
+                if (lane == null)
+                    continue;
 
-            var go = GameObject.Find(objectName);
-            if (go == null)
-                return;
+                string laneKey = NormalizeBattlefieldLaneKey(!string.IsNullOrWhiteSpace(lane.laneKey) ? lane.laneKey : lane.slotColor);
+                if (string.IsNullOrWhiteSpace(laneKey))
+                {
+                    LogBattlefieldRouteFailureOnce(
+                        $"layout:lane_key:{lane.laneIndex}",
+                        $"Battlefield layout lane '{lane.laneIndex}' is missing a normalized lane key.");
+                    continue;
+                }
 
-            string normalizedLaneKey = NormalizeBattlefieldLaneKey(laneKey);
-            if (string.IsNullOrWhiteSpace(normalizedLaneKey))
-                return;
+                if (TryResolveLayoutWorldPoint(lane.townCore, out Vector3 townCoreWorld))
+                {
+                    _battlefieldTownCoreByLaneKey[laneKey] = townCoreWorld;
+                }
+                else
+                {
+                    LogBattlefieldRouteFailureOnce(
+                        $"layout:town_core:{laneKey}",
+                        $"Battlefield layout lane '{laneKey}' is missing a valid townCore point.");
+                }
 
-            _battlefieldTownCoreByLaneKey[normalizedLaneKey] = go.transform.position;
-        }
+                if (TryResolveLayoutWorldPoint(lane.frontGate, out Vector3 frontGateWorld))
+                {
+                    _battlefieldFrontGateByLaneKey[laneKey] = frontGateWorld;
+                }
+                else
+                {
+                    LogBattlefieldRouteFailureOnce(
+                        $"layout:front_gate:{laneKey}",
+                        $"Battlefield layout lane '{laneKey}' is missing a valid frontGate point.");
+                }
 
-        void BindNamedFrontGateAnchor(string objectName, string laneKey)
-        {
-            if (string.IsNullOrWhiteSpace(objectName) || string.IsNullOrWhiteSpace(laneKey))
-                return;
+                if (lane.fortressPads != null)
+                {
+                    for (int padIndex = 0; padIndex < lane.fortressPads.Length; padIndex++)
+                    {
+                        var pad = lane.fortressPads[padIndex];
+                        if (pad == null || string.IsNullOrWhiteSpace(pad.padId))
+                            continue;
 
-            var go = GameObject.Find(objectName);
-            if (go == null)
-                return;
+                        if (!TryResolveLayoutWorldPoint(pad.combatWorld, out Vector3 combatWorld))
+                        {
+                            LogBattlefieldRouteFailureOnce(
+                                $"layout:fortress_pad:{laneKey}:{pad.padId}",
+                                $"Battlefield layout lane '{laneKey}' pad '{pad.padId}' is missing a valid combatWorld point.");
+                            continue;
+                        }
 
-            string normalizedLaneKey = NormalizeBattlefieldLaneKey(laneKey);
-            if (string.IsNullOrWhiteSpace(normalizedLaneKey))
-                return;
+                        _battlefieldFortressCombatWorldByLaneAndPadId[
+                            BuildBattlefieldFortressPadKey(laneKey, pad.padId)] = combatWorld;
+                    }
+                }
 
-            _battlefieldFrontGateByLaneKey[normalizedLaneKey] = go.transform.position;
+                if (lane.barracksSites == null)
+                    continue;
+
+                for (int siteIndex = 0; siteIndex < lane.barracksSites.Length; siteIndex++)
+                {
+                    var site = lane.barracksSites[siteIndex];
+                    if (site == null || string.IsNullOrWhiteSpace(site.barracksId))
+                        continue;
+
+                    if (!TryResolveLayoutWorldPoint(site.world, out Vector3 barracksWorld))
+                    {
+                        LogBattlefieldRouteFailureOnce(
+                            $"layout:barracks:{laneKey}:{site.barracksId}",
+                            $"Battlefield layout lane '{laneKey}' barracks '{site.barracksId}' is missing a valid world point.");
+                        continue;
+                    }
+
+                    _battlefieldBarracksByLaneAndId[
+                        BuildBattlefieldBarracksKey(laneKey, site.barracksId)] = barracksWorld;
+                }
+            }
         }
 
         void RefreshBattlefieldRouteNodeWorlds(MLSnapshot snap)
         {
             _battlefieldRouteNodeWorldByNode.Clear();
-            if (_battlefieldMineAnchor != null)
-                _battlefieldRouteNodeWorldByNode[RouteMineNode] = _battlefieldMineAnchor.position;
+            _battlefieldMineWorld = default;
+            _hasBattlefieldMineWorld = false;
 
-            for (int laneIndex = 0; laneIndex < 4; laneIndex++)
-            {
-                string laneKey = ResolveFixedLaneKeyForLaneIndex(laneIndex);
-                string routeCoreNode = ResolveDefaultRouteNodeForLaneIndex(laneIndex);
-                string waveRouteNode = ResolveWaveRouteNodeForLaneIndex(laneIndex);
-                if (string.IsNullOrWhiteSpace(laneKey) || string.IsNullOrWhiteSpace(routeCoreNode))
-                    continue;
-
-                if (TryResolveLaneRouteCoreWorld(laneKey, laneIndex, out Vector3 coreWorld, out _))
-                {
-                    _battlefieldRouteNodeWorldByNode[routeCoreNode] = coreWorld;
-                    if (!string.IsNullOrWhiteSpace(waveRouteNode))
-                    {
-                        if (_battlefieldMineAnchor != null)
-                            _battlefieldRouteNodeWorldByNode[waveRouteNode] = _battlefieldMineAnchor.position;
-                        else
-                            LogBattlefieldRouteFailureOnce($"anchor:wave_node:{waveRouteNode}", $"Cannot resolve wave route node '{waveRouteNode}' without WaveSpawnAnchor(mine_center).");
-                    }
-                }
-            }
-
-            if (snap?.lanes == null)
+            var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
+            if (layout == null)
                 return;
 
-            for (int i = 0; i < snap.lanes.Length; i++)
+            if (layout.routeNodes == null || layout.routeNodes.Length == 0)
             {
-                MLLaneSnap lane = snap.lanes[i];
-                if (lane == null)
+                LogBattlefieldRouteFailureOnce(
+                    "layout:route_nodes_missing",
+                    $"Battlefield layout '{layout.layoutId ?? "<null>"}' has no routeNodes.");
+                return;
+            }
+
+            for (int i = 0; i < layout.routeNodes.Length; i++)
+            {
+                var node = layout.routeNodes[i];
+                if (node == null)
                     continue;
 
-                string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
-                string routeCoreNode = ResolveDefaultRouteNodeForLaneIndex(lane.laneIndex);
-                string waveRouteNode = ResolveWaveRouteNodeForLaneIndex(lane.laneIndex);
-                if (string.IsNullOrWhiteSpace(laneKey) || string.IsNullOrWhiteSpace(routeCoreNode))
-                    continue;
-
-                int spatialLane = (uint)lane.laneIndex < (uint)_branchMap.Length
-                    ? _branchMap[lane.laneIndex]
-                    : lane.laneIndex;
-
-                if (TryResolveLaneRouteCoreWorld(laneKey, spatialLane, out Vector3 coreWorld, out string failureReason))
-                {
-                    _battlefieldRouteNodeWorldByNode[routeCoreNode] = coreWorld;
-                    if (!string.IsNullOrWhiteSpace(waveRouteNode))
-                    {
-                        if (_battlefieldMineAnchor != null)
-                            _battlefieldRouteNodeWorldByNode[waveRouteNode] = _battlefieldMineAnchor.position;
-                        else
-                            LogBattlefieldRouteFailureOnce($"anchor:wave_node:{waveRouteNode}", $"Cannot resolve wave route node '{waveRouteNode}' without WaveSpawnAnchor(mine_center).");
-                    }
-                }
-                else
+                if (!TryNormalizeRouteNodeId(node.nodeId, out string normalizedNode))
                 {
                     LogBattlefieldRouteFailureOnce(
-                        $"route_core:{laneKey}",
-                        $"Unable to resolve battlefield route core for lane '{laneKey}': {failureReason}");
+                        $"layout:route_node_invalid:{node.nodeId ?? "<null>"}",
+                        $"Battlefield layout contains unsupported route node '{node.nodeId ?? "<null>"}'.");
+                    continue;
+                }
+
+                if (!TryResolveLayoutWorldPoint(node.world, out Vector3 nodeWorld))
+                {
+                    LogBattlefieldRouteFailureOnce(
+                        $"layout:route_node_world:{normalizedNode}",
+                        $"Battlefield layout route node '{normalizedNode}' is missing a valid world point.");
+                    continue;
+                }
+
+                _battlefieldRouteNodeWorldByNode[normalizedNode] = nodeWorld;
+                if (string.Equals(normalizedNode, RouteMineNode, StringComparison.OrdinalIgnoreCase))
+                {
+                    _battlefieldMineWorld = nodeWorld;
+                    _hasBattlefieldMineWorld = true;
                 }
             }
-        }
-
-        bool TryResolveLaneRouteCoreWorld(string laneKey, int spatialLane, out Vector3 worldPos, out string failureReason)
-        {
-            worldPos = default;
-            failureReason = null;
-
-            string normalizedLaneKey = NormalizeBattlefieldLaneKey(laneKey);
-            if (string.IsNullOrWhiteSpace(normalizedLaneKey))
-            {
-                failureReason = $"Route core lane key '{laneKey ?? "<null>"}' is invalid.";
-                return false;
-            }
-
-            if (_battlefieldTownCoreByLaneKey.TryGetValue(normalizedLaneKey, out Vector3 townCoreWorld))
-            {
-                worldPos = townCoreWorld;
-                return true;
-            }
-
-            failureReason = $"Town-core anchor is missing for lane '{normalizedLaneKey}'.";
-            return false;
-        }
-
-        bool TryResolveLiveCombatWorldPosition(
-            MLUnit unit,
-            MLLaneSnap lane,
-            int spatialLane,
-            out Vector3 worldPos,
-            out Vector3 routeForward,
-            out string resolvedRouteSource)
-        {
-            worldPos = default;
-            routeForward = Vector3.forward;
-            resolvedRouteSource = null;
-            if (unit == null || lane == null)
-                return false;
-            if (!float.IsFinite(unit.gridX) || !float.IsFinite(unit.gridY))
-                return false;
-            if (!IsCombatSnapshotUnit(unit))
-                return false;
-            if (ShouldPreferBattlefieldRouteProjection(unit))
-                return false;
-            if (!ShouldUseLiveCombatProjection(unit, lane))
-                return false;
-
-            int targetLaneIndex = spatialLane;
-            string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
-            bool usePacketLaneProjection = ShouldUsePacketLaneCombatProjection(unit);
-
-            if (!ShouldUseStanceAnchorProjection(unit) && !usePacketLaneProjection)
-            {
-                if (!TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode))
-                    return false;
-
-                targetLaneIndex = ResolveLaneIndexForRouteNode(routeTargetNode);
-                if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
-                    return false;
-
-                if (!_battlefieldRouteNodeLaneByNode.TryGetValue(routeTargetNode, out laneKey) || string.IsNullOrWhiteSpace(laneKey))
-                    return false;
-            }
-
-            if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
-                return false;
-
-            laneKey = NormalizeBattlefieldLaneKey(laneKey);
-            if (string.IsNullOrWhiteSpace(laneKey))
-                return false;
-
-            return TryResolveLaneCombatSimWorldPosition(
-                unit.gridX,
-                unit.gridY,
-                targetLaneIndex,
-                laneKey,
-                out worldPos,
-                out routeForward,
-                out resolvedRouteSource);
-        }
-
-        bool ShouldUseLiveCombatProjection(MLUnit unit, MLLaneSnap lane)
-        {
-            if (unit == null)
-                return false;
-
-            if (unit.blockedByStructure || !string.IsNullOrWhiteSpace(unit.blockedByStructureId))
-                return true;
-
-            if (string.IsNullOrWhiteSpace(unit.combatTargetId))
-                return false;
-
-            return TryResolveFortressPadWorldPosition(unit.combatTargetId, lane, out _);
-        }
-
-        static bool ShouldUsePacketLaneCombatProjection(MLUnit unit)
-        {
-            if (unit == null || string.IsNullOrWhiteSpace(unit.groupId))
-                return false;
-
-            return string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase);
         }
 
         static bool HasAuthoritativeRouteSample(MLUnit unit)
@@ -1295,6 +1253,38 @@ namespace CastleDefender.Game
                 && float.IsFinite(unit.segmentProgress)
                 && float.IsFinite(unit.routeWorldX)
                 && float.IsFinite(unit.routeWorldY);
+        }
+
+        static bool HasAuthoritativeAnchorSample(MLUnit unit)
+        {
+            return unit != null
+                && float.IsFinite(unit.anchorTargetX)
+                && float.IsFinite(unit.anchorTargetY);
+        }
+
+        static bool RequiresAuthoritativeCombatSpaceProjection(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            if (IsCombatSnapshotUnit(unit))
+                return true;
+            if (ShouldUseStanceAnchorProjection(unit))
+                return true;
+
+            return unit.currentSlotIndex >= 0 && HasAuthoritativeAnchorSample(unit);
+        }
+
+        static string DescribeAuthoritativeCombatSpaceFailure(MLUnit unit, MLLaneSnap lane, string routeFailure)
+        {
+            return
+                $"Authoritative combat-space projection is required for unit '{unit?.id ?? "<null>"}' " +
+                $"lane={lane?.laneIndex ?? -1} movementMode='{unit?.movementMode ?? "<null>"}' " +
+                $"presentationPhase='{unit?.presentationPhase ?? "<null>"}' " +
+                $"currentSegment='{unit?.currentSegment ?? "<null>"}' currentSlotIndex={(unit != null ? unit.currentSlotIndex : -1)} " +
+                $"routeWorld=({(unit != null ? unit.routeWorldX : float.NaN):0.###},{(unit != null ? unit.routeWorldY : float.NaN):0.###}) " +
+                $"anchorTarget=({(unit != null ? unit.anchorTargetX : float.NaN):0.###},{(unit != null ? unit.anchorTargetY : float.NaN):0.###}) " +
+                $"failure='{routeFailure ?? "<unknown>"}'.";
         }
 
         static bool HasPresentationPhase(MLUnit unit, string presentationPhase)
@@ -1638,6 +1628,8 @@ namespace CastleDefender.Game
             facing = Vector3.zero;
             if (unit == null || lane == null || !IsCombatSnapshotUnit(unit))
                 return false;
+            if (!unit.combatContact)
+                return false;
 
             string targetId = !string.IsNullOrWhiteSpace(unit.combatTargetId)
                 ? unit.combatTargetId
@@ -1722,94 +1714,38 @@ namespace CastleDefender.Game
             if (string.IsNullOrWhiteSpace(targetId))
                 return false;
 
-            _fortressAnchorScratch.Clear();
-            FortressPadAnchor.CollectAnchors(_fortressAnchorScratch);
-            for (int i = 0; i < _fortressAnchorScratch.Count; i++)
-            {
-                FortressPadAnchor anchor = _fortressAnchorScratch[i];
-                if (anchor == null || !anchor.MatchesPad(targetId))
-                    continue;
-                if (lane != null && !anchor.MatchesLane(lane.slotColor, lane.laneIndex))
-                    continue;
+            string laneKey = NormalizeBattlefieldLaneKey(lane?.slotColor);
+            if (string.IsNullOrWhiteSpace(laneKey))
+                return false;
 
-                worldPos = anchor.FocusTransform.position;
-                return true;
-            }
-
-            return false;
+            return _battlefieldFortressCombatWorldByLaneAndPadId.TryGetValue(
+                BuildBattlefieldFortressPadKey(laneKey, targetId),
+                out worldPos);
         }
 
         void RefreshBattlefieldRouteNodeMap(MLSnapshot snap)
         {
             _battlefieldRouteNodeLaneByNode.Clear();
 
-            for (int laneIndex = 0; laneIndex < 4; laneIndex++)
-            {
-                string laneKey = ResolveFixedLaneKeyForLaneIndex(laneIndex);
-                string routeNode = ResolveDefaultRouteNodeForLaneIndex(laneIndex);
-                if (!string.IsNullOrWhiteSpace(routeNode) && !string.IsNullOrWhiteSpace(laneKey))
-                    _battlefieldRouteNodeLaneByNode[routeNode] = laneKey;
-
-                string waveRouteNode = ResolveWaveRouteNodeForLaneIndex(laneIndex);
-                if (!string.IsNullOrWhiteSpace(waveRouteNode) && !string.IsNullOrWhiteSpace(laneKey))
-                    _battlefieldRouteNodeLaneByNode[waveRouteNode] = laneKey;
-            }
-
-            if (snap?.lanes == null)
+            var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
+            if (layout == null || layout.routeNodes == null)
                 return;
 
-            for (int i = 0; i < snap.lanes.Length; i++)
+            for (int i = 0; i < layout.routeNodes.Length; i++)
             {
-                MLLaneSnap lane = snap.lanes[i];
-                if (lane == null)
+                var node = layout.routeNodes[i];
+                if (node == null)
                     continue;
 
-                string laneKey = NormalizeBattlefieldLaneKey(lane.slotColor);
-                string routeNode = ResolveDefaultRouteNodeForLaneIndex(lane.laneIndex);
-                if (!string.IsNullOrWhiteSpace(routeNode) && !string.IsNullOrWhiteSpace(laneKey))
-                    _battlefieldRouteNodeLaneByNode[routeNode] = laneKey;
-
-                string waveRouteNode = ResolveWaveRouteNodeForLaneIndex(lane.laneIndex);
-                if (!string.IsNullOrWhiteSpace(waveRouteNode) && !string.IsNullOrWhiteSpace(laneKey))
-                    _battlefieldRouteNodeLaneByNode[waveRouteNode] = laneKey;
-            }
-
-            for (int i = 0; i < snap.lanes.Length; i++)
-            {
-                MLLaneSnap lane = snap.lanes[i];
-                if (lane?.units == null)
+                if (!TryNormalizeRouteNodeId(node.nodeId, out string normalizedNode))
                     continue;
 
-                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
-                {
-                    MLUnit unit = lane.units[unitIndex];
-                    if (unit == null)
-                        continue;
+                string laneKey = NormalizeBattlefieldLaneKey(node.laneKey);
+                if (string.IsNullOrWhiteSpace(laneKey))
+                    continue;
 
-                    if (!TryNormalizeRouteNodeId(unit.routeStartNode, out string routeStartNode))
-                        continue;
-
-                    var sourceLane = FindLaneByIndex(snap, unit.sourceLaneIndex);
-                    string sourceLaneKey = NormalizeBattlefieldLaneKey(sourceLane?.slotColor);
-                    if (!string.IsNullOrWhiteSpace(sourceLaneKey))
-                        _battlefieldRouteNodeLaneByNode[routeStartNode] = sourceLaneKey;
-                }
+                _battlefieldRouteNodeLaneByNode[normalizedNode] = laneKey;
             }
-        }
-
-        static MLLaneSnap FindLaneByIndex(MLSnapshot snap, int laneIndex)
-        {
-            if (snap?.lanes == null || laneIndex < 0)
-                return null;
-
-            for (int i = 0; i < snap.lanes.Length; i++)
-            {
-                var lane = snap.lanes[i];
-                if (lane != null && lane.laneIndex == laneIndex)
-                    return lane;
-            }
-
-            return null;
         }
 
         bool TryResolveSnapshotWorldPosition(MLUnit unit, MLLaneSnap lane, int spatialLane, out Vector3 worldPos, out string failureReason)
@@ -1970,8 +1906,21 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (TryResolveLiveCombatWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
-                return true;
+            bool requiresAuthoritativeCombatSpace = RequiresAuthoritativeCombatSpaceProjection(unit);
+            if (requiresAuthoritativeCombatSpace)
+            {
+                if (TryResolveBattlefieldRouteWorldFallbackPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
+                {
+                    resolvedRouteSource = $"battlefield_routes:authoritative:{resolvedRouteSource}";
+                    return true;
+                }
+
+                if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
+                {
+                    resolvedRouteSource = $"battlefield_routes:authoritative:{resolvedRouteSource}";
+                    return true;
+                }
+            }
 
             string routeFailure = null;
             if (TryResolveBattlefieldSegment(unit, lane, out string fromNode, out string toNode, out string segmentId, out string segmentFailure))
@@ -2037,6 +1986,12 @@ namespace CastleDefender.Game
                 routeFailure = segmentFailure;
             }
 
+            if (requiresAuthoritativeCombatSpace)
+            {
+                failureReason = DescribeAuthoritativeCombatSpaceFailure(unit, lane, routeFailure);
+                return false;
+            }
+
             if (HasAuthoritativeRouteSample(unit)
                 && TryResolveBattlefieldRouteWorldFallbackPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
             {
@@ -2099,16 +2054,16 @@ namespace CastleDefender.Game
                 return true;
             }
 
-            if (_battlefieldMineAnchor == null)
+            if (!_hasBattlefieldMineWorld)
             {
                 failureReason = IsCenterCrossSegment(fromNode, toNode)
-                    ? "Wave center anchor is missing for center-cross route."
-                    : "Wave center anchor is missing for perimeter route.";
-                LogBattlefieldRouteFailureOnce("anchor:mine_missing", failureReason);
+                    ? "Battlefield layout is missing the mine route node for center-cross routing."
+                    : "Battlefield layout is missing the mine route node for perimeter routing.";
+                LogBattlefieldRouteFailureOnce("layout:mine_missing", failureReason);
                 return false;
             }
 
-            Vector3 mineWorld = _battlefieldMineAnchor.position;
+            Vector3 mineWorld = _battlefieldMineWorld;
             if (IsCenterCrossSegment(fromNode, toNode))
             {
                 p1 = mineWorld;
@@ -2260,13 +2215,13 @@ namespace CastleDefender.Game
 
             if (string.Equals(normalizedNode, RouteMineNode, StringComparison.OrdinalIgnoreCase))
             {
-                if (_battlefieldMineAnchor == null)
+                if (!_hasBattlefieldMineWorld)
                 {
-                    failureReason = "WaveSpawnAnchor(mine_center) is missing.";
+                    failureReason = "Battlefield layout is missing the mine route node.";
                     return false;
                 }
 
-                worldPos = _battlefieldMineAnchor.position;
+                worldPos = _battlefieldMineWorld;
                 laneKey = "mine_center";
                 return true;
             }
@@ -2739,18 +2694,6 @@ namespace CastleDefender.Game
             };
         }
 
-        static string ResolveFrontGateObjectNameForLaneKey(string laneKey)
-        {
-            return NormalizeBattlefieldLaneKey(laneKey) switch
-            {
-                "red" => "Red_Gate_Front",
-                "yellow" => "Yellow_Gate_Front",
-                "blue" => "Blue_Gate_Front",
-                "green" => "Green_Gate_Front",
-                _ => string.Empty,
-            };
-        }
-
         static string NormalizeBattlefieldLaneKey(string slotColor)
         {
             if (string.IsNullOrWhiteSpace(slotColor))
@@ -2762,6 +2705,21 @@ namespace CastleDefender.Game
         static string BuildBattlefieldBarracksKey(string laneKey, string barracksId)
         {
             return $"{NormalizeBattlefieldLaneKey(laneKey)}:{BarracksActivityUtility.NormalizeBarracksId(barracksId)}";
+        }
+
+        static string BuildBattlefieldFortressPadKey(string laneKey, string padId)
+        {
+            return $"{NormalizeBattlefieldLaneKey(laneKey)}:{padId?.Trim().ToLowerInvariant()}";
+        }
+
+        static bool TryResolveLayoutWorldPoint(MLWorldPoint point, out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (point == null)
+                return false;
+
+            worldPos = new Vector3(point.x, 0f, point.y);
+            return true;
         }
 
         void LogBattlefieldRouteFailureOnce(string key, string message)
@@ -2798,6 +2756,26 @@ namespace CastleDefender.Game
                 Debug.LogError(message, this);
 
             RuntimeFailureMarker.MarkWorld(transform, $"wave_failure_{key}", worldPos, message);
+        }
+
+        void HardFailMatchContent(string detail)
+        {
+            if (_contentFailureTriggered)
+                return;
+
+            _contentFailureTriggered = true;
+            Debug.LogError(
+                $"[WaveSnapshotRuntimeSpawner] Match content failure. Returning to lobby because authoritative presentation content is missing. {detail}",
+                this);
+
+            if (returnToLobbyOnContentFailure && isActiveAndEnabled)
+                StartCoroutine(ReturnToLobbyAfterContentFailure());
+        }
+
+        System.Collections.IEnumerator ReturnToLobbyAfterContentFailure()
+        {
+            yield return new WaitForSecondsRealtime(Mathf.Max(0f, contentFailureLobbyReturnDelaySeconds));
+            LoadingScreen.LoadScene("Lobby");
         }
 
         static Vector3 ResolveLaneFailureMarkerWorld(int spatialLane)
@@ -3206,6 +3184,8 @@ namespace CastleDefender.Game
 
             UnitAnimationAttackFamily family = UnitAnimationResolver.ResolveRuntimeAttackFamily(unit);
             TryPlayCombatSfx(AttackSfxFor(family), 0.28f, now);
+            if (!unit.combatContact)
+                return;
 
             string targetId = !string.IsNullOrWhiteSpace(unit.combatTargetId)
                 ? unit.combatTargetId

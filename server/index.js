@@ -293,6 +293,26 @@ app.get("/api/content-manifest", async (_req, res) => {
     .getAllUnitTypes()
     .filter((ut) => ut.enabled && ut.display_to_players !== false);
   let skins = [];
+  let environmentEntries = [];
+
+  try {
+    const publicConfig = simMl.createMLPublicConfig({});
+    const battlefieldLayout = publicConfig?.battlefieldLayout;
+    if (battlefieldLayout) {
+      environmentEntries.push({
+        key: "game_ml",
+        content_key: "environment_game_ml",
+        content_hash: battlefieldLayout.contentHash || null,
+        tier: "t1",
+        address: "environment/game_ml",
+        reason:
+          `Required before the first playable match starts so match geometry for ` +
+          `${battlefieldLayout.layoutId || "the authoritative battlefield"} is present.`,
+      });
+    }
+  } catch (err) {
+    log.error("[api] GET /api/content-manifest environment layout error", { err: err.message });
+  }
 
   if (db) {
     try {
@@ -326,7 +346,7 @@ app.get("/api/content-manifest", async (_req, res) => {
     }
   }
 
-  res.json(buildContentManifest({ unitTypes: allUnitTypes, skins }));
+  res.json(buildContentManifest({ unitTypes: allUnitTypes, skins, environmentEntries }));
 });
 
 app.get("/api/barracks-levels", async (_req, res) => {

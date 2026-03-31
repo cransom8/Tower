@@ -139,7 +139,7 @@ namespace CastleDefender.Game
                         return remoteSkinPrefab;
 
                     LogBrokenRemoteSkinPrefabOnce(skinKey, unitType, remoteIssue, remoteContent);
-                    return requiresRemoteSkin ? null : GetPrefab(unitType);
+                    return null;
                 }
 
                 if (requiresRemoteSkin)
@@ -155,11 +155,11 @@ namespace CastleDefender.Game
                         return s.prefab;
 
                     LogBrokenLocalSkinPrefabOnce(skinKey, unitType, localIssue);
-                    return GetPrefab(unitType);
+                    return null;
                 }
 
                 LogMissingSkinOnce(skinKey, unitType, remoteContent);
-                return GetPrefab(unitType);
+                return null;
             }
             return GetPrefab(unitType);
         }
@@ -285,9 +285,9 @@ namespace CastleDefender.Game
 
             string message =
                 $"[UnitPrefabRegistry] Missing prefab for skin '{normalizedKey}' on unit '{unitType ?? "<unknown>"}'. " +
-                "Falling back to the base unit prefab when one is available.";
+                "Runtime will not substitute the base unit prefab for a missing requested skin.";
 
-            Debug.LogWarning(message);
+            Debug.LogError(message);
         }
 
         void LogMissingRequiredRemoteUnitOnce(string key, RemoteContentManager remoteContent)
@@ -333,12 +333,12 @@ namespace CastleDefender.Game
                 ? $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
                   "Runtime will not fall back to the base unit when the live manifest declares the skin."
                 : $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
-                  "Falling back to the base unit prefab when one is available.";
+                  "Runtime will not substitute the base unit prefab for a broken requested skin.";
 
             if (requiresRemoteSkin && IsCriticalSkin(remoteContent, normalizedKey))
                 Debug.LogError(message);
             else
-                Debug.LogWarning(message);
+                Debug.LogError(message);
         }
 
         void LogMissingRequiredRemoteSkinOnce(string skinKey, string unitType, RemoteContentManager remoteContent)
@@ -374,9 +374,9 @@ namespace CastleDefender.Game
             if (!_loggedMissingSkins.Add($"broken_local:{normalizedKey}"))
                 return;
 
-            Debug.LogWarning(
+            Debug.LogError(
                 $"[UnitPrefabRegistry] Local skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
-                "Falling back to the base unit prefab when one is available.");
+                "Runtime will not substitute the base unit prefab for a broken requested skin.");
         }
 
         static bool IsRenderablePrefab(GameObject prefab, out string issue)

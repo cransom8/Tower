@@ -45,6 +45,7 @@ namespace CastleDefender.Net
         // race condition where OnMLMatchConfig fires before any scene subscriber
         // has a chance to hook in.
         public LoadoutEntry[] LastMatchLoadout { get; private set; }
+        public MLMatchConfig LastMLMatchConfig { get; private set; }
 
         // Cached so LoadoutPhaseManager.Start() can pick it up after scene load.
         // Cleared when ml_loadout_phase_end or ml_match_config(loadout) arrives.
@@ -65,6 +66,7 @@ namespace CastleDefender.Net
         bool _finalGameOverHandledForCurrentMatch;
         bool _pendingLoadoutReadySignal;
         bool _pendingGameplayReadySignal;
+        bool _loggedFirstMLSnapshotForCurrentMatch;
 
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
@@ -308,7 +310,10 @@ namespace CastleDefender.Net
                     LastPreparationState = null;
                     LastMLWaveReadyState = null;
                     LastMLWaveStart = null;
+                    LastMLMatchConfig = null;
+                    LastMatchLoadout = null;
                     LastMLMatchReady = p;
+                    _loggedFirstMLSnapshotForCurrentMatch = false;
                     Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                     OnMLMatchReady?.Invoke(p);
                     TryEmitPendingCriticalReadySignals("ml_match_ready");
@@ -317,12 +322,9 @@ namespace CastleDefender.Net
                 case "ml_match_config":
                 {
                     var cfg = JsonUtility.FromJson<MLMatchConfig>(json);
-                    if (cfg.loadout != null && cfg.loadout.Length > 0)
-                    {
-                        LastMatchLoadout = cfg.loadout;
-                        PendingLoadoutPhase = null; // phase complete
-                        ClearPendingLoadoutReady("ml_match_config");
-                    }
+                    cfg = CacheMLMatchConfig(cfg, "ml_match_config");
+                    if (cfg == null)
+                        break;
                     OnMLMatchConfig?.Invoke(cfg);
                     TryEmitPendingCriticalReadySignals("ml_match_config");
                     break;
@@ -405,6 +407,13 @@ namespace CastleDefender.Net
                     var p = JsonUtility.FromJson<MLSnapshot>(json);
                     CurrentMLMatchState = !string.IsNullOrEmpty(p.matchState) ? p.matchState : CurrentMLMatchState;
                     ClearPendingGameplayReady("ml_state_snapshot");
+                    if (!_loggedFirstMLSnapshotForCurrentMatch)
+                    {
+                        _loggedFirstMLSnapshotForCurrentMatch = true;
+                        Debug.Log(
+                            $"[NM] first ml_state_snapshot round={p.roundNumber} matchState={p.matchState ?? "<null>"} " +
+                            $"lanes={p.lanes?.Length ?? 0} hasCachedLayout={(LastMLMatchConfig?.battlefieldLayout != null)}");
+                    }
                     OnMLStateSnapshot?.Invoke(p);
                     break;
                 }
@@ -642,7 +651,10 @@ namespace CastleDefender.Net
                 LastMLGameOver = null;
                 LastPreparationState = null;
                 LastMLWaveReadyState = null;
+                LastMLMatchConfig = null;
+                LastMatchLoadout = null;
                 LastMLMatchReady = p;
+                _loggedFirstMLSnapshotForCurrentMatch = false;
                 Debug.Log($"[NM] ml_match_ready playerCount={p.playerCount}");
                 OnMLMatchReady?.Invoke(p);
                 TryEmitPendingCriticalReadySignals("ml_match_ready");
@@ -651,12 +663,9 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("ml_match_config", resp =>
             {
                 var cfg = FromResp<MLMatchConfig>(resp);
-                if (cfg.loadout != null && cfg.loadout.Length > 0)
-                {
-                    LastMatchLoadout = cfg.loadout;
-                    PendingLoadoutPhase = null; // phase complete
-                    ClearPendingLoadoutReady("ml_match_config");
-                }
+                cfg = CacheMLMatchConfig(cfg, "ml_match_config");
+                if (cfg == null)
+                    return;
                 OnMLMatchConfig?.Invoke(cfg);
                 TryEmitPendingCriticalReadySignals("ml_match_config");
             });
@@ -741,6 +750,13 @@ namespace CastleDefender.Net
                 var p = FromResp<MLSnapshot>(resp);
                 CurrentMLMatchState = !string.IsNullOrEmpty(p.matchState) ? p.matchState : CurrentMLMatchState;
                 ClearPendingGameplayReady("ml_state_snapshot");
+                if (!_loggedFirstMLSnapshotForCurrentMatch)
+                {
+                    _loggedFirstMLSnapshotForCurrentMatch = true;
+                    Debug.Log(
+                        $"[NM] first ml_state_snapshot round={p.roundNumber} matchState={p.matchState ?? "<null>"} " +
+                        $"lanes={p.lanes?.Length ?? 0} hasCachedLayout={(LastMLMatchConfig?.battlefieldLayout != null)}");
+                }
                 OnMLStateSnapshot?.Invoke(p);
             });
 
@@ -924,6 +940,78 @@ namespace CastleDefender.Net
                 _respSettings);
 
 #endif // !UNITY_WEBGL || UNITY_EDITOR
+
+        MLMatchConfig CacheMLMatchConfig(MLMatchConfig incoming, string source)
+        {
+            if (incoming == null)
+            {
+                Debug.LogError($"[NM] Received null ml_match_config payload via {source}.");
+                return null;
+            }
+
+            if (LastMLMatchConfig == null)
+                LastMLMatchConfig = incoming;
+            else
+                MergeMLMatchConfig(LastMLMatchConfig, incoming);
+
+            if (LastMLMatchConfig.loadout != null && LastMLMatchConfig.loadout.Length > 0)
+            {
+                LastMatchLoadout = LastMLMatchConfig.loadout;
+                PendingLoadoutPhase = null;
+                ClearPendingLoadoutReady(source);
+            }
+
+            Debug.Log($"[NM] {source} {DescribeMLMatchConfig(LastMLMatchConfig)}");
+            return LastMLMatchConfig;
+        }
+
+        static void MergeMLMatchConfig(MLMatchConfig target, MLMatchConfig incoming)
+        {
+            if (target == null || incoming == null)
+                return;
+
+            if (incoming.tickHz > 0) target.tickHz = incoming.tickHz;
+            if (incoming.incomeIntervalTicks > 0) target.incomeIntervalTicks = incoming.incomeIntervalTicks;
+            if (incoming.startGold > 0f) target.startGold = incoming.startGold;
+            if (incoming.startIncome > 0f) target.startIncome = incoming.startIncome;
+            if (incoming.livesStart > 0) target.livesStart = incoming.livesStart;
+            if (incoming.teamHpStart > 0) target.teamHpStart = incoming.teamHpStart;
+            if (incoming.buildPhaseTicks > 0) target.buildPhaseTicks = incoming.buildPhaseTicks;
+            if (incoming.transitionPhaseTicks > 0) target.transitionPhaseTicks = incoming.transitionPhaseTicks;
+            if (incoming.gridW > 0) target.gridW = incoming.gridW;
+            if (incoming.gridH > 0) target.gridH = incoming.gridH;
+            if (!string.IsNullOrWhiteSpace(incoming.raceId)) target.raceId = incoming.raceId;
+            if (incoming.loadout != null && incoming.loadout.Length > 0) target.loadout = incoming.loadout;
+            if (!string.IsNullOrWhiteSpace(incoming.reconnectToken)) target.reconnectToken = incoming.reconnectToken;
+            if (incoming.ranked) target.ranked = true;
+            if (incoming.battlefieldTopology != null) target.battlefieldTopology = incoming.battlefieldTopology;
+            if (incoming.battlefieldLayout != null) target.battlefieldLayout = incoming.battlefieldLayout;
+            if (incoming.slotDefinitions != null && incoming.slotDefinitions.Length > 0) target.slotDefinitions = incoming.slotDefinitions;
+            if (incoming.fortressBuildingConfigs != null && incoming.fortressBuildingConfigs.Length > 0) target.fortressBuildingConfigs = incoming.fortressBuildingConfigs;
+            if (incoming.fortressPadConfigs != null && incoming.fortressPadConfigs.Length > 0) target.fortressPadConfigs = incoming.fortressPadConfigs;
+            if (incoming.barracksSiteConfigs != null && incoming.barracksSiteConfigs.Length > 0) target.barracksSiteConfigs = incoming.barracksSiteConfigs;
+            if (incoming.barracksRosterConfigs != null && incoming.barracksRosterConfigs.Length > 0) target.barracksRosterConfigs = incoming.barracksRosterConfigs;
+            if (incoming.heroRosterConfigs != null && incoming.heroRosterConfigs.Length > 0) target.heroRosterConfigs = incoming.heroRosterConfigs;
+            if (incoming.marketRosterConfigs != null && incoming.marketRosterConfigs.Length > 0) target.marketRosterConfigs = incoming.marketRosterConfigs;
+            if (incoming.barracksRosterRefundPct > 0) target.barracksRosterRefundPct = incoming.barracksRosterRefundPct;
+            if (incoming.barracksSendTimerTicks > 0) target.barracksSendTimerTicks = incoming.barracksSendTimerTicks;
+            if (incoming.waveTimerTicks > 0) target.waveTimerTicks = incoming.waveTimerTicks;
+            if (incoming.movementTuning != null) target.movementTuning = incoming.movementTuning;
+        }
+
+        static string DescribeMLMatchConfig(MLMatchConfig config)
+        {
+            if (config == null)
+                return "ml_match_config=<null>";
+
+            int loadoutCount = config.loadout != null ? config.loadout.Length : 0;
+            int slotCount = config.slotDefinitions != null ? config.slotDefinitions.Length : 0;
+            var layout = config.battlefieldLayout;
+            return
+                $"ml_match_config loadout={loadoutCount} raceId={config.raceId ?? "<null>"} " +
+                $"slots={slotCount} layoutId={layout?.layoutId ?? "<none>"} layoutHash={layout?.contentHash ?? "<none>"} " +
+                $"layoutLanes={layout?.lanes?.Length ?? 0} routeNodes={layout?.routeNodes?.Length ?? 0} routeSegments={layout?.routeSegments?.Length ?? 0}";
+        }
 
         void HandleIncomingMLGameOver(MLGameOverPayload payload)
         {

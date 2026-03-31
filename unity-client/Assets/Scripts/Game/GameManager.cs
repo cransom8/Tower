@@ -80,6 +80,7 @@ namespace CastleDefender.Game
         string _playerSide;     // "left" | "right" — cached on first snapshot
         string _prevRoundState; // tracks previous round state for transition detection
         bool   _hudSubscribed;
+        SnapshotApplier _hudSnapshotApplier;
 
         [Header("Legacy Single-Lane Camera (unused in battlefield mode)")]
         public float CameraBehind = 0f;
@@ -99,12 +100,7 @@ namespace CastleDefender.Game
             EnsureWaveCombatRuntime();
             EnsureCenterBarracksOnboardingRuntime();
 
-            var sa = SnapshotApplier.Instance;
-            if (sa != null && !_hudSubscribed)
-            {
-                sa.OnMLSnapshotApplied += OnMLSnapshot;
-                _hudSubscribed = true;
-            }
+            EnsureHudSnapshotSubscription();
 
             var nm = CastleDefender.Net.NetworkManager.Instance;
             if (nm != null)
@@ -118,8 +114,9 @@ namespace CastleDefender.Game
 
         void OnDisable()
         {
-            if (_hudSubscribed && SnapshotApplier.Instance != null)
-                SnapshotApplier.Instance.OnMLSnapshotApplied -= OnMLSnapshot;
+            if (_hudSnapshotApplier != null)
+                _hudSnapshotApplier.OnMLSnapshotApplied -= OnMLSnapshot;
+            _hudSnapshotApplier = null;
             _hudSubscribed = false;
 
             var nm = CastleDefender.Net.NetworkManager.Instance;
@@ -296,25 +293,42 @@ namespace CastleDefender.Game
             }
 
             // SnapshotApplier may have initialised after OnEnable — subscribe if missed.
-            if (!_hudSubscribed)
-            {
-                var sa = SnapshotApplier.Instance;
-                if (sa != null)
-                {
-                    sa.OnMLSnapshotApplied += OnMLSnapshot;
-                    _hudSubscribed = true;
-                    if (sa.LatestML != null) OnMLSnapshot(sa.LatestML);
-                }
-            }
+            EnsureHudSnapshotSubscription();
         }
 
         void LateUpdate()
         {
+            EnsureHudSnapshotSubscription();
+
             if (_cameraLockCountdown > 0)
             {
                 EnsureCameraPOV();
                 _cameraLockCountdown--;
             }
+        }
+
+        void EnsureHudSnapshotSubscription()
+        {
+            var sa = SnapshotApplier.Instance;
+            if (_hudSubscribed && _hudSnapshotApplier == sa && sa != null)
+                return;
+
+            if (_hudSnapshotApplier != null)
+            {
+                _hudSnapshotApplier.OnMLSnapshotApplied -= OnMLSnapshot;
+                _hudSnapshotApplier = null;
+                _hudSubscribed = false;
+            }
+
+            if (sa == null)
+                return;
+
+            sa.OnMLSnapshotApplied -= OnMLSnapshot;
+            sa.OnMLSnapshotApplied += OnMLSnapshot;
+            _hudSnapshotApplier = sa;
+            _hudSubscribed = true;
+            if (sa.LatestML != null)
+                OnMLSnapshot(sa.LatestML);
         }
 
         // ─────────────────────────────────────────────────────────────────────

@@ -5,7 +5,8 @@ namespace CastleDefender.Game
 {
     static class HpBarVisuals
     {
-        public const float UnitBillboardScaleFactor = 0.18f;
+        public const float UnitBillboardScaleFactor = 0.24f;
+        static readonly Vector3 UnitBarLocalScale = new(1.15f, 1.85f, 1f);
         static readonly Color DefaultFillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
         static readonly Color DefaultFrameColor = new(0.88f, 0.96f, 1f, 0.72f);
         const string FillVisualRootName = "FillVisual";
@@ -34,6 +35,8 @@ namespace CastleDefender.Game
         {
             if (barRoot == null)
                 return;
+
+            barRoot.localScale = UnitBarLocalScale;
 
             var billboard = barRoot.GetComponent<CastleDefender.FX.BillboardY>();
             if (billboard != null)

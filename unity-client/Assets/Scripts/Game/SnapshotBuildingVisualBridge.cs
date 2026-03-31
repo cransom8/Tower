@@ -206,6 +206,12 @@ namespace CastleDefender.Game
                     return;
                 }
 
+                if (hasSnapshot && lane != null && lane.barracksSites == null)
+                {
+                    ClearVisualFailure();
+                    return;
+                }
+
                 var site = ResolveBarracksSite(lane);
                 if (hasSnapshot && site == null)
                 {
@@ -235,6 +241,12 @@ namespace CastleDefender.Game
                         "missing_lane",
                         $"Fortress pad '{_fortressPad.PadId}' could not resolve lane '{_fortressPad.AnchorLaneColor}'.");
                     HideBrokenVisuals();
+                    return;
+                }
+
+                if (hasSnapshot && lane != null && lane.fortressPads == null)
+                {
+                    ClearVisualFailure();
                     return;
                 }
 

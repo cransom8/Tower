@@ -67,6 +67,15 @@ function createGame(startGold = 500) {
   });
 }
 
+function createGameWithStartingMilitia(startGold = 500, startingCombatMilitiaCount = 5) {
+  return simMl.createMLGame(2, {
+    laneTeams: ["red", "blue"],
+    startGold,
+    startIncome: 0,
+    startingCombatMilitiaCount,
+  });
+}
+
 function laneSnapshot(game, laneIndex = 0) {
   const snapshot = simMl.createMLSnapshot(game);
   return snapshot.lanes[laneIndex];
@@ -106,6 +115,42 @@ test("militia stays unavailable until a barracks is built", () => {
 
   assert.equal(buyResult.ok, false);
   assert.match(buyResult.reason, /Buy Building first/i);
+});
+
+test("combat test militia can be seeded before the center barracks is built", () => {
+  const game = createGameWithStartingMilitia();
+  const lane = laneSnapshot(game, 0);
+  const centerBarracks = findBarracksSite(lane, "center");
+  const centerMilitia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
+
+  assert.ok(centerBarracks, "expected the center barracks site to exist");
+  assert.equal(centerBarracks.isBuilt, false);
+  assert.equal(centerMilitia && centerMilitia.ownedCount, 0);
+  assert.equal(game.lanes[0].spawnQueue.length, 5);
+  assert.equal(game.lanes[1].spawnQueue.length, 5);
+  assert.ok(
+    game.lanes[0].spawnQueue.every((unit) =>
+      unit
+      && unit.spawnSourceType === "barracks_roster"
+      && unit.sourceBarracksId === "center"
+      && unit.rosterKey === "militia"
+    ),
+    "expected seeded starting militia to use center-barracks identity"
+  );
+
+  simMl.mlTick(game);
+
+  const activeStartingMilitia = game.lanes[0].units.filter((unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceBarracksId === "center"
+    && unit.rosterKey === "militia"
+  );
+  const laneAfterTick = laneSnapshot(game, 0);
+  const centerBarracksAfterTick = findBarracksSite(laneAfterTick, "center");
+
+  assert.equal(activeStartingMilitia.length, 5);
+  assert.equal(centerBarracksAfterTick && centerBarracksAfterTick.isBuilt, false);
 });
 
 test("building a barracks unlocks militia without requiring a blacksmith", () => {

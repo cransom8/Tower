@@ -557,8 +557,11 @@ public class LoadingScreen : MonoBehaviour
             if (loadingLabel)
                 loadingLabel.text = "Preparing match environment";
 
+            string expectedEnvironmentContentHash = NetworkManager.Instance?.LastMLMatchConfig?.battlefieldLayout?.contentHash;
+
             yield return remoteContent.EnsureEnvironmentReady(
                 RemoteContentManager.GameMlEnvironmentAddress,
+                expectedEnvironmentContentHash,
                 (progress, status) =>
                 {
                     SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));

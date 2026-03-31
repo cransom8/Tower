@@ -773,8 +773,53 @@ namespace CastleDefender.Net
             return TryGetLoadedEnvironmentPrefab(address, out _);
         }
 
+        public bool ValidateEnvironmentContentHash(string address, string expectedContentHash, out string error)
+        {
+            error = null;
+
+            string normalizedExpectedHash = expectedContentHash?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedExpectedHash))
+                return true;
+
+            if (Manifest == null)
+            {
+                error =
+                    $"Content manifest is unavailable while validating environment '{NormalizeAddress(address, GameMlEnvironmentAddress)}' " +
+                    $"against authoritative layout hash '{normalizedExpectedHash}'.";
+                return false;
+            }
+
+            if (!TryGetEnvironmentManifestEntry(address, out var entry, out string normalizedAddress))
+            {
+                error =
+                    $"Content manifest is missing an environment entry for address '{normalizedAddress}'. " +
+                    "Runtime will not assume the loaded environment matches the authoritative battlefield layout.";
+                return false;
+            }
+
+            string manifestHash = entry?.content_hash?.Trim();
+            if (string.IsNullOrWhiteSpace(manifestHash))
+            {
+                error =
+                    $"Content manifest entry for environment '{normalizedAddress}' is missing content_hash. " +
+                    $"Expected authoritative layout hash '{normalizedExpectedHash}'.";
+                return false;
+            }
+
+            if (!string.Equals(manifestHash, normalizedExpectedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    $"Environment '{normalizedAddress}' content hash mismatch. " +
+                    $"Manifest='{manifestHash}', authoritative layout='{normalizedExpectedHash}'.";
+                return false;
+            }
+
+            return true;
+        }
+
         public IEnumerator EnsureEnvironmentReady(
             string address = null,
+            string expectedContentHash = null,
             Action<float, string> onProgress = null,
             string requester = null,
             bool suppressCatalogWarnings = false)
@@ -790,6 +835,21 @@ namespace CastleDefender.Net
             LastError = null;
             LastFailureStage = CriticalPreloadFailureStage.None;
             LastAddressablesCallError = null;
+
+            if (Manifest == null)
+            {
+                yield return EnsureManifestForSession(requester: requester);
+                if (Manifest == null)
+                    yield break;
+            }
+
+            if (!ValidateEnvironmentContentHash(normalizedAddress, expectedContentHash, out string manifestValidationError))
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                LastError = manifestValidationError;
+                ReportProgress(1f, "Environment manifest validation failed.", onProgress);
+                yield break;
+            }
 
             if (TryGetLoadedEnvironmentPrefab(normalizedAddress, out _))
             {
@@ -1740,6 +1800,7 @@ namespace CastleDefender.Net
                 return new RemoteContentEntry
                 {
                     content_key = critical.content_key?.Trim(),
+                    content_hash = critical.content_hash?.Trim(),
                     addressables_label = address,
                     prefab_address = address,
                     dependency_keys = Array.Empty<string>(),
@@ -2338,6 +2399,7 @@ namespace CastleDefender.Net
                 kind = kind,
                 key = key,
                 content_key = contentKey,
+                content_hash = remote?.content_hash?.Trim(),
                 tier = remote.tier,
                 address = address,
                 reason = remote.preload_reason,
@@ -2360,6 +2422,31 @@ namespace CastleDefender.Net
             }
 
             return GameMlEnvironmentAddress;
+        }
+
+        bool TryGetEnvironmentManifestEntry(string address, out CriticalContentEntry entry, out string normalizedAddress)
+        {
+            normalizedAddress = NormalizeAddress(address, ResolveEnvironmentAddressFromManifest());
+            entry = null;
+
+            var entries = GetWaveCriticalContentEntries();
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var candidate = entries[i];
+                if (candidate == null)
+                    continue;
+                if (!string.Equals(candidate.kind, "environment", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string candidateAddress = NormalizeAddress(candidate.address, normalizedAddress);
+                if (!string.Equals(candidateAddress, normalizedAddress, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                entry = candidate;
+                return true;
+            }
+
+            return false;
         }
 
         void ReportProgress(float progress, string status, Action<float, string> callback)

@@ -87,7 +87,10 @@ const ENGAGEMENT_RANGE_PADDING = 2.0; // extra leash beyond attack range before 
 const SEP_DAMP              = 0.35;
 const SEP_MAX_PUSH          = 0.16;
 const CONTACT_SLOT_TOLERANCE = 0.10;
-const DISABLE_RIGID_PACKET_FORMATIONS = true;
+// Keep lane-controlled packets on their authored rally/combat slots so the
+// server can drive Warcraft-style surrounds, shared target focus, and bounded
+// defender leashes instead of falling back to the legacy simple-contact chase.
+const DISABLE_RIGID_PACKET_FORMATIONS = false;
 
 // Wave defense constants (Forge Wars Wave Rework Phase 1)
 const TEAM_HP_START = 20;
@@ -3291,6 +3294,8 @@ const BARRACKS_ROLE_SORT_ORDER = Object.freeze({
 // Spawn queue rows advance toward the castle as spawnIndex grows, so queue support first
 // and melee last to produce the intended formation: melee front, ranged middle, support back.
 const BARRACKS_SPAWN_ROLE_ORDER = Object.freeze(["support", "ranged", "melee", "siege"]);
+const STARTING_COMBAT_TEST_BARRACKS_ID = "center";
+const STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY = "militia";
 
 const BARRACKS_SITE_DEFS = Object.freeze([
   {
@@ -4055,8 +4060,12 @@ function resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex) {
   };
 }
 
-function validateSpawnDefinition(game, targetLane, waveDef) {
+function validateSpawnDefinition(game, targetLane, waveDef, options = {}) {
   const spawnType = resolveSpawnSourceTypeFromWaveDef(waveDef);
+  const allowUnbuiltBarracks = !!(
+    options.allowUnbuiltBarracks
+    || (waveDef && waveDef.allowUnbuiltBarracks)
+  );
   const requestedSpawnIndex = Number.isInteger(waveDef && waveDef.spawnIndex)
     ? waveDef.spawnIndex
     : Math.max(0, targetLane && Array.isArray(targetLane.spawnQueue) ? targetLane.spawnQueue.length : 0);
@@ -4085,7 +4094,7 @@ function validateSpawnDefinition(game, targetLane, waveDef) {
       && sourceLane && sourceTeam && resolveLaneAllegianceKey(sourceLane) !== sourceTeam)
     return { ok: false, reason: "Spawn source team does not match source lane ownership", spawnType };
 
-  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && sourceLane) {
+  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && sourceLane && !allowUnbuiltBarracks) {
     const descriptor = describeBarracksSite(game, sourceLane, sourceBarracksKey);
     if (!descriptor || !descriptor.isBuilt)
       return { ok: false, reason: "Spawn source barracks does not exist or is not built on the source lane", spawnType };
@@ -5447,8 +5456,9 @@ function getBarracksFormationColumns(role, unitCount) {
   }
 }
 
-function spawnBarracksRosterFormation(game, lane, pendingEntries) {
+function spawnBarracksRosterFormation(game, lane, pendingEntries, options = null) {
   if (!game || !lane || !Array.isArray(pendingEntries) || pendingEntries.length === 0) return;
+  const safeOptions = options && typeof options === "object" ? options : null;
 
   const sourceLaneIndex = Number.isInteger(pendingEntries[0] && pendingEntries[0].sourceLaneIndex)
     ? pendingEntries[0].sourceLaneIndex
@@ -5506,7 +5516,7 @@ function spawnBarracksRosterFormation(game, lane, pendingEntries) {
         groupSpawnOrdinal,
         groupSpawnTick,
         spawnIndex,
-      });
+      }, safeOptions || undefined);
     }
 
     nextRoleRow += Math.ceil(roleEntries.length / columns);
@@ -5514,6 +5524,42 @@ function spawnBarracksRosterFormation(game, lane, pendingEntries) {
 }
 
 // ── Tower stat helpers ─────────────────────────────────────────────────────────
+
+function seedStartingCombatTestMilitia(game, lane, count) {
+  const safeCount = Math.max(0, Math.floor(Number(count) || 0));
+  if (!game || !lane || safeCount <= 0)
+    return 0;
+
+  const rosterDef = getBarracksRosterDefinition(STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY);
+  if (!rosterDef)
+    return 0;
+
+  const presentation = resolveFortPresentationConfig(
+    rosterDef.archetypeKey,
+    rosterDef.presentationKey,
+    rosterDef.displayName,
+  );
+  const pendingEntries = [];
+  for (let i = 0; i < safeCount; i += 1) {
+    pendingEntries.push({
+      unitType: rosterDef.archetypeKey || presentation.catalogUnitKey,
+      count: 1,
+      source: SPAWN_SOURCE_TYPES.BARRACKS_ROSTER,
+      barracksId: STARTING_COMBAT_TEST_BARRACKS_ID,
+      rosterKey: rosterDef.rosterKey,
+      archetypeKey: rosterDef.archetypeKey,
+      presentationKey: presentation.presentationKey,
+      role: rosterDef.role,
+      sortIndex: rosterDef.sortIndex || 0,
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team || null,
+      skinKey: presentation.skinKey || null,
+    });
+  }
+
+  spawnBarracksRosterFormation(game, lane, pendingEntries, { allowUnbuiltBarracks: true });
+  return pendingEntries.length;
+}
 
 function getTowerUpgradeCost(type, nextLevel) {
   const base = resolveTowerDef(type);
@@ -5686,6 +5732,7 @@ function normalizeGameOptions(options) {
     transitionPhaseTicks: normalizeMlOptionNumber(src, "transitionPhaseTicks", runtime.transitionPhaseTicks, 20, 7200, true),
     laneTeams,
     matchSeed: typeof src.matchSeed === "number" ? (src.matchSeed >>> 0) : undefined,
+    startingCombatMilitiaCount: Math.max(0, Math.floor(Number(src.startingCombatMilitiaCount) || 0)),
     battlefieldTopology: getBattlefieldTopology(Number(src.playerCount) || laneTeams.length || 4, laneTeams),
   };
 }
@@ -5838,6 +5885,10 @@ function createMLGame(playerCount, options) {
     configVersionId: null,
     actionSeq: 0,
   };
+  if (opt.startingCombatMilitiaCount > 0) {
+    for (const lane of lanes)
+      seedStartingCombatTestMilitia(game, lane, opt.startingCombatMilitiaCount);
+  }
   recomputeTeamHpState(game);
   return game;
 }
@@ -8285,12 +8336,12 @@ function createLaneUpcomingWaveQueue(game, lane, maxCount = 4) {
   return queue;
 }
 
-function _spawnWaveUnit(game, lane, waveDef) {
+function _spawnWaveUnit(game, lane, waveDef, options = {}) {
   const unitType = waveDef.unit_type;
   const def = resolveUnitDef(unitType);
   if (!def) return;
   if (lane.units.length + lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return;
-  const spawnValidation = validateSpawnDefinition(game, lane, waveDef);
+  const spawnValidation = validateSpawnDefinition(game, lane, waveDef, options);
   if (!spawnValidation.ok) {
     log.error("[SpawnAudit][ServerQueue] rejected", {
       spawnType: spawnValidation.spawnType,
@@ -9100,6 +9151,8 @@ function createMLPublicConfig(options) {
     getWaveSpawnNodeId,
     getBarracksRouteStartNodeId,
     getLaneCombatAxes,
+    getDefaultSlotDefinitions,
+    defaultEnvironmentPlayerCount: FIXED_SLOT_LAYOUT.length,
     normalizeAllegianceKey,
     FRONT_GATE_COMBAT_OFFSET,
   });

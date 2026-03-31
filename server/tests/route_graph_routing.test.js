@@ -225,7 +225,7 @@ test("match config exposes a stable authoritative battlefield layout payload", (
   });
 
   assert.ok(firstConfig.battlefieldLayout, "expected battlefieldLayout in ml_match_config");
-  assert.equal(firstConfig.battlefieldLayout.layoutId, "lava_lake_funnel:server_v1");
+  assert.equal(firstConfig.battlefieldLayout.layoutId, "lava_lake_funnel:server_v2");
   assert.equal(firstConfig.battlefieldLayout.playerCount, 2);
   assert.equal(firstConfig.battlefieldLayout.contentHash, secondConfig.battlefieldLayout.contentHash);
   assert.equal(firstConfig.battlefieldLayout.lanes.length, 2);
@@ -248,6 +248,41 @@ test("match config exposes a stable authoritative battlefield layout payload", (
   const redTownCoreNode = firstConfig.battlefieldLayout.routeNodes.find((node) => node && node.nodeId === "A");
   assert.ok(redTownCoreNode, "expected lane core node in battlefieldLayout");
   assert.equal(redTownCoreNode.laneKey, "red");
+});
+
+test("battlefield layout emits authored world-space fortress positions instead of compressed sim-space footprints", () => {
+  const config = simMl.createMLPublicConfig({
+    playerCount: 2,
+    laneTeams: ["red", "yellow"],
+  });
+
+  const redLane = config.battlefieldLayout.lanes.find((lane) => lane && lane.laneKey === "red");
+  const yellowLane = config.battlefieldLayout.lanes.find((lane) => lane && lane.laneKey === "yellow");
+  assert.ok(redLane, "expected red lane layout");
+  assert.ok(yellowLane, "expected yellow lane layout");
+
+  const redPadXs = redLane.fortressPads.map((pad) => Number(pad && pad.world && pad.world.x));
+  const yellowPadXs = yellowLane.fortressPads.map((pad) => Number(pad && pad.world && pad.world.x));
+  assert.ok(Math.min(...redPadXs) < -40, "red lane should stay on the authored left-side fortress footprint");
+  assert.ok(Math.max(...yellowPadXs) > 40, "yellow lane should stay on the authored right-side fortress footprint");
+  assert.ok(Number(redLane.townCore.x) < -60, "red town core should be emitted in authored world space");
+  assert.ok(Number(yellowLane.townCore.x) > 60, "yellow town core should be emitted in authored world space");
+});
+
+test("battlefield layout content hash matches the authored environment footprint across player counts", () => {
+  const twoPlayerConfig = simMl.createMLPublicConfig({
+    playerCount: 2,
+    laneTeams: ["red", "yellow"],
+  });
+  const fourPlayerConfig = simMl.createMLPublicConfig({
+    playerCount: 4,
+    laneTeams: ["red", "yellow", "blue", "green"],
+  });
+
+  assert.equal(
+    twoPlayerConfig.battlefieldLayout.contentHash,
+    fourPlayerConfig.battlefieldLayout.contentHash,
+    "environment content hash should describe the authored environment, not the active lane subset");
 });
 
 test("legacy gold lane input normalizes to canonical yellow allegiance", () => {
@@ -1257,6 +1292,93 @@ test("settled defend formations stay parked on their assigned slots instead of b
       `settled defend units should stay parked near their slot instead of buzzing around, got drift=${drift.toFixed(3)} for ${unit.id}`
     );
   }
+});
+
+test("lane-controlled defend packets keep authoritative slot indices at the rally anchor", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+
+  const defendAnchor = primeDefendAnchor(game, lane);
+  const packetUnits = Array.from({ length: 4 }, (_, index) => createAttacker({
+    id: `rigid_slot_unit_${index}`,
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    posX: Number(defendAnchor.x) + (index * 0.08),
+    posY: Number(defendAnchor.y) - 0.35 - (index * 0.06),
+    atkCd: 999,
+  }));
+
+  lane.units.push(...packetUnits);
+  tick(game, 1);
+
+  const updatedUnits = lane.units.filter((unit) => unit.id.startsWith("rigid_slot_unit_"));
+  assert.equal(updatedUnits.length, packetUnits.length, "all staged packet units should remain active.");
+
+  for (const unit of updatedUnits) {
+    assert.equal(
+      Number.isInteger(unit.currentSlotIndex),
+      true,
+      `expected ${unit.id} to keep an authoritative formation slot index once packet formations are enabled.`
+    );
+    assert.ok(
+      Number.isFinite(Number(unit.anchorTargetX)) && Number.isFinite(Number(unit.anchorTargetY)),
+      `expected ${unit.id} to expose a defend anchor target.`
+    );
+    assert.ok(
+      Number.isFinite(Number(unit.groupCenterX)) && Number.isFinite(Number(unit.groupCenterY)),
+      `expected ${unit.id} to expose a packet group center for leash and formation logic.`
+    );
+  }
+});
+
+test("lane-controlled defenders use combat pocket movement instead of simple contact memory against unit targets", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+
+  const defendAnchor = primeDefendAnchor(game, lane);
+  const defender = createAttacker({
+    id: "combat_pocket_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    posX: Number(defendAnchor.x),
+    posY: Number(defendAnchor.y),
+    atkCd: 999,
+  });
+  const hostileWave = createAttacker({
+    id: "combat_pocket_wave",
+    spawnSourceType: "dungeon_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    ownerLaneIndex: -1,
+    ownerLane: -1,
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    allegianceKey: "dungeon",
+    posX: Number(defendAnchor.x),
+    posY: Number(defendAnchor.y) - 4.25,
+    atkCd: 999,
+  });
+
+  lane.units.push(defender, hostileWave);
+  tick(game, 2);
+
+  const liveDefender = lane.units.find((unit) => unit.id === defender.id);
+  assert.ok(liveDefender, "expected the defender to remain alive during the pocket approach.");
+  assert.equal(liveDefender.combatTargetId, hostileWave.id, "defender should acquire the hostile wave unit as its combat target.");
+  assert.equal(liveDefender.movementMode, "CombatEngage", "defender should already be in combat-engage movement while closing.");
+  assert.equal(
+    !!liveDefender.simpleContactApproachTargetId,
+    false,
+    "lane-controlled unit-vs-unit combat should route through combat pocket positioning, not the legacy simple-contact memory path."
+  );
 });
 
 test("center-spawn waves travel through the red front gate approach before they reach the Town Core", () => {

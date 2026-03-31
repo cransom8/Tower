@@ -514,6 +514,15 @@ function registerSocketHandlers({
         if (room.raceByLane && room.raceByLane[laneIndex]) {
           reconnectConfig.raceId = room.raceByLane[laneIndex];
         }
+        log.info("[rejoin] emitting ml_match_config", {
+          roomId,
+          code,
+          laneIndex,
+          loadoutEntries: Array.isArray(reconnectConfig.loadout) ? reconnectConfig.loadout.length : 0,
+          layoutId: reconnectConfig?.battlefieldLayout?.layoutId || null,
+          layoutHash: reconnectConfig?.battlefieldLayout?.contentHash || null,
+          layoutLanes: Array.isArray(reconnectConfig?.battlefieldLayout?.lanes) ? reconnectConfig.battlefieldLayout.lanes.length : 0,
+        });
         socket.emit("ml_match_config", reconnectConfig);
         // Re-emit loadout phase if still active (player reconnected during selection window)
         if (room._loadoutPhaseResolve && room._loadoutPhaseDeadline) {

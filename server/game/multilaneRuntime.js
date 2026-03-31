@@ -819,6 +819,7 @@ function createMultilaneRuntime({
       ...room.settings,
       laneTeams,
       matchSeed: matchSeedNum,
+      startingCombatMilitiaCount: 5,
     });
 
     try {
@@ -857,6 +858,15 @@ function createMultilaneRuntime({
       laneAssignments,
       battlefieldTopology: publicConfig.battlefieldTopology,
       aiEngine: "new_bot_controller_v1",
+    });
+    log.info("[multilane] emitting ml_match_config", {
+      roomId,
+      code,
+      playerCount,
+      loadoutEntries: Array.isArray(publicConfig.loadout) ? publicConfig.loadout.length : 0,
+      layoutId: publicConfig?.battlefieldLayout?.layoutId || null,
+      layoutHash: publicConfig?.battlefieldLayout?.contentHash || null,
+      layoutLanes: Array.isArray(publicConfig?.battlefieldLayout?.lanes) ? publicConfig.battlefieldLayout.lanes.length : 0,
     });
     io.to(roomId).emit("ml_match_config", publicConfig);
 
@@ -998,7 +1008,21 @@ function createMultilaneRuntime({
               }
             }
           }
-          sock.emit("ml_match_config", { loadout, raceId });
+          const resolvedConfig = simMl.createMLPublicConfig({ ...room.settings, playerCount, laneTeams });
+          resolvedConfig.loadout = loadout;
+          resolvedConfig.raceId = raceId;
+          log.info("[multilane] emitting resolved ml_match_config", {
+            roomId,
+            code,
+            laneIndex: laneIdx,
+            loadoutEntries: Array.isArray(resolvedConfig.loadout) ? resolvedConfig.loadout.length : 0,
+            layoutId: resolvedConfig?.battlefieldLayout?.layoutId || null,
+            layoutHash: resolvedConfig?.battlefieldLayout?.contentHash || null,
+            layoutLanes: Array.isArray(resolvedConfig?.battlefieldLayout?.lanes)
+              ? resolvedConfig.battlefieldLayout.lanes.length
+              : 0,
+          });
+          sock.emit("ml_match_config", resolvedConfig);
         }),
       ]);
     } catch (err) {
