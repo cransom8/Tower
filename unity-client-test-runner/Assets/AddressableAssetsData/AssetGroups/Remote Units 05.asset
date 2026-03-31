@@ -1,0 +1,37 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Units 05
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Units 05
+  m_GUID: 5dd2b3dc81e13324d9f554ee8e1c7d69
+  m_SerializeEntries:
+  - m_GUID: 0890e3d3941655a4184bae9bcd1d7353
+    m_Address: units/skeleton_knight
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skeleton_knight
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 903aef66cc7cefc46aee27b2a5d14472
+    m_Address: units/kobold
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - kobold
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 614ad739316e5e348a0d190fc7db0685, type: 2}
+    - {fileID: 11400000, guid: 991cf7fc64195a544bf115a7f19555e9, type: 2}

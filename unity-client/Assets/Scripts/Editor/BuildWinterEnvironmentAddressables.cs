@@ -205,8 +205,6 @@ namespace CastleDefender.Editor
         {
             var placements = new[]
             {
-                new Placement("RockBorder_NorthWest", OptionalAssetCatalog[5], new Vector3(-36f, -4f, -47f), new Vector3(0f, 31f, 0f), new Vector3(6f, 4.5f, 6f)),
-                new Placement("RockBorder_NorthEast", OptionalAssetCatalog[6], new Vector3(34f, -4f, -48f), new Vector3(0f, -26f, 0f), new Vector3(6.5f, 4.7f, 6.5f)),
                 new Placement("RockBorder_SouthWest", OptionalAssetCatalog[7], new Vector3(-39f, -5f, 46f), new Vector3(0f, 202f, 0f), new Vector3(5.8f, 4.8f, 5.8f)),
                 new Placement("RockBorder_SouthEast", OptionalAssetCatalog[4], new Vector3(41f, -5f, 44f), new Vector3(0f, 164f, 0f), new Vector3(6.4f, 4.6f, 6.4f)),
                 new Placement("RockBorder_West", OptionalAssetCatalog[6], new Vector3(-48f, -6f, 3f), new Vector3(0f, 121f, 0f), new Vector3(7f, 5f, 7f)),

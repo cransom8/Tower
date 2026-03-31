@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("crypto");
+
 function getLaneBarracksSendTimerSnapshot(game, lane, deps) {
   const { ensureBarracksSiteStates, BARRACKS_SITE_DEFS, getBarracksSiteSendIntervalTicks } = deps;
   const states = ensureBarracksSiteStates(lane, game);
@@ -203,7 +205,7 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
       presentationIntent = "Move";
       break;
     case "CombatResolve":
-      presentationIntent = isDefending ? "Defend" : "Idle";
+      presentationIntent = "Attack";
       break;
     case "CombatRegroup":
       if (settledAtAnchor)
@@ -606,9 +608,189 @@ function createMLPublicConfig(options, deps) {
     getBarracksSiteBuildCost,
     getBarracksSiteMaxLevel,
     resolveFortPresentationConfig,
+    ROUTE_SEGMENT_POLYLINES,
+    ROUTE_GRAPH_NODE_POSITIONS,
+    getPadWorldPosition,
+    getBarracksSiteWorldPosition,
+    getWaveSpawnWorldPosition,
+    getLaneNodeId,
+    getWaveSpawnNodeId,
+    getBarracksRouteStartNodeId,
+    getLaneCombatAxes,
+    normalizeAllegianceKey,
+    FRONT_GATE_COMBAT_OFFSET,
   } = deps;
   const opt = normalizeGameOptions(options, getMlRuntimeSettings);
   const allUnitTypes = typeof getAllUnitTypes === "function" ? getAllUnitTypes() : [];
+
+  function createWorldPoint(x, y) {
+    return {
+      x: Number.isFinite(Number(x)) ? Number(x) : 0,
+      y: Number.isFinite(Number(y)) ? Number(y) : 0,
+    };
+  }
+
+  function buildBattlefieldLayout() {
+    const slotDefinitions = Array.isArray(opt.battlefieldTopology?.slotDefinitions)
+      ? opt.battlefieldTopology.slotDefinitions
+      : [];
+    const laneCount = slotDefinitions.length;
+    const routeNodes = [];
+    const routeSegments = [];
+    const lanes = [];
+    const liveLaneKeys = new Set();
+    const slotByLaneIndex = new Map();
+
+    for (let laneIndex = 0; laneIndex < slotDefinitions.length; laneIndex += 1) {
+      const slot = slotDefinitions[laneIndex];
+      if (!slot)
+        continue;
+
+      const slotColor = normalizeAllegianceKey(slot.slotColor || slot.team || slot.side) || slot.slotColor || slot.team || `lane_${laneIndex}`;
+      liveLaneKeys.add(slotColor);
+      slotByLaneIndex.set(laneIndex, slot);
+    }
+
+    const mineWorld = getWaveSpawnWorldPosition(0) || createWorldPoint(0, 0);
+    routeNodes.push({
+      nodeId: "M",
+      laneIndex: -1,
+      laneKey: "mine_center",
+      world: createWorldPoint(mineWorld.x, mineWorld.y),
+    });
+
+    for (let laneIndex = 0; laneIndex < laneCount; laneIndex += 1) {
+      const slot = slotByLaneIndex.get(laneIndex);
+      if (!slot)
+        continue;
+
+      const laneKey = normalizeAllegianceKey(slot.slotColor || slot.team || slot.side) || slot.slotColor || slot.team || `lane_${laneIndex}`;
+      const coreNodeId = getLaneNodeId(laneIndex);
+      const waveNodeId = getWaveSpawnNodeId(laneIndex);
+      const coreWorld = ROUTE_GRAPH_NODE_POSITIONS[coreNodeId] || createWorldPoint(0, 0);
+      const waveWorld = getWaveSpawnWorldPosition(laneIndex) || mineWorld;
+      const axes = typeof getLaneCombatAxes === "function"
+        ? getLaneCombatAxes(laneIndex)
+        : null;
+      const frontGateWorld = axes
+        ? createWorldPoint(
+            Number(axes.core.x) + (Number(axes.forward.x) * Number(FRONT_GATE_COMBAT_OFFSET || 0)),
+            Number(axes.core.y) + (Number(axes.forward.y) * Number(FRONT_GATE_COMBAT_OFFSET || 0)))
+        : createWorldPoint(coreWorld.x, coreWorld.y);
+
+      routeNodes.push({
+        nodeId: coreNodeId,
+        laneIndex,
+        laneKey,
+        world: createWorldPoint(coreWorld.x, coreWorld.y),
+      });
+      routeNodes.push({
+        nodeId: waveNodeId,
+        laneIndex,
+        laneKey,
+        world: createWorldPoint(waveWorld.x, waveWorld.y),
+      });
+
+      const fortressPads = FORTRESS_PAD_DEFS.map((pad) => {
+        const world = getPadWorldPosition(laneIndex, pad.gridX, pad.gridY) || createWorldPoint(0, 0);
+        const combatWorld = Number.isFinite(Number(pad.combatOffsetX)) && Number.isFinite(Number(pad.combatOffsetY)) && axes
+          ? createWorldPoint(
+              Number(axes.core.x) + (Number(axes.lateral.x) * Number(pad.combatOffsetX)) + (Number(axes.forward.x) * Number(pad.combatOffsetY)),
+              Number(axes.core.y) + (Number(axes.lateral.y) * Number(pad.combatOffsetX)) + (Number(axes.forward.y) * Number(pad.combatOffsetY)))
+          : createWorldPoint(world.x, world.y);
+
+        return {
+          padId: pad.padId,
+          buildingType: pad.buildingType,
+          displayName: pad.displayName,
+          gridX: pad.gridX,
+          gridY: pad.gridY,
+          world: createWorldPoint(world.x, world.y),
+          combatWorld,
+        };
+      });
+
+      const barracksSites = BARRACKS_SITE_DEFS.map((siteDef) => {
+        const world = getBarracksSiteWorldPosition(laneIndex, siteDef.barracksId) || createWorldPoint(0, 0);
+        const routeNodeId = getBarracksRouteStartNodeId(laneIndex, siteDef.barracksId);
+        routeNodes.push({
+          nodeId: routeNodeId,
+          laneIndex,
+          laneKey,
+          world: createWorldPoint(world.x, world.y),
+        });
+
+        return {
+          barracksId: siteDef.barracksId,
+          displayName: siteDef.displayName,
+          slot: siteDef.slot,
+          sortIndex: siteDef.sortIndex,
+          world: createWorldPoint(world.x, world.y),
+          routeNodeId,
+        };
+      });
+
+      const townCorePad = fortressPads.find((entry) => entry && entry.padId === "town_core_pad") || null;
+
+      lanes.push({
+        laneIndex,
+        laneKey,
+        slotColor: slot.slotColor,
+        slotKey: slot.slotKey,
+        branchId: slot.branchId,
+        townCore: townCorePad ? createWorldPoint(townCorePad.world.x, townCorePad.world.y) : createWorldPoint(coreWorld.x, coreWorld.y),
+        frontGate: frontGateWorld,
+        waveSpawn: createWorldPoint(waveWorld.x, waveWorld.y),
+        fortressPads,
+        barracksSites,
+      });
+    }
+
+    for (const [segmentId, points] of Object.entries(ROUTE_SEGMENT_POLYLINES || {})) {
+      if (!Array.isArray(points) || points.length < 2)
+        continue;
+
+      const splitIndex = segmentId.indexOf("_");
+      if (splitIndex <= 0 || splitIndex >= segmentId.length - 1)
+        continue;
+
+      const fromNodeId = segmentId.slice(0, splitIndex);
+      const toNodeId = segmentId.slice(splitIndex + 1);
+      const fromLaneKey = normalizeAllegianceKey((slotByLaneIndex.get(routeNodes.find((entry) => entry && entry.nodeId === fromNodeId)?.laneIndex)?.slotColor) || null);
+      const toLaneKey = normalizeAllegianceKey((slotByLaneIndex.get(routeNodes.find((entry) => entry && entry.nodeId === toNodeId)?.laneIndex)?.slotColor) || null);
+
+      routeSegments.push({
+        segmentId,
+        fromNodeId,
+        toNodeId,
+        laneKey: fromLaneKey || toLaneKey || null,
+        points: points.map((point) => createWorldPoint(point.x, point.y)),
+      });
+    }
+
+    const canonicalLayout = {
+      mapType: opt.battlefieldTopology?.mapType || "unknown",
+      playerCount: laneCount,
+      lanes,
+      routeNodes,
+      routeSegments,
+    };
+
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(JSON.stringify(canonicalLayout))
+      .digest("hex");
+
+    return {
+      layoutId: `${canonicalLayout.mapType}:server_v1`,
+      mapType: canonicalLayout.mapType,
+      playerCount: canonicalLayout.playerCount,
+      contentHash,
+      lanes: canonicalLayout.lanes,
+      routeNodes: canonicalLayout.routeNodes,
+      routeSegments: canonicalLayout.routeSegments,
+    };
+  }
 
   function pickSoundFields(ut) {
     return {
@@ -776,6 +958,8 @@ function createMLPublicConfig(options, deps) {
     maxLevel: getBarracksSiteMaxLevel(),
   }));
 
+  const battlefieldLayout = buildBattlefieldLayout();
+
   return {
     tickHz: TICK_HZ,
     incomeIntervalTicks: INCOME_INTERVAL_TICKS,
@@ -796,6 +980,7 @@ function createMLPublicConfig(options, deps) {
     transitionPhaseTicks: 0,
     escalationPerExtraRound: ESCALATION_PER_EXTRA_ROUND,
     battlefieldTopology: opt.battlefieldTopology,
+    battlefieldLayout,
     slotDefinitions: opt.battlefieldTopology.slotDefinitions,
     fortressBuildingConfigs,
     fortressPadConfigs,

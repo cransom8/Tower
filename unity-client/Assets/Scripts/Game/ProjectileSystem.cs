@@ -92,8 +92,8 @@ namespace CastleDefender.Game
                 else if (!v.isSplash && v.go != null)
                 {
                     var hitEffect = HitEffectPool.Get();
-                    if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType));
-                    AudioManager.I?.Play(HitSFXFor(v.projectileType));
+                    if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType, v.damageType));
+                    AudioManager.I?.Play(HitSFXFor(v.projectileType, v.damageType));
                 }
 
                 if (v.go != null) Destroy(v.go);
@@ -131,11 +131,13 @@ namespace CastleDefender.Game
             var go   = Instantiate(prefab, from, Quaternion.identity, transform);
             go.name  = $"Proj_{p.id}";
 
-            float scale = p.projectileType switch
+            string family = ResolveProjectileFamily(p.projectileType, p.damageType);
+            float scale = family switch
             {
                 "cannon"   => 0.4f,
                 "ballista" => 0.25f,
                 "mage"     => 0.2f,
+                "support"  => 0.22f,
                 _          => 0.15f,
             };
             go.transform.localScale = Vector3.one * scale;
@@ -167,7 +169,7 @@ namespace CastleDefender.Game
             };
             _projs[p.id] = view;
 
-            AudioManager.I?.Play(ShootSFXFor(p.projectileType));
+            AudioManager.I?.Play(ShootSFXFor(p.projectileType, p.damageType));
             return view;
         }
 
@@ -216,30 +218,75 @@ namespace CastleDefender.Game
         }
 
         // ── Audio / FX helpers ────────────────────────────────────────────────
-        static AudioManager.SFX ShootSFXFor(string projType) => projType switch
+        static AudioManager.SFX ShootSFXFor(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
             "cannon"   => AudioManager.SFX.CannonShoot,
             "ballista" => AudioManager.SFX.BallistaShoot,
             "mage"     => AudioManager.SFX.MageShoot,
+            "support"  => AudioManager.SFX.MageShoot,
             "fighter"  => AudioManager.SFX.FighterSlash,
             _          => AudioManager.SFX.ArcherShoot,
         };
 
-        static AudioManager.SFX HitSFXFor(string projType) => projType switch
+        static AudioManager.SFX HitSFXFor(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
-            "mage"   => AudioManager.SFX.MageShoot,
-            "cannon" => AudioManager.SFX.CannonSplash,
-            _        => AudioManager.SFX.UnitDeath,
+            "mage"    => AudioManager.SFX.MageShoot,
+            "support" => AudioManager.SFX.MageShoot,
+            "cannon"  => AudioManager.SFX.CannonSplash,
+            _         => AudioManager.SFX.UnitDeath,
         };
 
-        static HitEffect.TowerType TowerTypeFromString(string projType) => projType switch
+        static HitEffect.TowerType TowerTypeFromString(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
             "archer"   => HitEffect.TowerType.Archer,
             "fighter"  => HitEffect.TowerType.Fighter,
             "mage"     => HitEffect.TowerType.Mage,
+            "support"  => HitEffect.TowerType.Ballista,
             "ballista" => HitEffect.TowerType.Ballista,
             "cannon"   => HitEffect.TowerType.Cannon,
             _          => HitEffect.TowerType.Archer,
         };
+
+        static string ResolveProjectileFamily(string projType, string damageType)
+        {
+            string token = string.IsNullOrWhiteSpace(projType)
+                ? string.Empty
+                : projType.Trim().ToLowerInvariant();
+            string damage = string.IsNullOrWhiteSpace(damageType)
+                ? string.Empty
+                : damageType.Trim().ToUpperInvariant();
+
+            if (token == "cannon" || damage == "SPLASH")
+                return "cannon";
+            if (token == "ballista" || token.Contains("ballista") || damage == "SIEGE")
+                return "ballista";
+            if (token == "mage" || token.Contains("mage") || token.Contains("wizard") || token.Contains("arcane") || token.Contains("thaum"))
+                return "mage";
+            if (token.Contains("priest") || token.Contains("cleric") || token.Contains("bishop") || token.Contains("support"))
+                return "support";
+            if (token == "fighter"
+                || token.Contains("shield")
+                || token.Contains("sword")
+                || token.Contains("spear")
+                || token.Contains("halber")
+                || token.Contains("knight")
+                || token.Contains("guardian")
+                || token.Contains("militia"))
+            {
+                return "fighter";
+            }
+            if (token == "archer"
+                || token.Contains("archer")
+                || token.Contains("crossbow")
+                || token.Contains("ranger")
+                || token.Contains("scout")
+                || damage == "PIERCE")
+            {
+                return "archer";
+            }
+            if (damage == "MAGIC")
+                return "mage";
+            return "archer";
+        }
     }
 }

@@ -8,11 +8,17 @@ namespace CastleDefender.Game
     // They no longer run local target acquisition, movement, or combat loops.
     public class LaneSnapshotCombatant : MonoBehaviour, ITeamOwned
     {
+        static readonly Color DungeonHpBarFill = new(0.74f, 0.28f, 0.98f, 1f);
+        static readonly Color DungeonHpBarFrame = new(0.88f, 0.62f, 1.00f, 0.88f);
+        static readonly Color HostileHpBarFill = new(0.98f, 0.48f, 0.20f, 0.98f);
+        static readonly Color HostileHpBarFrame = new(1.00f, 0.74f, 0.44f, 0.84f);
         BarracksSpawnCombatProfile _combatProfile;
         string _combatantId;
         string _defenderTeamKey;
+        string _ownerTeamKey;
         BattleTeam _team = BattleTeam.Red;
         bool _hasExplicitTeam;
+        bool _isDungeonUnit;
         float _displayHp;
         float _maxHp = 1f;
         float _lastAttackAt = float.MinValue;
@@ -237,7 +243,7 @@ namespace CastleDefender.Game
                 return;
             }
 
-            float extraLift = Mathf.Max(0.85f, combined.size.y * 0.35f) + 0.32f;
+            float extraLift = Mathf.Max(1.15f, combined.size.y * 0.45f) + 0.56f;
             Vector3 headWorld = new(combined.center.x, combined.max.y + extraLift, combined.center.z);
             _hpBarRoot.localPosition = transform.InverseTransformPoint(headWorld);
         }
@@ -248,7 +254,9 @@ namespace CastleDefender.Game
                 return;
 
             float hp01 = Mathf.Clamp01(CurrentHp / MaxHp);
-            HpBarVisuals.ApplyFill(_hpBarFill, _hpBarImage, hp01);
+            ResolveHpBarColors(out Color fillColor, out Color frameColor);
+            HpBarVisuals.ApplyFill(_hpBarFill, _hpBarImage, hp01, fillColor);
+            HpBarVisuals.ApplyFrameColor(_hpBarRoot, frameColor);
 
             if (_hpBarFill != null)
             {
@@ -264,6 +272,29 @@ namespace CastleDefender.Game
             }
         }
 
+        void ResolveHpBarColors(out Color fillColor, out Color frameColor)
+        {
+            if (_hasExplicitTeam)
+            {
+                Color teamColor = BattleTeamUtility.ToColor(_team);
+                fillColor = Color.Lerp(teamColor, Color.white, 0.04f);
+                fillColor.a = 1f;
+                frameColor = Color.Lerp(teamColor, Color.white, 0.18f);
+                frameColor.a = 0.84f;
+                return;
+            }
+
+            if (_isDungeonUnit)
+            {
+                fillColor = DungeonHpBarFill;
+                frameColor = DungeonHpBarFrame;
+                return;
+            }
+
+            fillColor = HostileHpBarFill;
+            frameColor = HostileHpBarFrame;
+        }
+
         static string NormalizeTeamKey(string teamKey)
         {
             return BattleTeamUtility.NormalizeServerTeamKey(teamKey);
@@ -272,6 +303,8 @@ namespace CastleDefender.Game
         void ApplyAllegiance(string defenderTeamKey, string ownerTeamKey)
         {
             _defenderTeamKey = NormalizeTeamKey(defenderTeamKey);
+            _ownerTeamKey = NormalizeTeamKey(ownerTeamKey);
+            _isDungeonUnit = string.Equals(_ownerTeamKey, "dungeon", StringComparison.OrdinalIgnoreCase);
             _hasExplicitTeam = BattleTeamUtility.TryParseServerTeamKey(ownerTeamKey, out _team);
 
             if (!_hasExplicitTeam && BattleTeamUtility.TryParseServerTeamKey(_defenderTeamKey, out BattleTeam parsedTeam))

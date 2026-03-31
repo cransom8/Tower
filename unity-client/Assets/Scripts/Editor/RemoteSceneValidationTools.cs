@@ -17,11 +17,24 @@ namespace CastleDefender.Editor
         const string BootstrapScenePath = "Assets/Scenes/Bootstrap.unity";
         const string CombatValidationScreenshotPath = "projects/combat-validation.png";
         const string LiveCadenceScreenshotPath = "projects/live-match-cadence.png";
+        const string LiveRouteDefendScreenshotPath = "projects/live-route-defend.png";
+        const string LiveRouteAttackMidScreenshotPath = "projects/live-route-attack-midpoint.png";
         static int s_framesUntilLog = -1;
         static int s_framesUntilScreenshot = -1;
         static bool s_liveSoloValidationRunning;
         static bool s_liveContinueValidationRunning;
+        static bool s_liveRouteTimingCaptureRunning;
         static bool s_captureLiveGameplayScreenshot;
+
+        struct LiveRouteCaptureMetrics
+        {
+            public string CommandState;
+            public int UnitCount;
+            public float AverageAnchorDistance;
+            public float MaxAnchorDistance;
+            public float AveragePathProgress;
+            public float MinEnemyCoreDistance;
+        }
 
         static RemoteSceneValidationTools()
         {
@@ -208,6 +221,50 @@ namespace CastleDefender.Editor
             InjectSnapshot(BuildCombatContactSnapshot(), "combat contact validation");
             FrameCombatValidationCamera();
             s_framesUntilScreenshot = 150;
+        }
+
+        [MenuItem("Castle Defender/Remote Scene Validation/Capture Live Route Timing Screenshots")]
+        public static void CaptureLiveRouteTimingScreenshots()
+        {
+            if (!Application.isPlaying)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] Enter Play Mode first.");
+                return;
+            }
+
+            if (SceneManager.GetActiveScene().name != "Game_ML")
+            {
+                Debug.LogWarning("[RemoteSceneValidation] Load Game_ML before capturing live route timing screenshots.");
+                return;
+            }
+
+            var nm = NetworkManager.Instance;
+            if (nm == null || !nm.IsConnected)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] NetworkManager is not connected.");
+                return;
+            }
+
+            if (SnapshotApplier.Instance?.LatestML == null)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] No live multilane snapshot is active.");
+                return;
+            }
+
+            var remoteContent = RemoteContentManager.EnsureInstance();
+            if (remoteContent == null)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] RemoteContentManager is not available.");
+                return;
+            }
+
+            if (s_liveRouteTimingCaptureRunning)
+            {
+                Debug.LogWarning("[RemoteSceneValidation] Live route timing capture is already running.");
+                return;
+            }
+
+            remoteContent.StartCoroutine(RunLiveRouteTimingCapture(nm));
         }
 
         static void InjectSnapshot(MLSnapshot snapshot, string label)
@@ -593,6 +650,74 @@ namespace CastleDefender.Editor
             }
         }
 
+        static System.Collections.IEnumerator RunLiveRouteTimingCapture(NetworkManager nm)
+        {
+            s_liveRouteTimingCaptureRunning = true;
+            try
+            {
+                int myLaneIndex = Mathf.Max(0, nm != null ? nm.MyLaneIndex : 0);
+                Debug.Log($"[RemoteSceneValidation] Starting live route timing capture for lane={myLaneIndex}.");
+
+                ActionSender.SetLaneDefendProgress(0f);
+
+                LiveRouteCaptureMetrics defendMetrics = default;
+                bool defendReady = false;
+                yield return WaitForCondition(
+                    () => defendReady = TryCollectLiveRouteCaptureMetrics(myLaneIndex, "DEFEND", out defendMetrics)
+                        && IsDefendCaptureReady(defendMetrics),
+                    18f,
+                    "Timed out waiting for barracks units to settle on the defend anchor.");
+                if (!Application.isPlaying)
+                    yield break;
+
+                if (!defendReady)
+                {
+                    TryCollectLiveRouteCaptureMetrics(myLaneIndex, "DEFEND", out defendMetrics);
+                    Debug.LogWarning(
+                        $"[RemoteSceneValidation] Defend capture was not ready. {FormatLiveRouteCaptureMetrics(defendMetrics)}");
+                }
+                else
+                {
+                    FrameLiveRouteValidationCamera();
+                    CaptureScreenshotToPath(LiveRouteDefendScreenshotPath);
+                    Debug.Log(
+                        $"[RemoteSceneValidation] Captured live defend-route screenshot to '{LiveRouteDefendScreenshotPath}'. " +
+                        $"{FormatLiveRouteCaptureMetrics(defendMetrics)}");
+                    yield return WaitForFrames(10);
+                }
+
+                ActionSender.SetLaneAttack();
+
+                LiveRouteCaptureMetrics attackMetrics = default;
+                bool attackReady = false;
+                yield return WaitForCondition(
+                    () => attackReady = TryCollectLiveRouteCaptureMetrics(myLaneIndex, "ATTACK", out attackMetrics)
+                        && IsAttackMidCaptureReady(attackMetrics),
+                    24f,
+                    "Timed out waiting for barracks units to reach the attack midpoint.");
+                if (!Application.isPlaying)
+                    yield break;
+
+                if (!attackReady)
+                {
+                    TryCollectLiveRouteCaptureMetrics(myLaneIndex, "ATTACK", out attackMetrics);
+                    Debug.LogWarning(
+                        $"[RemoteSceneValidation] Attack midpoint capture was not ready. {FormatLiveRouteCaptureMetrics(attackMetrics)}");
+                    yield break;
+                }
+
+                FrameLiveRouteValidationCamera();
+                CaptureScreenshotToPath(LiveRouteAttackMidScreenshotPath);
+                Debug.Log(
+                    $"[RemoteSceneValidation] Captured live attack-midpoint screenshot to '{LiveRouteAttackMidScreenshotPath}'. " +
+                    $"{FormatLiveRouteCaptureMetrics(attackMetrics)}");
+            }
+            finally
+            {
+                s_liveRouteTimingCaptureRunning = false;
+            }
+        }
+
         static System.Collections.IEnumerator WaitForCondition(System.Func<bool> condition, float timeoutSeconds, string timeoutMessage)
         {
             float deadline = Time.realtimeSinceStartup + timeoutSeconds;
@@ -608,6 +733,190 @@ namespace CastleDefender.Editor
 
             s_liveSoloValidationRunning = false;
             s_liveContinueValidationRunning = false;
+        }
+
+        static System.Collections.IEnumerator WaitForFrames(int frameCount)
+        {
+            int remaining = Mathf.Max(0, frameCount);
+            while (Application.isPlaying && remaining-- > 0)
+                yield return null;
+        }
+
+        static bool TryCollectLiveRouteCaptureMetrics(int laneIndex, string requiredCommandState, out LiveRouteCaptureMetrics metrics)
+        {
+            metrics = default;
+            var snapshot = SnapshotApplier.Instance?.LatestML;
+            if (snapshot?.lanes == null)
+                return false;
+
+            MLLaneSnap lane = null;
+            for (int i = 0; i < snapshot.lanes.Length; i++)
+            {
+                var candidate = snapshot.lanes[i];
+                if (candidate != null && candidate.laneIndex == laneIndex)
+                {
+                    lane = candidate;
+                    break;
+                }
+            }
+
+            if (lane == null)
+                return false;
+            if (!string.Equals(lane.commandState, requiredCommandState, System.StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (lane.units == null || lane.units.Length == 0)
+                return false;
+
+            bool hasEnemyCore = TryResolveGridPoint(lane.enemyCoreAnchor, out Vector2 enemyCorePoint);
+            float totalAnchorDistance = 0f;
+            float maxAnchorDistance = 0f;
+            float totalPathProgress = 0f;
+            int pathProgressCount = 0;
+            float minEnemyCoreDistance = float.PositiveInfinity;
+            int unitCount = 0;
+
+            for (int i = 0; i < lane.units.Length; i++)
+            {
+                MLUnit unit = lane.units[i];
+                if (!IsLiveRouteCaptureCandidate(unit, laneIndex, requiredCommandState))
+                    continue;
+                if (!TryResolveSnapshotUnitPoint(unit, out Vector2 unitPoint))
+                    continue;
+
+                unitCount++;
+
+                if (TryResolveUnitAnchorPoint(unit, out Vector2 anchorPoint))
+                {
+                    float anchorDistance = Vector2.Distance(unitPoint, anchorPoint);
+                    totalAnchorDistance += anchorDistance;
+                    if (anchorDistance > maxAnchorDistance)
+                        maxAnchorDistance = anchorDistance;
+                }
+
+                if (float.IsFinite(unit.pathIdx))
+                {
+                    totalPathProgress += Mathf.Clamp01(unit.pathIdx);
+                    pathProgressCount++;
+                }
+
+                if (hasEnemyCore)
+                {
+                    float enemyCoreDistance = Vector2.Distance(unitPoint, enemyCorePoint);
+                    if (enemyCoreDistance < minEnemyCoreDistance)
+                        minEnemyCoreDistance = enemyCoreDistance;
+                }
+            }
+
+            if (unitCount <= 0)
+                return false;
+
+            metrics = new LiveRouteCaptureMetrics
+            {
+                CommandState = lane.commandState,
+                UnitCount = unitCount,
+                AverageAnchorDistance = totalAnchorDistance / unitCount,
+                MaxAnchorDistance = maxAnchorDistance,
+                AveragePathProgress = pathProgressCount > 0 ? totalPathProgress / pathProgressCount : float.NaN,
+                MinEnemyCoreDistance = hasEnemyCore ? minEnemyCoreDistance : float.NaN,
+            };
+            return true;
+        }
+
+        static bool IsLiveRouteCaptureCandidate(MLUnit unit, int sourceLaneIndex, string requiredCommandState)
+        {
+            if (unit == null || unit.hp <= 0f)
+                return false;
+            if (unit.sourceLaneIndex != sourceLaneIndex)
+                return false;
+            if (!string.Equals(unit.commandState, requiredCommandState, System.StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (!string.IsNullOrWhiteSpace(unit.combatTargetId) || unit.isAttacking || unit.blockedByStructure)
+                return false;
+            if (string.Equals(unit.movementMode, "CombatEngage", System.StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return string.Equals(unit.spawnSourceType, "barracks_roster", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.spawnSourceType, "barracks_hero", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool TryResolveSnapshotUnitPoint(MLUnit unit, out Vector2 point)
+        {
+            point = default;
+            if (unit == null)
+                return false;
+
+            if (float.IsFinite(unit.gridX) && float.IsFinite(unit.gridY))
+            {
+                point = new Vector2(unit.gridX, unit.gridY);
+                return true;
+            }
+
+            if (float.IsFinite(unit.routeWorldX) && float.IsFinite(unit.routeWorldY))
+            {
+                point = new Vector2(unit.routeWorldX, unit.routeWorldY);
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool TryResolveUnitAnchorPoint(MLUnit unit, out Vector2 point)
+        {
+            point = default;
+            if (unit == null)
+                return false;
+            if (!float.IsFinite(unit.anchorTargetX) || !float.IsFinite(unit.anchorTargetY))
+                return false;
+
+            point = new Vector2(unit.anchorTargetX, unit.anchorTargetY);
+            return true;
+        }
+
+        static bool TryResolveGridPoint(MLGridPos point, out Vector2 resolved)
+        {
+            resolved = default;
+            if (point == null)
+                return false;
+            if (!float.IsFinite(point.x) || !float.IsFinite(point.y))
+                return false;
+
+            resolved = new Vector2(point.x, point.y);
+            return true;
+        }
+
+        static bool IsDefendCaptureReady(LiveRouteCaptureMetrics metrics)
+        {
+            return metrics.UnitCount > 0
+                && metrics.MaxAnchorDistance <= 0.9f;
+        }
+
+        static bool IsAttackMidCaptureReady(LiveRouteCaptureMetrics metrics)
+        {
+            return metrics.UnitCount > 0
+                && float.IsFinite(metrics.AveragePathProgress)
+                && metrics.AveragePathProgress >= 0.35f
+                && metrics.AveragePathProgress <= 0.65f
+                && (!float.IsFinite(metrics.MinEnemyCoreDistance) || metrics.MinEnemyCoreDistance >= 4.5f);
+        }
+
+        static string FormatLiveRouteCaptureMetrics(LiveRouteCaptureMetrics metrics)
+        {
+            return
+                $"command='{metrics.CommandState ?? "<none>"}' units={metrics.UnitCount} " +
+                $"avgAnchorDist={metrics.AverageAnchorDistance:0.###} maxAnchorDist={metrics.MaxAnchorDistance:0.###} " +
+                $"avgPathProgress={metrics.AveragePathProgress:0.###} minEnemyCoreDist={metrics.MinEnemyCoreDistance:0.###}";
+        }
+
+        static void CaptureScreenshotToPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            string dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(dir))
+                Directory.CreateDirectory(dir);
+
+            ScreenCapture.CaptureScreenshot(path);
         }
 
         static string ResolveValidationRaceId(MLLoadoutPhaseStartPayload phase)
@@ -865,6 +1174,17 @@ namespace CastleDefender.Editor
 
             cam.transform.position = new Vector3(19.5f, 15.5f, 0.0f);
             cam.transform.rotation = Quaternion.Euler(52f, 90f, 0f);
+        }
+
+        static void FrameLiveRouteValidationCamera()
+        {
+            Camera cam = Camera.main ?? Object.FindFirstObjectByType<Camera>();
+            if (cam == null)
+                return;
+
+            cam.transform.position = new Vector3(19.5f, 17.5f, 0.0f);
+            cam.transform.rotation = Quaternion.Euler(52f, 90f, 0f);
+            cam.fieldOfView = 32f;
         }
 
         static void RenderCombatValidationScreenshot()

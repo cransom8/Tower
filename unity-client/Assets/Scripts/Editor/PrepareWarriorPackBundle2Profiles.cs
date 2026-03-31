@@ -93,7 +93,8 @@ public static class PrepareWarriorPackBundle2Profiles
 
     static readonly PrefabBindingConfig[] PrefabBindingConfigs =
     {
-        new PrefabBindingConfig { prefabName = "TT_Peasant", profileAssetName = "Explosive_TwoHanded", notes = "Militia and peasant-combat presentation." },
+        new PrefabBindingConfig { prefabName = "TT_Peasant", profileAssetName = "Explosive_TwoHanded", notes = "Militia presentation." },
+        new PrefabBindingConfig { prefabName = "TT_Settler", profileAssetName = "Explosive_TTRTS_Default", notes = "Peasant / settler / trader civilian presentation." },
         new PrefabBindingConfig { prefabName = "TT_Light_Infantry", profileAssetName = "Explosive_TwoHanded", notes = "Footman / swordsman presentation." },
         new PrefabBindingConfig { prefabName = "TT_Mounted_Knight", profileAssetName = "Explosive_TwoHanded", notes = "Knight presentation using the imported heavy melee controller." },
         new PrefabBindingConfig { prefabName = "TT_King", profileAssetName = "Explosive_TwoHanded", notes = "Hero king presentation." },
@@ -271,8 +272,8 @@ public static class PrepareWarriorPackBundle2Profiles
         switch (flavor)
         {
             case ProfileFlavor.Knight:
-                SetStateAliases(profile.attackDefault, "Attack1", "Attack2", "Attack3", "MoveAttack1", "SpecialAttack1", "SpecialAttack2");
-                SetStateAliases(profile.attackMelee, "Attack1", "Attack2", "Attack3", "MoveAttack1", "SpecialAttack1", "SpecialAttack2", "Block");
+                SetStateAliases(profile.attackDefault, "Attack1", "Attack2", "Attack3", "MoveAttack1", "Jump-Attack1", "SpecialAttack1", "SpecialAttack2");
+                SetStateAliases(profile.attackMelee, "Attack1", "Attack2", "Attack3", "MoveAttack1", "Jump-Attack1", "SpecialAttack1", "SpecialAttack2", "Block");
                 SetStateAliases(profile.attackRanged, "RangeAttack1", "Attack1", "MoveAttack1");
                 SetStateAliases(profile.attackMagic, "RangeAttack1", "SpecialAttack1", "Attack1");
                 SetStateAliases(profile.attackSupport, "RangeAttack1", "SpecialAttack1", "Attack1");
@@ -280,20 +281,20 @@ public static class PrepareWarriorPackBundle2Profiles
                 break;
 
             case ProfileFlavor.Archer:
-                SetStateAliases(profile.attackDefault, "RangeAttack1", "Aiming-Firing", "Attack1", "MoveAttack1", "MoveAttack2", "SpecialAttack1");
+                SetStateAliases(profile.attackDefault, "RangeAttack1", "RangeAttack1_Run", "Aiming-Firing", "Attack1", "MoveAttack1", "MoveAttack2", "SpecialAttack1");
                 SetStateAliases(profile.attackMelee, "Attack1", "MoveAttack1", "SpecialAttack1");
-                SetStateAliases(profile.attackRanged, "RangeAttack1", "Aiming-Firing", "Attack1", "MoveAttack1", "MoveAttack2", "SpecialAttack1");
+                SetStateAliases(profile.attackRanged, "RangeAttack1", "RangeAttack1_Run", "Aiming-Firing", "Attack1", "MoveAttack1", "MoveAttack2", "SpecialAttack1");
                 SetStateAliases(profile.attackMagic, "RangeAttack1", "SpecialAttack1", "Attack1");
                 SetStateAliases(profile.attackSupport, "RangeAttack1", "SpecialAttack1", "Attack1");
                 SetStateAliases(profile.attackSiege, "RangeAttack1", "SpecialAttack1", "Attack1");
                 break;
 
             case ProfileFlavor.Mage:
-                SetStateAliases(profile.attackDefault, "RangeAttack1", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
+                SetStateAliases(profile.attackDefault, "RangeAttack1", "RangeAttack2", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
                 SetStateAliases(profile.attackMelee, "Attack1", "Attack2", "SpecialAttack1");
-                SetStateAliases(profile.attackRanged, "RangeAttack1", "Attack1", "SpecialAttack1");
-                SetStateAliases(profile.attackMagic, "RangeAttack1", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
-                SetStateAliases(profile.attackSupport, "RangeAttack1", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
+                SetStateAliases(profile.attackRanged, "RangeAttack1", "RangeAttack2", "Attack1", "SpecialAttack1");
+                SetStateAliases(profile.attackMagic, "RangeAttack1", "RangeAttack2", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
+                SetStateAliases(profile.attackSupport, "RangeAttack1", "RangeAttack2", "Attack1", "Attack2", "SpecialAttack1", "SpecialAttack2");
                 SetStateAliases(profile.attackSiege, "RangeAttack1", "SpecialAttack1", "SpecialAttack2");
                 break;
 

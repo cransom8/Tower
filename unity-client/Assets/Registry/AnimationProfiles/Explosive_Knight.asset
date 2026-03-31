@@ -74,6 +74,7 @@ MonoBehaviour:
     - Attack2
     - Attack3
     - MoveAttack1
+    - Jump-Attack1
     - SpecialAttack1
     - SpecialAttack2
   attackMelee:
@@ -82,6 +83,7 @@ MonoBehaviour:
     - Attack2
     - Attack3
     - MoveAttack1
+    - Jump-Attack1
     - SpecialAttack1
     - SpecialAttack2
     - Block

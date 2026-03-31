@@ -58,6 +58,7 @@ namespace CastleDefender.UI
         }
 
         public GameObject StagedObject => _staged;
+        public UnitAnimationResolver.ResolvedProfile StagedAnimationProfile => _stagedAnimationProfile;
 
         public void ShowPrefab(GameObject prefab, float scale = 1f, Action<GameObject> configureInstance = null)
         {
@@ -297,6 +298,9 @@ namespace CastleDefender.UI
                 var animator = _stagedAnimators[i];
                 if (animator == null)
                     continue;
+
+                _ = animator.GetComponent<SnapshotAnimationEventRelay>()
+                    ?? animator.gameObject.AddComponent<SnapshotAnimationEventRelay>();
 
                 animator.Rebind();
                 animator.Update(0f);

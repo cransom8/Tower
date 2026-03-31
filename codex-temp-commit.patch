@@ -1,0 +1,65 @@
+diff --git a/unity-client/Assets/Scripts/UI/LoadoutPhaseManager.cs b/unity-client/Assets/Scripts/UI/LoadoutPhaseManager.cs
+--- a/unity-client/Assets/Scripts/UI/LoadoutPhaseManager.cs
++++ b/unity-client/Assets/Scripts/UI/LoadoutPhaseManager.cs
+@@ -2952 +2952 @@ namespace CastleDefender.UI
+-            return GetBuildingIcon(GetBuildingTypeForUnit(unit));
++            return null;
+@@ -3465,0 +3465,5 @@ namespace CastleDefender.UI
++        UnitPrefabRegistry ResolvePortraitRegistry()
++        {
++            return RuntimePortraitStudio.ResolveRegistry(PortraitRegistry);
++        }
++
+@@ -3469 +3473,2 @@ namespace CastleDefender.UI
+-            if (PortraitRegistry == null || string.IsNullOrWhiteSpace(normalizedKey))
++            var registry = ResolvePortraitRegistry();
++            if (registry == null || string.IsNullOrWhiteSpace(normalizedKey))
+@@ -3473 +3478 @@ namespace CastleDefender.UI
+-                && PortraitRegistry.TryGet(normalizedKey, out _))
++                && registry.TryGet(normalizedKey, out _))
+@@ -3478 +3483 @@ namespace CastleDefender.UI
+-            return PortraitRegistry.TryGetUnitTypeForSkin(normalizedKey, out _);
++            return registry.TryGetUnitTypeForSkin(normalizedKey, out _);
+@@ -3487 +3492,2 @@ namespace CastleDefender.UI
+-            if (PortraitRegistry != null
++            var registry = ResolvePortraitRegistry();
++            if (registry != null
+@@ -3489 +3495 @@ namespace CastleDefender.UI
+-                && PortraitRegistry.TryGet(normalizedKey, out _))
++                && registry.TryGet(normalizedKey, out _))
+@@ -3502 +3508 @@ namespace CastleDefender.UI
+-            if (PortraitRegistry != null && PortraitRegistry.TryGetUnitTypeForSkin(normalizedKey, out string unitType))
++            if (registry != null && registry.TryGetUnitTypeForSkin(normalizedKey, out string unitType))
+diff --git a/unity-client/Assets/Scripts/Game/WaveSnapshotRuntimeSpawner.cs b/unity-client/Assets/Scripts/Game/WaveSnapshotRuntimeSpawner.cs
+--- a/unity-client/Assets/Scripts/Game/WaveSnapshotRuntimeSpawner.cs
++++ b/unity-client/Assets/Scripts/Game/WaveSnapshotRuntimeSpawner.cs
+@@ -647 +708 @@ namespace CastleDefender.Game
+-            ApplySnapshotUnitTint(unit, renderers, ownerTeamKey);
++            ApplySnapshotUnitTint(go, unit, renderers, ownerTeamKey);
+@@ -2315 +2557 @@ namespace CastleDefender.Game
+-        static void ApplySnapshotUnitTint(MLUnit unit, Renderer[] renderers, string ownerTeamKey)
++        static void ApplySnapshotUnitTint(GameObject root, MLUnit unit, Renderer[] renderers, string ownerTeamKey)
+@@ -2322,0 +2565,3 @@ namespace CastleDefender.Game
++                if (ApplyTeamMaterialProfiles(root, team))
++                    return;
++
+@@ -2329,0 +2575,19 @@ namespace CastleDefender.Game
++        static bool ApplyTeamMaterialProfiles(GameObject root, BattleTeam team)
++        {
++            if (root == null)
++                return false;
++
++            bool appliedAny = false;
++            var profiles = root.GetComponentsInChildren<TeamColorMaterialProfile>(true);
++            for (int i = 0; i < profiles.Length; i++)
++            {
++                var profile = profiles[i];
++                if (profile == null)
++                    continue;
++
++                appliedAny |= profile.Apply(team);
++            }
++
++            return appliedAny;
++        }
++

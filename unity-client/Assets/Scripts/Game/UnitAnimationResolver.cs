@@ -226,6 +226,9 @@ namespace CastleDefender.Game
             if (attacking)
                 return UnitAnimationStateIntent.Attack;
 
+            if (IsCombatContactHold(unit))
+                return UnitAnimationStateIntent.Attack;
+
             if (TryResolveServerPresentationIntent(unit, out UnitAnimationStateIntent authoritativeIntent))
                 return authoritativeIntent;
 
@@ -523,10 +526,23 @@ namespace CastleDefender.Game
             return EqualsIgnoreCase(unit != null ? unit.commandState : null, "defend");
         }
 
+        static bool IsCombatContactHold(MLUnit unit)
+        {
+            if (unit == null || unit.hp <= 0f)
+                return false;
+            if (!EqualsIgnoreCase(unit.presentationPhase, "combatresolve"))
+                return false;
+            if (string.Equals(unit.combatTargetKind, "fortress_pad", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return unit.combatContact || !string.IsNullOrWhiteSpace(unit.combatTargetId);
+        }
+
         static bool TryResolveServerPresentationIntent(MLUnit unit, out UnitAnimationStateIntent intent)
         {
             intent = UnitAnimationStateIntent.Idle;
             string presentationIntent = unit != null ? unit.presentationIntent : null;
+            string presentationPhase = unit != null ? unit.presentationPhase : null;
             if (string.IsNullOrWhiteSpace(presentationIntent))
                 return false;
 
@@ -550,7 +566,9 @@ namespace CastleDefender.Game
 
             if (EqualsIgnoreCase(presentationIntent, "defend"))
             {
-                intent = UnitAnimationStateIntent.Defend;
+                intent = EqualsIgnoreCase(presentationPhase, "formationhold")
+                    ? UnitAnimationStateIntent.Idle
+                    : UnitAnimationStateIntent.Defend;
                 return true;
             }
 

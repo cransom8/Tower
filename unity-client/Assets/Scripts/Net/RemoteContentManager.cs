@@ -60,7 +60,6 @@ namespace CastleDefender.Net
         readonly Dictionary<string, GameObject> _loadedEnvironmentPrefabsByAddress = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, AsyncOperationHandle<GameObject>> _environmentHandlesByAddress = new(StringComparer.OrdinalIgnoreCase);
         readonly HashSet<string> _environmentAddressesInFlight = new(StringComparer.OrdinalIgnoreCase);
-        const string CachedManifestPlayerPrefsKey = "remote_content_manifest_cache_v1";
         bool _addressablesReady;
         AsyncOperationHandle _initializationHandle;
         bool _hasInitializationHandle;
@@ -660,6 +659,36 @@ namespace CastleDefender.Net
         {
             if (string.IsNullOrWhiteSpace(contentKey)) return false;
             return _preloadedContentKeys.Contains(contentKey.Trim());
+        }
+
+        public bool ManifestContainsUnit(string unitKey)
+        {
+            if (string.IsNullOrWhiteSpace(unitKey) || Manifest?.units == null)
+                return false;
+
+            string normalizedKey = unitKey.Trim();
+            foreach (var unit in Manifest.units)
+            {
+                if (unit != null && string.Equals(unit.key, normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        public bool ManifestContainsSkin(string skinKey)
+        {
+            if (string.IsNullOrWhiteSpace(skinKey) || Manifest?.skins == null)
+                return false;
+
+            string normalizedKey = skinKey.Trim();
+            foreach (var skin in Manifest.skins)
+            {
+                if (skin != null && string.Equals(skin.skin_key, normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
 
         public bool TryGetLoadedPrefabForUnit(string unitKey, out GameObject prefab)
@@ -1461,11 +1490,10 @@ namespace CastleDefender.Net
             if (req.result != UnityWebRequest.Result.Success)
             {
                 LastFailureStage = CriticalPreloadFailureStage.ManifestDownload;
-                if (TryLoadCachedManifest(onProgress))
-                    yield break;
-
-                LastError = $"Could not download content manifest: {req.error}";
-                Debug.LogWarning($"[RemoteContent] Manifest fetch failed: {req.error}");
+                LastError =
+                    $"Could not download the live content manifest: {req.error}. " +
+                    "Runtime will not reuse cached manifest data.";
+                Debug.LogError($"[RemoteContent] Manifest fetch failed: {req.error}");
                 yield break;
             }
 
@@ -1478,7 +1506,6 @@ namespace CastleDefender.Net
                     yield break;
                 }
 
-                CacheManifestJson(req.downloadHandler.text);
                 Debug.Log(
                     $"[RemoteContent] Manifest ready — {(Manifest.units?.Length ?? 0)} units, {(Manifest.skins?.Length ?? 0)} skins, " +
                     $"{(Manifest.t0_content?.Length ?? 0)} T0 entries, {(Manifest.t1_content?.Length ?? 0)} T1 entries, " +
@@ -1969,28 +1996,6 @@ namespace CastleDefender.Net
             }
         }
 
-        bool TryLoadCachedManifest(Action<float, string> onProgress)
-        {
-            string cachedJson = PlayerPrefs.GetString(CachedManifestPlayerPrefsKey, "");
-            if (!TryApplyManifestJson(cachedJson, out string error))
-            {
-                if (!string.IsNullOrWhiteSpace(cachedJson))
-                    Debug.LogWarning($"[RemoteContent] Cached manifest was unusable: {error}");
-                return false;
-            }
-
-            LastError = null;
-            Debug.Log("[RemoteContent] Using cached manifest because the live manifest could not be downloaded.");
-            ReportProgress(0.2f, "Using cached content manifest.", onProgress);
-            return true;
-        }
-
-        void CacheManifestJson(string json)
-        {
-            if (string.IsNullOrWhiteSpace(json)) return;
-            PlayerPrefs.SetString(CachedManifestPlayerPrefsKey, json);
-            PlayerPrefs.Save();
-        }
 
         static List<string> NormalizeUniqueKeys(IEnumerable<string> keys)
         {

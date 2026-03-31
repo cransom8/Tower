@@ -101,6 +101,7 @@ namespace CastleDefender.Net
             if (!string.IsNullOrWhiteSpace(incoming.reconnectToken)) target.reconnectToken = incoming.reconnectToken;
             if (incoming.ranked) target.ranked = true;
             if (incoming.battlefieldTopology != null) target.battlefieldTopology = incoming.battlefieldTopology;
+            if (incoming.battlefieldLayout != null) target.battlefieldLayout = incoming.battlefieldLayout;
             if (incoming.slotDefinitions != null && incoming.slotDefinitions.Length > 0) target.slotDefinitions = incoming.slotDefinitions;
             if (incoming.fortressBuildingConfigs != null && incoming.fortressBuildingConfigs.Length > 0) target.fortressBuildingConfigs = incoming.fortressBuildingConfigs;
             if (incoming.fortressPadConfigs != null && incoming.fortressPadConfigs.Length > 0) target.fortressPadConfigs = incoming.fortressPadConfigs;
@@ -460,6 +461,11 @@ namespace CastleDefender.Net
                     return entry;
             }
             return null;
+        }
+
+        public MLBattlefieldLayout GetBattlefieldLayout()
+        {
+            return LatestMLMatchConfig?.battlefieldLayout;
         }
 
         public MLLaneAssignment GetLaneAssignment(int index)

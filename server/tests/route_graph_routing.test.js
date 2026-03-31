@@ -214,6 +214,42 @@ test("two-player seating uses red and yellow as the only live bases", () => {
   );
 });
 
+test("match config exposes a stable authoritative battlefield layout payload", () => {
+  const firstConfig = simMl.createMLPublicConfig({
+    playerCount: 2,
+    laneTeams: ["red", "yellow"],
+  });
+  const secondConfig = simMl.createMLPublicConfig({
+    playerCount: 2,
+    laneTeams: ["red", "yellow"],
+  });
+
+  assert.ok(firstConfig.battlefieldLayout, "expected battlefieldLayout in ml_match_config");
+  assert.equal(firstConfig.battlefieldLayout.layoutId, "lava_lake_funnel:server_v1");
+  assert.equal(firstConfig.battlefieldLayout.playerCount, 2);
+  assert.equal(firstConfig.battlefieldLayout.contentHash, secondConfig.battlefieldLayout.contentHash);
+  assert.equal(firstConfig.battlefieldLayout.lanes.length, 2);
+
+  const redLane = firstConfig.battlefieldLayout.lanes.find((lane) => lane && lane.laneKey === "red");
+  assert.ok(redLane, "expected red lane layout");
+  assert.equal(redLane.fortressPads.length, firstConfig.fortressPadConfigs.length);
+  assert.equal(redLane.barracksSites.length, firstConfig.barracksSiteConfigs.length);
+  assert.ok(Number.isFinite(Number(redLane.townCore?.x)));
+  assert.ok(Number.isFinite(Number(redLane.townCore?.y)));
+  assert.ok(Number.isFinite(Number(redLane.frontGate?.x)));
+  assert.ok(Number.isFinite(Number(redLane.frontGate?.y)));
+
+  const waveSegment = firstConfig.battlefieldLayout.routeSegments.find((segment) => segment && segment.segmentId === "WA_A");
+  assert.ok(waveSegment, "expected lane wave route segment in battlefieldLayout");
+  assert.equal(waveSegment.fromNodeId, "WA");
+  assert.equal(waveSegment.toNodeId, "A");
+  assert.ok(Array.isArray(waveSegment.points) && waveSegment.points.length >= 2);
+
+  const redTownCoreNode = firstConfig.battlefieldLayout.routeNodes.find((node) => node && node.nodeId === "A");
+  assert.ok(redTownCoreNode, "expected lane core node in battlefieldLayout");
+  assert.equal(redTownCoreNode.laneKey, "red");
+});
+
 test("legacy gold lane input normalizes to canonical yellow allegiance", () => {
   const game = createTwoPlayerGame(["red", "gold"]);
   const goldLane = game.lanes[1];
@@ -407,6 +443,7 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
 test("blocking structures are targeted before the town core", () => {
   const game = createGame();
   const lane = game.lanes[0];
+  issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: lane.laneIndex });
 
   const buildResult = simMl.applyMLAction(game, 0, {
     type: "build_barracks_site",
@@ -436,6 +473,7 @@ test("blocking structures are targeted before the town core", () => {
 test("barracks attackers clear built non-core fortress structures before the town core", () => {
   const game = createGame();
   const lane = game.lanes[0];
+  issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: lane.laneIndex });
 
   const buildResult = simMl.applyMLAction(game, 0, {
     type: "build_on_pad",
@@ -470,6 +508,7 @@ test("route units engage hostile movers on shared center routes instead of passi
   const game = createGame();
   const attackerLane = game.lanes[1];
   const hostileLane = game.lanes[2];
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
 
   const attacker = createAttacker({
     id: "red_center_route_unit",
@@ -520,6 +559,7 @@ test("attack-mode lane formations share the first hostile contact instead of let
   const game = createGame();
   const attackerLane = game.lanes[1];
   const hostileLane = game.lanes[2];
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
   const attackers = [
     createAttacker({
       id: "formation_attack_front",
@@ -613,6 +653,7 @@ test("lane-controlled attackers keep a short lock on their current contact inste
   const game = createGame();
   const attackerLane = game.lanes[1];
   const hostileLane = game.lanes[2];
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
   const attacker = createAttacker({
     id: "sticky_target_attacker",
     sourceLaneIndex: 0,
@@ -812,6 +853,93 @@ test("redirecting an attack lane reprojects existing attackers onto the new rout
   assert.ok(
     Math.abs(Number(attacker.routeLateralOffset) || 0) < 8,
     "redirecting an active attacker should reproject it near the new route instead of preserving a fortress-wide lateral offset."
+  );
+});
+
+test("switching a defend packet to attack keeps it moving along the live route instead of skipping to the enemy core", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
+  const targetLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, sourceLane);
+
+  const attacker = createAttacker({
+    id: "defend_to_attack_transition",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: sourceLane.laneIndex,
+    laneId: sourceLane.laneIndex,
+    baseSpeed: 2.4,
+    atkCd: 999,
+  });
+
+  assert.equal(
+    simMl.initializeMovingUnitRouteState(game, sourceLane, attacker, { x: 5, y: 0 }).ok,
+    true,
+    "expected the defend-stage attacker to receive an initial route contract"
+  );
+  sourceLane.units.push(attacker);
+
+  tick(game, 6);
+
+  const enemyCore = getTownCoreTargetPosition(targetLane);
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  let previousPoint = { x: Number(attacker.posX), y: Number(attacker.posY) };
+  let sawMidRouteProgress = false;
+  let liveUnit = attacker;
+
+  for (let i = 0; i < 14; i += 1) {
+    tick(game, 1);
+
+    liveUnit = null;
+    for (const lane of game.lanes) {
+      const candidate = lane.units.find((unit) => unit && unit.id === attacker.id);
+      if (candidate) {
+        liveUnit = candidate;
+        break;
+      }
+    }
+
+    assert.ok(liveUnit, "the transitioned attacker should remain alive while traversing the attack route.");
+
+    const stepDistance = Math.hypot(
+      Number(liveUnit.posX) - previousPoint.x,
+      Number(liveUnit.posY) - previousPoint.y
+    );
+    assert.ok(
+      stepDistance <= Number(liveUnit.baseSpeed) + 0.2,
+      `expected incremental travel during command transition, got step=${stepDistance.toFixed(3)} speed=${Number(liveUnit.baseSpeed).toFixed(3)}`
+    );
+
+    const coreDistance = Math.hypot(
+      Number(liveUnit.posX) - enemyCore.posX,
+      Number(liveUnit.posY) - enemyCore.posY
+    );
+    if (i === 0) {
+      assert.ok(
+        coreDistance > 10,
+        "the first ATTACK tick should keep the unit en route instead of teleporting it onto the enemy Town Core."
+      );
+    }
+
+    if (Number.isFinite(liveUnit.pathIdx) && liveUnit.pathIdx >= 0.3 && liveUnit.pathIdx <= 0.55)
+      sawMidRouteProgress = true;
+
+    previousPoint = { x: Number(liveUnit.posX), y: Number(liveUnit.posY) };
+  }
+
+  assert.equal(liveUnit.stance, "ATTACK");
+  assert.equal(liveUnit.commandState, "ATTACK");
+  assert.ok(
+    sawMidRouteProgress,
+    "the transitioned attacker should pass through the route midpoint instead of jumping from the defend anchor to the enemy objective."
+  );
+  assert.ok(
+    Math.hypot(Number(liveUnit.posX) - enemyCore.posX, Number(liveUnit.posY) - enemyCore.posY) > 8,
+    "after the midpoint sample window the attacker should still be visibly traveling toward the target, not already sitting on the core."
   );
 });
 
@@ -1084,6 +1212,53 @@ test("settled lane formations separate with small lateral nudges instead of bein
   );
 });
 
+test("settled defend formations stay parked on their assigned slots instead of buzzing at idle", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const coreTarget = getTownCoreTargetPosition(lane);
+  const formationUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
+    id: `idle_settle_unit_${index}`,
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    atkCd: 999,
+    baseSpeed: 0.01,
+    posX: coreTarget.posX,
+    posY: coreTarget.posY - 0.6 - (index * 0.08),
+  }));
+
+  lane.units.push(...formationUnits);
+  tick(game, 1);
+
+  for (const unit of lane.units.filter((entry) => entry.id.startsWith("idle_settle_unit_"))) {
+    unit.posX = Number(unit.anchorTargetX);
+    unit.posY = Number(unit.anchorTargetY);
+    unit.pathIdx = unit.posY;
+    unit.routeSegments = null;
+    unit.routeSegmentIndex = 0;
+    unit.segmentProgress = 0;
+    unit.movementMode = "FormationJoin";
+  }
+
+  tick(game, 3);
+
+  const settledUnits = lane.units.filter((unit) => unit.id.startsWith("idle_settle_unit_"));
+  assert.equal(settledUnits.length, formationUnits.length);
+  for (const unit of settledUnits) {
+    const drift = Math.hypot(
+      Number(unit.posX) - Number(unit.anchorTargetX),
+      Number(unit.posY) - Number(unit.anchorTargetY)
+    );
+    assert.ok(
+      drift <= 0.05,
+      `settled defend units should stay parked near their slot instead of buzzing around, got drift=${drift.toFixed(3)} for ${unit.id}`
+    );
+  }
+});
+
 test("center-spawn waves travel through the red front gate approach before they reach the Town Core", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const redLane = game.lanes[0];
@@ -1251,6 +1426,217 @@ test("defend-mode formations fan around an intercepted wave at the gate instead 
   assert.ok(
     Math.max(...lateralOffsets) - Math.min(...lateralOffsets) > 0.7,
     "defenders should occupy distinct surround slots instead of collapsing into one narrow stack."
+  );
+});
+
+test("defend-mode packets from different barracks share the same gate interception target", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+
+  const defenders = [
+    createAttacker({
+      id: "defend_shared_center_front",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -1.1, -0.5),
+    }),
+    createAttacker({
+      id: "defend_shared_center_rear",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -2.0, -0.1),
+    }),
+    createAttacker({
+      id: "defend_shared_left_front",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "left",
+      sourceBarracksKey: "left",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -1.1, 0.6),
+    }),
+    createAttacker({
+      id: "defend_shared_left_rear",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "left",
+      sourceBarracksKey: "left",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -2.0, 1.0),
+    }),
+  ];
+  const hostileWave = createAttacker({
+    id: "defend_shared_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    ...getDefendAnchorPosition(lane, 0.25, 0.1),
+  });
+
+  lane.units.push(...defenders, hostileWave);
+
+  tick(game, 6);
+
+  const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("defend_shared_") && unit.id !== hostileWave.id);
+  assert.equal(liveDefenders.length, defenders.length);
+  assert.ok(
+    liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
+    "nearby defend packets from separate barracks should all commit to the same intercepted wave."
+  );
+});
+
+test("defend-mode units engage a hostile that slips behind the gate line instead of only checking forward contacts", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+
+  const defenders = [
+    createAttacker({
+      id: "defend_backtrack_front",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -0.9, -0.35),
+    }),
+    createAttacker({
+      id: "defend_backtrack_rear",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -1.5, 0.35),
+    }),
+  ];
+  const hostileWave = createAttacker({
+    id: "defend_backtrack_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    ...getDefendAnchorPosition(lane, -3.4, 0.1),
+  });
+
+  lane.units.push(...defenders, hostileWave);
+
+  tick(game, 6);
+
+  const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("defend_backtrack_") && unit.id !== hostileWave.id);
+  assert.equal(liveDefenders.length, defenders.length);
+  assert.ok(
+    liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
+    "defenders should still react to a hostile inside the camp even if it is no longer in the route-forward direction."
+  );
+});
+
+test("defend-mode units engage a hostile that reaches the home fortress interior even outside the defend anchor bubble", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+
+  const townCore = getTownCoreTargetPosition(lane);
+  const defenders = [
+    createAttacker({
+      id: "defend_core_emergency_front",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -0.9, -0.3),
+    }),
+    createAttacker({
+      id: "defend_core_emergency_rear",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "left",
+      sourceBarracksKey: "left",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(lane, -1.5, 0.35),
+    }),
+  ];
+  const hostileWave = createAttacker({
+    id: "defend_core_emergency_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: townCore.posX + 0.8,
+    posY: townCore.posY - 5.0,
+  });
+
+  lane.units.push(...defenders, hostileWave);
+
+  tick(game, 6);
+
+  const liveDefenders = lane.units.filter((unit) => unit && unit.id.startsWith("defend_core_emergency_") && unit.id !== hostileWave.id);
+  assert.equal(liveDefenders.length, defenders.length);
+  assert.ok(
+    liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
+    "once a hostile reaches the home fortress interior, defenders should treat it as an emergency target even if it is no longer near the outside-gate anchor."
   );
 });
 

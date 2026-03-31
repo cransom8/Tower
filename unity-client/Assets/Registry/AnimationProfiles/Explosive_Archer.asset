@@ -71,6 +71,7 @@ MonoBehaviour:
   attackDefault:
     stateNames:
     - RangeAttack1
+    - RangeAttack1_Run
     - Aiming-Firing
     - Attack1
     - MoveAttack1
@@ -84,6 +85,7 @@ MonoBehaviour:
   attackRanged:
     stateNames:
     - RangeAttack1
+    - RangeAttack1_Run
     - Aiming-Firing
     - Attack1
     - MoveAttack1

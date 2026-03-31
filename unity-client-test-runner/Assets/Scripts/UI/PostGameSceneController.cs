@@ -1,0 +1,569 @@
+using System;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+using TMPro;
+using CastleDefender.Net;
+using CastleDefender.Game;
+
+namespace CastleDefender.UI
+{
+    public class PostGameSceneController : MonoBehaviour
+    {
+        const string SceneName = "PostGame";
+        const float StableOpenLogDelaySeconds = 0.2f;
+
+        Canvas _canvas;
+        TMP_Text _resultText;
+        TMP_Text _winnerText;
+        TMP_Text _causeText;
+        TMP_Text _summaryText;
+        TMP_Text _rematchLabel;
+        Button _rematchButton;
+        Button _lobbyButton;
+        Button _statsButton;
+        PostGameStatsPanel _statsPanel;
+        MLGameOverPayload _payload;
+        bool _rematchRequested;
+        bool _lobbyRequested;
+        bool _transitioningToLoadout;
+
+        void Awake()
+        {
+            EnsureUi();
+        }
+
+        void OnEnable()
+        {
+            var nm = NetworkManager.Instance;
+            if (nm == null) return;
+            nm.OnRematchStatus += HandleRematchStatus;
+            nm.OnRematchStarting += HandleRematchStarting;
+            nm.OnMLLoadoutPhaseStart += HandleLoadoutPhaseStart;
+            nm.OnMLMatchReady += HandleMatchReady;
+        }
+
+        void OnDisable()
+        {
+            var nm = NetworkManager.Instance;
+            if (nm == null) return;
+            nm.OnRematchStatus -= HandleRematchStatus;
+            nm.OnRematchStarting -= HandleRematchStarting;
+            nm.OnMLLoadoutPhaseStart -= HandleLoadoutPhaseStart;
+            nm.OnMLMatchReady -= HandleMatchReady;
+        }
+
+        void Start()
+        {
+            var nm = NetworkManager.Instance;
+            _payload = nm != null ? nm.LastMLGameOver : null;
+            ShowPayload(_payload);
+            Debug.Log(
+                $"[PostGameFlow] Post-game opened. scene={SceneName} " +
+                $"result={_resultText?.text ?? "UNKNOWN"} winnerLane={_payload?.winnerLaneIndex ?? -1} round={_payload?.finalRound ?? -1}.");
+
+            StartCoroutine(EnsureEventSystemReady());
+
+            if (nm != null && nm.LastRematchStatus != null)
+                HandleRematchStatus(nm.LastRematchStatus);
+
+            if (ShouldResumePendingLoadoutTransition(nm))
+            {
+                BeginLoadoutTransition(nm.PendingLoadoutPhase);
+            }
+            else
+            {
+                StartCoroutine(LogStableOpenState());
+            }
+        }
+
+        void ShowPayload(MLGameOverPayload payload)
+        {
+            if (_resultText == null) return;
+
+            if (payload == null)
+            {
+                _resultText.text = "MATCH COMPLETE";
+                _winnerText.text = "No post-game data available.";
+                _causeText.text = "Exit to Lobby or start a new match.";
+                _summaryText.text = string.Empty;
+                return;
+            }
+
+            int myLaneIndex = NetworkManager.Instance != null ? NetworkManager.Instance.MyLaneIndex : -1;
+            bool isWinner = payload.winnerLaneIndex == myLaneIndex;
+            bool hasWinner = payload.winnerLaneIndex >= 0;
+            _resultText.text = isWinner ? "VICTORY" : "DEFEAT";
+            _resultText.color = isWinner
+                ? new Color(1f, 0.84f, 0.25f)
+                : new Color(0.92f, 0.34f, 0.32f);
+
+            _winnerText.text = hasWinner && !string.IsNullOrWhiteSpace(payload.winnerName)
+                ? $"Winner: {payload.winnerName}"
+                : (hasWinner && !string.IsNullOrWhiteSpace(payload.winningTeam) ? $"Winner: {payload.winningTeam}" : "Survival run complete");
+
+            int survivalSeconds = payload.survivalDuration > 0 ? payload.survivalDuration : payload.gameDuration;
+            string summaryCause = !string.IsNullOrWhiteSpace(payload.causeLoss)
+                ? payload.causeLoss
+                : $"Survival ended on Wave {payload.finalRound}";
+            string baseSummary = $"{summaryCause}  -  Survival {survivalSeconds / 60}m {survivalSeconds % 60}s";
+            _causeText.text = baseSummary;
+
+            var myStat = GetMyStat(payload, myLaneIndex);
+            if (myStat != null)
+            {
+                string continuation = $"    Final Wave {payload.finalRound}";
+                _summaryText.text =
+                    $"Income {myStat.income:F0}    Build {myStat.buildValue:F0}    Sends {myStat.totalSendSpend:F0}/{myStat.totalSendCount}    " +
+                    $"Leaks {myStat.totalLeaksTaken}    Hold {myStat.longestHoldStreak}{continuation}";
+            }
+            else
+            {
+                _summaryText.text = $"Final Wave {payload.finalRound}";
+            }
+        }
+
+        void HandleRematchStatus(RematchStatusPayload payload)
+        {
+            if (_lobbyRequested) return;
+            if (_rematchLabel == null || _rematchButton == null) return;
+            if (payload == null)
+            {
+                _rematchLabel.text = _rematchRequested ? "Waiting for opponent..." : "Ready for rematch?";
+                _rematchButton.interactable = !_rematchRequested;
+                return;
+            }
+
+            if (payload.allAccepted)
+            {
+                _rematchLabel.text = "Rematch accepted. Starting...";
+                _rematchButton.interactable = false;
+                return;
+            }
+
+            if (_rematchRequested)
+            {
+                _rematchLabel.text = $"Waiting for opponent... ({payload.count}/{payload.needed})";
+                _rematchButton.interactable = false;
+            }
+            else if (payload.count > 0)
+            {
+                _rematchLabel.text = $"Opponent accepted rematch ({payload.count}/{payload.needed})";
+                _rematchButton.interactable = true;
+            }
+            else
+            {
+                _rematchLabel.text = "Ready for rematch?";
+                _rematchButton.interactable = true;
+            }
+        }
+
+        void HandleRematchStarting(RematchStartingPayload _)
+        {
+            if (_lobbyRequested) return;
+            if (_rematchLabel != null) _rematchLabel.text = "Rematch starting...";
+            if (_rematchButton != null) _rematchButton.interactable = false;
+        }
+
+        void HandleMatchReady(MLMatchReadyPayload _)
+        {
+            if (_lobbyRequested || _transitioningToLoadout) return;
+            Debug.Log("[PostGameFlow] Rematch accepted. Preparing loadout readiness from post-game.");
+            if (_rematchLabel != null) _rematchLabel.text = "Preparing rematch...";
+            StartCoroutine(WaitForContentAndEmitLoadoutReady());
+        }
+
+        System.Collections.IEnumerator WaitForContentAndEmitLoadoutReady()
+        {
+            var rc = RemoteContentManager.EnsureInstance();
+            if (!rc.HasCompletedLoadoutPreload)
+            {
+                Debug.Log("[PostGameFlow] Loadout content not ready; preloading before rematch.");
+                yield return rc.PreloadLoadoutContentForSession(requester: "PostGame.MatchReady");
+            }
+
+            Debug.Log("[PostGameFlow] Emitting ml_loadout_ready from post-game.");
+            NetworkManager.Instance?.RequestLoadoutReady();
+        }
+
+        void HandleLoadoutPhaseStart(MLLoadoutPhaseStartPayload payload)
+        {
+            if (_lobbyRequested) return;
+            BeginLoadoutTransition(payload);
+        }
+
+        void BeginLoadoutTransition(MLLoadoutPhaseStartPayload payload = null)
+        {
+            if (_transitioningToLoadout) return;
+            _transitioningToLoadout = true;
+            Debug.Log("[PostGameFlow] Transitioning cleanly from post-game to loadout.");
+            NetworkManager.Instance?.ClearPostGameData();
+            LoadingScreen.LoadSceneWithRemoteContentGate(
+                "Loadout",
+                portraitKeys: RaceProgressionCatalog.GetPortraitWarmupKeys(payload?.availableRaceIds));
+        }
+
+        void OnRematch()
+        {
+            if (_rematchRequested || _lobbyRequested || _transitioningToLoadout) return;
+            _rematchRequested = true;
+            _rematchLabel.text = "Waiting for opponent...";
+            _rematchButton.interactable = false;
+            Debug.Log("[PostGameFlow] Rematch clicked. Waiting for opponent vote.");
+            ActionSender.RequestRematch();
+        }
+
+        void OnLobby()
+        {
+            if (_lobbyRequested || _transitioningToLoadout) return;
+            _lobbyRequested = true;
+            if (_rematchButton != null) _rematchButton.interactable = false;
+            if (_lobbyButton != null) _lobbyButton.interactable = false;
+            Debug.Log("[PostGameFlow] Exit to Lobby clicked.");
+            ClearReconnectPrefs();
+            NetworkManager.Instance?.Emit("leave_game", null);
+            NetworkManager.Instance?.ClearPostGameData();
+            Debug.Log("[PostGameFlow] Transitioning cleanly from post-game to lobby.");
+            LoadingScreen.LoadScene("Lobby");
+        }
+
+        void OnStats()
+        {
+            if (_statsPanel != null && _payload != null)
+            {
+                if (!_statsPanel.gameObject.activeSelf)
+                    _statsPanel.gameObject.SetActive(true);
+                _statsPanel.Show(_payload);
+            }
+        }
+
+        MLFinalLaneStat GetMyStat(MLGameOverPayload payload, int myLaneIndex)
+        {
+            if (payload == null || payload.finalStats == null) return null;
+            foreach (var stat in payload.finalStats)
+            {
+                if (stat != null && stat.laneIndex == myLaneIndex) return stat;
+            }
+            return null;
+        }
+
+        void EnsureUi()
+        {
+            if (_canvas != null && _resultText != null)
+                return;
+
+            _canvas = FindCanvasInScene(gameObject.scene);
+            if (_canvas == null)
+            {
+                var canvasGo = new GameObject("PostGameCanvas");
+                SceneManager.MoveGameObjectToScene(canvasGo, gameObject.scene);
+                _canvas = canvasGo.AddComponent<Canvas>();
+                _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                _canvas.sortingOrder = 200;
+                var scaler = canvasGo.AddComponent<CanvasScaler>();
+                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(1920f, 1080f);
+                scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                canvasGo.AddComponent<GraphicRaycaster>();
+            }
+            else if (_canvas.GetComponent<GraphicRaycaster>() == null)
+            {
+                _canvas.gameObject.AddComponent<GraphicRaycaster>();
+            }
+
+            var backdrop = MakePanel(_canvas.transform, "Backdrop", new Color(0.04f, 0.03f, 0.05f, 1f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var card = MakePanel(backdrop.transform, "Card", new Color(0.10f, 0.08f, 0.12f, 0.96f), new Vector2(0.16f, 0.12f), new Vector2(0.84f, 0.88f), Vector2.zero, Vector2.zero);
+
+            _resultText = MakeText(card.transform, "TxtResult", "VICTORY", 42, new Vector2(0.08f, 0.78f), new Vector2(0.92f, 0.94f), FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
+            _winnerText = MakeText(card.transform, "TxtWinner", "Winner", 22, new Vector2(0.08f, 0.68f), new Vector2(0.92f, 0.78f), FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
+            _causeText = MakeText(card.transform, "TxtCause", "Cause", 18, new Vector2(0.08f, 0.60f), new Vector2(0.92f, 0.68f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+            _summaryText = MakeText(card.transform, "TxtSummary", "Summary", 16, new Vector2(0.08f, 0.50f), new Vector2(0.92f, 0.60f), FontStyles.Normal, TextAlignmentOptions.TopLeft);
+            _rematchLabel = MakeText(card.transform, "TxtRematchStatus", "Ready for rematch?", 16, new Vector2(0.08f, 0.34f), new Vector2(0.92f, 0.42f), FontStyles.Italic, TextAlignmentOptions.MidlineLeft);
+
+            _rematchButton = MakeButton(card.transform, "BtnRematch", "Rematch", new Vector2(0.08f, 0.18f), new Vector2(0.32f, 0.28f), new Color(0.72f, 0.23f, 0.18f, 1f));
+            _lobbyButton = MakeButton(card.transform, "BtnLobby", "Exit to Lobby", new Vector2(0.36f, 0.18f), new Vector2(0.62f, 0.28f), new Color(0.23f, 0.25f, 0.30f, 1f));
+            _statsButton = MakeButton(card.transform, "BtnStats", "View Report", new Vector2(0.66f, 0.18f), new Vector2(0.92f, 0.28f), new Color(0.18f, 0.38f, 0.56f, 1f));
+
+            _rematchButton.onClick.AddListener(OnRematch);
+            _lobbyButton.onClick.AddListener(OnLobby);
+            _statsButton.onClick.AddListener(OnStats);
+
+            _statsPanel = BuildStatsPanel(backdrop.transform);
+        }
+
+        bool ShouldResumePendingLoadoutTransition(NetworkManager nm)
+        {
+            if (nm == null || nm.PendingLoadoutPhase == null)
+                return false;
+
+            if (string.Equals(nm.CurrentMLMatchState, "final_game_over", StringComparison.OrdinalIgnoreCase))
+            {
+                Debug.LogWarning("[PostGameFlow] Ignoring stale pending loadout phase while post-game modal is active.");
+                return false;
+            }
+
+            return true;
+        }
+
+        System.Collections.IEnumerator EnsureEventSystemReady()
+        {
+            yield return null;
+            yield return null;
+
+            var currentEventSystem = EventSystem.current;
+            if (currentEventSystem != null && currentEventSystem.gameObject.scene == gameObject.scene)
+                yield break;
+
+            var sceneEventSystem = FindEventSystemInScene(gameObject.scene);
+            if (sceneEventSystem != null)
+            {
+                if (sceneEventSystem.GetComponent<StandaloneInputModule>() == null)
+                    sceneEventSystem.gameObject.AddComponent<StandaloneInputModule>();
+                Debug.Log("[PostGameFlow] Reusing scene-local EventSystem for post-game input.");
+                yield break;
+            }
+
+            var eventSystemGo = new GameObject("PostGameEventSystem");
+            SceneManager.MoveGameObjectToScene(eventSystemGo, gameObject.scene);
+            eventSystemGo.AddComponent<EventSystem>();
+            eventSystemGo.AddComponent<StandaloneInputModule>();
+            Debug.Log("[PostGameFlow] Created scene-local EventSystem for post-game input.");
+        }
+
+        System.Collections.IEnumerator LogStableOpenState()
+        {
+            yield return new WaitForSecondsRealtime(StableOpenLogDelaySeconds);
+
+            if (_lobbyRequested || _transitioningToLoadout)
+                yield break;
+
+            bool modalActive =
+                _canvas != null &&
+                _canvas.gameObject.activeInHierarchy &&
+                _rematchButton != null &&
+                _rematchButton.gameObject.activeInHierarchy;
+            Debug.Log($"[PostGameFlow] Post-game remained active and is awaiting input (modalActive={modalActive}).");
+        }
+
+        static Canvas FindCanvasInScene(Scene scene)
+        {
+            if (!scene.IsValid())
+                return null;
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var canvas = root.GetComponentInChildren<Canvas>(true);
+                if (canvas != null)
+                    return canvas;
+            }
+
+            return null;
+        }
+
+        static EventSystem FindEventSystemInScene(Scene scene)
+        {
+            if (!scene.IsValid())
+                return null;
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var eventSystem = root.GetComponentInChildren<EventSystem>(true);
+                if (eventSystem != null)
+                    return eventSystem;
+            }
+
+            return null;
+        }
+
+        static void ClearReconnectPrefs()
+        {
+            PlayerPrefs.DeleteKey("reconnect_token");
+            PlayerPrefs.DeleteKey("reconnect_code");
+            PlayerPrefs.DeleteKey("reconnect_lane");
+            PlayerPrefs.DeleteKey("reconnect_gametype");
+            PlayerPrefs.Save();
+        }
+
+        PostGameStatsPanel BuildStatsPanel(Transform parent)
+        {
+            var root = MakePanel(parent, "PanelPostGameStats", new Color(0.04f, 0.04f, 0.10f, 0.98f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            root.SetActive(false);
+
+            var panel = root.AddComponent<PostGameStatsPanel>();
+            panel.PanelRoot = root;
+
+            var header = MakePanel(root.transform, "PanelHeader", new Color(0.10f, 0.10f, 0.18f, 1f), new Vector2(0f, 0.92f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
+            var layout = header.AddComponent<HorizontalLayoutGroup>();
+            layout.padding = new RectOffset(12, 12, 8, 8);
+            layout.spacing = 8;
+            layout.childControlWidth = true;
+            layout.childForceExpandWidth = true;
+
+            panel.Btn_Tab_Summary = MakeLayoutButton(header.transform, "BtnTabSummary", "Summary");
+            panel.Btn_Tab_Economy = MakeLayoutButton(header.transform, "BtnTabEconomy", "Economy");
+            panel.Btn_Tab_Build = MakeLayoutButton(header.transform, "BtnTabBuild", "Build");
+            panel.Btn_Tab_Waves = MakeLayoutButton(header.transform, "BtnTabWaves", "Waves");
+            panel.Btn_Close = MakeLayoutButton(header.transform, "BtnClose", "Close");
+
+            var content = new GameObject("Content");
+            content.transform.SetParent(root.transform, false);
+            var contentRt = content.AddComponent<RectTransform>();
+            contentRt.anchorMin = Vector2.zero;
+            contentRt.anchorMax = new Vector2(1f, 0.92f);
+            contentRt.offsetMin = Vector2.zero;
+            contentRt.offsetMax = Vector2.zero;
+
+            panel.PanelSummary = MakePanel(content.transform, "PanelSummary", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var summaryLayout = panel.PanelSummary.AddComponent<VerticalLayoutGroup>();
+            summaryLayout.padding = new RectOffset(24, 24, 24, 24);
+            summaryLayout.spacing = 14;
+            summaryLayout.childControlHeight = false;
+
+            panel.SummaryRows = new TMP_Text[4];
+            for (int i = 0; i < panel.SummaryRows.Length; i++)
+            {
+                var row = new GameObject($"SummaryRow_{i}");
+                row.transform.SetParent(panel.PanelSummary.transform, false);
+                row.AddComponent<LayoutElement>().preferredHeight = 42f;
+                panel.SummaryRows[i] = row.AddComponent<TextMeshProUGUI>();
+                panel.SummaryRows[i].fontSize = 16;
+                panel.SummaryRows[i].color = Color.white;
+                panel.SummaryRows[i].alignment = TextAlignmentOptions.MidlineLeft;
+            }
+
+            panel.PanelEconomy = MakePanel(content.transform, "PanelEconomy", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelEconomy.SetActive(false);
+            panel.EconomyGraph = BuildGraph(panel.PanelEconomy.transform, "EconomyGraph");
+
+            panel.PanelBuild = MakePanel(content.transform, "PanelBuild", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelBuild.SetActive(false);
+            panel.BuildGraph = BuildGraph(panel.PanelBuild.transform, "BuildGraph");
+
+            panel.PanelWaves = MakePanel(content.transform, "PanelWaves", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelWaves.SetActive(false);
+
+            var scrollGo = new GameObject("ScrollRect");
+            scrollGo.transform.SetParent(panel.PanelWaves.transform, false);
+            var scrollRt = scrollGo.AddComponent<RectTransform>();
+            scrollRt.anchorMin = Vector2.zero;
+            scrollRt.anchorMax = Vector2.one;
+            scrollRt.offsetMin = Vector2.zero;
+            scrollRt.offsetMax = Vector2.zero;
+            var scroll = scrollGo.AddComponent<ScrollRect>();
+
+            var viewport = MakePanel(scrollGo.transform, "Viewport", new Color(0f, 0f, 0f, 0.01f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            viewport.AddComponent<Mask>().showMaskGraphic = false;
+
+            var contentGo = new GameObject("WaveContent");
+            contentGo.transform.SetParent(viewport.transform, false);
+            var wavesRt = contentGo.AddComponent<RectTransform>();
+            wavesRt.anchorMin = new Vector2(0f, 1f);
+            wavesRt.anchorMax = new Vector2(1f, 1f);
+            wavesRt.pivot = new Vector2(0.5f, 1f);
+            wavesRt.offsetMin = new Vector2(0f, 0f);
+            wavesRt.offsetMax = new Vector2(0f, 0f);
+            var waveLayout = contentGo.AddComponent<VerticalLayoutGroup>();
+            waveLayout.padding = new RectOffset(12, 12, 12, 12);
+            waveLayout.spacing = 6;
+            waveLayout.childControlHeight = false;
+            waveLayout.childForceExpandHeight = false;
+            contentGo.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scroll.viewport = viewport.GetComponent<RectTransform>();
+            scroll.content = wavesRt;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+
+            panel.WaveRowContainer = wavesRt;
+            panel.WaveRowPrefab = BuildWaveRowPrefab();
+
+            return panel;
+        }
+
+        GameObject BuildWaveRowPrefab()
+        {
+            var go = new GameObject("WaveRowRuntime");
+            var rt = go.AddComponent<RectTransform>();
+            rt.sizeDelta = new Vector2(0f, 48f);
+            go.AddComponent<Image>().color = new Color(0.12f, 0.12f, 0.18f, 0.88f);
+            go.AddComponent<LayoutElement>().preferredHeight = 48f;
+
+            var text = new GameObject("Label");
+            text.transform.SetParent(go.transform, false);
+            var textRt = text.AddComponent<RectTransform>();
+            textRt.anchorMin = Vector2.zero;
+            textRt.anchorMax = Vector2.one;
+            textRt.offsetMin = new Vector2(10f, 0f);
+            textRt.offsetMax = new Vector2(-10f, 0f);
+            var tmp = text.AddComponent<TextMeshProUGUI>();
+            tmp.fontSize = 13;
+            tmp.color = Color.white;
+            tmp.alignment = TextAlignmentOptions.MidlineLeft;
+            return go;
+        }
+
+        LineGraphUI BuildGraph(Transform parent, string name)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0.05f, 0.10f);
+            rt.anchorMax = new Vector2(0.95f, 0.90f);
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            return go.AddComponent<LineGraphUI>();
+        }
+
+        GameObject MakePanel(Transform parent, string name, Color color, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = anchorMin;
+            rt.anchorMax = anchorMax;
+            rt.offsetMin = offsetMin;
+            rt.offsetMax = offsetMax;
+            go.AddComponent<Image>().color = color;
+            return go;
+        }
+
+        TMP_Text MakeText(Transform parent, string name, string text, float fontSize, Vector2 anchorMin, Vector2 anchorMax, FontStyles style, TextAlignmentOptions alignment)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = anchorMin;
+            rt.anchorMax = anchorMax;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.text = text;
+            tmp.fontSize = fontSize;
+            tmp.fontStyle = style;
+            tmp.color = Color.white;
+            tmp.alignment = alignment;
+            return tmp;
+        }
+
+        Button MakeButton(Transform parent, string name, string label, Vector2 anchorMin, Vector2 anchorMax, Color color)
+        {
+            var go = MakePanel(parent, name, color, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+            var button = go.AddComponent<Button>();
+            var text = MakeText(go.transform, "Label", label, 18, Vector2.zero, Vector2.one, FontStyles.Bold, TextAlignmentOptions.Center);
+            text.color = Color.white;
+            return button;
+        }
+
+        Button MakeLayoutButton(Transform parent, string name, string label)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.AddComponent<LayoutElement>().preferredHeight = 38f;
+            go.AddComponent<Image>().color = new Color(0.22f, 0.22f, 0.32f, 1f);
+            var button = go.AddComponent<Button>();
+            MakeText(go.transform, "Label", label, 14, Vector2.zero, Vector2.one, FontStyles.Bold, TextAlignmentOptions.Center);
+            return button;
+        }
+    }
+}

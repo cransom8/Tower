@@ -1,0 +1,212 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d76e11d12e692914781ad34a8ca59a4e, type: 3}
+  m_Name: BuildingVisualCatalog
+  m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.BuildingVisualCatalog
+  entries:
+  - key: town_core
+    buildingType: town_core
+    displayName: Civic
+    maxTier: 4
+    prefab: {fileID: 5311737425048914403, guid: 22f525768cec5394988aaba549ecac40, type: 3}
+    cardIds:
+    - building_house
+    - building_town_hall
+    - building_keep
+    - building_castle
+    portraitResourcePaths:
+    - TechTree/Buildings/building_house
+    - TechTree/Buildings/building_town_hall
+    - TechTree/Buildings/building_keep
+    - TechTree/Buildings/building_castle
+  - key: barracks
+    buildingType: barracks
+    displayName: Barracks
+    maxTier: 3
+    prefab: {fileID: 4881245431843440117, guid: 0a6af7cd8fce9f44ea2947db4d5c8d9c, type: 3}
+    cardIds:
+    - buildings_barracks_tier1
+    - buildings_barracks_tier2
+    - buildings_barracks_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_barracks_tier1
+    - TechTree/Buildings/buildings_barracks_tier2
+    - TechTree/Buildings/buildings_barracks_tier3
+  - key: blacksmith
+    buildingType: blacksmith
+    displayName: Blacksmith
+    maxTier: 3
+    prefab: {fileID: 3003480967992830738, guid: 0aca001de475cd1439b7bf0db36fd394, type: 3}
+    cardIds:
+    - buildings_blacksmith_tier1
+    - buildings_blacksmith_tier2
+    - buildings_blacksmith_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_blacksmith_tier1
+    - TechTree/Buildings/buildings_blacksmith_tier2
+    - TechTree/Buildings/buildings_blacksmith_tier3
+  - key: temple
+    buildingType: temple
+    displayName: Temple
+    maxTier: 3
+    prefab: {fileID: 4812062363149691527, guid: 102e8a61ce79c7149993ff72f7122959, type: 3}
+    cardIds:
+    - buildings_temple_tier1
+    - buildings_temple_tier2
+    - buildings_temple_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_temple_tier1
+    - TechTree/Buildings/buildings_temple_tier2
+    - TechTree/Buildings/buildings_temple_tier3
+  - key: wizard_tower
+    buildingType: wizard_tower
+    displayName: Wizard Tower
+    maxTier: 3
+    prefab: {fileID: 1286798104751371238, guid: e3ef768affbebd44b8add7e7a3346dea, type: 3}
+    cardIds:
+    - buildings_wizard_tower_tier1
+    - buildings_wizard_tower_tier2
+    - buildings_wizard_tower_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_wizard_tower_tier1
+    - TechTree/Buildings/buildings_wizard_tower_tier2
+    - TechTree/Buildings/buildings_wizard_tower_tier3
+  - key: archery_tower
+    buildingType: archery_tower
+    displayName: Archery Tower
+    maxTier: 3
+    prefab: {fileID: 4245934610585644264, guid: 3439dff6020c7d646bac73e357967c6a, type: 3}
+    cardIds:
+    - buildings_archery_tower_tier1
+    - buildings_archery_tower_tier2
+    - buildings_archery_tower_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_archery_tower_tier1
+    - TechTree/Buildings/buildings_archery_tower_tier2
+    - TechTree/Buildings/buildings_archery_tower_tier3
+  - key: stable
+    buildingType: stable
+    displayName: Stable
+    maxTier: 3
+    prefab: {fileID: 1672019796172293977, guid: dac8ecd1f2ff35d418346faae8f8184c, type: 3}
+    cardIds:
+    - buildings_stable_tier1
+    - buildings_stable_tier2
+    - buildings_stable_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_stable_tier1
+    - TechTree/Buildings/buildings_stable_tier2
+    - TechTree/Buildings/buildings_stable_tier3
+  - key: workshop
+    buildingType: workshop
+    displayName: Workshop
+    maxTier: 3
+    prefab: {fileID: 6214566301485942801, guid: 271bc890de316d94db42350c2982724c, type: 3}
+    cardIds:
+    - buildings_workshop_tier1
+    - buildings_workshop_tier2
+    - buildings_workshop_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_workshop_tier1
+    - TechTree/Buildings/buildings_workshop_tier2
+    - TechTree/Buildings/buildings_workshop_tier3
+  - key: library
+    buildingType: library
+    displayName: Library
+    maxTier: 3
+    prefab: {fileID: 831404548161701860, guid: ef4c2ecd2cfe7864882db6b555cf6748, type: 3}
+    cardIds:
+    - buildings_library_tier1
+    - buildings_library_tier2
+    - buildings_library_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_library_tier1
+    - TechTree/Buildings/buildings_library_tier2
+    - TechTree/Buildings/buildings_library_tier3
+  - key: market
+    buildingType: market
+    displayName: Market
+    maxTier: 3
+    prefab: {fileID: 1238540695871701038, guid: 0aaec0c6509e5034cba431a95dd9eb05, type: 3}
+    cardIds:
+    - buildings_market_tier1
+    - buildings_market_tier2
+    - buildings_market_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_market_tier1
+    - TechTree/Buildings/buildings_market_tier2
+    - TechTree/Buildings/buildings_market_tier3
+  - key: lumber_mill
+    buildingType: lumber_mill
+    displayName: Lumber Mill
+    maxTier: 3
+    prefab: {fileID: 5888056179496680946, guid: ea0db0ec1c05af943970ca18337e92bb, type: 3}
+    cardIds:
+    - buildings_lumber_mill_tier1
+    - buildings_lumber_mill_tier2
+    - buildings_lumber_mill_tier3
+    portraitResourcePaths:
+    - TechTree/Buildings/buildings_lumber_mill_tier1
+    - TechTree/Buildings/buildings_lumber_mill_tier2
+    - TechTree/Buildings/buildings_lumber_mill_tier3
+  - key: wall
+    buildingType: wall
+    displayName: Walls
+    maxTier: 3
+    prefab: {fileID: 843240597534784378, guid: 5569ef9b1fd4d6b47a74e1ff9cbb7e5b, type: 3}
+    cardIds:
+    - wall_tier_1
+    - wall_tier_2
+    - wall_tier_3
+    portraitResourcePaths:
+    - TechTree/Buildings/wall_tier_1
+    - TechTree/Buildings/wall_tier_2
+    - TechTree/Buildings/wall_tier_3
+  - key: gate
+    buildingType: gate
+    displayName: Gates
+    maxTier: 3
+    prefab: {fileID: 956545406451639301, guid: 191b15b488c5b214aa6a90e8a68af50b, type: 3}
+    cardIds:
+    - gate_tier_1
+    - gate_tier_2
+    - gate_tier_3
+    portraitResourcePaths:
+    - TechTree/Buildings/gate_tier_1
+    - TechTree/Buildings/gate_tier_2
+    - TechTree/Buildings/gate_tier_3
+  - key: turret
+    buildingType: turret
+    displayName: Turrets
+    maxTier: 3
+    prefab: {fileID: 6833222374974641205, guid: fb67685449a43c148b516b771c3cdfa6, type: 3}
+    cardIds:
+    - turret_tier_1
+    - turret_tier_2
+    - turret_tier_3
+    portraitResourcePaths:
+    - TechTree/Buildings/turret_tier_1
+    - TechTree/Buildings/turret_tier_2
+    - TechTree/Buildings/turret_tier_3
+  - key: tower_archer
+    buildingType: tower_archer
+    displayName: Archer Towers
+    maxTier: 3
+    prefab: {fileID: 4604682994765928067, guid: 6c617edb5daf3fd42ab96d7c257cb9bf, type: 3}
+    cardIds:
+    - archer_tower_tier_1
+    - archer_tower_tier_2
+    - archer_tower_tier_3
+    portraitResourcePaths:
+    - TechTree/Buildings/archer_tower_tier_1
+    - TechTree/Buildings/archer_tower_tier_2
+    - TechTree/Buildings/archer_tower_tier_3

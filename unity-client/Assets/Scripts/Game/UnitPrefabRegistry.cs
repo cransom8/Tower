@@ -85,12 +85,19 @@ namespace CastleDefender.Game
         public GameObject GetPrefab(string key)
         {
             var remoteContent = RemoteContentManager.Instance;
+            bool requiresRemotePrefab = RequiresRemoteUnitPrefab(remoteContent, key);
             if (remoteContent != null && remoteContent.TryGetLoadedPrefabForUnit(key, out var remotePrefab) && remotePrefab != null)
             {
                 if (IsRenderablePrefab(remotePrefab, out string remoteIssue))
                     return remotePrefab;
 
                 LogBrokenRemoteUnitPrefabOnce(key, remoteIssue, remoteContent);
+                return null;
+            }
+
+            if (requiresRemotePrefab)
+            {
+                LogMissingRequiredRemoteUnitOnce(key, remoteContent);
                 return null;
             }
 
@@ -125,13 +132,20 @@ namespace CastleDefender.Game
             if (!string.IsNullOrEmpty(skinKey))
             {
                 var remoteContent = RemoteContentManager.Instance;
+                bool requiresRemoteSkin = RequiresRemoteSkinPrefab(remoteContent, skinKey);
                 if (remoteContent != null && remoteContent.TryGetLoadedPrefabForSkin(skinKey, out var remoteSkinPrefab) && remoteSkinPrefab != null)
                 {
                     if (IsRenderablePrefab(remoteSkinPrefab, out string remoteIssue))
                         return remoteSkinPrefab;
 
                     LogBrokenRemoteSkinPrefabOnce(skinKey, unitType, remoteIssue, remoteContent);
-                    return GetPrefab(unitType);
+                    return requiresRemoteSkin ? null : GetPrefab(unitType);
+                }
+
+                if (requiresRemoteSkin)
+                {
+                    LogMissingRequiredRemoteSkinOnce(skinKey, unitType, remoteContent);
+                    return null;
                 }
 
                 if (_skinDict == null) Rebuild();
@@ -172,6 +186,7 @@ namespace CastleDefender.Game
 
             string normalizedKey = skinKey.Trim();
             var remoteContent = RemoteContentManager.Instance;
+            bool requiresRemoteSkin = RequiresRemoteSkinPrefab(remoteContent, normalizedKey);
             if (remoteContent != null
                 && remoteContent.TryGetLoadedPrefabForSkin(normalizedKey, out var remoteSkinPrefab)
                 && remoteSkinPrefab != null)
@@ -179,6 +194,9 @@ namespace CastleDefender.Game
                 prefab = remoteSkinPrefab;
                 return true;
             }
+
+            if (requiresRemoteSkin)
+                return false;
 
             if (_skinDict == null)
                 Rebuild();
@@ -272,6 +290,22 @@ namespace CastleDefender.Game
             Debug.LogWarning(message);
         }
 
+        void LogMissingRequiredRemoteUnitOnce(string key, RemoteContentManager remoteContent)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(key) ? "<empty>" : key.Trim();
+            if (!_loggedMissingUnits.Add($"remote_required:{normalizedKey}"))
+                return;
+
+            string message =
+                $"[UnitPrefabRegistry] Required remote prefab for unit '{normalizedKey}' was not loaded. " +
+                "Runtime will not fall back to the local registry when the live manifest declares the unit.";
+
+            if (IsCriticalUnit(remoteContent, normalizedKey))
+                Debug.LogError(message);
+            else
+                Debug.LogError(message);
+        }
+
         void LogBrokenRemoteUnitPrefabOnce(string key, string issue, RemoteContentManager remoteContent)
         {
             string normalizedKey = string.IsNullOrWhiteSpace(key) ? "<empty>" : key.Trim();
@@ -294,11 +328,33 @@ namespace CastleDefender.Game
             if (!_loggedMissingSkins.Add($"broken:{normalizedKey}"))
                 return;
 
-            string message =
-                $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
-                "Falling back to the base unit prefab when one is available.";
+            bool requiresRemoteSkin = RequiresRemoteSkinPrefab(remoteContent, normalizedKey);
+            string message = requiresRemoteSkin
+                ? $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
+                  "Runtime will not fall back to the base unit when the live manifest declares the skin."
+                : $"[UnitPrefabRegistry] Remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' is broken ({issue}). " +
+                  "Falling back to the base unit prefab when one is available.";
 
-            Debug.LogWarning(message);
+            if (requiresRemoteSkin && IsCriticalSkin(remoteContent, normalizedKey))
+                Debug.LogError(message);
+            else
+                Debug.LogWarning(message);
+        }
+
+        void LogMissingRequiredRemoteSkinOnce(string skinKey, string unitType, RemoteContentManager remoteContent)
+        {
+            string normalizedKey = string.IsNullOrWhiteSpace(skinKey) ? "<empty>" : skinKey.Trim();
+            if (!_loggedMissingSkins.Add($"remote_required:{normalizedKey}"))
+                return;
+
+            string message =
+                $"[UnitPrefabRegistry] Required remote skin prefab '{normalizedKey}' for unit '{unitType ?? "<unknown>"}' was not loaded. " +
+                "Runtime will not fall back to the base unit when the live manifest declares the skin.";
+
+            if (IsCriticalSkin(remoteContent, normalizedKey))
+                Debug.LogError(message);
+            else
+                Debug.LogError(message);
         }
 
         void LogBrokenLocalUnitPrefabOnce(string key, string issue)
@@ -425,6 +481,14 @@ namespace CastleDefender.Game
             return false;
         }
 
+        static bool RequiresRemoteUnitPrefab(RemoteContentManager remoteContent, string unitKey)
+        {
+            return remoteContent != null
+                && remoteContent.HasManifest
+                && !string.IsNullOrWhiteSpace(unitKey)
+                && remoteContent.ManifestContainsUnit(unitKey);
+        }
+
         static bool IsCriticalSkin(RemoteContentManager remoteContent, string skinKey)
         {
             if (remoteContent?.Manifest == null || string.IsNullOrWhiteSpace(skinKey))
@@ -443,6 +507,14 @@ namespace CastleDefender.Game
             }
 
             return false;
+        }
+
+        static bool RequiresRemoteSkinPrefab(RemoteContentManager remoteContent, string skinKey)
+        {
+            return remoteContent != null
+                && remoteContent.HasManifest
+                && !string.IsNullOrWhiteSpace(skinKey)
+                && remoteContent.ManifestContainsSkin(skinKey);
         }
     }
 }

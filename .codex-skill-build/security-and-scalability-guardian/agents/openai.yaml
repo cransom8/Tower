@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security & Scalability Guardian"
+  short_description: "Harden authority, anti-cheat, and scaling"
+  default_prompt: "Use $security-and-scalability-guardian to review this system for client-trust bugs, exploit paths, and scaling risks."

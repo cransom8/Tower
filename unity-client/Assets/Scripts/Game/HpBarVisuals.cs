@@ -5,9 +5,9 @@ namespace CastleDefender.Game
 {
     static class HpBarVisuals
     {
-        public const float UnitBillboardScaleFactor = 0.12f;
-        static readonly Color FillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
-        static readonly Color FrameColor = new(0.88f, 0.96f, 1f, 0.72f);
+        public const float UnitBillboardScaleFactor = 0.18f;
+        static readonly Color DefaultFillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
+        static readonly Color DefaultFrameColor = new(0.88f, 0.96f, 1f, 0.72f);
         const string FillVisualRootName = "FillVisual";
 
         public static void EnsureStyled(Transform barRoot)
@@ -42,16 +42,34 @@ namespace CastleDefender.Game
 
         public static void ApplyFill(Transform fill, Image image, float hp01)
         {
+            ApplyFill(fill, image, hp01, DefaultFillColor);
+        }
+
+        public static void ApplyFill(Transform fill, Image image, float hp01, Color fillColor)
+        {
             hp01 = Mathf.Clamp01(hp01);
 
             if (image != null)
             {
                 image.fillAmount = hp01;
-                image.color = FillColor;
+                image.color = fillColor;
             }
 
             if (fill != null)
-                TintFillVisual(fill, FillColor);
+                TintFillVisual(fill, fillColor);
+        }
+
+        public static void ApplyFrameColor(Transform barRoot, Color frameColor)
+        {
+            if (barRoot == null)
+                return;
+
+            var frameRoot = FindChildRecursive(barRoot, "HpFrame");
+            if (frameRoot == null)
+                return;
+
+            for (int i = 0; i < frameRoot.childCount; i++)
+                SetMeshColor(frameRoot.GetChild(i), frameColor);
         }
 
         static void EnsureFrame(Transform barRoot)
@@ -66,14 +84,14 @@ namespace CastleDefender.Game
                 go.transform.localScale = Vector3.one;
                 frameRoot = go.transform;
 
-                CreateFramePiece(frameRoot, "Top", new Vector3(0f, 0.05f, 0f), new Vector3(1.04f, 0.012f, 0.012f), false);
-                CreateFramePiece(frameRoot, "Bottom", new Vector3(0f, -0.05f, 0f), new Vector3(1.04f, 0.012f, 0.012f), false);
-                CreateFramePiece(frameRoot, "Left", new Vector3(-0.52f, 0f, 0f), new Vector3(0.02f, 0.11f, 0.012f), true);
-                CreateFramePiece(frameRoot, "Right", new Vector3(0.52f, 0f, 0f), new Vector3(0.02f, 0.11f, 0.012f), true);
+                CreateFramePiece(frameRoot, "Top", new Vector3(0f, 0.07f, 0f), new Vector3(1.12f, 0.024f, 0.024f), false);
+                CreateFramePiece(frameRoot, "Bottom", new Vector3(0f, -0.07f, 0f), new Vector3(1.12f, 0.024f, 0.024f), false);
+                CreateFramePiece(frameRoot, "Left", new Vector3(-0.56f, 0f, 0f), new Vector3(0.04f, 0.15f, 0.024f), true);
+                CreateFramePiece(frameRoot, "Right", new Vector3(0.56f, 0f, 0f), new Vector3(0.04f, 0.15f, 0.024f), true);
             }
 
             for (int i = 0; i < frameRoot.childCount; i++)
-                SetMeshColor(frameRoot.GetChild(i), FrameColor);
+                SetMeshColor(frameRoot.GetChild(i), DefaultFrameColor);
         }
 
         static void EnsureFillVisual(Transform fillRoot)
@@ -91,12 +109,12 @@ namespace CastleDefender.Game
                 go.transform.localScale = Vector3.one;
                 visualRoot = go.transform;
 
-                CreateFillPiece(visualRoot, "Core", Vector3.zero, new Vector3(1f, 1f, 1f), false);
-                CreateFillPiece(visualRoot, "LeftCap", new Vector3(-0.5f, 0f, 0f), new Vector3(0.24f, 1f, 1f), true);
-                CreateFillPiece(visualRoot, "RightCap", new Vector3(0.5f, 0f, 0f), new Vector3(0.24f, 1f, 1f), true);
+                CreateFillPiece(visualRoot, "Core", Vector3.zero, new Vector3(1.04f, 1.5f, 1.2f), false);
+                CreateFillPiece(visualRoot, "LeftCap", new Vector3(-0.52f, 0f, 0f), new Vector3(0.28f, 1.5f, 1.2f), true);
+                CreateFillPiece(visualRoot, "RightCap", new Vector3(0.52f, 0f, 0f), new Vector3(0.28f, 1.5f, 1.2f), true);
             }
 
-            TintFillVisual(fillRoot, FillColor);
+            TintFillVisual(fillRoot, DefaultFillColor);
         }
 
         static void CreateFillPiece(Transform parent, string name, Vector3 localPosition, Vector3 localScale, bool rounded)
@@ -115,7 +133,7 @@ namespace CastleDefender.Game
             var collider = primitive.GetComponent<Collider>();
             if (collider != null) Object.Destroy(collider);
 
-            SetMeshColor(primitive.transform, FillColor);
+            SetMeshColor(primitive.transform, DefaultFillColor);
         }
 
         static void TintFillVisual(Transform fillRoot, Color color)
@@ -146,7 +164,7 @@ namespace CastleDefender.Game
             var collider = primitive.GetComponent<Collider>();
             if (collider != null) Object.Destroy(collider);
 
-            SetMeshColor(primitive.transform, FrameColor);
+            SetMeshColor(primitive.transform, DefaultFrameColor);
         }
 
         static Transform FindChildRecursive(Transform root, string childName)

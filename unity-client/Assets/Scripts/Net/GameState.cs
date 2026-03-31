@@ -105,6 +105,7 @@ namespace CastleDefender.Net
         public string       reconnectToken;  // Phase U8 — store for disconnect recovery
         public bool         ranked;
         public MLBattlefieldTopology battlefieldTopology;
+        public MLBattlefieldLayout battlefieldLayout;
         public MLSlotDefinition[] slotDefinitions;
         public MLFortressBuildingConfig[] fortressBuildingConfigs;
         public MLFortressPadConfig[] fortressPadConfigs;
@@ -359,6 +360,82 @@ namespace CastleDefender.Net
         public bool   startsBuilt;
         public int    buildCost;
         public int    maxLevel;
+    }
+
+    [Serializable]
+    public class MLBattlefieldLayout
+    {
+        public string layoutId;
+        public string mapType;
+        public int    playerCount;
+        public string contentHash;
+        public MLBattlefieldLayoutLane[] lanes;
+        public MLBattlefieldRouteNode[] routeNodes;
+        public MLBattlefieldRouteSegment[] routeSegments;
+    }
+
+    [Serializable]
+    public class MLBattlefieldLayoutLane
+    {
+        public int    laneIndex;
+        public string laneKey;
+        public string slotColor;
+        public string slotKey;
+        public string branchId;
+        public MLWorldPoint townCore;
+        public MLWorldPoint frontGate;
+        public MLWorldPoint waveSpawn;
+        public MLFortressPadPlacement[] fortressPads;
+        public MLBarracksSitePlacement[] barracksSites;
+    }
+
+    [Serializable]
+    public class MLWorldPoint
+    {
+        public float x;
+        public float y;
+    }
+
+    [Serializable]
+    public class MLBattlefieldRouteNode
+    {
+        public string nodeId;
+        public int    laneIndex;
+        public string laneKey;
+        public MLWorldPoint world;
+    }
+
+    [Serializable]
+    public class MLBattlefieldRouteSegment
+    {
+        public string segmentId;
+        public string fromNodeId;
+        public string toNodeId;
+        public string laneKey;
+        public MLWorldPoint[] points;
+    }
+
+    [Serializable]
+    public class MLFortressPadPlacement
+    {
+        public string padId;
+        public string buildingType;
+        public string displayName;
+        public int    gridX;
+        public int    gridY;
+        public MLWorldPoint world;
+        public MLWorldPoint combatWorld;
+    }
+
+    [Serializable]
+    public class MLBarracksSitePlacement
+    {
+        public string barracksId;
+        public string displayName;
+        public string slot;
+        public int    sortIndex;
+        public MLWorldPoint world;
+        public string routeNodeId;
     }
 
 

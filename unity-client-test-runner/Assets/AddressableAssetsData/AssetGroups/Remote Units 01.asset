@@ -1,0 +1,51 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Units 01
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Units 01
+  m_GUID: b53fa9dc2332e6c47857a9d657aa69b4
+  m_SerializeEntries:
+  - m_GUID: 938a7ee8cf2318f4698d8ede62d86f63
+    m_Address: units/griffin
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - griffin
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 9ab829a698d6c2f44adbc501c1dcab88
+    m_Address: units/dragonide
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - dragonide
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: ad405f3b7601d1c4e8ca0e4bcc5ace47
+    m_Address: units/mummy
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - mummy
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e297ec5bfb121ea4d8d4f2b1462c7139
+    m_Address: units/chimera
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - chimera
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: 254e63a8cbbe85849bc66d85b49b2906, type: 2}
+    - {fileID: 11400000, guid: fe5d70f162d37664bb75f2fce04c37bd, type: 2}

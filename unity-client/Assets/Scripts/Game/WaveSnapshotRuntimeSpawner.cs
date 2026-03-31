@@ -10,6 +10,10 @@ namespace CastleDefender.Game
     public class WaveSnapshotRuntimeSpawner : MonoBehaviour
     {
         const float TargetFollowSharpness = 18f;
+        const float SnapshotCatchupMinStep = 0.12f;
+        const float SnapshotCatchupSpeedScale = 2.35f;
+        const float VisualMotionSqrThreshold = 0.0004f;
+        const float StationarySnapshotSnapDistance = 0.32f;
         const float AttackVisualHoldSeconds = 0.32f;
         const float HitReactVisualHoldSeconds = 0.18f;
         const float AttackVisualMinHoldSeconds = 0.22f;
@@ -22,11 +26,15 @@ namespace CastleDefender.Game
         const float GroundProbeDistance = 96f;
         const float GroundClearance = 0.04f;
         const float GroundNormalThreshold = 0.35f;
+        const float UnitSelectionColliderPadding = 0.2f;
+        const float UnitFootprintColliderRadiusScale = 0.4f;
+        const float UnitFootprintColliderHeight = 1.2f;
         const float PerimeterRouteControlScale = 0.28f;
         const float FrontGateForwardOffset = 10.2f;
         const float CombatProjectionForwardSlack = 4.5f;
         const float CombatProjectionRearSlack = 8f;
         const float CombatProjectionLateralLimit = 10f;
+        const float RouteProjectionAnchorBlendDistance = 1.75f;
         const float WaveSpawnDistance = 25f;
         const string RouteMineNode = "M";
         const string RouteWaveNodeA = "WA";
@@ -40,6 +48,8 @@ namespace CastleDefender.Game
         const string BarracksRouteNodeCenterSuffix = "CTR";
         const string BarracksRouteNodeLeftSuffix = "LFT";
         const string BarracksRouteNodeRightSuffix = "RGT";
+        const string UnitSelectionLayerName = "UnitSelection";
+        const string UnitFootprintLayerName = "UnitFootprint";
         const float CombatFacingTurnSharpness = 20f;
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
@@ -107,6 +117,7 @@ namespace CastleDefender.Game
         readonly HashSet<string> _loggedPathModeKeys = new();
         readonly HashSet<string> _loggedRejectionKeys = new();
         readonly HashSet<string> _loggedBattlefieldRouteErrors = new();
+        readonly HashSet<string> _loggedUnitQueryLayerErrors = new();
         readonly Dictionary<string, Vector3> _battlefieldTownCoreByLaneKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldFrontGateByLaneKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldBarracksByLaneAndId = new(StringComparer.OrdinalIgnoreCase);
@@ -346,15 +357,19 @@ namespace CastleDefender.Game
                 if (view.hadSnapshot)
                 {
                     Vector3 desired = view.snapshotWorldPos;
-                    float maxStep = Mathf.Max(spawnSnapDistance, view.snapshotVelocity.magnitude * dt * 1.5f);
-                    if ((view.go.transform.position - desired).sqrMagnitude > spawnSnapDistance * spawnSnapDistance)
+                    if (ShouldSnapMinorStationaryCorrection(view.latestSnapshotUnit, view.go.transform.position, desired))
                     {
-                        view.go.transform.position = Vector3.MoveTowards(view.go.transform.position, desired, maxStep);
+                        view.snapshotVelocity = Vector3.zero;
+                        view.go.transform.position = desired;
                     }
                     else
                     {
+                        float catchupStep = Mathf.Max(
+                            SnapshotCatchupMinStep,
+                            view.snapshotVelocity.magnitude * dt * SnapshotCatchupSpeedScale);
+                        Vector3 advanced = Vector3.MoveTowards(view.go.transform.position, desired, catchupStep);
                         float lerpT = 1f - Mathf.Exp(-TargetFollowSharpness * dt);
-                        view.go.transform.position = Vector3.Lerp(view.go.transform.position, desired, lerpT);
+                        view.go.transform.position = Vector3.Lerp(advanced, desired, lerpT * 0.2f);
                     }
                 }
 
@@ -362,6 +377,7 @@ namespace CastleDefender.Game
                 Vector3 moveDelta = currentPosition - view.lastFramePosition;
                 Vector3 flatDelta = moveDelta;
                 flatDelta.y = 0f;
+                bool moving = ShouldTreatSnapshotAsMoving(view.latestSnapshotUnit, flatDelta);
                 if (view.hasDesiredFacing)
                 {
                     float turnSharpness = view.lockCombatFacing
@@ -369,12 +385,11 @@ namespace CastleDefender.Game
                         : TargetFollowSharpness;
                     RotateTowardDirection(view.go.transform, view.desiredFacing, turnSharpness, dt);
                 }
-                else if (flatDelta.sqrMagnitude > 0.0004f)
+                else if (moving)
                 {
                     FaceDirection(view.go.transform, flatDelta);
                 }
 
-                bool moving = flatDelta.sqrMagnitude > 0.0004f;
                 bool attacking = now <= view.lastVisualAttackUntil
                     || (view.combatant != null && now - view.combatant.LastAttackAt <= AttackVisualHoldSeconds);
                 bool hitReacting = !attacking
@@ -502,8 +517,12 @@ namespace CastleDefender.Game
 
                     MLUnit previousSnapshotUnit = view.latestSnapshotUnit;
                     view.combatant.ApplySnapshot(defenderTeamKey, ownerTeamKey, unit.hp, unit.maxHp, unit.moveSpeed);
+                    ApplySnapshotTeamAccents(view.go, unit, ownerTeamKey);
 
                     bool hadPreviousSnapshot = view.hadSnapshot;
+                    if (hadPreviousSnapshot && ShouldFreezeMinorStationarySnapshotDrift(unit, view.snapshotWorldPos, worldPos))
+                        worldPos = view.snapshotWorldPos;
+
                     if (hadPreviousSnapshot)
                         view.snapshotVelocity = (worldPos - view.snapshotWorldPos) / snapDt;
                     else
@@ -519,7 +538,7 @@ namespace CastleDefender.Game
                     if (!view.go.activeSelf && !view.combatant.IsLocallyDefeated)
                         view.go.SetActive(true);
 
-                    if (createdNow || !hadPreviousSnapshot || (view.go.transform.position - worldPos).sqrMagnitude > spawnSnapDistance * spawnSnapDistance)
+                    if (createdNow || !hadPreviousSnapshot)
                         view.go.transform.position = worldPos;
 
                     if (TryResolveDesiredFacing(snap, unit, lane, spatialLane, worldPos, out Vector3 desiredFacing, out bool lockCombatFacing))
@@ -681,6 +700,7 @@ namespace CastleDefender.Game
             for (int i = 0; i < renderers.Length; i++)
                 UpgradeLegacyRendererMaterials(renderers[i]);
             ApplySnapshotUnitTint(go, unit, renderers, ownerTeamKey);
+            ApplySnapshotTeamAccents(go, unit, ownerTeamKey);
 
             var animators = go.GetComponentsInChildren<Animator>(true);
             var animationProfile = UnitAnimationResolver.ResolveForUnit(go, unit);
@@ -710,6 +730,7 @@ namespace CastleDefender.Game
                 unit.hp,
                 unit.maxHp,
                 unit.moveSpeed);
+            InstallUnitQueryColliders(go, renderers);
 
             var view = new WaveView
             {
@@ -741,6 +762,126 @@ namespace CastleDefender.Game
                 $"spawnedName='{go.name}' worldPos=({spawnPos.x:0.###},{spawnPos.y:0.###},{spawnPos.z:0.###}) " +
                 $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'");
             return view;
+        }
+
+        void InstallUnitQueryColliders(GameObject root, Renderer[] renderers)
+        {
+            if (root == null || !TryGetRenderableBounds(renderers, root.transform.position, out Bounds bounds))
+                return;
+
+            int selectionLayer = ResolveUnitQueryLayer(UnitSelectionLayerName, root.layer);
+            int footprintLayer = ResolveUnitQueryLayer(UnitFootprintLayerName, root.layer);
+
+            ConfigureUnitQueryCollider(
+                root.transform,
+                "RuntimeSelectionQuery",
+                selectionLayer,
+                bounds,
+                radiusScale: 0.5f,
+                minHeight: 1.8f,
+                padding: UnitSelectionColliderPadding,
+                alignToFootprint: false);
+
+            ConfigureUnitQueryCollider(
+                root.transform,
+                "RuntimeFootprintQuery",
+                footprintLayer,
+                bounds,
+                radiusScale: UnitFootprintColliderRadiusScale,
+                minHeight: UnitFootprintColliderHeight,
+                padding: 0f,
+                alignToFootprint: true);
+        }
+
+        int ResolveUnitQueryLayer(string layerName, int fallbackLayer)
+        {
+            int layer = LayerMask.NameToLayer(layerName);
+            if (layer >= 0)
+                return layer;
+
+            if (_loggedUnitQueryLayerErrors.Add(layerName))
+            {
+                Debug.LogError(
+                    $"[WaveSnapshotRuntimeSpawner] Required physics/query layer '{layerName}' is missing. " +
+                    "Add it to TagManager so unit selection and footprint triggers do not collapse onto Default.",
+                    this);
+            }
+
+            return fallbackLayer;
+        }
+
+        static bool TryGetRenderableBounds(Renderer[] renderers, Vector3 fallbackCenter, out Bounds bounds)
+        {
+            bounds = new Bounds(fallbackCenter, Vector3.zero);
+            if (renderers == null || renderers.Length == 0)
+                return false;
+
+            bool hasBounds = false;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null)
+                    continue;
+
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+
+            return hasBounds;
+        }
+
+        static void ConfigureUnitQueryCollider(
+            Transform root,
+            string childName,
+            int layer,
+            Bounds bounds,
+            float radiusScale,
+            float minHeight,
+            float padding,
+            bool alignToFootprint)
+        {
+            if (root == null)
+                return;
+
+            Transform child = root.Find(childName);
+            if (child == null)
+            {
+                child = new GameObject(childName).transform;
+                child.SetParent(root, false);
+                child.localPosition = Vector3.zero;
+                child.localRotation = Quaternion.identity;
+                child.localScale = Vector3.one;
+            }
+
+            child.gameObject.layer = layer;
+            var collider = child.GetComponent<CapsuleCollider>();
+            if (collider == null)
+                collider = child.gameObject.AddComponent<CapsuleCollider>();
+
+            collider.isTrigger = true;
+            collider.direction = 1;
+
+            Vector3 localCenter = root.InverseTransformPoint(bounds.center);
+            float width = Mathf.Max(bounds.size.x, bounds.size.z);
+            float radius = Mathf.Max(0.18f, (width * Mathf.Max(0.05f, radiusScale)) + padding);
+            float height = Mathf.Max(minHeight, bounds.size.y + (padding * 2f), radius * 2f);
+
+            if (alignToFootprint)
+            {
+                Vector3 localFoot = root.InverseTransformPoint(new Vector3(bounds.center.x, bounds.min.y, bounds.center.z));
+                localCenter = new Vector3(localCenter.x, localFoot.y + (height * 0.5f), localCenter.z);
+            }
+
+            collider.radius = radius;
+            collider.height = height;
+            collider.center = localCenter;
         }
 
         void DestroyWaveView(string id)
@@ -1085,6 +1226,8 @@ namespace CastleDefender.Game
                 return false;
             if (!IsCombatSnapshotUnit(unit))
                 return false;
+            if (ShouldPreferBattlefieldRouteProjection(unit))
+                return false;
             if (!ShouldUseLiveCombatProjection(unit, lane))
                 return false;
 
@@ -1143,6 +1286,232 @@ namespace CastleDefender.Game
 
             return string.Equals(unit.spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(unit.spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool HasAuthoritativeRouteSample(MLUnit unit)
+        {
+            return unit != null
+                && !string.IsNullOrWhiteSpace(unit.currentSegment)
+                && float.IsFinite(unit.segmentProgress)
+                && float.IsFinite(unit.routeWorldX)
+                && float.IsFinite(unit.routeWorldY);
+        }
+
+        static bool HasPresentationPhase(MLUnit unit, string presentationPhase)
+        {
+            return unit != null
+                && !string.IsNullOrWhiteSpace(presentationPhase)
+                && string.Equals(unit.presentationPhase, presentationPhase, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool HasPresentationIntent(MLUnit unit, string presentationIntent)
+        {
+            return unit != null
+                && !string.IsNullOrWhiteSpace(presentationIntent)
+                && string.Equals(unit.presentationIntent, presentationIntent, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsMovementMode(MLUnit unit, string movementMode)
+        {
+            return unit != null
+                && string.Equals(unit.movementMode, movementMode, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool HasAuthoritativeMovingPresentation(MLUnit unit)
+        {
+            return HasPresentationIntent(unit, "Move")
+                || HasPresentationIntent(unit, "Retreat")
+                || HasPresentationPhase(unit, "CombatCommit");
+        }
+
+        static bool IsAuthoritativeStationaryPresentation(MLUnit unit)
+        {
+            if (unit == null || unit.hp <= 0f)
+                return false;
+
+            if (HasPresentationPhase(unit, "FormationHold"))
+                return true;
+
+            if (HasAuthoritativeMovingPresentation(unit))
+                return false;
+
+            return HasPresentationIntent(unit, "Idle")
+                || HasPresentationIntent(unit, "Defend");
+        }
+
+        static bool ShouldSnapMinorStationaryCorrection(MLUnit unit, Vector3 currentPosition, Vector3 desiredPosition)
+        {
+            if (!IsAuthoritativeStationaryPresentation(unit))
+                return false;
+
+            Vector3 delta = desiredPosition - currentPosition;
+            delta.y = 0f;
+            return delta.sqrMagnitude <= StationarySnapshotSnapDistance * StationarySnapshotSnapDistance;
+        }
+
+        static bool ShouldFreezeMinorStationarySnapshotDrift(MLUnit unit, Vector3 currentSnapshotWorldPos, Vector3 nextSnapshotWorldPos)
+        {
+            if (!IsAuthoritativeStationaryPresentation(unit))
+                return false;
+
+            Vector3 delta = nextSnapshotWorldPos - currentSnapshotWorldPos;
+            delta.y = 0f;
+            return delta.sqrMagnitude <= StationarySnapshotSnapDistance * StationarySnapshotSnapDistance;
+        }
+
+        static bool ShouldTreatSnapshotAsMoving(MLUnit unit, Vector3 flatDelta)
+        {
+            if (IsAuthoritativeStationaryPresentation(unit))
+                return false;
+            if (HasAuthoritativeMovingPresentation(unit))
+                return true;
+
+            return flatDelta.sqrMagnitude > VisualMotionSqrThreshold;
+        }
+
+        static bool TryGetAuthoritativeAnchorDistance(MLUnit unit, out float distance)
+        {
+            distance = float.PositiveInfinity;
+            if (unit == null)
+                return false;
+            if (!float.IsFinite(unit.anchorTargetX) || !float.IsFinite(unit.anchorTargetY))
+                return false;
+
+            float sampleX = float.IsFinite(unit.routeWorldX) ? unit.routeWorldX : unit.gridX;
+            float sampleY = float.IsFinite(unit.routeWorldY) ? unit.routeWorldY : unit.gridY;
+            if (!float.IsFinite(sampleX) || !float.IsFinite(sampleY))
+                return false;
+
+            distance = Vector2.Distance(
+                new Vector2(sampleX, sampleY),
+                new Vector2(unit.anchorTargetX, unit.anchorTargetY));
+            return float.IsFinite(distance);
+        }
+
+        static bool ShouldPreferBattlefieldRouteProjection(MLUnit unit)
+        {
+            if (!HasAuthoritativeRouteSample(unit))
+                return false;
+            if (IsMovementMode(unit, "CombatEngage"))
+                return false;
+            if (IsMovementMode(unit, "LaneTravel") || IsMovementMode(unit, "ReturnToAnchor"))
+                return true;
+
+            if (IsMovementMode(unit, "FormationJoin")
+                && TryGetAuthoritativeAnchorDistance(unit, out float anchorDistance))
+            {
+                return anchorDistance > RouteProjectionAnchorBlendDistance;
+            }
+
+            return false;
+        }
+
+        static int ResolveBattlefieldRouteSampleLaneIndex(int fromLaneIndex, int toLaneIndex, float segmentProgress, int fallbackLaneIndex)
+        {
+            if (fromLaneIndex >= 0 && toLaneIndex >= 0)
+            {
+                if (fromLaneIndex == toLaneIndex)
+                    return fromLaneIndex;
+
+                return Mathf.Clamp01(segmentProgress) < 0.5f
+                    ? fromLaneIndex
+                    : toLaneIndex;
+            }
+
+            if (fromLaneIndex >= 0)
+                return fromLaneIndex;
+            if (toLaneIndex >= 0)
+                return toLaneIndex;
+
+            return fallbackLaneIndex;
+        }
+
+        bool TryResolveBattlefieldRouteLaneKey(string routeNodeId, int laneIndex, out string laneKey)
+        {
+            laneKey = null;
+
+            if (!string.IsNullOrWhiteSpace(routeNodeId)
+                && _battlefieldRouteNodeLaneByNode.TryGetValue(routeNodeId, out string mappedLaneKey)
+                && !string.IsNullOrWhiteSpace(mappedLaneKey))
+            {
+                laneKey = NormalizeBattlefieldLaneKey(mappedLaneKey);
+                if (!string.IsNullOrWhiteSpace(laneKey))
+                    return true;
+            }
+
+            laneKey = NormalizeBattlefieldLaneKey(ResolveFixedLaneKeyForLaneIndex(laneIndex));
+            return !string.IsNullOrWhiteSpace(laneKey);
+        }
+
+        bool TryResolveBattlefieldRouteWorldFallbackPosition(
+            MLUnit unit,
+            MLLaneSnap lane,
+            int spatialLane,
+            out Vector3 worldPos,
+            out Vector3 routeForward,
+            out string resolvedRouteSource)
+        {
+            worldPos = default;
+            routeForward = BattlefieldSpaceMapper.GetLaneForwardDir(lane?.laneIndex ?? 0);
+            resolvedRouteSource = null;
+
+            if (unit == null || !float.IsFinite(unit.routeWorldX) || !float.IsFinite(unit.routeWorldY))
+                return false;
+
+            int targetLaneIndex = spatialLane;
+            string laneKey = NormalizeBattlefieldLaneKey(lane?.slotColor);
+
+            if (TryParseBattlefieldSegmentId(unit.currentSegment, out string fromNode, out string toNode))
+            {
+                int fromLaneIndex = ResolveLaneIndexForRouteNode(fromNode);
+                int toLaneIndex = ResolveLaneIndexForRouteNode(toNode);
+                targetLaneIndex = ResolveBattlefieldRouteSampleLaneIndex(
+                    fromLaneIndex,
+                    toLaneIndex,
+                    unit.segmentProgress,
+                    spatialLane);
+
+                string preferredNode = targetLaneIndex == fromLaneIndex
+                    ? fromNode
+                    : (targetLaneIndex == toLaneIndex ? toNode : null);
+                if (TryResolveBattlefieldRouteLaneKey(preferredNode, targetLaneIndex, out string resolvedLaneKey))
+                    laneKey = resolvedLaneKey;
+            }
+            else if (TryNormalizeRouteNodeId(unit.routeTargetNode, out string routeTargetNode))
+            {
+                int routeLaneIndex = ResolveLaneIndexForRouteNode(routeTargetNode);
+                if (routeLaneIndex >= 0)
+                {
+                    targetLaneIndex = routeLaneIndex;
+                    if (TryResolveBattlefieldRouteLaneKey(routeTargetNode, targetLaneIndex, out string resolvedLaneKey))
+                        laneKey = resolvedLaneKey;
+                }
+            }
+
+            if (targetLaneIndex < 0 || targetLaneIndex >= LaneCombatCoreSimPositions.Length)
+                targetLaneIndex = spatialLane;
+
+            laneKey = NormalizeBattlefieldLaneKey(laneKey);
+            if (string.IsNullOrWhiteSpace(laneKey)
+                && !TryResolveBattlefieldRouteLaneKey(null, targetLaneIndex, out laneKey))
+            {
+                return false;
+            }
+
+            if (!TryResolveLaneCombatSimWorldPosition(
+                unit.routeWorldX,
+                unit.routeWorldY,
+                targetLaneIndex,
+                laneKey,
+                out worldPos,
+                out routeForward,
+                out resolvedRouteSource))
+            {
+                return false;
+            }
+
+            resolvedRouteSource = $"route_world_sim:{resolvedRouteSource}";
+            return true;
         }
 
         bool TryResolveLaneCombatSimWorldPosition(
@@ -1601,117 +1970,158 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
-                return true;
-
             if (TryResolveLiveCombatWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
                 return true;
 
-            if (!TryResolveBattlefieldSegment(unit, lane, out string fromNode, out string toNode, out string segmentId, out failureReason))
-                return false;
-
-            if (!TryResolveBattlefieldNodeWorld(fromNode, out Vector3 fromWorld, out string fromLaneKey, out string fromReason))
+            string routeFailure = null;
+            if (TryResolveBattlefieldSegment(unit, lane, out string fromNode, out string toNode, out string segmentId, out string segmentFailure))
             {
-                failureReason = fromReason;
-                return false;
+                if (!TryResolveBattlefieldNodeWorld(fromNode, out Vector3 fromWorld, out string fromLaneKey, out string fromReason))
+                {
+                    routeFailure = fromReason;
+                }
+                else if (!TryResolveBattlefieldNodeWorld(toNode, out Vector3 toWorld, out string toLaneKey, out string toReason))
+                {
+                    routeFailure = toReason;
+                }
+                else if (!TryResolveBattlefieldSegmentProgress(unit, out float segmentProgress))
+                {
+                    routeFailure = $"segmentProgress is invalid ({unit.segmentProgress:0.###})";
+                }
+                else if (!TryBuildBattlefieldRoutePolyline(
+                    fromNode,
+                    toNode,
+                    fromWorld,
+                    toWorld,
+                    out Vector3 p0,
+                    out Vector3 p1,
+                    out Vector3 p2,
+                    out int pointCount,
+                    out string segmentShape,
+                    out string polylineFailure))
+                {
+                    routeFailure = polylineFailure;
+                }
+                else if (!TryResolveAuthoritativeRouteOffsets(
+                    unit,
+                    segmentId,
+                    segmentProgress,
+                    out float longitudinalOffset,
+                    out float lateralOffset,
+                    out string offsetFailure))
+                {
+                    routeFailure = offsetFailure;
+                }
+                else if (!TrySampleBattlefieldPolyline(
+                    p0,
+                    p1,
+                    p2,
+                    pointCount,
+                    segmentProgress,
+                    longitudinalOffset,
+                    lateralOffset,
+                    out worldPos,
+                    out routeForward))
+                {
+                    routeFailure = $"failed to sample segment '{segmentId}'";
+                }
+                else
+                {
+                    resolvedRouteSource =
+                        $"battlefield_routes:{segmentShape}:{segmentId}:from={fromLaneKey}:to={toLaneKey}";
+                    return true;
+                }
+            }
+            else
+            {
+                routeFailure = segmentFailure;
             }
 
-            if (!TryResolveBattlefieldNodeWorld(toNode, out Vector3 toWorld, out string toLaneKey, out string toReason))
+            if (HasAuthoritativeRouteSample(unit)
+                && TryResolveBattlefieldRouteWorldFallbackPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
             {
-                failureReason = toReason;
-                return false;
+                resolvedRouteSource = $"battlefield_routes:fallback:{resolvedRouteSource}";
+                failureReason = routeFailure;
+                return true;
             }
 
-            if (!TryResolveBattlefieldSegmentProgress(unit, out float segmentProgress))
+            if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
             {
-                failureReason = $"segmentProgress is invalid ({unit.segmentProgress:0.###})";
-                return false;
+                resolvedRouteSource = $"battlefield_routes:fallback:{resolvedRouteSource}";
+                failureReason = routeFailure;
+                return true;
             }
 
-            Vector3 p0 = fromWorld;
-            Vector3 p1;
-            Vector3 p2 = default;
-            int pointCount;
-            string segmentShape;
+            failureReason = routeFailure;
+            return false;
+        }
+
+        bool TryBuildBattlefieldRoutePolyline(
+            string fromNode,
+            string toNode,
+            Vector3 fromWorld,
+            Vector3 toWorld,
+            out Vector3 p0,
+            out Vector3 p1,
+            out Vector3 p2,
+            out int pointCount,
+            out string segmentShape,
+            out string failureReason)
+        {
+            p0 = fromWorld;
+            p1 = default;
+            p2 = default;
+            pointCount = 0;
+            segmentShape = null;
+            failureReason = null;
 
             if (IsBarracksLinkSegment(fromNode, toNode))
             {
                 p1 = toWorld;
                 pointCount = 2;
                 segmentShape = "barracks_link";
+                return true;
             }
-            else if (IsWaveLaneSegment(fromNode, toNode))
+
+            if (IsWaveLaneSegment(fromNode, toNode))
             {
                 p1 = toWorld;
                 pointCount = 2;
                 segmentShape = "wave_lane";
+                return true;
             }
-            else if (IsMineBridgeSegment(fromNode, toNode))
+
+            if (IsMineBridgeSegment(fromNode, toNode))
             {
                 p1 = toWorld;
                 pointCount = 2;
                 segmentShape = "center_bridge";
+                return true;
             }
-            else if (IsCenterCrossSegment(fromNode, toNode))
-            {
-                if (_battlefieldMineAnchor == null)
-                {
-                    failureReason = "Wave center anchor is missing for center-cross route.";
-                    LogBattlefieldRouteFailureOnce("anchor:mine_missing", failureReason);
-                    return false;
-                }
 
-                Vector3 mineWorld = _battlefieldMineAnchor.position;
+            if (_battlefieldMineAnchor == null)
+            {
+                failureReason = IsCenterCrossSegment(fromNode, toNode)
+                    ? "Wave center anchor is missing for center-cross route."
+                    : "Wave center anchor is missing for perimeter route.";
+                LogBattlefieldRouteFailureOnce("anchor:mine_missing", failureReason);
+                return false;
+            }
+
+            Vector3 mineWorld = _battlefieldMineAnchor.position;
+            if (IsCenterCrossSegment(fromNode, toNode))
+            {
                 p1 = mineWorld;
                 p2 = toWorld;
                 pointCount = 3;
                 segmentShape = "center_cross";
-            }
-            else
-            {
-                if (_battlefieldMineAnchor == null)
-                {
-                    failureReason = "Wave center anchor is missing for perimeter route.";
-                    LogBattlefieldRouteFailureOnce("anchor:mine_missing", failureReason);
-                    return false;
-                }
-
-                Vector3 mineWorld = _battlefieldMineAnchor.position;
-                p1 = ResolvePerimeterControlPoint(fromWorld, toWorld, mineWorld);
-                p2 = toWorld;
-                pointCount = 3;
-                segmentShape = "outer_perimeter";
+                return true;
             }
 
-            if (!TryResolveAuthoritativeRouteOffsets(
-                unit,
-                segmentId,
-                segmentProgress,
-                out float longitudinalOffset,
-                out float lateralOffset,
-                out string offsetFailure))
-            {
-                failureReason = offsetFailure;
-                return false;
-            }
-
-            if (!TrySampleBattlefieldPolyline(
-                p0,
-                p1,
-                p2,
-                pointCount,
-                segmentProgress,
-                longitudinalOffset,
-                lateralOffset,
-                out worldPos,
-                out routeForward))
-            {
-                failureReason = $"failed to sample segment '{segmentId}'";
-                return false;
-            }
-
-            resolvedRouteSource =
-                $"battlefield_routes:{segmentShape}:{segmentId}:from={fromLaneKey}:to={toLaneKey}";
+            p1 = ResolvePerimeterControlPoint(fromWorld, toWorld, mineWorld);
+            p2 = toWorld;
+            pointCount = 3;
+            segmentShape = "outer_perimeter";
             return true;
         }
 
@@ -1778,14 +2188,20 @@ namespace CastleDefender.Game
             if (!isBarracksUnit)
                 return false;
 
-            if (string.Equals(unit.currentWaypointTargetKind, "outsideGateAnchor", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(unit.currentWaypointTargetKind, "insideGateAnchor", StringComparison.OrdinalIgnoreCase))
-            {
+            bool wantsAnchorProjection =
+                string.Equals(unit.currentWaypointTargetKind, "outsideGateAnchor", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(unit.currentWaypointTargetKind, "insideGateAnchor", StringComparison.OrdinalIgnoreCase);
+            if (!wantsAnchorProjection)
+                return false;
+            if (!HasAuthoritativeRouteSample(unit))
                 return true;
-            }
+            if (ShouldPreferBattlefieldRouteProjection(unit))
+                return false;
+            if (!IsMovementMode(unit, "FormationJoin"))
+                return false;
 
-            return string.Equals(unit.commandState, "DEFEND", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(unit.commandState, "RETREAT", StringComparison.OrdinalIgnoreCase);
+            return TryGetAuthoritativeAnchorDistance(unit, out float anchorDistance)
+                && anchorDistance <= RouteProjectionAnchorBlendDistance;
         }
 
         bool TryResolveBattlefieldSegment(
@@ -2223,6 +2639,18 @@ namespace CastleDefender.Game
                 return false;
             }
 
+            bool hasExplicitRouteSample =
+                !string.IsNullOrWhiteSpace(unit.currentSegment)
+                || !string.IsNullOrWhiteSpace(unit.routeType);
+
+            if (hasExplicitRouteSample
+                && float.IsFinite(unit.routeWorldX)
+                && float.IsFinite(unit.routeWorldY))
+            {
+                point = new Vector2(unit.routeWorldX, unit.routeWorldY);
+                return true;
+            }
+
             if (float.IsFinite(unit.gridX) && float.IsFinite(unit.gridY))
             {
                 point = new Vector2(unit.gridX, unit.gridY);
@@ -2400,13 +2828,33 @@ namespace CastleDefender.Game
                 : string.Empty;
         }
 
+        static bool IsDungeonWaveUnit(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            if (unit.isWaveUnit)
+                return true;
+
+            string explicitAllegiance = BattleTeamUtility.NormalizeServerTeamKey(unit.allegianceKey);
+            if (string.Equals(explicitAllegiance, "dungeon", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            string spawnSourceType = string.IsNullOrWhiteSpace(unit.spawnSourceType)
+                ? null
+                : unit.spawnSourceType.Trim();
+            return string.Equals(spawnSourceType, "scheduled_wave", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(spawnSourceType, "dungeon_wave", StringComparison.OrdinalIgnoreCase);
+        }
+
         static string ResolveOwnerTeamKey(MLUnit unit, MLLaneSnap lane, string defenderTeamKey)
         {
+            if (IsDungeonWaveUnit(unit))
+                return "dungeon";
+
             string explicitAllegiance = BattleTeamUtility.NormalizeServerTeamKey(unit?.allegianceKey);
             if (!string.IsNullOrWhiteSpace(explicitAllegiance))
             {
-                if (string.Equals(explicitAllegiance, "dungeon", StringComparison.OrdinalIgnoreCase))
-                    return null;
                 return explicitAllegiance;
             }
 
@@ -2426,7 +2874,9 @@ namespace CastleDefender.Game
                 return defenderTeamKey;
             }
 
-            return null;
+            return unit != null && unit.isWaveUnit
+                ? "dungeon"
+                : null;
         }
 
         static string ResolveLaneTeamKey(int laneIndex)
@@ -2550,6 +3000,10 @@ namespace CastleDefender.Game
             if (renderers == null)
                 return;
 
+            if (IsDungeonWaveUnit(unit)
+                || string.Equals(BattleTeamUtility.NormalizeServerTeamKey(ownerTeamKey), "dungeon", StringComparison.OrdinalIgnoreCase))
+                return;
+
             if (!string.IsNullOrWhiteSpace(ownerTeamKey)
                 && BattleTeamUtility.TryParseServerTeamKey(ownerTeamKey, out BattleTeam team))
             {
@@ -2561,6 +3015,25 @@ namespace CastleDefender.Game
             }
 
             ApplyHostileTint(renderers);
+        }
+
+        static void ApplySnapshotTeamAccents(GameObject root, MLUnit unit, string ownerTeamKey)
+        {
+            if (root == null)
+                return;
+
+            if (IsDungeonWaveUnit(unit)
+                || string.Equals(BattleTeamUtility.NormalizeServerTeamKey(ownerTeamKey), "dungeon", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (!BattleTeamUtility.TryParseServerTeamKey(ownerTeamKey, out BattleTeam team))
+                return;
+
+            var accents = root.GetComponent<UnitTeamAccentMarkers>();
+            if (accents == null)
+                accents = root.AddComponent<UnitTeamAccentMarkers>();
+
+            accents.Apply(team);
         }
 
         static bool ApplyTeamMaterialProfiles(GameObject root, BattleTeam team)
@@ -2849,7 +3322,7 @@ namespace CastleDefender.Game
         {
             UnitAnimationAttackFamily.Ranged => HitEffect.TowerType.Archer,
             UnitAnimationAttackFamily.Magic => HitEffect.TowerType.Mage,
-            UnitAnimationAttackFamily.Support => HitEffect.TowerType.Mage,
+            UnitAnimationAttackFamily.Support => HitEffect.TowerType.Ballista,
             UnitAnimationAttackFamily.Siege => HitEffect.TowerType.Ballista,
             _ => HitEffect.TowerType.Fighter,
         };

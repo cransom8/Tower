@@ -131,14 +131,33 @@ namespace CastleDefender.UI
 
         enum DetailPreviewMotion
         {
+            Spawn,
             Idle,
             Walk,
             March,
             Run,
             Strike,
             Special,
+            Defend,
+            Retreat,
             Hit,
             Death,
+        }
+
+        struct DetailPreviewCycleEntry
+        {
+            public DetailPreviewMotion Motion;
+            public string StateName;
+            public float ClipLength;
+            public float Speed;
+
+            public DetailPreviewCycleEntry(DetailPreviewMotion motion, string stateName, float clipLength, float speed)
+            {
+                Motion = motion;
+                StateName = stateName;
+                ClipLength = clipLength;
+                Speed = speed;
+            }
         }
 
         enum ClassicRpgButtonSize
@@ -188,6 +207,8 @@ namespace CastleDefender.UI
         const float CompactRequirementCardFlexWidth = 2.1f;
         const float ArrowFlexWidth = 0.45f;
         const float RequiredRaceSelectionPortraitTimeoutSeconds = 10f;
+        const float DetailsPreviewCycleInitialDelay = 1.2f;
+        const float DetailsPreviewManualResumeDelay = 2.6f;
 
         PhaseState _state = PhaseState.Idle;
         ProgressionViewerMode _mode = ProgressionViewerMode.LobbyViewer;
@@ -285,7 +306,9 @@ namespace CastleDefender.UI
         bool _isCapturingPortraits;
         UnitPortraitCamera _detailsPreviewCam;
         Coroutine _detailsPreviewResetRoutine;
+        Coroutine _detailsPreviewCycleRoutine;
         string _detailsPreviewStagedKey;
+        string _detailsPreviewCycleSignature;
         int _raceSelectionGateVersion;
 
         bool _loadoutReadyEmitted;
@@ -372,6 +395,7 @@ namespace CastleDefender.UI
             StopWarmupRoutines();
             StopRaceSelectionGate();
             StopDetailsPreviewResetRoutine();
+            StopDetailsPreviewCycleRoutine();
             DestroyRuntimePortraitStudio();
         }
 
@@ -4788,9 +4812,10 @@ namespace CastleDefender.UI
                 new Color(0.15f, 0.18f, 0.24f, 0.92f));
 
             bool hasLivePreview = TryEnsureDetailsPreviewUnit(unit);
+            List<DetailPreviewCycleEntry> cycleEntries = hasLivePreview ? BuildDetailsPreviewCycleEntries() : null;
             SetDetailsPreviewStatus(
                 hasLivePreview
-                    ? $"Preview ready. Choose a motion to watch how {unit?.DisplayName ?? "this unit"} moves in battle."
+                    ? BuildDetailsPreviewReadyStatus(unit, cycleEntries)
                     : $"Live motion preview is not wired for {unit?.DisplayName ?? "this entry"} yet.");
             RefreshMotionPreviewButton(_btnPreviewIdle, _txtPreviewIdle, "Idle", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Idle));
             RefreshMotionPreviewButton(_btnPreviewWalk, _txtPreviewWalk, "Walk", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Walk));
@@ -4804,6 +4829,7 @@ namespace CastleDefender.UI
                 hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Special));
             RefreshMotionPreviewButton(_btnPreviewHit, _txtPreviewHit, "Hit React", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Hit));
             RefreshMotionPreviewButton(_btnPreviewDeath, _txtPreviewDeath, "Death", hasLivePreview && CanPlayDetailsPreviewMotion(DetailPreviewMotion.Death));
+            RefreshDetailsPreviewCycle(unit, hasLivePreview, cycleEntries);
         }
 
         static void SetPreviewButtonState(Button button, TMP_Text label, bool enabled, string text, Color enabledColor, Color disabledColor)
@@ -4844,36 +4870,64 @@ namespace CastleDefender.UI
 
         void PlayDetailsPreviewMotion(DetailPreviewMotion motion)
         {
+            StopDetailsPreviewCycleRoutine();
+            StopDetailsPreviewResetRoutine();
+
+            if (!TryPlayDetailsPreviewMotion(motion, updateStatus: true, scheduleReset: true))
+                return;
+
+            StartDetailsPreviewCycle(
+                _selectedUnit,
+                BuildDetailsPreviewCycleEntries(),
+                BuildDetailsPreviewCycleSignature(_selectedUnit),
+                DetailsPreviewManualResumeDelay);
+        }
+
+        bool TryPlayDetailsPreviewMotion(DetailPreviewMotion motion, bool updateStatus, bool scheduleReset)
+        {
+            return TryPlayDetailsPreviewStates(motion, ResolvePreviewMotionStates(motion), updateStatus, scheduleReset);
+        }
+
+        bool TryPlayDetailsPreviewStates(DetailPreviewMotion motion, string[] candidateStates, bool updateStatus, bool scheduleReset)
+        {
             if (!TryEnsureDetailsPreviewUnit(_selectedUnit))
             {
-                SetDetailsPreviewStatus("This entry does not have a live rig preview yet.");
-                return;
+                if (updateStatus)
+                    SetDetailsPreviewStatus("This entry does not have a live rig preview yet.");
+                return false;
             }
 
             if (_detailsPreviewCam == null)
-                return;
+                return false;
 
             _detailsPreviewCam.SetAnimatorSpeed(GetPreviewMotionSpeed(motion));
-            if (!_detailsPreviewCam.TryPlayFirstAvailableState(GetPreviewMotionStates(motion), out var playedState, out var clipLength, 0f))
+            if (!_detailsPreviewCam.TryPlayFirstAvailableState(candidateStates, out var playedState, out var clipLength, 0f))
             {
-                SetDetailsPreviewStatus($"No {BuildPreviewMotionLabel(motion, _selectedUnit).ToLowerInvariant()} animation is wired for {_selectedUnit?.DisplayName ?? "this unit"} yet.");
-                return;
+                if (updateStatus)
+                {
+                    SetDetailsPreviewStatus($"No {BuildPreviewMotionLabel(motion, _selectedUnit).ToLowerInvariant()} animation is wired for {_selectedUnit?.DisplayName ?? "this unit"} yet.");
+                }
+
+                return false;
             }
 
             StopDetailsPreviewResetRoutine();
-            SetDetailsPreviewStatus(BuildPreviewStatusText(motion, _selectedUnit, playedState));
+            if (updateStatus)
+                SetDetailsPreviewStatus(BuildPreviewStatusText(motion, _selectedUnit, playedState));
 
-            if (IsTransientPreviewMotion(motion))
+            if (scheduleReset && IsTransientPreviewMotion(motion))
             {
                 float resetDelay = ResolveTransientPreviewDelay(motion, clipLength);
                 _detailsPreviewResetRoutine = StartCoroutine(ReturnDetailsPreviewToIdle(resetDelay));
             }
+
+            return true;
         }
 
         bool CanPlayDetailsPreviewMotion(DetailPreviewMotion motion)
         {
             return _detailsPreviewCam != null
-                && _detailsPreviewCam.HasAnyState(GetPreviewMotionStates(motion));
+                && _detailsPreviewCam.HasAnyState(ResolvePreviewMotionStates(motion));
         }
 
         void RefreshDetailsPortrait(RaceProgressionUnitDefinition unit)
@@ -4940,9 +4994,10 @@ namespace CastleDefender.UI
             if (!string.Equals(_detailsPreviewStagedKey, previewKey, StringComparison.OrdinalIgnoreCase) || previewCam.StagedObject == null)
             {
                 StopDetailsPreviewResetRoutine();
+                StopDetailsPreviewCycleRoutine();
                 previewCam.ShowUnit(previewKey);
                 previewCam.SetAnimatorSpeed(1f);
-                previewCam.PlayFirstAvailableState(GetPreviewMotionStates(DetailPreviewMotion.Idle), 0.05f);
+                previewCam.PlayFirstAvailableState(ResolvePreviewMotionStates(DetailPreviewMotion.Idle), 0.05f);
                 _detailsPreviewStagedKey = previewKey;
             }
 
@@ -4952,6 +5007,7 @@ namespace CastleDefender.UI
         void ClearDetailsLivePreview()
         {
             StopDetailsPreviewResetRoutine();
+            StopDetailsPreviewCycleRoutine();
             _detailsPreviewStagedKey = null;
             if (_detailsPreviewCam != null)
                 _detailsPreviewCam.Clear();
@@ -4995,7 +5051,7 @@ namespace CastleDefender.UI
                 yield break;
 
             _detailsPreviewCam.SetAnimatorSpeed(1f);
-            _detailsPreviewCam.PlayFirstAvailableState(GetPreviewMotionStates(DetailPreviewMotion.Idle), 0.08f);
+            _detailsPreviewCam.PlayFirstAvailableState(ResolvePreviewMotionStates(DetailPreviewMotion.Idle), 0.08f);
             SetDetailsPreviewStatus($"Preview reset to idle for {_selectedUnit.DisplayName}.");
             _detailsPreviewResetRoutine = null;
         }
@@ -5009,27 +5065,356 @@ namespace CastleDefender.UI
             _detailsPreviewResetRoutine = null;
         }
 
+        void RefreshDetailsPreviewCycle(RaceProgressionUnitDefinition unit, bool hasLivePreview, List<DetailPreviewCycleEntry> cycleEntries)
+        {
+            if (!hasLivePreview || unit == null)
+            {
+                StopDetailsPreviewCycleRoutine();
+                return;
+            }
+
+            List<DetailPreviewCycleEntry> resolvedEntries = cycleEntries ?? BuildDetailsPreviewCycleEntries();
+            if (resolvedEntries.Count < 2)
+            {
+                StopDetailsPreviewCycleRoutine();
+                return;
+            }
+
+            string cycleSignature = BuildDetailsPreviewCycleSignature(unit);
+            if (_detailsPreviewCycleRoutine != null
+                && string.Equals(_detailsPreviewCycleSignature, cycleSignature, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            StartDetailsPreviewCycle(unit, resolvedEntries, cycleSignature, DetailsPreviewCycleInitialDelay);
+        }
+
+        void StartDetailsPreviewCycle(
+            RaceProgressionUnitDefinition unit,
+            List<DetailPreviewCycleEntry> cycleEntries,
+            string cycleSignature,
+            float initialDelay)
+        {
+            StopDetailsPreviewCycleRoutine();
+            if (unit == null || cycleEntries == null || cycleEntries.Count < 2 || string.IsNullOrWhiteSpace(cycleSignature))
+                return;
+
+            _detailsPreviewCycleSignature = cycleSignature;
+            _detailsPreviewCycleRoutine = StartCoroutine(RunDetailsPreviewCycle(cycleSignature, cycleEntries.ToArray(), initialDelay));
+        }
+
+        IEnumerator RunDetailsPreviewCycle(string cycleSignature, DetailPreviewCycleEntry[] cycleEntries, float initialDelay)
+        {
+            if (cycleEntries == null || cycleEntries.Length < 2)
+            {
+                _detailsPreviewCycleRoutine = null;
+                _detailsPreviewCycleSignature = null;
+                yield break;
+            }
+
+            if (initialDelay > 0f)
+                yield return new WaitForSecondsRealtime(initialDelay);
+
+            if (!IsDetailsPreviewCycleCurrent(cycleSignature))
+            {
+                _detailsPreviewCycleRoutine = null;
+                _detailsPreviewCycleSignature = null;
+                yield break;
+            }
+
+            int index = cycleEntries[0].Motion == DetailPreviewMotion.Idle && cycleEntries.Length > 1 ? 1 : 0;
+            while (IsDetailsPreviewCycleCurrent(cycleSignature))
+            {
+                DetailPreviewCycleEntry entry = cycleEntries[index];
+                if (TryPlayDetailsPreviewStates(entry.Motion, new[] { entry.StateName }, updateStatus: false, scheduleReset: false))
+                    yield return new WaitForSecondsRealtime(ResolveDetailsPreviewCycleDwell(entry));
+                else
+                    yield return new WaitForSecondsRealtime(0.4f);
+
+                index = (index + 1) % cycleEntries.Length;
+            }
+
+            if (string.Equals(_detailsPreviewCycleSignature, cycleSignature, StringComparison.OrdinalIgnoreCase))
+            {
+                _detailsPreviewCycleRoutine = null;
+                _detailsPreviewCycleSignature = null;
+            }
+        }
+
+        bool IsDetailsPreviewCycleCurrent(string cycleSignature)
+        {
+            return !string.IsNullOrWhiteSpace(cycleSignature)
+                && _detailsPreviewCam != null
+                && _detailsPreviewCam.StagedObject != null
+                && _selectedUnit != null
+                && string.Equals(_detailsPreviewCycleSignature, cycleSignature, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(BuildDetailsPreviewCycleSignature(_selectedUnit), cycleSignature, StringComparison.OrdinalIgnoreCase);
+        }
+
+        void StopDetailsPreviewCycleRoutine()
+        {
+            if (_detailsPreviewCycleRoutine != null)
+            {
+                StopCoroutine(_detailsPreviewCycleRoutine);
+                _detailsPreviewCycleRoutine = null;
+            }
+
+            _detailsPreviewCycleSignature = null;
+        }
+
+        List<DetailPreviewCycleEntry> BuildDetailsPreviewCycleEntries()
+        {
+            var entries = new List<DetailPreviewCycleEntry>();
+            if (_detailsPreviewCam == null)
+                return entries;
+
+            var seenStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Spawn, ResolvePreviewMotionStates(DetailPreviewMotion.Spawn), 1);
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Idle, ResolvePreviewMotionStates(DetailPreviewMotion.Idle), 1);
+
+            string[] moveStates = ResolvePreviewMoveStates(preferRun: false);
+            if (moveStates.Length > 0)
+            {
+                AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Walk, new[] { moveStates[0] }, 1);
+                if (moveStates.Length > 1)
+                    AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Run, SlicePreviewStates(moveStates, 1), 1);
+                if (moveStates.Length > 2)
+                    AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.March, SlicePreviewStates(moveStates, 2), int.MaxValue);
+            }
+
+            string[] attackStates = ResolvePreviewAttackStates(preferAlternate: false);
+            if (attackStates.Length > 0)
+            {
+                AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Strike, new[] { attackStates[0] }, 1);
+                if (attackStates.Length > 1)
+                    AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Special, SlicePreviewStates(attackStates, 1), int.MaxValue);
+            }
+
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Defend, ResolvePreviewMotionStates(DetailPreviewMotion.Defend), 1);
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Retreat, ResolvePreviewMotionStates(DetailPreviewMotion.Retreat), 1);
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Hit, ResolvePreviewMotionStates(DetailPreviewMotion.Hit), 1);
+            AppendDetailsPreviewCycleEntries(entries, seenStates, DetailPreviewMotion.Death, ResolvePreviewMotionStates(DetailPreviewMotion.Death), 1);
+
+            return entries;
+        }
+
+        void AppendDetailsPreviewCycleEntries(
+            List<DetailPreviewCycleEntry> entries,
+            HashSet<string> seenStates,
+            DetailPreviewMotion motion,
+            string[] candidateStates,
+            int maxEntries)
+        {
+            if (entries == null || seenStates == null || candidateStates == null || candidateStates.Length == 0 || maxEntries <= 0)
+                return;
+
+            int added = 0;
+            for (int i = 0; i < candidateStates.Length && added < maxEntries; i++)
+            {
+                if (!TryResolveDetailsPreviewCycleEntry(motion, candidateStates[i], out var entry))
+                    continue;
+
+                string dedupeKey = ResolvePreviewStateIdentity(entry.StateName);
+                if (string.IsNullOrWhiteSpace(dedupeKey) || !seenStates.Add(dedupeKey))
+                    continue;
+
+                entries.Add(entry);
+                added++;
+            }
+        }
+
+        bool TryResolveDetailsPreviewCycleEntry(DetailPreviewMotion motion, string candidateStateName, out DetailPreviewCycleEntry entry)
+        {
+            entry = default;
+            if (_detailsPreviewCam == null || string.IsNullOrWhiteSpace(candidateStateName))
+                return false;
+
+            Animator[] animators = _detailsPreviewCam.GetStagedAnimators();
+            for (int i = 0; i < animators.Length; i++)
+            {
+                var animator = animators[i];
+                if (animator == null)
+                    continue;
+
+                int stateHash = Animator.StringToHash(candidateStateName);
+                if (!animator.HasState(0, stateHash))
+                    continue;
+
+                entry = new DetailPreviewCycleEntry(
+                    motion,
+                    candidateStateName,
+                    UnitAnimationResolver.ResolveClipLength(animator, candidateStateName),
+                    GetPreviewMotionSpeed(motion));
+                return true;
+            }
+
+            return false;
+        }
+
+        static float ResolveDetailsPreviewCycleDwell(DetailPreviewCycleEntry entry)
+        {
+            float playbackSeconds = entry.ClipLength > 0.01f && entry.Speed > 0.05f
+                ? entry.ClipLength / entry.Speed
+                : 0f;
+
+            return entry.Motion switch
+            {
+                DetailPreviewMotion.Idle => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds, 1.15f, 1.75f) : 1.25f,
+                DetailPreviewMotion.Walk => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds, 1.05f, 1.55f) : 1.15f,
+                DetailPreviewMotion.March => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds, 1.20f, 1.85f) : 1.35f,
+                DetailPreviewMotion.Run => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds, 1.00f, 1.40f) : 1.10f,
+                DetailPreviewMotion.Hit => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds + 0.10f, 0.90f, 1.35f) : 1.00f,
+                DetailPreviewMotion.Death => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds + 0.20f, 1.40f, 2.80f) : 1.90f,
+                _ => playbackSeconds > 0.01f ? Mathf.Clamp(playbackSeconds + 0.10f, 1.00f, 1.90f) : 1.20f,
+            };
+        }
+
+        string BuildDetailsPreviewCycleSignature(RaceProgressionUnitDefinition unit)
+        {
+            string previewKey = ResolveDetailsPreviewKey(unit);
+            string unitKey = NormalizeTechTreeKey(unit?.Id);
+            return $"{unitKey}|{previewKey ?? string.Empty}";
+        }
+
         static float GetPreviewMotionSpeed(DetailPreviewMotion motion)
         {
             return motion switch
             {
                 DetailPreviewMotion.March => 0.72f,
+                DetailPreviewMotion.Retreat => 0.9f,
                 _ => 1f,
             };
         }
 
-        static string[] GetPreviewMotionStates(DetailPreviewMotion motion)
+        string[] ResolvePreviewMotionStates(DetailPreviewMotion motion)
+        {
+            var profile = _detailsPreviewCam != null ? _detailsPreviewCam.StagedAnimationProfile : null;
+            return motion switch
+            {
+                DetailPreviewMotion.Spawn => ChoosePreviewStateCandidates(profile?.SpawnStates, GetLegacyPreviewMotionStates(motion)),
+                DetailPreviewMotion.Idle => ChoosePreviewStateCandidates(profile?.IdleStates, GetLegacyPreviewMotionStates(motion)),
+                DetailPreviewMotion.Walk => ResolvePreviewMoveStates(preferRun: false),
+                DetailPreviewMotion.March => ResolvePreviewMoveStates(preferRun: false),
+                DetailPreviewMotion.Run => ResolvePreviewMoveStates(preferRun: true),
+                DetailPreviewMotion.Strike => ResolvePreviewAttackStates(preferAlternate: false),
+                DetailPreviewMotion.Special => ResolvePreviewAttackStates(preferAlternate: true),
+                DetailPreviewMotion.Defend => ChoosePreviewStateCandidates(profile?.DefendStates, GetLegacyPreviewMotionStates(motion)),
+                DetailPreviewMotion.Retreat => ChoosePreviewStateCandidates(profile?.RetreatStates, GetLegacyPreviewMotionStates(motion)),
+                DetailPreviewMotion.Hit => ChoosePreviewStateCandidates(profile?.HitReactStates, GetLegacyPreviewMotionStates(motion)),
+                DetailPreviewMotion.Death => ChoosePreviewStateCandidates(profile?.DeathStates, GetLegacyPreviewMotionStates(motion)),
+                _ => Array.Empty<string>(),
+            };
+        }
+
+        string[] ResolvePreviewMoveStates(bool preferRun)
+        {
+            var profile = _detailsPreviewCam != null ? _detailsPreviewCam.StagedAnimationProfile : null;
+            string[] candidates = ChoosePreviewStateCandidates(profile?.MoveStates, GetLegacyPreviewMotionStates(preferRun ? DetailPreviewMotion.Run : DetailPreviewMotion.Walk));
+            if (candidates.Length <= 1)
+                return candidates;
+
+            var preferred = new List<string>(candidates.Length);
+            var fallback = new List<string>(candidates.Length);
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string stateName = candidates[i];
+                string stateId = ResolvePreviewStateIdentity(stateName);
+                bool isRunLike = stateId.Contains("run", StringComparison.OrdinalIgnoreCase);
+                bool isWalkLike = stateId.Contains("walk", StringComparison.OrdinalIgnoreCase)
+                    || stateId.Contains("move", StringComparison.OrdinalIgnoreCase);
+
+                if ((preferRun && isRunLike) || (!preferRun && isWalkLike))
+                    preferred.Add(stateName);
+                else
+                    fallback.Add(stateName);
+            }
+
+            if (preferred.Count == 0)
+                return candidates;
+
+            preferred.AddRange(fallback);
+            return preferred.ToArray();
+        }
+
+        string[] ResolvePreviewAttackStates(bool preferAlternate)
+        {
+            var profile = _detailsPreviewCam != null ? _detailsPreviewCam.StagedAnimationProfile : null;
+            string[] candidates = ChoosePreviewStateCandidates(profile?.AttackStates, GetLegacyPreviewMotionStates(preferAlternate ? DetailPreviewMotion.Special : DetailPreviewMotion.Strike));
+            if (!preferAlternate || candidates.Length < 2)
+                return candidates;
+
+            var rotated = new string[candidates.Length];
+            for (int i = 1; i < candidates.Length; i++)
+                rotated[i - 1] = candidates[i];
+            rotated[^1] = candidates[0];
+            return rotated;
+        }
+
+        static string[] ChoosePreviewStateCandidates(string[] preferredStates, string[] fallbackStates)
+        {
+            return preferredStates != null && preferredStates.Length > 0
+                ? DeduplicatePreviewStateCandidates(preferredStates)
+                : DeduplicatePreviewStateCandidates(fallbackStates);
+        }
+
+        static string[] DeduplicatePreviewStateCandidates(string[] stateNames)
+        {
+            if (stateNames == null || stateNames.Length == 0)
+                return Array.Empty<string>();
+
+            var ordered = new List<string>(stateNames.Length);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < stateNames.Length; i++)
+            {
+                string stateName = stateNames[i];
+                string stateId = ResolvePreviewStateIdentity(stateName);
+                if (string.IsNullOrWhiteSpace(stateId) || !seen.Add(stateId))
+                    continue;
+
+                ordered.Add(stateName.Trim());
+            }
+
+            return ordered.ToArray();
+        }
+
+        static string[] SlicePreviewStates(string[] stateNames, int startIndex)
+        {
+            if (stateNames == null || startIndex < 0 || startIndex >= stateNames.Length)
+                return Array.Empty<string>();
+
+            string[] slice = new string[stateNames.Length - startIndex];
+            Array.Copy(stateNames, startIndex, slice, 0, slice.Length);
+            return slice;
+        }
+
+        static string ResolvePreviewStateIdentity(string stateName)
+        {
+            if (string.IsNullOrWhiteSpace(stateName))
+                return string.Empty;
+
+            string trimmed = stateName.Trim();
+            int lastDot = trimmed.LastIndexOf('.');
+            return lastDot >= 0 && lastDot < trimmed.Length - 1
+                ? trimmed[(lastDot + 1)..]
+                : trimmed;
+        }
+
+        static string[] GetLegacyPreviewMotionStates(DetailPreviewMotion motion)
         {
             return motion switch
             {
-                DetailPreviewMotion.Idle => new[] { "Idle", "IdleNormal", "IdleCombat", "idle" },
-                DetailPreviewMotion.Walk => new[] { "Walk", "walk" },
-                DetailPreviewMotion.March => new[] { "Walk", "walk" },
-                DetailPreviewMotion.Run => new[] { "Run", "run", "Walk", "walk" },
-                DetailPreviewMotion.Strike => new[] { "Attack1", "Attack", "attack" },
-                DetailPreviewMotion.Special => new[] { "Attack2", "Attack1", "Attack", "attack" },
-                DetailPreviewMotion.Hit => new[] { "Damage", "Hit", "damage", "hit" },
-                DetailPreviewMotion.Death => new[] { "Death", "death", "die" },
+                DetailPreviewMotion.Spawn => new[] { "WeaponUnSheath", "WeaponUnsheath2", "UnSheathed", "Unsheathed", "Spawn", "Summon", "Idle", "idle" },
+                DetailPreviewMotion.Idle => new[] { "Idle", "IdleNormal", "IdleCombat", "Idle-Sheathed", "Sheathed", "UnSheathed", "Unsheathed", "idle" },
+                DetailPreviewMotion.Walk => new[] { "WalkRun", "Walk", "Move", "walk", "move" },
+                DetailPreviewMotion.March => new[] { "WalkRun", "Walk", "Move", "walk", "move" },
+                DetailPreviewMotion.Run => new[] { "Run", "WalkRun", "Move", "run", "walkrun", "move" },
+                DetailPreviewMotion.Strike => new[] { "Attack1", "MoveAttack1", "Attack", "attack" },
+                DetailPreviewMotion.Special => new[] { "Attack2", "Attack3", "MoveAttack2", "Run2-Attack1", "Jump-Attack1", "SpecialAttack1", "SpecialAttack2", "Attack1", "Attack", "attack" },
+                DetailPreviewMotion.Defend => new[] { "Blocking", "Block", "Defend", "ShieldBlock", "IdleCombat", "Idle", "idle" },
+                DetailPreviewMotion.Retreat => new[] { "Retreat", "WalkRun", "Run", "Walk", "Move", "run", "walk", "move" },
+                DetailPreviewMotion.Hit => new[] { "Damage", "Hit", "HitReact", "Hurt", "damage", "hit" },
+                DetailPreviewMotion.Death => new[] { "Death", "Die", "Knockout", "death", "die" },
                 _ => Array.Empty<string>(),
             };
         }
@@ -5040,6 +5425,14 @@ namespace CastleDefender.UI
                 return;
 
             _txtDetailsPreviewStatus.text = text;
+        }
+
+        static string BuildDetailsPreviewReadyStatus(RaceProgressionUnitDefinition unit, List<DetailPreviewCycleEntry> cycleEntries)
+        {
+            string unitName = unit?.DisplayName ?? "this unit";
+            return cycleEntries != null && cycleEntries.Count > 1
+                ? $"Preview ready. Auto-cycling the bound controller states for {unitName}. Tap any motion button to inspect a specific move."
+                : $"Preview ready. Tap a motion button to inspect how {unitName} moves in battle.";
         }
 
         static string BuildPreviewStatusText(DetailPreviewMotion motion, RaceProgressionUnitDefinition unit, string stateName)
@@ -5053,12 +5446,15 @@ namespace CastleDefender.UI
         {
             return motion switch
             {
+                DetailPreviewMotion.Spawn => "Spawn",
                 DetailPreviewMotion.Idle => "Idle",
                 DetailPreviewMotion.Walk => "Walk",
                 DetailPreviewMotion.March => "March",
                 DetailPreviewMotion.Run => "Run",
                 DetailPreviewMotion.Strike => "Strike",
                 DetailPreviewMotion.Special => BuildSpecialPreviewButtonLabel(unit),
+                DetailPreviewMotion.Defend => "Defend",
+                DetailPreviewMotion.Retreat => "Retreat",
                 DetailPreviewMotion.Hit => "Hit React",
                 DetailPreviewMotion.Death => "Death",
                 _ => "Motion",
@@ -5732,10 +6128,19 @@ namespace CastleDefender.UI
             if (catalog == null)
                 return "Unavailable";
 
-            string sourceUnit = HumanizeLabel(catalog.canonical_unit_type);
-            if (string.IsNullOrWhiteSpace(catalog.canonical_unit_type))
+            if (!string.IsNullOrWhiteSpace(catalog.name))
+                return catalog.name.Trim();
+
+            string sourceUnit = !string.IsNullOrWhiteSpace(catalog.canonical_unit_type)
+                ? catalog.canonical_unit_type
+                : catalog.key;
+            if (string.IsNullOrWhiteSpace(sourceUnit))
                 return "Not specified";
 
+            if (sourceUnit.StartsWith("tt_", StringComparison.OrdinalIgnoreCase))
+                sourceUnit = sourceUnit.Substring(3);
+
+            sourceUnit = HumanizeLabel(sourceUnit);
             return sourceUnit;
         }
 
@@ -5820,12 +6225,12 @@ namespace CastleDefender.UI
                 builder.AppendLine($"[Skills] {BuildCondensedLiveHookSummary(catalog)}");
                 builder.Append(
                     TryResolvePreviewSfx(unit, out _, out var sfxLabel)
-                        ? $"[Preview] Use the live rig above to preview idle, walk, march, run, strike, {BuildSpecialPreviewButtonLabel(unit)}, hit, and death. {sfxLabel} audio can also be previewed below."
-                        : $"[Preview] Use the live rig above to preview idle, walk, march, run, strike, {BuildSpecialPreviewButtonLabel(unit)}, hit, and death. No dedicated unit SFX is wired for this entry yet.");
+                        ? $"[Preview] The live rig above auto-cycles the bound controller states for this unit, including movement, attacks, stance, react, and death clips when they are wired on the prefab profile. Tap a motion button to inspect one directly. {sfxLabel} audio can also be previewed below."
+                        : $"[Preview] The live rig above auto-cycles the bound controller states for this unit, including movement, attacks, stance, react, and death clips when they are wired on the prefab profile. Tap a motion button to inspect one directly. No dedicated unit SFX is wired for this entry yet.");
             }
             else
             {
-                builder.Append("[Preview] Move buttons will still try to play the prefab states, but catalog-backed detail data is missing.");
+                builder.Append("[Preview] The live rig will auto-cycle any bound prefab states it can resolve here. Motion buttons still let you inspect a specific state, but catalog-backed detail data is missing.");
             }
 
             return builder.ToString().TrimEnd();

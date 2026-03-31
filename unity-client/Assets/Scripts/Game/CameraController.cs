@@ -22,6 +22,7 @@ using UnityEngine.EventSystems;
 public class CameraController : MonoBehaviour
 {
     static readonly System.Collections.Generic.List<FortressPadAnchor> s_fortressBoundsAnchors = new();
+    const float FocusPlaneResolveEpsilon = 0.001f;
 
     [Header("References")]
     public Transform CameraTarget;
@@ -105,6 +106,8 @@ public class CameraController : MonoBehaviour
 
     bool EnsureCameraReferences()
     {
+        ResolveFocusPlaneYIfNeeded();
+
         if (MainCam == null)
             MainCam = Camera.main ?? FindFirstObjectByType<Camera>();
         if (MainCam == null)
@@ -114,6 +117,14 @@ public class CameraController : MonoBehaviour
             CameraTarget = MainCam.transform;
 
         return CameraTarget != null;
+    }
+
+    void ResolveFocusPlaneYIfNeeded()
+    {
+        if (Mathf.Abs(FocusPlaneY) > FocusPlaneResolveEpsilon)
+            return;
+
+        FocusPlaneY = BattlefieldSpaceMapper.TileToWorld(0, 0f, 0f).y;
     }
 
     void ScrollZoom()

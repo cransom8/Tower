@@ -17,5 +17,17 @@ namespace CastleDefender.Game
         public void Hit()
         {
         }
+
+        public void Land()
+        {
+        }
+
+        public void WeaponSwitch()
+        {
+        }
+
+        public void Shoot()
+        {
+        }
     }
 }

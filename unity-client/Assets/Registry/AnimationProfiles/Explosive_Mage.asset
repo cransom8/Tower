@@ -71,6 +71,7 @@ MonoBehaviour:
   attackDefault:
     stateNames:
     - RangeAttack1
+    - RangeAttack2
     - Attack1
     - Attack2
     - SpecialAttack1
@@ -83,11 +84,13 @@ MonoBehaviour:
   attackRanged:
     stateNames:
     - RangeAttack1
+    - RangeAttack2
     - Attack1
     - SpecialAttack1
   attackMagic:
     stateNames:
     - RangeAttack1
+    - RangeAttack2
     - Attack1
     - Attack2
     - SpecialAttack1
@@ -95,6 +98,7 @@ MonoBehaviour:
   attackSupport:
     stateNames:
     - RangeAttack1
+    - RangeAttack2
     - Attack1
     - Attack2
     - SpecialAttack1

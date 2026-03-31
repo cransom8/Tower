@@ -973,7 +973,7 @@ namespace CastleDefender.UI
                         marketLane,
                         "Peasant",
                         null,
-                        "tt_peasant",
+                        "tt_settler",
                         startsUnlocked: false,
                         unlockRequirement: marketT1,
                         description: "Market Tier 1 economy unit. Carries starter trade goods between the Town Core and Market for 4 gold each completed lap.",

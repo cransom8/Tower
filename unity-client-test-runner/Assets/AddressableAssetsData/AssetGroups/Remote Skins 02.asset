@@ -1,0 +1,79 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Remote Skins 02
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Remote Skins 02
+  m_GUID: 9cd45beb9e66be04599b15d07903f928
+  m_SerializeEntries:
+  - m_GUID: 148322894bbd52e488116a8616dfbe4c
+    m_Address: skins/tt_halberdier
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_halberdier
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 4e3c7da5fb6ce5a47a0a7dbc18b843c6
+    m_Address: skins/tt_light_cavalry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_light_cavalry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6652791f0d19f3b408a94277d330b59b
+    m_Address: skins/tt_scout
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_scout
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 75925c365bd895145beefbc806717633
+    m_Address: skins/tt_heavy_swordman
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_heavy_swordman
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 892bd1c95e4ec2f43a7e0a49c68f27f1
+    m_Address: skins/tt_heavy_cavalry
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_heavy_cavalry
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a36479667d1b0f74bbd661b17c3f9476
+    m_Address: skins/tt_mounted_king
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_king
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: bc0e691c888319a4daf7fd1c112e7d03
+    m_Address: skins/tt_mounted_mage
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - skin
+    - tt_mounted_mage
+    - unit
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: a3974753fbc05454fb7c4af13a619fcb, type: 2}
+    - {fileID: 11400000, guid: f57eeaa631666934989ac98852e88d9c, type: 2}

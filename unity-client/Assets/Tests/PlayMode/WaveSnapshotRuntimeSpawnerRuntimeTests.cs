@@ -108,6 +108,107 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
     }
 
     [UnityTest]
+    public System.Collections.IEnumerator WaveUnit_Preserves_Authored_Materials_When_WaveMetadata_Leaks_LaneColor()
+    {
+        Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
+        Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
+
+        Assert.That(registryType, Is.Not.Null);
+        Assert.That(spawnerType, Is.Not.Null);
+
+        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_DungeonMaterialGuard");
+        ScriptableObject registry = null;
+        GameObject prefab = null;
+
+        try
+        {
+            CreateWaveCenterAnchor("Wave_Center_Anchor", new Vector3(0f, 0f, 0f));
+            CreateFrontGateAnchor("Yellow_Gate_Front", new Vector3(12f, 0f, 12f));
+
+            Color authoredColor = new(0.18f, 0.72f, 0.34f, 1f);
+            registry = ScriptableObject.CreateInstance(registryType);
+            prefab = CreateUnitPrefab(authoredColor);
+            ConfigureSkinEntries(registry, prefab);
+            InvokeNoArgs(registry, "Rebuild");
+
+            var spawnerHost = new GameObject("WaveRuntime_DungeonMaterialGuard");
+            spawnerHost.transform.SetParent(root.transform, false);
+            var spawner = spawnerHost.AddComponent(spawnerType);
+            spawnerType.GetField("Registry", BindingFlags.Instance | BindingFlags.Public).SetValue(spawner, registry);
+
+            var snapshot = new MLSnapshot
+            {
+                lanes = new[]
+                {
+                    new MLLaneSnap
+                    {
+                        laneIndex = 1,
+                        team = "gold",
+                        slotColor = "gold",
+                        slotKey = "left_b",
+                        branchId = "left_branch_b",
+                        units = new[]
+                        {
+                            new MLUnit
+                            {
+                                id = "wu_runtime_color_guard",
+                                type = "goblin",
+                                skinKey = "tt_peasant",
+                                laneId = 1,
+                                allegianceKey = "yellow",
+                                sourceTeam = "yellow",
+                                isWaveUnit = true,
+                                spawnSourceType = "scheduled_wave",
+                                stance = "ATTACK",
+                                pathContractType = "wave_lane",
+                                routeType = "WAVE_LANE",
+                                routeStartNode = "WB",
+                                routeTargetNode = "B",
+                                pathId = "WB_B",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "B",
+                                currentSegment = "WB_B",
+                                segmentProgress = 0f,
+                                movementState = "MOVING",
+                                routeWorldX = 0f,
+                                routeWorldY = 0f,
+                                hp = 10f,
+                                maxHp = 10f,
+                                moveSpeed = 1f,
+                            }
+                        }
+                    }
+                }
+            };
+
+            Invoke(spawner, "DebugApplySnapshot", snapshot);
+            yield return null;
+
+            Transform waveUnit = spawnerHost.transform.Find("SnapshotUnit_wu_runtime_color_guard_goblin_tt_peasant");
+            Assert.That(waveUnit, Is.Not.Null, "Wave units should still materialize when their snapshot metadata includes a lane color.");
+
+            Renderer bodyRenderer = waveUnit.GetComponentInChildren<Renderer>();
+            Assert.That(bodyRenderer, Is.Not.Null, "Wave presenter should expose a renderer.");
+
+            Color actualColor = ReadMaterialColor(bodyRenderer.material);
+            Assert.That(actualColor.r, Is.EqualTo(authoredColor.r).Within(0.08f));
+            Assert.That(actualColor.g, Is.EqualTo(authoredColor.g).Within(0.08f));
+            Assert.That(actualColor.b, Is.EqualTo(authoredColor.b).Within(0.08f));
+        }
+        finally
+        {
+            if (root != null)
+                UnityEngine.Object.DestroyImmediate(root);
+            if (prefab != null)
+                UnityEngine.Object.DestroyImmediate(prefab);
+            if (registry != null)
+                UnityEngine.Object.DestroyImmediate(registry);
+            DestroyIfPresent("Yellow_Gate_Front");
+            DestroyIfPresent("Wave_Center_Anchor");
+        }
+    }
+
+    [UnityTest]
     public System.Collections.IEnumerator CoreCombat_Uses_Live_Server_CombatSpace_Instead_Of_Stale_RouteData()
     {
         Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
@@ -888,16 +989,48 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
 
     static GameObject CreateUnitPrefab()
     {
+        return CreateUnitPrefab(new Color(0.72f, 0.72f, 0.72f, 1f));
+    }
+
+    static GameObject CreateUnitPrefab(Color bodyColor)
+    {
         var prefab = new GameObject("ValidationWaveUnitPrefab");
         var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
         body.name = "Body";
         body.transform.SetParent(prefab.transform, false);
+
+        Renderer renderer = body.GetComponent<Renderer>();
+        if (renderer != null && renderer.sharedMaterial != null)
+            SetMaterialColor(renderer.material, bodyColor);
 
         Collider collider = body.GetComponent<Collider>();
         if (collider != null)
             UnityEngine.Object.DestroyImmediate(collider);
 
         return prefab;
+    }
+
+    static void SetMaterialColor(Material material, Color color)
+    {
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", color);
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", color);
+    }
+
+    static Color ReadMaterialColor(Material material)
+    {
+        if (material == null)
+            return Color.clear;
+
+        if (material.HasProperty("_BaseColor"))
+            return material.GetColor("_BaseColor");
+        if (material.HasProperty("_Color"))
+            return material.GetColor("_Color");
+        return Color.clear;
     }
 
     static void DestroyIfPresent(string objectName)

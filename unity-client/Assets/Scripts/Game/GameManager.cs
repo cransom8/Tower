@@ -529,7 +529,8 @@ namespace CastleDefender.Game
                 halfVertical + verticalPadding,
                 (halfHorizontal + horizontalPadding) / aspect);
 
-            focusWorld = new Vector3(focusWorld.x, laneBounds.center.y, focusWorld.z);
+            float gameplaySurfaceY = BattlefieldSpaceMapper.TileToWorld(laneIndex, 0f, 0f).y;
+            focusWorld = new Vector3(focusWorld.x, gameplaySurfaceY, focusWorld.z);
             return true;
         }
 
