@@ -105,6 +105,25 @@ test("startNextWaveNow allows the next wave after the previous wave has fully cl
   assert.equal(game.roundNumber, 2, "starting again after a clear should advance to the next wave");
 });
 
+test("resolveWaveForRound uses the most recent authored wave before a gap and only escalates past the authored tail", () => {
+  const game = createGame();
+  game.waveConfig = [
+    { wave_number: 1, unit_type: "raider", spawn_qty: 2, hp_mult: 1, dmg_mult: 1, speed_mult: 1 },
+    { wave_number: 3, unit_type: "raider", spawn_qty: 5, hp_mult: 2, dmg_mult: 3, speed_mult: 1.25 },
+  ];
+
+  const gapWave = simMl.resolveWaveForRound(game, 2);
+  assert.equal(gapWave.spawn_qty, 2, "a missing authored round should reuse the last authored wave before the gap");
+  assert.equal(gapWave.hp_mult, 1, "the gap wave should not downscale a future authored row");
+  assert.equal(gapWave.dmg_mult, 1, "the gap wave should preserve the last authored combat values");
+
+  const escalatedWave = simMl.resolveWaveForRound(game, 4);
+  assert.equal(escalatedWave.spawn_qty, 5, "rounds past the authored tail should still use the last authored wave");
+  assert.ok(Math.abs(escalatedWave.hp_mult - 2.2) < 1e-9, "tail escalation should scale the last authored hp multiplier");
+  assert.ok(Math.abs(escalatedWave.dmg_mult - 3.3) < 1e-9, "tail escalation should scale the last authored damage multiplier");
+  assert.equal(escalatedWave.speed_mult, 1.25, "tail escalation should preserve the authored speed multiplier");
+});
+
 test("barracks attackers do not block the next scheduled wave gate", () => {
   const game = createGame();
   const targetLane = game.lanes[1];

@@ -41,6 +41,7 @@ const {
 const fortressSystem = require("./game/multilane/fortressSystem");
 const barracksSystem = require("./game/multilane/barracksSystem");
 const laneCommandSystem = require("./game/multilane/laneCommandSystem");
+const waveSystem = require("./game/multilane/waveSystem");
 const routeGraph = require("./game/multilane/routeGraph");
 const {
   getCurrentBarracksMult,
@@ -1408,6 +1409,24 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   ROUTE_SLOT_ROW_SPACING,
   SPAWN_X,
   SPAWN_YG,
+});
+
+const WAVE_SYSTEM_DEPS = Object.freeze({
+  ESCALATION_PER_EXTRA_ROUND,
+  INCOME_INTERVAL_TICKS,
+  WAVE_TIMER_TICKS,
+  TICK_HZ,
+  BARRACKS_SITE_DEFS,
+  isScheduledWaveUnit,
+  getEffectiveWaveEntrySpeedMult,
+  createRoundSnapshotLane,
+  ensureBarracksSiteStates,
+  describeBarracksSite,
+  getBarracksSiteState,
+  createBarracksSiteSnapshot,
+  summarizeBarracksSiteRosterEntries,
+  spawnScheduledBarracksRoster,
+  spawnWaveUnit: _spawnWaveUnit,
 });
 
 function buildTownCoreStateSummary(game) {
@@ -3886,174 +3905,27 @@ function _doAttack(game, lane, attacker, target) {
 // ── Wave defense helpers ──────────────────────────────────────────────────────
 
 function resolveWaveForRound(game, roundNumber) {
-  const cfg = Array.isArray(game.waveConfig) ? game.waveConfig : [];
-  const round = Math.max(1, Math.floor(Number(roundNumber) || 1));
-  if (cfg.length === 0)
-    return null;
-
-  // Find exact wave row; if past the last, use last row with escalation.
-  const exact = cfg.find(w => Number(w.wave_number) === round);
-  if (exact) return exact;
-
-  const last = cfg.reduce((a, b) => Number(a.wave_number) >= Number(b.wave_number) ? a : b);
-  if (!last)
-    return null;
-
-  const extra = round - Number(last.wave_number);
-  const esc = 1 + extra * ESCALATION_PER_EXTRA_ROUND;
-  return {
-    unit_type: last.unit_type,
-    spawn_qty: last.spawn_qty,
-    hp_mult:    Number(last.hp_mult)    * esc,
-    dmg_mult:   Number(last.dmg_mult)   * esc,
-    speed_mult: Number(last.speed_mult),
-  };
+  return waveSystem.resolveWaveForRound(game, roundNumber, WAVE_SYSTEM_DEPS);
 }
 
 function getUpcomingWaveNumber(game) {
-  if (!game)
-    return 1;
-
-  const currentRound = Math.max(1, Math.floor(Number(game.roundNumber) || 1));
-  return game.hasSpawnedWave
-    ? currentRound + 1
-    : currentRound;
+  return waveSystem.getUpcomingWaveNumber(game, WAVE_SYSTEM_DEPS);
 }
 
 function countRemainingWaveMobs(game) {
-  if (!game)
-    return 0;
-
-  let remaining = 0;
-  for (const lane of game.lanes || []) {
-    if (!lane || lane.eliminated)
-      continue;
-
-    for (const unit of lane.spawnQueue || []) {
-      if (unit && isScheduledWaveUnit(unit) && Number(unit.hp) > 0)
-        remaining += 1;
-    }
-
-    for (const unit of lane.units || []) {
-      if (unit && isScheduledWaveUnit(unit) && Number(unit.hp) > 0)
-        remaining += 1;
-    }
-  }
-
-  return remaining;
+  return waveSystem.countRemainingWaveMobs(game, WAVE_SYSTEM_DEPS);
 }
 
 function isCurrentWaveComplete(game) {
-  return countRemainingWaveMobs(game) <= 0;
+  return waveSystem.isCurrentWaveComplete(game, WAVE_SYSTEM_DEPS);
 }
 
 function createLaneUpcomingWavePreview(game, lane, waveNumber = null) {
-  const upcomingWaveNumber = Number.isInteger(waveNumber) && waveNumber > 0
-    ? waveNumber
-    : getUpcomingWaveNumber(game);
-  const entriesByKey = new Map();
-
-  const addEntry = ({
-    source,
-    unitType,
-    archetypeKey = null,
-    presentationKey = null,
-    skinKey = null,
-    count = 1,
-    hpMult = 1,
-    dmgMult = 1,
-    speedMult = 1,
-    sourceLaneIndex = -1,
-    sourceBarracksId = null,
-    isHero = false,
-    heroKey = null,
-    heroVisualStyleKey = null,
-  }) => {
-    if (!unitType)
-      return;
-
-    const normalizedCount = Math.max(0, Math.floor(Number(count) || 0));
-    if (normalizedCount <= 0)
-      return;
-
-    const key = [
-      source || "scheduled",
-      String(unitType).trim().toLowerCase(),
-      String(archetypeKey || "").trim().toLowerCase(),
-      String(presentationKey || "").trim().toLowerCase(),
-      String(skinKey || "").trim().toLowerCase(),
-      Number(hpMult || 1).toFixed(3),
-      Number(dmgMult || 1).toFixed(3),
-      Number(speedMult || 1).toFixed(3),
-      Number.isInteger(sourceLaneIndex) ? sourceLaneIndex : -1,
-      String(sourceBarracksId || "").trim().toLowerCase(),
-      isHero ? "hero" : "unit",
-      String(heroKey || "").trim().toLowerCase(),
-    ].join("|");
-
-    if (entriesByKey.has(key)) {
-      entriesByKey.get(key).count += normalizedCount;
-      return;
-    }
-
-    entriesByKey.set(key, {
-      source: source || "scheduled",
-      unitType: String(unitType).trim().toLowerCase(),
-      archetypeKey: archetypeKey || null,
-      presentationKey: presentationKey || null,
-      skinKey: skinKey || null,
-      count: normalizedCount,
-      hpMult: Number(hpMult || 1),
-      dmgMult: Number(dmgMult || 1),
-      speedMult: Number(speedMult || 1),
-      sourceLaneIndex: Number.isInteger(sourceLaneIndex) ? sourceLaneIndex : -1,
-      sourceBarracksId: sourceBarracksId || null,
-      isHero: !!isHero,
-      heroKey: heroKey || null,
-      heroVisualStyleKey: heroVisualStyleKey || null,
-    });
-  };
-
-  const scheduledWave = resolveWaveForRound(game, upcomingWaveNumber);
-  if (scheduledWave) {
-    addEntry({
-      source: "scheduled",
-      unitType: scheduledWave.unit_type,
-      archetypeKey: null,
-      presentationKey: null,
-      count: scheduledWave.spawn_qty,
-      hpMult: scheduledWave.hp_mult,
-      dmgMult: scheduledWave.dmg_mult,
-      speedMult: getEffectiveWaveEntrySpeedMult(game, lane, scheduledWave),
-    });
-  }
-
-  const entries = Array.from(entriesByKey.values()).sort((a, b) => {
-    if (a.source !== b.source)
-      return a.source === "scheduled" ? -1 : 1;
-    if (a.count !== b.count)
-      return b.count - a.count;
-    return String(a.unitType).localeCompare(String(b.unitType));
-  });
-
-  return {
-    waveNumber: upcomingWaveNumber,
-    totalUnits: entries.reduce((sum, entry) => sum + (entry.count || 0), 0),
-    entries,
-  };
+  return waveSystem.createLaneUpcomingWavePreview(game, lane, waveNumber, WAVE_SYSTEM_DEPS);
 }
 
 function createLaneUpcomingWaveQueue(game, lane, maxCount = 4) {
-  const safeCount = Math.max(1, Math.floor(Number(maxCount) || 1));
-  const firstWaveNumber = getUpcomingWaveNumber(game);
-  const queue = [];
-
-  for (let i = 0; i < safeCount; i++) {
-    const waveNumber = firstWaveNumber + i;
-    queue.push(createLaneUpcomingWavePreview(game, lane, waveNumber));
-  }
-
-  return queue;
+  return waveSystem.createLaneUpcomingWaveQueue(game, lane, maxCount, WAVE_SYSTEM_DEPS);
 }
 
 function _spawnWaveUnit(game, lane, waveDef, options = {}) {
@@ -4168,150 +4040,31 @@ function _spawnWaveUnit(game, lane, waveDef, options = {}) {
 }
 
 function finalizeCompletedWave(game) {
-  if (!game || !game.hasSpawnedWave) return;
-
-  for (const lane of game.lanes) {
-    if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0) {
-      lane.wavesLeaked += 1;
-      lane.currentHoldStreak = 0;
-      lane.biggestLeakTaken = Math.max(lane.biggestLeakTaken || 0, lane.lifeLossThisRound || lane.leakCountThisRound || 0);
-    } else {
-      lane.wavesHeld += 1;
-      lane.currentHoldStreak = (lane.currentHoldStreak || 0) + 1;
-      lane.longestHoldStreak = Math.max(lane.longestHoldStreak || 0, lane.currentHoldStreak);
-    }
-  }
-  game.roundSnapshots.push({
-    round: game.roundNumber,
-    elapsedSeconds: Math.floor(game.tick / TICK_HZ),
-    lanes: game.lanes.map(l => createRoundSnapshotLane(game, l)),
-  });
-  game._pendingEvents.push({
-    type: "ml_round_end",
-    roundNumber: game.roundNumber,
-    teamHp: Object.assign({}, game.teamHp),
-  });
+  return waveSystem.finalizeCompletedWave(game, WAVE_SYSTEM_DEPS);
 }
 
 function resetWaveIntervalState(game) {
-  if (!game) return;
-  for (const lane of game.lanes) {
-    lane.leakCountThisRound = 0;
-    lane.lifeLossThisRound = 0;
-    lane.sendCountThisRound = 0;
-    lane.sendSpendThisRound = 0;
-    lane.buildSpendThisRound = 0;
-  }
+  return waveSystem.resetWaveIntervalState(game, WAVE_SYSTEM_DEPS);
 }
 
 function spawnScheduledWave(game) {
-  if (!game) return;
-
-  const nextRoundNumber = getUpcomingWaveNumber(game);
-  const waveDef = resolveWaveForRound(game, nextRoundNumber);
-  if (!waveDef)
-    return false;
-
-  if (game.hasSpawnedWave)
-    finalizeCompletedWave(game);
-
-  game.roundNumber = nextRoundNumber;
-
-  resetWaveIntervalState(game);
-  const waveSizes = {};
-  for (const lane of game.lanes) {
-    if (lane.eliminated) continue;
-    waveSizes[lane.laneIndex] = waveDef.spawn_qty;
-    for (let i = 0; i < waveDef.spawn_qty; i++) _spawnWaveUnit(game, lane, waveDef);
-  }
-
-  game.hasSpawnedWave = true;
-  game.lastWaveSpawnTick = game.tick;
-  game._pendingEvents.push({
-    type: "ml_wave_start",
-    roundNumber: game.roundNumber,
-    waveSizes,
-  });
-  return true;
+  return waveSystem.spawnScheduledWave(game, WAVE_SYSTEM_DEPS);
 }
 
 function grantScheduledIncome(game) {
-  if (!game) return;
-  const interval = Math.max(1, Math.floor(Number(game.incomeIntervalTicks) || INCOME_INTERVAL_TICKS));
-  if (!Number.isInteger(game.nextIncomeTick) || game.nextIncomeTick <= 0)
-    game.nextIncomeTick = game.tick + interval;
-
-  while (game.tick >= game.nextIncomeTick) {
-    for (const lane of game.lanes) {
-      if (lane && !lane.eliminated)
-        lane.gold += lane.income;
-    }
-    game.nextIncomeTick += interval;
-  }
+  return waveSystem.grantScheduledIncome(game, WAVE_SYSTEM_DEPS);
 }
 
 function runScheduledBarracksSends(game) {
-  if (!game) return;
-  for (const lane of game.lanes) {
-    if (!lane || lane.eliminated)
-      continue;
-
-    ensureBarracksSiteStates(lane, game);
-    for (const siteDef of BARRACKS_SITE_DEFS) {
-      const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
-      if (!descriptor || !descriptor.isBuilt)
-        continue;
-
-      const interval = Math.max(1, descriptor.sendIntervalTicks);
-      let siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
-      if (!siteState)
-        continue;
-
-      if (!Number.isInteger(siteState.nextSendTick) || siteState.nextSendTick <= 0)
-        siteState.nextSendTick = game.tick + interval;
-
-      while (siteState != null && game.tick >= siteState.nextSendTick) {
-        const siteSnapshot = createBarracksSiteSnapshot(game, lane, siteDef.barracksId);
-        console.log(
-          `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
-          `barracksId='${siteDef.barracksId}' built=${siteSnapshot ? siteSnapshot.isBuilt : false} ` +
-          `roster=${summarizeBarracksSiteRosterEntries(siteSnapshot && siteSnapshot.roster)}`);
-        const spawnedCount = spawnScheduledBarracksRoster(game, lane, siteDef.barracksId);
-        console.log(
-          `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
-          `barracksId='${siteDef.barracksId}' spawnedCount=${spawnedCount}`);
-        siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
-        if (siteState != null)
-            siteState.nextSendTick += interval;
-      }
-    }
-  }
+  return waveSystem.runScheduledBarracksSends(game, WAVE_SYSTEM_DEPS);
 }
 
 function runScheduledWaves(game) {
-  if (!game) return;
-  const interval = Math.max(1, Math.floor(Number(game.waveIntervalTicks) || WAVE_TIMER_TICKS));
-  if (!Number.isInteger(game.nextWaveTick) || game.nextWaveTick <= 0)
-    game.nextWaveTick = game.tick + interval;
-
-  while (game.tick >= game.nextWaveTick) {
-    spawnScheduledWave(game);
-    game.nextWaveTick += interval;
-  }
+  return waveSystem.runScheduledWaves(game, WAVE_SYSTEM_DEPS);
 }
 
 function startNextWaveNow(game) {
-  if (!game || game.phase !== "playing")
-    return false;
-
-  if (!isCurrentWaveComplete(game))
-    return false;
-
-  const interval = Math.max(1, Math.floor(Number(game.waveIntervalTicks) || WAVE_TIMER_TICKS));
-  const spawned = spawnScheduledWave(game);
-  if (spawned)
-    game.nextWaveTick = Math.floor(Number(game.tick) || 0) + interval;
-  return spawned;
+  return waveSystem.startNextWaveNow(game, WAVE_SYSTEM_DEPS);
 }
 
 function mlTick(game) {
