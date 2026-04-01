@@ -1,0 +1,441 @@
+"use strict";
+
+const crypto = require("crypto");
+const { loadAuthoredEnvironmentLayout } = require("../../authoredEnvironmentLayout");
+
+function requireDepFunction(deps, name) {
+  const fn = deps && deps[name];
+  if (typeof fn !== "function")
+    throw new Error(`battlefieldLayoutSystem requires deps.${name}`);
+  return fn;
+}
+
+function requireDepArray(deps, name) {
+  const value = deps && deps[name];
+  if (!Array.isArray(value))
+    throw new Error(`battlefieldLayoutSystem requires array deps.${name}`);
+  return value;
+}
+
+function requireDepObject(deps, name) {
+  const value = deps && deps[name];
+  if (!value || typeof value !== "object")
+    throw new Error(`battlefieldLayoutSystem requires object deps.${name}`);
+  return value;
+}
+
+function createWorldPoint(x, y, contextLabel = "world point") {
+  const numericX = Number(x);
+  const numericY = Number(y);
+  if (!Number.isFinite(numericX) || !Number.isFinite(numericY)) {
+    throw new Error(
+      `[battlefieldLayoutSystem] Missing finite coordinates for ${contextLabel}.`
+    );
+  }
+
+  return {
+    x: numericX,
+    y: numericY,
+  };
+}
+
+function createFinitePointFromEntry(entry, contextLabel) {
+  if (!entry || !Number.isFinite(Number(entry.x)) || !Number.isFinite(Number(entry.y))) {
+    throw new Error(
+      `[battlefieldLayoutSystem] Missing finite point for ${contextLabel}.`
+    );
+  }
+
+  return createWorldPoint(entry.x, entry.y, contextLabel);
+}
+
+function normalizeLaneLayoutKey(slot, deps = {}) {
+  const normalizeAllegianceKey = requireDepFunction(deps, "normalizeAllegianceKey");
+  return normalizeAllegianceKey(slot && (slot.slotColor || slot.team || slot.side))
+    || (slot && (slot.slotColor || slot.team))
+    || "";
+}
+
+function resolvePerimeterControlPoint(fromWorld, toWorld, mineCenterWorld) {
+  const midpoint = {
+    x: (Number(fromWorld.x) + Number(toWorld.x)) * 0.5,
+    y: (Number(fromWorld.y) + Number(toWorld.y)) * 0.5,
+  };
+  let outward = {
+    x: midpoint.x - Number(mineCenterWorld.x),
+    y: midpoint.y - Number(mineCenterWorld.y),
+  };
+  let outwardLength = Math.hypot(outward.x, outward.y);
+  if (outwardLength <= 0.0001) {
+    const edge = {
+      x: Number(toWorld.x) - Number(fromWorld.x),
+      y: Number(toWorld.y) - Number(fromWorld.y),
+    };
+    outward = {
+      x: -edge.y,
+      y: edge.x,
+    };
+    outwardLength = Math.hypot(outward.x, outward.y);
+  }
+
+  if (outwardLength <= 0.0001) {
+    outward = { x: 0, y: 1 };
+    outwardLength = 1;
+  }
+
+  const controlDistance = Math.max(
+    2,
+    Math.hypot(
+      Number(toWorld.x) - Number(fromWorld.x),
+      Number(toWorld.y) - Number(fromWorld.y)
+    ) * 0.28
+  );
+  return createWorldPoint(
+    midpoint.x + ((outward.x / outwardLength) * controlDistance),
+    midpoint.y + ((outward.y / outwardLength) * controlDistance)
+  );
+}
+
+function buildAuthoredSegmentWorldPoints(
+  segmentId,
+  segmentPoints,
+  fromNodeId,
+  toNodeId,
+  fromWorld,
+  toWorld,
+  frontGatePoint,
+  mineWorldPoint,
+  waveNodeIds,
+  coreNodeIds
+) {
+  const routePointCount = Array.isArray(segmentPoints) ? segmentPoints.length : 0;
+  if (routePointCount < 2) {
+    throw new Error(
+      `[battlefieldLayoutSystem] Route segment '${segmentId}' is missing route-space points.`
+    );
+  }
+
+  if (routePointCount === 2) {
+    return [
+      createWorldPoint(fromWorld.x, fromWorld.y),
+      createWorldPoint(toWorld.x, toWorld.y),
+    ];
+  }
+
+  if (routePointCount !== 3) {
+    throw new Error(
+      `[battlefieldLayoutSystem] Route segment '${segmentId}' uses unsupported route-space point count ${routePointCount}.`
+    );
+  }
+
+  if (waveNodeIds.has(fromNodeId)) {
+    if (!frontGatePoint) {
+      throw new Error(
+        `[battlefieldLayoutSystem] Wave route segment '${segmentId}' is missing its authored front gate control point.`
+      );
+    }
+
+    return [
+      createWorldPoint(fromWorld.x, fromWorld.y),
+      createWorldPoint(frontGatePoint.x, frontGatePoint.y),
+      createWorldPoint(toWorld.x, toWorld.y),
+    ];
+  }
+
+  if (segmentId === "A_C" || segmentId === "C_A" || segmentId === "B_D" || segmentId === "D_B") {
+    return [
+      createWorldPoint(fromWorld.x, fromWorld.y),
+      createWorldPoint(mineWorldPoint.x, mineWorldPoint.y),
+      createWorldPoint(toWorld.x, toWorld.y),
+    ];
+  }
+
+  const fromIsMine = fromNodeId === "M";
+  const toIsMine = toNodeId === "M";
+  if (fromIsMine || toIsMine) {
+    return [
+      createWorldPoint(fromWorld.x, fromWorld.y),
+      createWorldPoint(toWorld.x, toWorld.y),
+    ];
+  }
+
+  if (coreNodeIds.has(fromNodeId) && coreNodeIds.has(toNodeId)) {
+    const controlPoint = resolvePerimeterControlPoint(fromWorld, toWorld, mineWorldPoint);
+    return [
+      createWorldPoint(fromWorld.x, fromWorld.y),
+      controlPoint,
+      createWorldPoint(toWorld.x, toWorld.y),
+    ];
+  }
+
+  throw new Error(
+    `[battlefieldLayoutSystem] Route segment '${segmentId}' could not resolve authored world control points.`
+  );
+}
+
+function buildBattlefieldLayoutForSlotDefinitions(slotDefinitionsInput, opt, deps = {}) {
+  const getLaneNodeId = requireDepFunction(deps, "getLaneNodeId");
+  const getWaveSpawnNodeId = requireDepFunction(deps, "getWaveSpawnNodeId");
+  const getBarracksRouteStartNodeId = requireDepFunction(deps, "getBarracksRouteStartNodeId");
+  const fortressPadDefs = requireDepArray(deps, "FORTRESS_PAD_DEFS");
+  const barracksSiteDefs = requireDepArray(deps, "BARRACKS_SITE_DEFS");
+  const routeSegmentPolylines = requireDepObject(deps, "ROUTE_SEGMENT_POLYLINES");
+  const authoredEnvironmentLayout = loadAuthoredEnvironmentLayout();
+  const slotDefinitions = Array.isArray(slotDefinitionsInput) ? slotDefinitionsInput : [];
+  const laneCount = slotDefinitions.length;
+  const routeNodes = [];
+  const routeSegments = [];
+  const lanes = [];
+  const slotByLaneIndex = new Map();
+  const coreNodeIds = new Set();
+  const nodeLaneKeyByNodeId = new Map();
+  const nodeWorldByNodeId = new Map();
+  const laneFrontGateByLaneKey = new Map();
+  const waveNodeIds = new Set();
+
+  for (let laneIndex = 0; laneIndex < slotDefinitions.length; laneIndex += 1) {
+    const slot = slotDefinitions[laneIndex];
+    if (!slot)
+      continue;
+    slotByLaneIndex.set(laneIndex, slot);
+  }
+
+  const mineWorld = createFinitePointFromEntry(
+    authoredEnvironmentLayout.mineCenter,
+    "WaveSpawnAnchor 'mine_center'"
+  );
+  routeNodes.push({
+    nodeId: "M",
+    laneIndex: -1,
+    laneKey: "mine_center",
+    world: createWorldPoint(mineWorld.x, mineWorld.y),
+  });
+  nodeWorldByNodeId.set("M", createWorldPoint(mineWorld.x, mineWorld.y));
+  nodeLaneKeyByNodeId.set("M", "mine_center");
+
+  for (let laneIndex = 0; laneIndex < laneCount; laneIndex += 1) {
+    const slot = slotByLaneIndex.get(laneIndex);
+    if (!slot)
+      continue;
+
+    const laneKey = normalizeLaneLayoutKey(slot, deps) || `lane_${laneIndex}`;
+    const authoredLane = authoredEnvironmentLayout.lanes[laneKey];
+    if (!authoredLane) {
+      throw new Error(
+        `[battlefieldLayoutSystem] Missing authored environment lane '${laneKey}' while building battlefield layout.`
+      );
+    }
+
+    const coreNodeId = getLaneNodeId(laneIndex);
+    const waveNodeId = getWaveSpawnNodeId(laneIndex);
+    const fortressPads = fortressPadDefs.map((pad) => {
+      const authoredPad = authoredLane.pads[pad.padId];
+      if (!authoredPad) {
+        throw new Error(
+          `[battlefieldLayoutSystem] Authored environment lane '${laneKey}' is missing fortress pad '${pad.padId}'.`
+        );
+      }
+
+      const authoredPadWorld = createFinitePointFromEntry(
+        authoredPad,
+        `fortress pad '${pad.padId}' on lane '${laneKey}'`
+      );
+      return {
+        padId: pad.padId,
+        buildingType: pad.buildingType,
+        displayName: pad.displayName,
+        gridX: pad.gridX,
+        gridY: pad.gridY,
+        world: authoredPadWorld,
+        combatWorld: createWorldPoint(authoredPadWorld.x, authoredPadWorld.y),
+      };
+    });
+
+    const townCorePad = fortressPads.find((entry) => entry && entry.padId === "town_core_pad") || null;
+    if (!townCorePad) {
+      throw new Error(
+        `[battlefieldLayoutSystem] Authored environment lane '${laneKey}' is missing required pad 'town_core_pad'.`
+      );
+    }
+
+    const frontGatePad = fortressPads.find((entry) => entry && entry.padId === "gate_front_pad") || null;
+    if (!frontGatePad) {
+      throw new Error(
+        `[battlefieldLayoutSystem] Authored environment lane '${laneKey}' is missing required pad 'gate_front_pad'.`
+      );
+    }
+
+    const coreWorld = createWorldPoint(townCorePad.world.x, townCorePad.world.y);
+    const waveWorld = createWorldPoint(mineWorld.x, mineWorld.y);
+    const frontGateWorld = createWorldPoint(frontGatePad.world.x, frontGatePad.world.y);
+
+    routeNodes.push({
+      nodeId: coreNodeId,
+      laneIndex,
+      laneKey,
+      world: createWorldPoint(coreWorld.x, coreWorld.y),
+    });
+    coreNodeIds.add(coreNodeId);
+    routeNodes.push({
+      nodeId: waveNodeId,
+      laneIndex,
+      laneKey,
+      world: createWorldPoint(waveWorld.x, waveWorld.y),
+    });
+    nodeWorldByNodeId.set(coreNodeId, createWorldPoint(coreWorld.x, coreWorld.y));
+    nodeLaneKeyByNodeId.set(coreNodeId, laneKey);
+    nodeWorldByNodeId.set(waveNodeId, createWorldPoint(waveWorld.x, waveWorld.y));
+    nodeLaneKeyByNodeId.set(waveNodeId, laneKey);
+    laneFrontGateByLaneKey.set(laneKey, createWorldPoint(frontGateWorld.x, frontGateWorld.y));
+    waveNodeIds.add(waveNodeId);
+
+    const barracksSites = barracksSiteDefs.map((siteDef) => {
+      const authoredBarracks = authoredLane.barracks[siteDef.barracksId];
+      if (!authoredBarracks) {
+        throw new Error(
+          `[battlefieldLayoutSystem] Authored environment lane '${laneKey}' is missing barracks '${siteDef.barracksId}'.`
+        );
+      }
+
+      const world = createFinitePointFromEntry(
+        authoredBarracks,
+        `barracks '${siteDef.barracksId}' on lane '${laneKey}'`
+      );
+      const routeNodeId = getBarracksRouteStartNodeId(laneIndex, siteDef.barracksId);
+      routeNodes.push({
+        nodeId: routeNodeId,
+        laneIndex,
+        laneKey,
+        world: createWorldPoint(world.x, world.y),
+      });
+      nodeWorldByNodeId.set(routeNodeId, createWorldPoint(world.x, world.y));
+      nodeLaneKeyByNodeId.set(routeNodeId, laneKey);
+
+      return {
+        barracksId: siteDef.barracksId,
+        displayName: siteDef.displayName,
+        slot: siteDef.slot,
+        sortIndex: siteDef.sortIndex,
+        world: createWorldPoint(world.x, world.y),
+        routeNodeId,
+      };
+    });
+
+    lanes.push({
+      laneIndex,
+      laneKey,
+      slotColor: slot.slotColor,
+      slotKey: slot.slotKey,
+      branchId: slot.branchId,
+      townCore: createWorldPoint(coreWorld.x, coreWorld.y),
+      frontGate: frontGateWorld,
+      waveSpawn: createWorldPoint(waveWorld.x, waveWorld.y),
+      fortressPads,
+      barracksSites,
+    });
+  }
+
+  for (const [segmentId, segmentPoints] of Object.entries(routeSegmentPolylines)) {
+    if (!Array.isArray(segmentPoints) || segmentPoints.length < 2)
+      continue;
+
+    const splitIndex = segmentId.indexOf("_");
+    if (splitIndex <= 0 || splitIndex >= segmentId.length - 1)
+      continue;
+
+    const fromNodeId = segmentId.slice(0, splitIndex);
+    const toNodeId = segmentId.slice(splitIndex + 1);
+    const fromWorld = nodeWorldByNodeId.get(fromNodeId);
+    const toWorld = nodeWorldByNodeId.get(toNodeId);
+    if (!fromWorld || !toWorld)
+      continue;
+
+    const fromLaneKey = nodeLaneKeyByNodeId.get(fromNodeId) || null;
+    const toLaneKey = nodeLaneKeyByNodeId.get(toNodeId) || null;
+    const segmentLaneKey = (fromLaneKey && fromLaneKey !== "mine_center")
+      ? fromLaneKey
+      : ((toLaneKey && toLaneKey !== "mine_center") ? toLaneKey : null);
+    const frontGatePoint = segmentLaneKey
+      ? laneFrontGateByLaneKey.get(segmentLaneKey) || null
+      : null;
+    const authoredSegmentPoints = buildAuthoredSegmentWorldPoints(
+      segmentId,
+      segmentPoints,
+      fromNodeId,
+      toNodeId,
+      fromWorld,
+      toWorld,
+      frontGatePoint,
+      mineWorld,
+      waveNodeIds,
+      coreNodeIds
+    );
+    const routeSpacePoints = [];
+    for (let pointIndex = 0; pointIndex < segmentPoints.length; pointIndex += 1) {
+      routeSpacePoints.push(
+        createFinitePointFromEntry(
+          segmentPoints[pointIndex],
+          `route-space point ${pointIndex} for segment '${segmentId}'`
+        )
+      );
+    }
+
+    routeSegments.push({
+      segmentId,
+      fromNodeId,
+      toNodeId,
+      laneKey: segmentLaneKey,
+      points: authoredSegmentPoints,
+      routeSpacePoints,
+    });
+  }
+
+  return {
+    mapType: opt && opt.battlefieldTopology && opt.battlefieldTopology.mapType
+      ? opt.battlefieldTopology.mapType
+      : "unknown",
+    playerCount: laneCount,
+    lanes,
+    routeNodes,
+    routeSegments,
+  };
+}
+
+function buildBattlefieldLayout(opt, deps = {}) {
+  const getDefaultSlotDefinitions = requireDepFunction(deps, "getDefaultSlotDefinitions");
+  const activeSlotDefinitions = Array.isArray(opt && opt.battlefieldTopology && opt.battlefieldTopology.slotDefinitions)
+    ? opt.battlefieldTopology.slotDefinitions
+    : [];
+  const canonicalLayout = buildBattlefieldLayoutForSlotDefinitions(activeSlotDefinitions, opt, deps);
+
+  const authoredEnvironmentPlayerCount = Number.isFinite(Number(deps.defaultEnvironmentPlayerCount))
+    ? Math.max(1, Math.floor(Number(deps.defaultEnvironmentPlayerCount)))
+    : Math.max(1, activeSlotDefinitions.length);
+  const authoredSlotDefinitions = getDefaultSlotDefinitions(authoredEnvironmentPlayerCount, []);
+  const environmentLayout = buildBattlefieldLayoutForSlotDefinitions(
+    Array.isArray(authoredSlotDefinitions) && authoredSlotDefinitions.length > 0
+      ? authoredSlotDefinitions
+      : activeSlotDefinitions,
+    opt,
+    deps
+  );
+
+  const contentHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(environmentLayout))
+    .digest("hex");
+
+  return {
+    layoutId: `${canonicalLayout.mapType}:server_v2`,
+    mapType: canonicalLayout.mapType,
+    playerCount: canonicalLayout.playerCount,
+    contentHash,
+    lanes: canonicalLayout.lanes,
+    routeNodes: canonicalLayout.routeNodes,
+    routeSegments: canonicalLayout.routeSegments,
+  };
+}
+
+module.exports = {
+  buildBattlefieldLayout,
+};
