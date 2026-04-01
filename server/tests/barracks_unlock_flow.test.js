@@ -95,6 +95,13 @@ function act(game, laneIndex, type, data) {
   return result;
 }
 
+test("default games do not seed combat-test militia into live spawn queues", () => {
+  const game = createGame();
+
+  assert.equal(game.lanes[0].spawnQueue.length, 0);
+  assert.equal(game.lanes[1].spawnQueue.length, 0);
+});
+
 test("militia stays unavailable until a barracks is built", () => {
   const game = createGame();
   const lane = laneSnapshot(game, 0);

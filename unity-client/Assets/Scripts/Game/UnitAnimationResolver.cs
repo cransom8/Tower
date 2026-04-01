@@ -566,7 +566,7 @@ namespace CastleDefender.Game
 
             if (EqualsIgnoreCase(presentationIntent, "defend"))
             {
-                intent = EqualsIgnoreCase(presentationPhase, "formationhold")
+                intent = EqualsIgnoreCase(presentationPhase, "anchorhold")
                     ? UnitAnimationStateIntent.Idle
                     : UnitAnimationStateIntent.Defend;
                 return true;

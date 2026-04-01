@@ -419,9 +419,9 @@ namespace CastleDefender.Net
         public string         commandState;
         public int            commandTargetLaneIndex;
         public float          commandAnchorProgress;
-        public MLGridPos      formationAnchor;
-        public MLGridPos      formationFacing;
-        public MLLaneFormationSlot[] formationSlots;
+        public MLGridPos      commandAnchor;
+        public MLGridPos      commandFacing;
+        public MLLaneCommandSlot[] commandSlots;
         public string[]       assignedUnits;
         public float          engagementRadius;
         public bool           combatEnabled;
@@ -449,7 +449,7 @@ namespace CastleDefender.Net
     }
 
     [Serializable]
-    public class MLLaneFormationSlot
+    public class MLLaneCommandSlot
     {
         public int    slotIndex;
         public string unitId;
@@ -725,10 +725,17 @@ namespace CastleDefender.Net
         public string blockedByStructureId;
         public float  routeWorldX;
         public float  routeWorldY;
-        public int    currentSlotIndex;
         public float  anchorTargetX;
         public float  anchorTargetY;
         public float  anchorTargetProgress;
+        public int    assignedSlotIndex;
+        public float  anchorCenterX;
+        public float  anchorCenterY;
+        public float  anchorHoldRadius;
+        public float  anchorLeashRadius;
+        public float  currentWaypointTargetX;
+        public float  currentWaypointTargetY;
+        public string currentWaypointTargetKind;
         public float  combatLeashRadius;
         public bool   canEngage;
         public float  hp;

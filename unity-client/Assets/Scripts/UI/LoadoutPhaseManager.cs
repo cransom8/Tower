@@ -2587,7 +2587,7 @@ namespace CastleDefender.UI
             CreateStoreBadge(tagRow.transform, "Skins", new Color(0.44f, 0.27f, 0.51f, 0.98f));
             CreateStoreBadge(tagRow.transform, "Weapons", new Color(0.43f, 0.31f, 0.20f, 0.98f));
             CreateStoreBadge(tagRow.transform, "Victory", new Color(0.20f, 0.39f, 0.32f, 0.98f));
-            CreateStoreBadge(tagRow.transform, "Formation", new Color(0.36f, 0.25f, 0.25f, 0.98f));
+            CreateStoreBadge(tagRow.transform, "Position", new Color(0.36f, 0.25f, 0.25f, 0.98f));
 
             _txtDetailsCustomization = MakeLabel(customizationCard.transform, "Txt_Customization", "", 15, new Color(0.84f, 0.88f, 0.95f), 168f);
             ApplyReadableTextStyle(_txtDetailsCustomization, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
@@ -3007,13 +3007,13 @@ namespace CastleDefender.UI
                     NormalizeDossierValue(unit.StatsSummary, "Field report pending."));
                 return new[]
                 {
-                    new DetailRowData("ClassicRpgIcons/Badge_Warrior", string.Empty, NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit)), new Color(0.88f, 0.90f, 0.96f, 1f), statIconColor),
+                    new DetailRowData("ClassicRpgIcons/Badge_Warrior", string.Empty, NormalizeDossierValue(BuildCompactPositionTag(unit) ?? BuildPositionDetailText(unit)), new Color(0.88f, 0.90f, 0.96f, 1f), statIconColor),
                     new DetailRowData("ClassicRpgIcons/Icon_Character", string.Empty, BuildUnitRoleLabel(unit), new Color(0.82f, 0.86f, 0.92f, 1f)),
                     new DetailRowData("ClassicRpgIcons/Stat_Guard", string.Empty, fallbackSignature, new Color(0.84f, 0.88f, 0.95f, 1f), statIconColor),
                 };
             }
 
-            string rankValue = NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit));
+            string rankValue = NormalizeDossierValue(BuildCompactPositionTag(unit) ?? BuildPositionDetailText(unit));
             string attackValue = $"{FormatStatNumber(catalog.attack_damage)} dmg at {Mathf.Max(0.01f, catalog.attack_speed):0.##}/s | {FormatStatNumber(catalog.range)} rng";
             string vitalityValue = $"{FormatStatNumber(catalog.hp)} HP | {HumanizeLabel(catalog.armor_type)} {Mathf.Max(0f, catalog.damage_reduction_pct):0.#}%";
 
@@ -3045,7 +3045,7 @@ namespace CastleDefender.UI
                     string.Empty,
                     unit != null && unit.CardDisplay != null
                         ? HumanizeLabel(unit.LaneId)
-                        : NormalizeDossierValue(BuildCompactFormationTag(unit) ?? BuildFormationDetailText(unit)),
+                        : NormalizeDossierValue(BuildCompactPositionTag(unit) ?? BuildPositionDetailText(unit)),
                     new Color(0.82f, 0.86f, 0.92f, 1f)),
                 new DetailRowData("ClassicRpgIcons/Icon_Character", string.Empty, BuildRequirementSourceText(unit), new Color(0.82f, 0.86f, 0.92f, 1f)),
             };
@@ -3064,7 +3064,7 @@ namespace CastleDefender.UI
                 : unit.CardDisplay != null
                     ? BuildBuildingMoveSetSummary(unit)
                     : BuildUnitSpecialAttackText(unit);
-            string stanceValue = unit.CardDisplay != null ? "Structure or civic unlock rather than a combat formation." : BuildMoveStanceText(unit);
+            string stanceValue = unit.CardDisplay != null ? "Structure or civic unlock rather than a combat role." : BuildMoveStanceText(unit);
             string deliveryValue = TryGetCatalogEntry(unit, out var catalog)
                 ? BuildUnitDeliveryText(unit, catalog)
                 : unit.CardDisplay != null
@@ -4706,7 +4706,7 @@ namespace CastleDefender.UI
 
             var builder = new StringBuilder();
             builder.AppendLine(requirementText);
-            builder.AppendLine($"[Rank] {BuildFormationDetailText(unit)}");
+            builder.AppendLine($"[Rank] {BuildPositionDetailText(unit)}");
             builder.Append($"[Source] {BuildCurrentSourceText(TryGetCatalogEntry(unit, out var catalog) ? catalog : null)}");
             return builder.ToString().TrimEnd();
         }
@@ -5699,14 +5699,14 @@ namespace CastleDefender.UI
                 return lane?.Label ?? "Unit";
 
             if (unit.CardStyle == RaceProgressionUnitCardStyle.HeroOutcome)
-                return $"{BuildUnitRoleLabel(unit)} | {BuildCompactFormationTag(unit) ?? "Castle reward"}";
+                return $"{BuildUnitRoleLabel(unit)} | {BuildCompactPositionTag(unit) ?? "Castle reward"}";
 
             if (IsStableDisplayOnlyUnit(unit))
                 return !string.IsNullOrWhiteSpace(unit.StatsSummary) ? unit.StatsSummary : "Future stable branch";
 
-            string formationText = BuildCompactFormationTag(unit);
-            if (!string.IsNullOrWhiteSpace(formationText))
-                return formationText;
+            string positionText = BuildCompactPositionTag(unit);
+            if (!string.IsNullOrWhiteSpace(positionText))
+                return positionText;
 
             if (IsEconomyUnit(unit))
                 return "Trade Route Unit";
@@ -5742,7 +5742,7 @@ namespace CastleDefender.UI
                 builder.AppendLine($"[Coin] Route Value {BuildEconomyLapText(unit)}");
 
             builder.AppendLine($"[Role] {BuildUnitRoleLabel(unit)}");
-            builder.AppendLine($"[Rank] {BuildFormationDetailText(unit)}");
+            builder.AppendLine($"[Rank] {BuildPositionDetailText(unit)}");
             builder.AppendLine($"[Blade] Attack {FormatStatNumber(catalog.attack_damage)}");
             builder.AppendLine($"[Tempo] Attack Speed {Mathf.Max(0.01f, catalog.attack_speed):0.##}/s");
             builder.AppendLine($"[Strike] Damage per second {ComputeUnitDps(catalog):0.#}");
@@ -5805,9 +5805,9 @@ namespace CastleDefender.UI
             };
         }
 
-        static string BuildCompactFormationTag(RaceProgressionUnitDefinition unit)
+        static string BuildCompactPositionTag(RaceProgressionUnitDefinition unit)
         {
-            int rank = GetFormationRank(unit);
+            int rank = GetBattleLineRank(unit);
             return rank > 0
                 ? $"{Ordinal(rank)} Rank"
                 : IsEconomyUnit(unit)
@@ -5817,22 +5817,22 @@ namespace CastleDefender.UI
                         : null;
         }
 
-        static string BuildFormationDetailText(RaceProgressionUnitDefinition unit)
+        static string BuildPositionDetailText(RaceProgressionUnitDefinition unit)
         {
-            int rank = GetFormationRank(unit);
+            int rank = GetBattleLineRank(unit);
             if (rank > 0)
-                return $"Formation {Ordinal(rank)} rank";
+                return $"{Ordinal(rank)} battle-line rank";
 
             if (IsEconomyUnit(unit))
-                return "Formation trade route / not in the main battle line";
+                return "Trade route / off the battle line";
 
             if (IsStableDisplayOnlyUnit(unit))
-                return "Formation not assigned because this branch is display-only";
+                return "No live battle-line role; display-only branch";
 
-            return "Formation not assigned";
+            return "No live battle-line role assigned";
         }
 
-        static int GetFormationRank(RaceProgressionUnitDefinition unit)
+        static int GetBattleLineRank(RaceProgressionUnitDefinition unit)
         {
             return NormalizeTechTreeKey(unit?.Id) switch
             {
@@ -5987,14 +5987,14 @@ namespace CastleDefender.UI
                 "spearman" => "Third-rank reach support that helps control enemy approach.",
                 "halberdier" => "Higher-tier polearm pressure with better anti-armor identity.",
                 "lancer" => "Fast reach cavalry used to punish openings once the line is established.",
-                "shieldman" => "First-rank anchor that protects the rest of the formation.",
+                "shieldman" => "First-rank anchor that protects the rest of the battle line.",
                 "shield_guard" => "Improved first-rank tank that stabilizes longer engagements.",
                 "guardian" => "Elite defensive anchor for the late-game frontline.",
                 "cleric" => "Back-rank sustain support and early healing coverage.",
                 "priest" => "Stronger backline sustain with more reliable healing uptime.",
                 "high_priest" => "Peak support output for extended battles.",
                 "mage" => "Backline arcane damage with early spell pressure.",
-                "wizard" => "Stronger magical throughput from deeper in the formation.",
+                "wizard" => "Stronger magical throughput from deeper behind the battle line.",
                 "thaumaturge" => "Late-game caster that should define the arcane back line.",
                 "archer" => "Baseline ranged pressure from the fifth rank.",
                 "crossbowman" => "Tier-two ranged specialist intended to hit harder than base archers.",
@@ -6203,7 +6203,7 @@ namespace CastleDefender.UI
             {
                 return
                     $"[Route] {BuildUnitSpecialAttackText(unit)}\n" +
-                    "[Formation] This runner travels the trade route instead of joining the battle line.\n" +
+                    "[Position] This runner travels the trade route instead of joining the battle line.\n" +
                     "[Preview] Economy audio can be previewed below. Combat animation preview is not applicable.";
             }
 
@@ -6211,7 +6211,7 @@ namespace CastleDefender.UI
             {
                 return
                     $"[Stable] {BuildUnitSpecialAttackText(unit)}\n" +
-                    "[Formation] This branch is display-only while mounted gameplay is still pending.\n" +
+                    "[Position] This branch is display-only while mounted gameplay is still pending.\n" +
                     "[Preview] No combat move preview is wired yet because the live stable roster is not active.";
             }
 
@@ -6260,17 +6260,17 @@ namespace CastleDefender.UI
             if (unit == null)
                 return "Stance unavailable.";
 
-            int rank = GetFormationRank(unit);
+            int rank = GetBattleLineRank(unit);
             if (rank > 0)
-                return $"Holds the {Ordinal(rank)} rank as {BuildUnitRoleLabel(unit).ToLowerInvariant()}.";
+                return $"Operates from the {Ordinal(rank)} rank as {BuildUnitRoleLabel(unit).ToLowerInvariant()}.";
 
             if (IsEconomyUnit(unit))
-                return "Runs the market route and avoids the main battle formation.";
+                return "Runs the market route and stays off the battle line.";
 
             if (IsStableDisplayOnlyUnit(unit))
                 return "Reserved for future cavalry positioning once mounted combat is live.";
 
-            return "No live formation stance is assigned to this entry.";
+            return "No live battle-line role is assigned to this entry.";
         }
 
         static string BuildUnitDeliveryText(RaceProgressionUnitDefinition unit, UnitCatalogEntry catalog)
@@ -6278,7 +6278,7 @@ namespace CastleDefender.UI
             if (catalog == null)
                 return "Delivery data unavailable.";
 
-            int rank = GetFormationRank(unit);
+            int rank = GetBattleLineRank(unit);
             string rankText = rank > 0 ? $"{Ordinal(rank)} rank" : "assigned position";
             string damageType = HumanizeLabel(catalog.damage_type);
             if (!string.IsNullOrWhiteSpace(catalog.proj_behavior))
@@ -6346,7 +6346,7 @@ namespace CastleDefender.UI
                 return
                     "[Abilities] Route flourish variants, coin toss finishers, and delivery callouts can be sold here.\n" +
                     "[Skins] Wagon colors, heraldry, worker outfits, and cargo props fit this unit family.\n" +
-                    "[Formation] Route emotes and arrival celebrations can surface once the store data is wired.";
+                    "[Position] Route emotes and arrival celebrations can surface once the store data is wired.";
             }
 
             if (IsStableDisplayOnlyUnit(unit))
@@ -6361,8 +6361,8 @@ namespace CastleDefender.UI
             return
                 $"[Abilities] {signatureMove}, whirlwind strikes, backflip slashes, shield crashes, and other alternate move reels can live here.\n" +
                 "[Skins] Armor variants, cloaks, helmets, heraldry, weapon swaps, and material dyes fit the showcase.\n" +
-                "[Victory] Defeat monologues, taunts, dances, and formation finishers can be sold per unit line.\n" +
-                "[Formation] Banner calls, synchronized emotes, and squad formations can sit beside the combat loadout once store hooks are live.";
+                "[Victory] Defeat monologues, taunts, dances, and coordinated finishers can be sold per unit line.\n" +
+                "[Position] Banner calls, synchronized emotes, and squad coordination sets can sit beside the combat loadout once store hooks are live.";
         }
 
         bool TryResolvePreviewSfx(RaceProgressionUnitDefinition unit, out AudioManager.SFX sfx, out string label)

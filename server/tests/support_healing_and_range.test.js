@@ -96,18 +96,24 @@ function seedHumanRoster() {
 }
 
 function createGame(startGold = 300) {
-  return simMl.createMLGame(2, {
+  const game = simMl.createMLGame(2, {
     laneTeams: ["red", "blue"],
     startGold,
     startIncome: 0,
   });
+  const attackResult = simMl.applyMLAction(game, 0, {
+    type: "set_lane_attack",
+    data: { targetLaneIndex: 1 },
+  });
+  assert.equal(attackResult.ok, true, "expected support-healing tests to initialize lane 0 in attack mode");
+  return game;
 }
 
 function createBarracksUnit(typeKey, overrides = {}) {
   const def = simMl.resolveUnitDef(typeKey);
   const id = overrides.id || `fort_unit_${nextUnitId++}`;
   const ownerLaneIndex = overrides.ownerLaneIndex ?? 0;
-  const targetLaneIndex = overrides.targetLaneIndex ?? ownerLaneIndex;
+  const targetLaneIndex = overrides.targetLaneIndex ?? (ownerLaneIndex === 0 ? 1 : 0);
   const sourceBarracksId = overrides.sourceBarracksId ?? "center";
 
   return {
@@ -123,7 +129,6 @@ function createBarracksUnit(typeKey, overrides = {}) {
     sourceBarracksId,
     sourceBarracksKey: sourceBarracksId,
     spawnSourceType: overrides.spawnSourceType ?? "barracks_roster",
-    groupId: overrides.groupId ?? `packet:${ownerLaneIndex}:${sourceBarracksId}:${targetLaneIndex}`,
     type: typeKey,
     skinKey: null,
     isHero: overrides.isHero ?? false,
@@ -146,7 +151,7 @@ function createBarracksUnit(typeKey, overrides = {}) {
     isDefender: false,
     combatState: "IDLE",
     routeState: "IDLE",
-    movementMode: "FORMATION_JOIN",
+    movementMode: "AnchorJoin",
     combatTarget: null,
     combatTargetId: null,
     currentTargetId: null,

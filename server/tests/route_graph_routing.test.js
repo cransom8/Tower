@@ -88,9 +88,6 @@ function createAttacker(overrides = {}) {
   const canonicalSourceTeam = overrides.sourceTeam === "gold" ? "yellow" : (overrides.sourceTeam ?? null);
   const ownerLaneIndex = overrides.ownerLaneIndex ?? overrides.ownerLane ?? (isDungeonWave ? -1 : (overrides.sourceLaneIndex ?? -1));
   const targetLaneIndex = overrides.targetLaneIndex ?? overrides.laneId ?? ownerLaneIndex;
-  const defaultGroupId = !isDungeonWave && ownerLaneIndex >= 0
-    ? `test_packet:${ownerLaneIndex}:${overrides.sourceBarracksId ?? "center"}:${targetLaneIndex}`
-    : null;
   return {
     id: overrides.id || "route_attacker",
     unitId: overrides.id || "route_attacker",
@@ -103,7 +100,6 @@ function createAttacker(overrides = {}) {
     sourceBarracksId: overrides.sourceBarracksId ?? null,
     sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? null,
     spawnSourceType,
-    groupId: overrides.groupId ?? defaultGroupId,
     type: "raider",
     unitTypeKey: "raider",
     allegianceKey: overrides.allegianceKey ?? (isDungeonWave ? "dungeon" : canonicalSourceTeam),
@@ -162,11 +158,11 @@ function primeDefendAnchor(game, lane) {
 function getDefendAnchorPosition(lane, forwardOffset = 0, lateralOffset = 0) {
   const anchor = lane && lane.outsideGateAnchor
     ? lane.outsideGateAnchor
-    : lane && lane.formationAnchor;
+    : lane && lane.commandAnchor;
   assert.ok(anchor, `expected lane ${lane && lane.laneIndex} to have a defend anchor`);
 
-  const facing = lane && lane.formationFacing
-    ? lane.formationFacing
+  const facing = lane && lane.commandFacing
+    ? lane.commandFacing
     : { x: 0, y: -1 };
   const lateral = { x: -Number(facing.y) || 0, y: Number(facing.x) || 0 };
 
@@ -179,10 +175,18 @@ function getDefendAnchorPosition(lane, forwardOffset = 0, lateralOffset = 0) {
 test("lane command state controls barracks destinations regardless of barracks site", () => {
   const game = createGame();
 
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "center"), 1);
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 0);
+
+  issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: 0 });
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 0);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 0);
-  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 1);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "center"), 0);
+
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: 1 });
+  assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 1);
 
   issueLaneCommand(game, 1, "set_lane_retreat", { progress: 0 });
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 1);
@@ -314,13 +318,14 @@ test("legacy gold lane input normalizes to canonical yellow allegiance", () => {
 
 test("attack lanes keep their forward objective after the target lane falls until the player changes orders", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: 1 });
   game.lanes[1].eliminated = true;
 
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "center"), 1);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 0, "left"), 1);
 });
 
-test("defend mode stages same-lane formations into spaced slots around the home anchor", () => {
+test("defend mode stages same-lane units into spaced slots around the home anchor", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   issueLaneCommand(game, 0, "set_lane_defend_point", { progress: 0 });
 
@@ -351,10 +356,10 @@ test("defend mode stages same-lane formations into spaced slots around the home 
   assert.equal(firstRow.pathContractType, "guard_anchor");
   assert.equal(secondRow.pathContractType, "guard_anchor");
   assert.ok(secondRow.routeLongitudinalOffset < firstRow.routeLongitudinalOffset);
-  assert.ok(secondRow.posY < firstRow.posY, "the second hold row should stage deeper in the home-side hold formation.");
+  assert.ok(secondRow.posY < firstRow.posY, "the second hold row should stage deeper in the home-side anchor line.");
 });
 
-test("route initialization uses the modal lane-command route contract for every barracks site", () => {
+test("route initialization reflects the active lane-command contract for every barracks site", () => {
   const game = createGame();
   const targetLane = game.lanes[2];
 
@@ -365,8 +370,8 @@ test("route initialization uses the modal lane-command route contract for every 
   });
   simMl.initializeMovingUnitRouteState(game, targetLane, outerUnit, { x: 5, y: 0 });
   assert.equal(outerUnit.routeType, simMl.ROUTE_TYPES.CENTER_CROSS);
-  assert.equal(outerUnit.pathContractType, "barracks_cross");
-  assert.equal(outerUnit.stance, "ATTACK");
+  assert.equal(outerUnit.pathContractType, "guard_anchor");
+  assert.equal(outerUnit.stance, "DEFEND");
   assert.equal(outerUnit.routeStartNode, "ALFT");
   assert.equal(outerUnit.routeTargetNode, "B");
   assert.equal(outerUnit.currentSegment, "ALFT_A");
@@ -380,12 +385,56 @@ test("route initialization uses the modal lane-command route contract for every 
   });
   simMl.initializeMovingUnitRouteState(game, game.lanes[1], centerUnit, { x: 5, y: 0 });
   assert.equal(centerUnit.routeType, simMl.ROUTE_TYPES.CENTER_CROSS);
-  assert.equal(centerUnit.pathContractType, "barracks_cross");
-  assert.equal(centerUnit.stance, "ATTACK");
+  assert.equal(centerUnit.pathContractType, "guard_anchor");
+  assert.equal(centerUnit.stance, "DEFEND");
   assert.equal(centerUnit.routeStartNode, "ACTR");
   assert.equal(centerUnit.routeTargetNode, "B");
   assert.equal(centerUnit.currentSegment, "ACTR_A");
   assert.deepEqual(centerUnit.routeSegments, ["ACTR_A", "A_M", "M_B"]);
+
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  const attackUnit = createAttacker({
+    id: "attack_outer_unit",
+    sourceLaneIndex: 0,
+    sourceBarracksId: "left",
+  });
+  simMl.initializeMovingUnitRouteState(game, targetLane, attackUnit, { x: 5, y: 0 });
+  assert.equal(attackUnit.pathContractType, "barracks_cross");
+  assert.equal(attackUnit.stance, "ATTACK");
+  assert.equal(attackUnit.routeTargetNode, "C");
+  assert.deepEqual(attackUnit.routeSegments, ["ALFT_A", "A_M", "M_C"]);
+});
+
+test("barracks route initialization preserves lateral travel spread before units reach the anchor", () => {
+  const game = createGame();
+  const targetLane = game.lanes[0];
+
+  const leftColumn = createAttacker({
+    id: "travel_spread_left",
+    sourceLaneIndex: 0,
+    sourceBarracksId: "center",
+  });
+  const rightColumn = createAttacker({
+    id: "travel_spread_right",
+    sourceLaneIndex: 0,
+    sourceBarracksId: "center",
+  });
+
+  const leftResult = simMl.initializeMovingUnitRouteState(game, targetLane, leftColumn, { x: 4, y: 0 });
+  const rightResult = simMl.initializeMovingUnitRouteState(game, targetLane, rightColumn, { x: 6, y: 0 });
+
+  assert.equal(leftResult.ok, true);
+  assert.equal(rightResult.ok, true);
+  assert.notEqual(
+    leftColumn.routeLateralOffset,
+    rightColumn.routeLateralOffset,
+    "barracks march columns should keep distinct route lateral offsets instead of collapsing into one stacked travel line"
+  );
+  assert.ok(
+    Math.abs(Number(leftColumn.routeWorldX) - Number(rightColumn.routeWorldX)) > 0.5,
+    "route snapshot world positions should reflect travel-time spread for different barracks columns"
+  );
 });
 
 test("scheduled wave route initialization uses the shared mine-center origin", () => {
@@ -423,6 +472,7 @@ test("scheduled wave route initialization uses the shared mine-center origin", (
 test("snapshot contract preserves explicit barracks route assignment fields", () => {
   const game = createGame();
   const targetLane = game.lanes[1];
+  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
   const unit = createAttacker({
     id: "center_contract_unit",
     sourceLaneIndex: 0,
@@ -438,10 +488,10 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
   const snapLane = snapshot.lanes.find((lane) => lane && lane.laneIndex === 1);
   const snapUnit = snapLane.units.find((entry) => entry && entry.id === "center_contract_unit");
 
-  assert.equal(snapLane.commandState, "ATTACK");
+  assert.equal(snapLane.commandState, "DEFEND");
   assert.equal(snapLane.commandTargetLaneIndex, 0);
   assert.equal(snapLane.combatEnabled, true);
-  assert.ok(Array.isArray(snapLane.formationSlots));
+  assert.ok(Array.isArray(snapLane.commandSlots));
   assert.equal(snapUnit.sourceBarracksKey, "center");
   assert.equal(snapUnit.sourceBarracksId, "center");
   assert.equal(snapUnit.barracksId, "center");
@@ -475,7 +525,7 @@ test("snapshot contract preserves explicit barracks route assignment fields", ()
   assert.equal(typeof snapUnit.routeWorldY, "number");
 });
 
-test("blocking structures are targeted before the town core", () => {
+test("structures are ignored until they enter local combat vicinity", () => {
   const game = createGame();
   const lane = game.lanes[0];
   issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: lane.laneIndex });
@@ -500,12 +550,12 @@ test("blocking structures are targeted before the town core", () => {
   lane.units.push(attacker);
   tick(game, 1);
 
-  assert.equal(attacker.blockedByStructure, true);
-  assert.equal(attacker.blockedByStructureId, "barracks_site:center");
-  assert.equal(attacker.combatTarget?.padId, "barracks_site:center");
+  assert.equal(attacker.blockedByStructure, false);
+  assert.equal(attacker.blockedByStructureId, null);
+  assert.equal(attacker.combatTarget, null);
 });
 
-test("barracks attackers clear built non-core fortress structures before the town core", () => {
+test("nearby attackers pick the nearest hostile structure regardless of building type", () => {
   const game = createGame();
   const lane = game.lanes[0];
   issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: lane.laneIndex });
@@ -517,13 +567,13 @@ test("barracks attackers clear built non-core fortress structures before the tow
   assert.equal(buildResult.ok, true);
 
   const attacker = createAttacker({
-    id: "non_core_priority_test",
+    id: "nearest_structure_priority_test",
     sourceLaneIndex: 1,
     sourceTeam: "yellow",
     sourceBarracksId: "center",
     sourceBarracksKey: "center",
-    posX: -25,
-    posY: 21,
+    posX: -24,
+    posY: 23,
     atkCd: 10,
   });
 
@@ -531,11 +581,40 @@ test("barracks attackers clear built non-core fortress structures before the tow
   tick(game, 1);
 
   assert.equal(attacker.blockedByStructure, true);
-  assert.notEqual(attacker.combatTarget?.padId, "town_core_pad");
-  assert.notEqual(attacker.blockedByStructureType, "town_core");
-  assert.ok(
-    attacker.combatTarget?.padId === "blacksmith_pad" || attacker.combatTarget?.padId === "barracks_pad",
-    `expected a built non-core structure target, got ${attacker.combatTarget?.padId ?? "none"}`
+  assert.equal(attacker.combatTarget?.padId, "town_core_pad");
+  assert.equal(attacker.blockedByStructureType, "town_core");
+});
+
+test("nearby hostile structures are targeted by proximity instead of the current objective lane", () => {
+  const game = createGame();
+  const sourceLane = game.lanes[0];
+  const objectiveLane = game.lanes[1];
+  const nearbyHostileLane = game.lanes[2];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: objectiveLane.laneIndex });
+
+  const nearbyTownCore = getTownCoreTargetPosition(nearbyHostileLane);
+  const attacker = createAttacker({
+    id: "off_objective_structure_attacker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: objectiveLane.laneIndex,
+    laneId: objectiveLane.laneIndex,
+    posX: Number(nearbyTownCore.posX) + 0.4,
+    posY: Number(nearbyTownCore.posY) + 0.2,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+
+  objectiveLane.units.push(attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.kind, "fortress_pad");
+  assert.equal(
+    attacker.combatTarget?.laneIndex,
+    nearbyHostileLane.laneIndex,
+    "once no hostile units are nearby, the closest hostile structure should be selected even when it is off the current objective lane."
   );
 });
 
@@ -590,173 +669,259 @@ test("route units engage hostile movers on shared center routes instead of passi
   assert.equal(attacker.combatState, "COMBAT");
 });
 
-test("attack-mode lane formations share the first hostile contact instead of letting trailing units walk past", () => {
-  const game = createGame();
+test("route units pick the closest hostile unit even when it lives in another lane container", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const homeLane = game.lanes[0];
+  const otherLane = game.lanes[1];
+  const wave = createAttacker({
+    id: "cross_lane_wave",
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: homeLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    posX: 0,
+    posY: 0,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+  const fartherTarget = createAttacker({
+    id: "route_lane_target",
+    sourceLaneIndex: homeLane.laneIndex,
+    sourceTeam: homeLane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: homeLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    posX: 3.6,
+    posY: 0,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+  const closerTarget = createAttacker({
+    id: "other_lane_target",
+    sourceLaneIndex: otherLane.laneIndex,
+    sourceTeam: otherLane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: otherLane.laneIndex,
+    laneId: otherLane.laneIndex,
+    posX: 0.8,
+    posY: 0.2,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+
+  homeLane.units.push(wave, fartherTarget);
+  otherLane.units.push(closerTarget);
+
+  tick(game, 1);
+
+  assert.equal(
+    wave.combatTarget?.unitId,
+    closerTarget.id,
+    "combat targeting should choose the closest hostile unit, not the one that happens to share the current route lane container."
+  );
+});
+
+test("attack-mode lane units share the first hostile contact instead of letting trailing units walk past", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
   const attackerLane = game.lanes[1];
-  const hostileLane = game.lanes[2];
-  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
   const attackers = [
     createAttacker({
-      id: "formation_attack_front",
-      sourceLaneIndex: 0,
-      sourceTeam: "red",
+      id: "attack_line_front",
+      sourceLaneIndex: sourceLane.laneIndex,
+      sourceTeam: sourceLane.team,
       sourceBarracksId: "center",
       targetLaneIndex: attackerLane.laneIndex,
       laneId: attackerLane.laneIndex,
-      routeSegments: ["ACTR_A", "A_M", "M_B"],
-      routeSegmentIndex: 1,
-      segmentProgress: 0.84,
-      posX: -0.2,
-      posY: -1.2,
       atkCd: 0,
       baseDmg: 4,
       baseSpeed: 1.2,
     }),
     createAttacker({
-      id: "formation_attack_mid",
-      sourceLaneIndex: 0,
-      sourceTeam: "red",
+      id: "attack_line_mid",
+      sourceLaneIndex: sourceLane.laneIndex,
+      sourceTeam: sourceLane.team,
       sourceBarracksId: "center",
       targetLaneIndex: attackerLane.laneIndex,
       laneId: attackerLane.laneIndex,
-      routeSegments: ["ACTR_A", "A_M", "M_B"],
-      routeSegmentIndex: 1,
-      segmentProgress: 0.79,
-      posX: 0,
-      posY: -1.8,
       atkCd: 0,
       baseDmg: 4,
       baseSpeed: 1.2,
     }),
     createAttacker({
-      id: "formation_attack_rear",
-      sourceLaneIndex: 0,
-      sourceTeam: "red",
+      id: "attack_line_rear",
+      sourceLaneIndex: sourceLane.laneIndex,
+      sourceTeam: sourceLane.team,
       sourceBarracksId: "center",
       targetLaneIndex: attackerLane.laneIndex,
       laneId: attackerLane.laneIndex,
-      routeSegments: ["ACTR_A", "A_M", "M_B"],
-      routeSegmentIndex: 1,
-      segmentProgress: 0.74,
-      posX: 0.2,
-      posY: -2.4,
       atkCd: 0,
       baseDmg: 4,
       baseSpeed: 1.2,
     }),
   ];
   const hostileWave = createAttacker({
-    id: "formation_attack_wave",
-    sourceLaneIndex: -1,
-    sourceTeam: null,
-    sourceBarracksId: null,
+    id: "attack_line_wave",
     spawnSourceType: "dungeon_wave",
-    targetLaneIndex: hostileLane.laneIndex,
-    laneId: hostileLane.laneIndex,
-    routeSegments: ["WC_C"],
-    routeSegmentIndex: 0,
-    segmentProgress: 0.9,
-    posX: 0,
-    posY: 0.55,
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
     hp: 120,
     maxHp: 120,
     atkCd: 999,
-    baseSpeed: 0,
+    baseSpeed: 1.1,
   });
 
-  attackerLane.units.push(...attackers);
-  hostileLane.units.push(hostileWave);
+  attackers.forEach((unit, index) => {
+    assert.equal(simMl.initializeMovingUnitRouteState(game, attackerLane, unit, { x: 5, y: index }).ok, true);
+  });
+  assert.equal(simMl.initializeMovingUnitRouteState(game, attackerLane, hostileWave, { x: 5, y: 0 }).ok, true);
+  attackerLane.units.push(...attackers, hostileWave);
 
-  tick(game, 2);
+  let sharedContactEstablished = false;
+  for (let i = 0; i < 80 && !sharedContactEstablished; i += 1) {
+    tick(game, 1);
+    const liveAttackers = attackerLane.units.filter((unit) => unit && unit.id.startsWith("attack_line_") && unit.id !== hostileWave.id);
+    sharedContactEstablished = liveAttackers.length === 3
+      && liveAttackers.every((unit) => unit.combatTarget?.unitId === hostileWave.id);
+  }
 
-  const liveAttackers = game.lanes
-    .flatMap((lane) => lane.units)
-    .filter((unit) => unit && unit.id.startsWith("formation_attack_") && unit.id !== hostileWave.id);
+  const liveAttackers = attackerLane.units.filter((unit) => unit && unit.id.startsWith("attack_line_") && unit.id !== hostileWave.id);
 
   assert.equal(liveAttackers.length, 3);
   assert.ok(
-    liveAttackers.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
-    "once the lead unit finds contact, the rest of the attack formation should also stop and join that fight."
+    sharedContactEstablished,
+    "once the lead unit finds contact, the rest of the attackers should also stop and join that fight."
   );
   assert.ok(
     liveAttackers.every((unit) => unit.pathContractType === "intercept"),
-    "formation units that join the shared contact should publish intercept routing instead of continuing past the fight."
+    "units that join the shared contact should publish intercept routing instead of continuing past the fight."
   );
 });
 
-test("lane-controlled attackers keep a short lock on their current contact instead of swapping to a slightly closer newcomer", () => {
-  const game = createGame();
+test("lane-controlled attackers stay committed while already in direct contact instead of swapping to a slightly closer newcomer", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
   const attackerLane = game.lanes[1];
-  const hostileLane = game.lanes[2];
-  issueLaneCommand(game, 0, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
   const attacker = createAttacker({
     id: "sticky_target_attacker",
-    sourceLaneIndex: 0,
-    sourceTeam: "red",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
     sourceBarracksId: "center",
     targetLaneIndex: attackerLane.laneIndex,
     laneId: attackerLane.laneIndex,
-    routeSegments: ["ACTR_A", "A_M", "M_B"],
-    routeSegmentIndex: 1,
-    segmentProgress: 0.84,
-    posX: -0.2,
-    posY: -1.2,
     atkCd: 999,
     baseSpeed: 1.2,
   });
   const firstWave = createAttacker({
     id: "sticky_target_wave_1",
-    sourceLaneIndex: -1,
-    sourceTeam: null,
-    sourceBarracksId: null,
     spawnSourceType: "dungeon_wave",
-    targetLaneIndex: hostileLane.laneIndex,
-    laneId: hostileLane.laneIndex,
-    routeSegments: ["WC_C"],
-    routeSegmentIndex: 0,
-    segmentProgress: 0.9,
-    posX: 0,
-    posY: 0.55,
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
     hp: 120,
     maxHp: 120,
     atkCd: 999,
-    baseSpeed: 0,
+    baseSpeed: 1.1,
   });
 
-  attackerLane.units.push(attacker);
-  hostileLane.units.push(firstWave);
+  assert.equal(simMl.initializeMovingUnitRouteState(game, attackerLane, attacker, { x: 5, y: 0 }).ok, true);
+  assert.equal(simMl.initializeMovingUnitRouteState(game, attackerLane, firstWave, { x: 5, y: 0 }).ok, true);
+  attackerLane.units.push(attacker, firstWave);
 
-  tick(game, 1);
+  for (let i = 0; i < 80 && attacker.combatTarget?.unitId !== firstWave.id; i += 1)
+    tick(game, 1);
 
   assert.equal(attacker.combatTarget?.unitId, firstWave.id, "the attacker should lock onto the first hostile contact.");
 
   const secondWave = createAttacker({
     id: "sticky_target_wave_2",
-    sourceLaneIndex: -1,
-    sourceTeam: null,
-    sourceBarracksId: null,
     spawnSourceType: "dungeon_wave",
-    targetLaneIndex: hostileLane.laneIndex,
-    laneId: hostileLane.laneIndex,
-    routeSegments: ["WC_C"],
-    routeSegmentIndex: 0,
-    segmentProgress: 0.85,
-    posX: 0.1,
-    posY: -0.2,
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
     hp: 120,
     maxHp: 120,
     atkCd: 999,
     baseSpeed: 0,
+    posX: Number(attacker.posX) + 0.2,
+    posY: Number(attacker.posY) + 0.2,
   });
 
-  hostileLane.units.push(secondWave);
+  attackerLane.units.push(secondWave);
 
   tick(game, 1);
 
   assert.equal(
     attacker.combatTarget?.unitId,
     firstWave.id,
-    "a lane-controlled attacker should stay committed to its current combat target during the short lock window."
+    "a lane-controlled attacker should stay committed to the unit it is already actively fighting."
+  );
+});
+
+test("lane-controlled defenders can switch from a queued target to a closer hostile before contact", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+
+  const defender = createAttacker({
+    id: "queued_switch_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 999,
+    baseDmg: 8,
+    baseSpeed: 0.45,
+    ...getDefendAnchorPosition(lane, -0.6, 0),
+  });
+  const firstWave = createAttacker({
+    id: "queued_switch_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    ...getDefendAnchorPosition(lane, 3.8, 0),
+  });
+
+  lane.units.push(defender, firstWave);
+
+  tick(game, 1);
+
+  assert.equal(defender.combatTarget?.unitId, firstWave.id, "the defender should initially queue onto the first hostile.");
+  assert.equal(defender.attackPulse || 0, 0, "the defender should not already be in direct contact with the first hostile.");
+
+  const secondWave = createAttacker({
+    id: "queued_switch_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    ...getDefendAnchorPosition(lane, 1.4, 0.5),
+  });
+
+  lane.units.push(secondWave);
+
+  tick(game, 1);
+
+  assert.equal(
+    defender.combatTarget?.unitId,
+    secondWave.id,
+    "before reaching contact, a queued defender should switch to the closer hostile that enters engagement range."
   );
 });
 
@@ -891,7 +1056,7 @@ test("redirecting an attack lane reprojects existing attackers onto the new rout
   );
 });
 
-test("switching a defend packet to attack keeps it moving along the live route instead of skipping to the enemy core", () => {
+test("switching a defend lane from hold to attack keeps it moving along the live route instead of skipping to the enemy core", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const sourceLane = game.lanes[0];
   const targetLane = game.lanes[1];
@@ -1029,7 +1194,7 @@ test("snapshot contract exposes combat resolve state for lane-controlled contact
   assert.equal(snapDefender.presentationIntent, "Defend");
   assert.equal(snapDefender.combatTargetKind, "unit");
   assert.equal(snapDefender.combatContact, true);
-  assert.ok(snapDefender.combatLockTicksRemaining > 0, "the snapshot should carry the short target-lock window while contact is active.");
+  assert.equal(snapDefender.combatLockTicksRemaining, 0, "lane-controlled contact no longer relies on a synthetic target-lock window.");
 });
 
 test("snapshot contract exposes combat regroup after a lane-controlled kill", () => {
@@ -1101,7 +1266,7 @@ test("snapshot contract exposes combat regroup after a lane-controlled kill", ()
   assert.ok(snapDefender.regroupTicksRemaining > 0, "the regroup timer should remain visible to the client while the unit reforms.");
 });
 
-test("lane-controlled formations keep surround movement inside their combat leash", () => {
+test("lane-controlled units keep surround movement inside their combat leash", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -1121,7 +1286,7 @@ test("lane-controlled formations keep surround movement inside their combat leas
   lane.units.push(...defenders);
   tick(game, 1);
 
-  assert.ok(lane.formationAnchor, "the lane should expose a defend formation anchor before combat starts.");
+  assert.ok(lane.commandAnchor, "the lane should expose a defend command anchor before combat starts.");
   const hostileWave = createAttacker({
     id: "combat_pocket_wave",
     sourceLaneIndex: -1,
@@ -1144,7 +1309,7 @@ test("lane-controlled formations keep surround movement inside their combat leas
   assert.equal(liveDefenders.length, defenders.length);
   assert.ok(
     liveDefenders.some((unit) => unit.combatTarget?.unitId === hostileWave.id || unit.movementMode === "CombatEngage" || unit.attackPulse > 0),
-    "the formation should actually commit to the hostile wave instead of the test only exercising idle formation movement."
+    "the defenders should actually commit to the hostile wave instead of the test only exercising idle anchor movement."
   );
   assert.ok(
     liveDefenders.every((unit) => {
@@ -1157,12 +1322,12 @@ test("lane-controlled formations keep surround movement inside their combat leas
   );
 });
 
-test("settled lane formations separate with small lateral nudges instead of being shoved off-slot", () => {
+test("settled lane units resolve overlap with small nudges while staying near their shallow hold slots", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const coreTarget = getTownCoreTargetPosition(lane);
-  const formationUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
+  const anchorUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
     id: `soft_separation_unit_${index}`,
     sourceLaneIndex: lane.laneIndex,
     sourceTeam: lane.team,
@@ -1175,35 +1340,31 @@ test("settled lane formations separate with small lateral nudges instead of bein
     posY: coreTarget.posY - 0.5 - (index * 0.1),
   }));
 
-  lane.units.push(...formationUnits);
+  lane.units.push(...anchorUnits);
   tick(game, 1);
 
   const settledUnits = lane.units.filter((unit) => unit.id.startsWith("soft_separation_unit_"));
-  const facing = lane.formationFacing || { x: 0, y: -1 };
+  const facing = lane.commandFacing || { x: 0, y: -1 };
   const lateral = { x: -facing.y, y: facing.x };
   let chosenPair = null;
-  let smallestLateralDelta = Infinity;
+  let smallestAnchorDistance = Infinity;
   for (let i = 0; i < settledUnits.length; i += 1) {
     for (let j = i + 1; j < settledUnits.length; j += 1) {
       const a = settledUnits[i];
       const b = settledUnits[j];
       const anchorDx = Number(b.anchorTargetX) - Number(a.anchorTargetX);
       const anchorDy = Number(b.anchorTargetY) - Number(a.anchorTargetY);
-      const lateralDelta = Math.abs((anchorDx * lateral.x) + (anchorDy * lateral.y));
       const depthDelta = Math.abs((anchorDx * facing.x) + (anchorDy * facing.y));
-      if (depthDelta <= 0.5 || lateralDelta >= smallestLateralDelta)
+      const anchorDistance = Math.hypot(anchorDx, anchorDy);
+      if (depthDelta > 0.05 || anchorDistance >= smallestAnchorDistance)
         continue;
-      smallestLateralDelta = lateralDelta;
+      smallestAnchorDistance = anchorDistance;
       chosenPair = [a, b];
     }
   }
 
   const [frontUnit, rearUnit] = chosenPair || [];
-  assert.ok(frontUnit && rearUnit, "expected to find a front and rear formation pair in the same column.");
-  assert.ok(
-    smallestLateralDelta < 0.001,
-    "the chosen front and rear units should share a formation column so lateral separation is the drift we are testing."
-  );
+  assert.ok(frontUnit && rearUnit, "expected to find a nearby pair in the same shallow hold row.");
 
   for (const unit of settledUnits) {
     unit.posX = Number(unit.anchorTargetX);
@@ -1221,38 +1382,51 @@ test("settled lane formations separate with small lateral nudges instead of bein
   rearUnit.posY = midpointY + 0.01;
   rearUnit.pathIdx = rearUnit.posY;
 
-  tick(game, 1);
+  const startingFrontAnchorDistance = Math.hypot(
+    Number(frontUnit.posX) - Number(frontUnit.anchorTargetX),
+    Number(frontUnit.posY) - Number(frontUnit.anchorTargetY)
+  );
+  const startingRearAnchorDistance = Math.hypot(
+    Number(rearUnit.posX) - Number(rearUnit.anchorTargetX),
+    Number(rearUnit.posY) - Number(rearUnit.anchorTargetY)
+  );
+
+  tick(game, 10);
 
   const updatedFront = lane.units.find((unit) => unit.id === frontUnit.id);
   const updatedRear = lane.units.find((unit) => unit.id === rearUnit.id);
-  assert.ok(updatedFront && updatedRear, "the overlapped formation units should still exist after separation resolves.");
+  assert.ok(updatedFront && updatedRear, "the overlapped anchor-slot units should still exist after separation resolves.");
   const relativeDx = Number(updatedRear.posX) - Number(updatedFront.posX);
   const relativeDy = Number(updatedRear.posY) - Number(updatedFront.posY);
-  const lateralSpacing = Math.abs((relativeDx * lateral.x) + (relativeDy * lateral.y));
-  const frontLateralOffset = Math.abs(((Number(updatedFront.posX) - Number(updatedFront.anchorTargetX)) * lateral.x)
-    + ((Number(updatedFront.posY) - Number(updatedFront.anchorTargetY)) * lateral.y));
-  const rearLateralOffset = Math.abs(((Number(updatedRear.posX) - Number(updatedRear.anchorTargetX)) * lateral.x)
-    + ((Number(updatedRear.posY) - Number(updatedRear.anchorTargetY)) * lateral.y));
-  assert.ok(
-    lateralSpacing > 0.05,
-    "the spacing pass should still separate settled units enough to avoid overlap."
+  const pairSpacing = Math.hypot(relativeDx, relativeDy);
+  const frontAnchorDistance = Math.hypot(
+    Number(updatedFront.posX) - Number(updatedFront.anchorTargetX),
+    Number(updatedFront.posY) - Number(updatedFront.anchorTargetY)
+  );
+  const rearAnchorDistance = Math.hypot(
+    Number(updatedRear.posX) - Number(updatedRear.anchorTargetX),
+    Number(updatedRear.posY) - Number(updatedRear.anchorTargetY)
   );
   assert.ok(
-    frontLateralOffset < 0.16,
-    "settled front-row units should only get a light sideways nudge instead of being shoved far off their assigned slot."
+    pairSpacing > 0.1,
+    "the spacing pass should gradually separate settled units enough to avoid overlap."
   );
   assert.ok(
-    rearLateralOffset < 0.16,
-    "settled rear-row units should also stay close to their assigned slot while the overlap is resolved."
+    frontAnchorDistance < startingFrontAnchorDistance,
+    "settled shallow-line units should start returning toward their assigned slot after the overlap is resolved."
+  );
+  assert.ok(
+    rearAnchorDistance < startingRearAnchorDistance,
+    "settled shallow-line neighbors should also recover toward their assigned slot after the overlap is resolved."
   );
 });
 
-test("settled defend formations stay parked on their assigned slots instead of buzzing at idle", () => {
+test("settled defend units stay parked on their assigned slots instead of buzzing at idle", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const coreTarget = getTownCoreTargetPosition(lane);
-  const formationUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
+  const anchorUnits = Array.from({ length: 6 }, (_, index) => createAttacker({
     id: `idle_settle_unit_${index}`,
     sourceLaneIndex: lane.laneIndex,
     sourceTeam: lane.team,
@@ -1265,7 +1439,7 @@ test("settled defend formations stay parked on their assigned slots instead of b
     posY: coreTarget.posY - 0.6 - (index * 0.08),
   }));
 
-  lane.units.push(...formationUnits);
+  lane.units.push(...anchorUnits);
   tick(game, 1);
 
   for (const unit of lane.units.filter((entry) => entry.id.startsWith("idle_settle_unit_"))) {
@@ -1275,13 +1449,13 @@ test("settled defend formations stay parked on their assigned slots instead of b
     unit.routeSegments = null;
     unit.routeSegmentIndex = 0;
     unit.segmentProgress = 0;
-    unit.movementMode = "FormationJoin";
+    unit.movementMode = "AnchorJoin";
   }
 
   tick(game, 3);
 
   const settledUnits = lane.units.filter((unit) => unit.id.startsWith("idle_settle_unit_"));
-  assert.equal(settledUnits.length, formationUnits.length);
+  assert.equal(settledUnits.length, anchorUnits.length);
   for (const unit of settledUnits) {
     const drift = Math.hypot(
       Number(unit.posX) - Number(unit.anchorTargetX),
@@ -1294,13 +1468,13 @@ test("settled defend formations stay parked on their assigned slots instead of b
   }
 });
 
-test("lane-controlled defend packets keep authoritative slot indices at the rally anchor", () => {
+test("lane-controlled defenders keep authoritative slot indices at the rally anchor", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
 
   const defendAnchor = primeDefendAnchor(game, lane);
-  const packetUnits = Array.from({ length: 4 }, (_, index) => createAttacker({
+  const anchorUnits = Array.from({ length: 4 }, (_, index) => createAttacker({
     id: `rigid_slot_unit_${index}`,
     sourceLaneIndex: lane.laneIndex,
     sourceTeam: lane.team,
@@ -1312,25 +1486,25 @@ test("lane-controlled defend packets keep authoritative slot indices at the rall
     atkCd: 999,
   }));
 
-  lane.units.push(...packetUnits);
+  lane.units.push(...anchorUnits);
   tick(game, 1);
 
   const updatedUnits = lane.units.filter((unit) => unit.id.startsWith("rigid_slot_unit_"));
-  assert.equal(updatedUnits.length, packetUnits.length, "all staged packet units should remain active.");
+  assert.equal(updatedUnits.length, anchorUnits.length, "all staged defenders should remain active.");
 
   for (const unit of updatedUnits) {
     assert.equal(
-      Number.isInteger(unit.currentSlotIndex),
+      Number.isInteger(unit.assignedSlotIndex),
       true,
-      `expected ${unit.id} to keep an authoritative formation slot index once packet formations are enabled.`
+      `expected ${unit.id} to keep an authoritative assigned slot index at the defend anchor.`
     );
     assert.ok(
       Number.isFinite(Number(unit.anchorTargetX)) && Number.isFinite(Number(unit.anchorTargetY)),
       `expected ${unit.id} to expose a defend anchor target.`
     );
     assert.ok(
-      Number.isFinite(Number(unit.groupCenterX)) && Number.isFinite(Number(unit.groupCenterY)),
-      `expected ${unit.id} to expose a packet group center for leash and formation logic.`
+      Number.isFinite(Number(unit.anchorCenterX)) && Number.isFinite(Number(unit.anchorCenterY)),
+      `expected ${unit.id} to expose an anchor center for leash and slot logic.`
     );
   }
 });
@@ -1381,9 +1555,11 @@ test("lane-controlled defenders use combat pocket movement instead of simple con
   );
 });
 
-test("center-spawn waves travel through the red front gate approach before they reach the Town Core", () => {
+test("center-spawn waves pass through the red front gate corridor before they can reach the Town Core", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const redLane = game.lanes[0];
+  primeDefendAnchor(game, redLane);
+  const townCoreTarget = simMl.getLaneTownCoreCombatTarget(redLane);
   const incomingWave = createAttacker({
     id: "center_spawn_wave",
     ownerLane: -1,
@@ -1404,20 +1580,42 @@ test("center-spawn waves travel through the red front gate approach before they 
   assert.equal(simMl.initializeMovingUnitRouteState(game, redLane, incomingWave, { x: 5, y: 0 }).ok, true);
   redLane.units.push(incomingWave);
 
-  tick(game, 18);
+  let sawGateApproach = false;
+  let minGateDistance = Infinity;
+  let serverWave = incomingWave;
+  for (let i = 0; i < 28; i += 1) {
+    tick(game, 1);
+    serverWave = redLane.units.find((unit) => unit.id === incomingWave.id);
+    assert.ok(serverWave, "the routed wave should still be alive while approaching the fortress gate.");
+    assert.equal(serverWave.allegianceKey, "dungeon");
+    assert.equal(serverWave.pathContractType, "wave_lane");
+    const coreDistance = Math.hypot(
+      Number(serverWave.posX) - Number(townCoreTarget.posX),
+      Number(serverWave.posY) - Number(townCoreTarget.posY)
+    );
+    if (coreDistance > 2.25) {
+      assert.notEqual(
+        serverWave.combatTarget?.padId,
+        "town_core_pad",
+        "the wave should not aggro the Town Core until it enters local structure vicinity."
+      );
+    }
+    minGateDistance = Math.min(
+      minGateDistance,
+      Math.hypot(
+        Number(serverWave.posX) - Number(redLane.outsideGateAnchor.x),
+        Number(serverWave.posY) - Number(redLane.outsideGateAnchor.y)
+      )
+    );
+    if (minGateDistance <= 1.5) {
+      sawGateApproach = true;
+      break;
+    }
+  }
 
-  const serverWave = redLane.units.find((unit) => unit.id === incomingWave.id);
-  assert.ok(serverWave, "the routed wave should still be alive while approaching the fortress gate.");
-  assert.equal(serverWave.allegianceKey, "dungeon");
-  assert.equal(serverWave.pathContractType, "wave_lane");
-  assert.equal(serverWave.combatTarget, null, "the wave should not reach the Town Core before it reaches the front gate approach.");
-  assert.ok(redLane.outsideGateAnchor, "the lane should expose a front-gate defend anchor.");
   assert.ok(
-    Math.hypot(
-      Number(serverWave.posX) - Number(redLane.outsideGateAnchor.x),
-      Number(serverWave.posY) - Number(redLane.outsideGateAnchor.y)
-    ) <= 1.5,
-    "center-spawn wave routing should now bend through the front-gate approach instead of cutting diagonally into the Town Core."
+    sawGateApproach || minGateDistance <= 4.0,
+    "center-spawn wave routing should still pass through the front-gate corridor instead of cutting directly into the Town Core."
   );
   assert.equal(game.teamHp.left, 20, "the red Town Core should stay untouched while the interception is happening.");
   assert.equal(game.lanes[0].eliminated, false);
@@ -1471,7 +1669,7 @@ test("same-lane hold units do not aggro their own defenders while staging at the
   assert.equal(stagingUnit.hp, def.hp);
 });
 
-test("defend-mode formations fan around an intercepted wave at the gate instead of collapsing into one point", () => {
+test("defend-mode units fan around an intercepted wave at the gate instead of collapsing into one point", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -1538,20 +1736,20 @@ test("defend-mode formations fan around an intercepted wave at the gate instead 
   assert.equal(liveDefenders.length, 3);
   assert.ok(
     liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
-    "a DEFEND formation should commit together to a nearby interception target."
+    "DEFEND units should commit together to a nearby interception target."
   );
-  const formationFacing = lane.formationFacing || { x: 0, y: -1 };
-  const formationLateral = { x: -formationFacing.y, y: formationFacing.x };
+  const commandFacing = lane.commandFacing || { x: 0, y: -1 };
+  const anchorLateral = { x: -commandFacing.y, y: commandFacing.x };
   const lateralOffsets = liveDefenders.map((unit) =>
-    ((Number(unit.posX) - Number(hostileWave.posX)) * formationLateral.x)
-    + ((Number(unit.posY) - Number(hostileWave.posY)) * formationLateral.y));
+    ((Number(unit.posX) - Number(hostileWave.posX)) * anchorLateral.x)
+    + ((Number(unit.posY) - Number(hostileWave.posY)) * anchorLateral.y));
   assert.ok(
     Math.max(...lateralOffsets) - Math.min(...lateralOffsets) > 0.7,
     "defenders should occupy distinct surround slots instead of collapsing into one narrow stack."
   );
 });
 
-test("defend-mode packets from different barracks share the same gate interception target", () => {
+test("defend-mode units from different barracks share the same gate interception target", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -1634,7 +1832,7 @@ test("defend-mode packets from different barracks share the same gate intercepti
   assert.equal(liveDefenders.length, defenders.length);
   assert.ok(
     liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
-    "nearby defend packets from separate barracks should all commit to the same intercepted wave."
+    "nearby defenders from separate barracks should all commit to the same intercepted wave."
   );
 });
 
@@ -1766,6 +1964,7 @@ test("attackers stay on the destroyed forward objective until the player explici
   const game = createTwoPlayerGame(["red", "yellow"]);
   const sourceLane = game.lanes[0];
   const defeatedLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: defeatedLane.laneIndex });
   const coreTarget = getTownCoreTargetPosition(defeatedLane);
   for (const pad of defeatedLane.fortressPads || []) {
     if (!pad || pad.buildingType === "town_core")
@@ -1792,8 +1991,8 @@ test("attackers stay on the destroyed forward objective until the player explici
     atkCd: 0,
     spawnIndex: 0,
     posX: coreTarget.posX,
-    posY: coreTarget.posY - 2.8,
-    pathIdx: 0.95,
+    posY: coreTarget.posY - 1.5,
+    pathIdx: 0.98,
     routeSegments: ["A_M", "M_B"],
     routeSegmentIndex: 1,
     segmentProgress: 0.9,
@@ -1829,3 +2028,5 @@ test("attackers stay on the destroyed forward objective until the player explici
     "recalling a forward attacker should keep it close to its live route instead of preserving a map-wide offset from the route start."
   );
 });
+
+

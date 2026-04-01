@@ -29,7 +29,6 @@ namespace CastleDefender.Game
         const float UnitSelectionColliderPadding = 0.2f;
         const float UnitFootprintColliderRadiusScale = 0.4f;
         const float UnitFootprintColliderHeight = 1.2f;
-        const float PerimeterRouteControlScale = 0.28f;
         const float FrontGateForwardOffset = 10.2f;
         const float CombatProjectionForwardSlack = 4.5f;
         const float CombatProjectionRearSlack = 8f;
@@ -56,7 +55,16 @@ namespace CastleDefender.Game
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
         static readonly bool EnableVerboseSpawnAuditLogs = false;
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
-        static readonly Dictionary<string, Vector2[]> RouteSegmentSimPolylines = BuildRouteSegmentSimPolylines();
+        static readonly HashSet<string> AllowedSnapshotPresenterBehaviours = new(StringComparer.Ordinal)
+        {
+            typeof(Animator).FullName,
+            typeof(LaneSnapshotCombatant).FullName,
+            typeof(SnapshotAnimationEventRelay).FullName,
+            typeof(UnitAnimationBinding).FullName,
+            "CastleDefender.Game.TeamColorMaterialProfile",
+            "CastleDefender.Game.UnitTeamAccentMarkers",
+            "CastleDefender.Game.TTRTSUnitProportionScaler",
+        };
         static readonly Vector2[] LaneCombatCoreSimPositions =
         {
             new(-24f, 24f),
@@ -125,12 +133,11 @@ namespace CastleDefender.Game
         readonly Dictionary<string, Vector3> _battlefieldFrontGateByLaneKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldBarracksByLaneAndId = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Vector3> _battlefieldFortressCombatWorldByLaneAndPadId = new(StringComparer.OrdinalIgnoreCase);
-        readonly Dictionary<string, Vector3> _battlefieldRouteNodeWorldByNode = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, Vector3[]> _battlefieldRouteWorldPolylineBySegment = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, Vector2[]> _battlefieldRouteSpacePolylineBySegment = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, string> _battlefieldRouteNodeLaneByNode = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, float> _lastImpactFxAtByTarget = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<AudioManager.SFX, float> _lastCombatSfxAt = new();
-        Vector3 _battlefieldMineWorld;
-        bool _hasBattlefieldMineWorld;
         string _lastSnapshotSummaryLog;
         float _lastSnapTime = -1f;
         bool _subscribed;
@@ -153,180 +160,6 @@ namespace CastleDefender.Game
 
             runtime.SyncDependenciesFromScene();
             return runtime;
-        }
-
-        static Dictionary<string, Vector2[]> BuildRouteSegmentSimPolylines()
-        {
-            var polylines = new Dictionary<string, Vector2[]>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ "A_B" ] = new[]
-                {
-                    new Vector2(-24f, 24f),
-                    new Vector2(0f, 28f),
-                    new Vector2(24f, 24f),
-                },
-                [ "B_C" ] = new[]
-                {
-                    new Vector2(24f, 24f),
-                    new Vector2(28f, 0f),
-                    new Vector2(24f, -24f),
-                },
-                [ "C_D" ] = new[]
-                {
-                    new Vector2(24f, -24f),
-                    new Vector2(0f, -28f),
-                    new Vector2(-24f, -24f),
-                },
-                [ "D_A" ] = new[]
-                {
-                    new Vector2(-24f, -24f),
-                    new Vector2(-28f, 0f),
-                    new Vector2(-24f, 24f),
-                },
-                [ "A_C" ] = new[]
-                {
-                    new Vector2(-24f, 24f),
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, -24f),
-                },
-                [ "C_A" ] = new[]
-                {
-                    new Vector2(24f, -24f),
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, 24f),
-                },
-                [ "B_D" ] = new[]
-                {
-                    new Vector2(24f, 24f),
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, -24f),
-                },
-                [ "D_B" ] = new[]
-                {
-                    new Vector2(-24f, -24f),
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, 24f),
-                },
-                [ "A_M" ] = new[]
-                {
-                    new Vector2(-24f, 24f),
-                    new Vector2(0f, 0f),
-                },
-                [ "M_A" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, 24f),
-                },
-                [ "B_M" ] = new[]
-                {
-                    new Vector2(24f, 24f),
-                    new Vector2(0f, 0f),
-                },
-                [ "M_B" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, 24f),
-                },
-                [ "C_M" ] = new[]
-                {
-                    new Vector2(24f, -24f),
-                    new Vector2(0f, 0f),
-                },
-                [ "M_C" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, -24f),
-                },
-                [ "D_M" ] = new[]
-                {
-                    new Vector2(-24f, -24f),
-                    new Vector2(0f, 0f),
-                },
-                [ "M_D" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, -24f),
-                },
-                // Keep wave-lane route-space identical to the authoritative server
-                // graph so routeWorldX/Y offsets resolve around the mine center and
-                // the fortress front gate instead of cutting a straight diagonal to core.
-                [ "WA_A" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, 13.8f),
-                    new Vector2(-24f, 24f),
-                },
-                [ "WB_B" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, 13.8f),
-                    new Vector2(24f, 24f),
-                },
-                [ "WC_C" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(24f, -13.8f),
-                    new Vector2(24f, -24f),
-                },
-                [ "WD_D" ] = new[]
-                {
-                    new Vector2(0f, 0f),
-                    new Vector2(-24f, -13.8f),
-                    new Vector2(-24f, -24f),
-                },
-            };
-
-            var barracksPositions = new Dictionary<string, Vector2>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ "center" ] = new Vector2(0f, 2f),
-                [ "left" ] = new Vector2(-4f, 2f),
-                [ "right" ] = new Vector2(4f, 2f),
-            };
-
-            string[] coreNodeIds = { RouteNodeA, RouteNodeB, RouteNodeC, RouteNodeD };
-            Vector2[] coreNodePositions =
-            {
-                new(-24f, 24f),
-                new(24f, 24f),
-                new(24f, -24f),
-                new(-24f, -24f),
-            };
-            Vector2[] lateralDirs =
-            {
-                new(1f, 0f),
-                new(-1f, 0f),
-                new(-1f, 0f),
-                new(1f, 0f),
-            };
-            Vector2[] forwardDirs =
-            {
-                new(0f, -1f),
-                new(0f, -1f),
-                new(0f, 1f),
-                new(0f, 1f),
-            };
-
-            for (int laneIndex = 0; laneIndex < coreNodeIds.Length; laneIndex++)
-            {
-                string coreNodeId = coreNodeIds[laneIndex];
-                Vector2 coreNodePos = coreNodePositions[laneIndex];
-                Vector2 lateralDir = lateralDirs[laneIndex];
-                Vector2 forwardDir = forwardDirs[laneIndex];
-
-                foreach (var barracksPair in barracksPositions)
-                {
-                    string routeNodeId = GetBarracksRouteNodeId(coreNodeId, barracksPair.Key);
-                    Vector2 offset = barracksPair.Value;
-                    Vector2 routeNodePos = coreNodePos + (lateralDir * offset.x) + (forwardDir * offset.y);
-                    polylines[$"{routeNodeId}_{coreNodeId}"] = new[]
-                    {
-                        routeNodePos,
-                        coreNodePos,
-                    };
-                }
-            }
-
-            return polylines;
         }
 
         void Awake() => SyncDependenciesFromScene();
@@ -365,7 +198,12 @@ namespace CastleDefender.Game
                 if (view.hadSnapshot)
                 {
                     Vector3 desired = view.snapshotWorldPos;
-                    if (ShouldSnapMinorStationaryCorrection(view.latestSnapshotUnit, view.go.transform.position, desired))
+                    if (ShouldSnapToAuthoritativeSnapshotPosition(view.latestSnapshotUnit))
+                    {
+                        view.snapshotVelocity = Vector3.zero;
+                        view.go.transform.position = desired;
+                    }
+                    else if (ShouldSnapMinorStationaryCorrection(view.latestSnapshotUnit, view.go.transform.position, desired))
                     {
                         view.snapshotVelocity = Vector3.zero;
                         view.go.transform.position = desired;
@@ -534,13 +372,16 @@ namespace CastleDefender.Game
 
                     MLUnit previousSnapshotUnit = view.latestSnapshotUnit;
                     view.combatant.ApplySnapshot(defenderTeamKey, ownerTeamKey, unit.hp, unit.maxHp, unit.moveSpeed);
+                    view.combatant.ApplyPresentationSnapshot(unit);
                     ApplySnapshotTeamAccents(view.go, unit, ownerTeamKey);
 
                     bool hadPreviousSnapshot = view.hadSnapshot;
                     if (hadPreviousSnapshot && ShouldFreezeMinorStationarySnapshotDrift(unit, view.snapshotWorldPos, worldPos))
                         worldPos = view.snapshotWorldPos;
 
-                    if (hadPreviousSnapshot)
+                    if (hadPreviousSnapshot && ShouldSnapToAuthoritativeSnapshotPosition(unit))
+                        view.snapshotVelocity = Vector3.zero;
+                    else if (hadPreviousSnapshot)
                         view.snapshotVelocity = (worldPos - view.snapshotWorldPos) / snapDt;
                     else
                         view.snapshotVelocity = Vector3.zero;
@@ -555,7 +396,7 @@ namespace CastleDefender.Game
                     if (!view.go.activeSelf && !view.combatant.IsLocallyDefeated)
                         view.go.SetActive(true);
 
-                    if (createdNow || !hadPreviousSnapshot)
+                    if (createdNow || !hadPreviousSnapshot || ShouldSnapToAuthoritativeSnapshotPosition(unit))
                         view.go.transform.position = worldPos;
 
                     if (TryResolveDesiredFacing(snap, unit, lane, spatialLane, worldPos, out Vector3 desiredFacing, out bool lockCombatFacing))
@@ -705,7 +546,8 @@ namespace CastleDefender.Game
             Quaternion rotation = ResolveSnapshotSpawnRotation(unit, lane, spatialLane);
             var go = Instantiate(prefab, spawnPos, rotation, transform);
             go.name = $"SnapshotUnit_{unit.id}_{resolvedCatalogUnitKey}_{resolvedSkinKey ?? "default"}";
-            go.SetActive(true);
+            go.SetActive(false);
+            SanitizeSnapshotPresenter(go, unit);
             string sourceBarracksKey = ResolveSourceBarracksKey(unit);
             if (!string.IsNullOrWhiteSpace(sourceBarracksKey))
             {
@@ -773,6 +615,7 @@ namespace CastleDefender.Game
             };
 
             _views[unit.id] = view;
+            go.SetActive(true);
             SetVisualState(view, UnitAnimationResolver.ResolveRuntimeIntent(unit, moving: false, attacking: false));
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, 0.25f);
             LogVerboseSpawnAudit(
@@ -785,6 +628,88 @@ namespace CastleDefender.Game
                 $"spawnedName='{go.name}' worldPos=({spawnPos.x:0.###},{spawnPos.y:0.###},{spawnPos.z:0.###}) " +
                 $"activeSelf={go.activeSelf} scale={scale:0.###} ownerTeam='{ownerTeamKey ?? "<none>"}'");
             return view;
+        }
+
+        void SanitizeSnapshotPresenter(GameObject root, MLUnit unit)
+        {
+            if (root == null)
+                return;
+
+            int disabledBehaviourCount = 0;
+            int disabledColliderCount = 0;
+            int hardenedRigidbodyCount = 0;
+            int disabledAudioSourceCount = 0;
+
+            var colliders = root.GetComponentsInChildren<Collider>(true);
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                var collider = colliders[i];
+                if (collider == null)
+                    continue;
+
+                collider.enabled = false;
+                disabledColliderCount++;
+            }
+
+            var rigidbodies = root.GetComponentsInChildren<Rigidbody>(true);
+            for (int i = 0; i < rigidbodies.Length; i++)
+            {
+                var rigidbody = rigidbodies[i];
+                if (rigidbody == null)
+                    continue;
+
+                rigidbody.linearVelocity = Vector3.zero;
+                rigidbody.angularVelocity = Vector3.zero;
+                rigidbody.useGravity = false;
+                rigidbody.detectCollisions = false;
+                rigidbody.isKinematic = true;
+                rigidbody.Sleep();
+                hardenedRigidbodyCount++;
+            }
+
+            var audioSources = root.GetComponentsInChildren<AudioSource>(true);
+            for (int i = 0; i < audioSources.Length; i++)
+            {
+                var audioSource = audioSources[i];
+                if (audioSource == null)
+                    continue;
+
+                audioSource.enabled = false;
+                disabledAudioSourceCount++;
+            }
+
+            var behaviours = root.GetComponentsInChildren<Behaviour>(true);
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                var behaviour = behaviours[i];
+                if (behaviour == null)
+                    continue;
+
+                if (behaviour is Animator animator)
+                {
+                    animator.applyRootMotion = false;
+                    continue;
+                }
+
+                string typeName = behaviour.GetType().FullName;
+                if (!string.IsNullOrWhiteSpace(typeName) && AllowedSnapshotPresenterBehaviours.Contains(typeName))
+                    continue;
+
+                if (!behaviour.enabled)
+                    continue;
+
+                behaviour.enabled = false;
+                disabledBehaviourCount++;
+            }
+
+            if (disabledBehaviourCount > 0 || disabledColliderCount > 0 || hardenedRigidbodyCount > 0 || disabledAudioSourceCount > 0)
+            {
+                LogVerboseSpawnAudit(
+                    $"[WaveSnapshotRuntimeSpawner] Sanitized snapshot presenter unit='{unit?.id ?? "<null>"}' " +
+                    $"type='{unit?.type ?? "<null>"}' disabledBehaviours={disabledBehaviourCount} " +
+                    $"disabledColliders={disabledColliderCount} hardenedRigidbodies={hardenedRigidbodyCount} " +
+                    $"disabledAudioSources={disabledAudioSourceCount}.");
+            }
         }
 
         void InstallUnitQueryColliders(GameObject root, Renderer[] renderers)
@@ -1088,8 +1013,8 @@ namespace CastleDefender.Game
         void RefreshBattlefieldRouteCache(MLSnapshot snap)
         {
             RefreshBattlefieldRouteAnchors();
-            RefreshBattlefieldRouteNodeWorlds(snap);
             RefreshBattlefieldRouteNodeMap(snap);
+            RefreshBattlefieldRouteSegments();
         }
 
         void RefreshBattlefieldRouteAnchors()
@@ -1197,52 +1122,86 @@ namespace CastleDefender.Game
             }
         }
 
-        void RefreshBattlefieldRouteNodeWorlds(MLSnapshot snap)
+        void RefreshBattlefieldRouteSegments()
         {
-            _battlefieldRouteNodeWorldByNode.Clear();
-            _battlefieldMineWorld = default;
-            _hasBattlefieldMineWorld = false;
+            _battlefieldRouteWorldPolylineBySegment.Clear();
+            _battlefieldRouteSpacePolylineBySegment.Clear();
 
             var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
             if (layout == null)
                 return;
 
-            if (layout.routeNodes == null || layout.routeNodes.Length == 0)
+            if (layout.routeSegments == null || layout.routeSegments.Length == 0)
             {
                 LogBattlefieldRouteFailureOnce(
-                    "layout:route_nodes_missing",
-                    $"Battlefield layout '{layout.layoutId ?? "<null>"}' has no routeNodes.");
+                    "layout:route_segments_missing",
+                    $"Battlefield layout '{layout.layoutId ?? "<null>"}' has no routeSegments.");
                 return;
             }
 
-            for (int i = 0; i < layout.routeNodes.Length; i++)
+            for (int i = 0; i < layout.routeSegments.Length; i++)
             {
-                var node = layout.routeNodes[i];
-                if (node == null)
+                var segment = layout.routeSegments[i];
+                if (segment == null)
                     continue;
 
-                if (!TryNormalizeRouteNodeId(node.nodeId, out string normalizedNode))
+                if (!TryNormalizeBattlefieldSegmentId(segment.segmentId, out string normalizedSegmentId))
                 {
                     LogBattlefieldRouteFailureOnce(
-                        $"layout:route_node_invalid:{node.nodeId ?? "<null>"}",
-                        $"Battlefield layout contains unsupported route node '{node.nodeId ?? "<null>"}'.");
+                        $"layout:route_segment_invalid:{segment.segmentId ?? "<null>"}",
+                        $"Battlefield layout contains unsupported route segment '{segment.segmentId ?? "<null>"}'.");
                     continue;
                 }
 
-                if (!TryResolveLayoutWorldPoint(node.world, out Vector3 nodeWorld))
+                if (segment.points == null || segment.points.Length < 2)
                 {
                     LogBattlefieldRouteFailureOnce(
-                        $"layout:route_node_world:{normalizedNode}",
-                        $"Battlefield layout route node '{normalizedNode}' is missing a valid world point.");
+                        $"layout:route_segment_world_points_missing:{normalizedSegmentId}",
+                        $"Battlefield layout route segment '{normalizedSegmentId}' is missing authored world polyline points.");
                     continue;
                 }
 
-                _battlefieldRouteNodeWorldByNode[normalizedNode] = nodeWorld;
-                if (string.Equals(normalizedNode, RouteMineNode, StringComparison.OrdinalIgnoreCase))
+                if (segment.routeSpacePoints == null || segment.routeSpacePoints.Length < 2)
                 {
-                    _battlefieldMineWorld = nodeWorld;
-                    _hasBattlefieldMineWorld = true;
+                    LogBattlefieldRouteFailureOnce(
+                        $"layout:route_segment_route_space_points_missing:{normalizedSegmentId}",
+                        $"Battlefield layout route segment '{normalizedSegmentId}' is missing authoritative routeSpacePoints.");
+                    continue;
                 }
+
+                var worldPolyline = new Vector3[segment.points.Length];
+                var routeSpacePolyline = new Vector2[segment.routeSpacePoints.Length];
+                bool valid = true;
+
+                for (int pointIndex = 0; pointIndex < segment.points.Length; pointIndex++)
+                {
+                    if (!TryResolveLayoutWorldPoint(segment.points[pointIndex], out Vector3 worldPoint))
+                    {
+                        LogBattlefieldRouteFailureOnce(
+                            $"layout:route_segment_world_point:{normalizedSegmentId}:{pointIndex}",
+                            $"Battlefield layout route segment '{normalizedSegmentId}' has an invalid world point at index {pointIndex}.");
+                        valid = false;
+                        break;
+                    }
+
+                    if (!TryResolveRouteSpacePoint(segment.routeSpacePoints[pointIndex], out Vector2 routeSpacePoint))
+                    {
+                        LogBattlefieldRouteFailureOnce(
+                            $"layout:route_segment_route_space_point:{normalizedSegmentId}:{pointIndex}",
+                            $"Battlefield layout route segment '{normalizedSegmentId}' has an invalid routeSpacePoint at index {pointIndex}.");
+                        valid = false;
+                        break;
+                    }
+
+                    worldPolyline[pointIndex] = worldPoint;
+                    routeSpacePolyline[pointIndex] = routeSpacePoint;
+                }
+
+                if (!valid)
+                    continue;
+
+                _battlefieldRouteWorldPolylineBySegment[normalizedSegmentId] = worldPolyline;
+                _battlefieldRouteSpacePolylineBySegment[normalizedSegmentId] = routeSpacePolyline;
             }
         }
 
@@ -1267,12 +1226,14 @@ namespace CastleDefender.Game
             if (unit == null)
                 return false;
 
-            if (IsCombatSnapshotUnit(unit))
-                return true;
             if (ShouldUseStanceAnchorProjection(unit))
                 return true;
 
-            return unit.currentSlotIndex >= 0 && HasAuthoritativeAnchorSample(unit);
+            bool hasAuthoritativeCombatAnchor = unit.combatContact && HasAuthoritativeAnchorSample(unit);
+            if (hasAuthoritativeCombatAnchor)
+                return true;
+
+            return unit.combatContact && IsCombatSnapshotUnit(unit);
         }
 
         static string DescribeAuthoritativeCombatSpaceFailure(MLUnit unit, MLLaneSnap lane, string routeFailure)
@@ -1281,7 +1242,7 @@ namespace CastleDefender.Game
                 $"Authoritative combat-space projection is required for unit '{unit?.id ?? "<null>"}' " +
                 $"lane={lane?.laneIndex ?? -1} movementMode='{unit?.movementMode ?? "<null>"}' " +
                 $"presentationPhase='{unit?.presentationPhase ?? "<null>"}' " +
-                $"currentSegment='{unit?.currentSegment ?? "<null>"}' currentSlotIndex={(unit != null ? unit.currentSlotIndex : -1)} " +
+                $"currentSegment='{unit?.currentSegment ?? "<null>"}' " +
                 $"routeWorld=({(unit != null ? unit.routeWorldX : float.NaN):0.###},{(unit != null ? unit.routeWorldY : float.NaN):0.###}) " +
                 $"anchorTarget=({(unit != null ? unit.anchorTargetX : float.NaN):0.###},{(unit != null ? unit.anchorTargetY : float.NaN):0.###}) " +
                 $"failure='{routeFailure ?? "<unknown>"}'.";
@@ -1319,7 +1280,7 @@ namespace CastleDefender.Game
             if (unit == null || unit.hp <= 0f)
                 return false;
 
-            if (HasPresentationPhase(unit, "FormationHold"))
+            if (HasPresentationPhase(unit, "AnchorHold"))
                 return true;
 
             if (HasAuthoritativeMovingPresentation(unit))
@@ -1349,6 +1310,16 @@ namespace CastleDefender.Game
             return delta.sqrMagnitude <= StationarySnapshotSnapDistance * StationarySnapshotSnapDistance;
         }
 
+        static bool ShouldSnapToAuthoritativeSnapshotPosition(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            return RequiresAuthoritativeCombatSpaceProjection(unit)
+                || HasPresentationPhase(unit, "CombatRegroup")
+                || HasPresentationPhase(unit, "ReturnToSlot");
+        }
+
         static bool ShouldTreatSnapshotAsMoving(MLUnit unit, Vector3 flatDelta)
         {
             if (IsAuthoritativeStationaryPresentation(unit))
@@ -1366,14 +1337,11 @@ namespace CastleDefender.Game
                 return false;
             if (!float.IsFinite(unit.anchorTargetX) || !float.IsFinite(unit.anchorTargetY))
                 return false;
-
-            float sampleX = float.IsFinite(unit.routeWorldX) ? unit.routeWorldX : unit.gridX;
-            float sampleY = float.IsFinite(unit.routeWorldY) ? unit.routeWorldY : unit.gridY;
-            if (!float.IsFinite(sampleX) || !float.IsFinite(sampleY))
+            if (!float.IsFinite(unit.routeWorldX) || !float.IsFinite(unit.routeWorldY))
                 return false;
 
             distance = Vector2.Distance(
-                new Vector2(sampleX, sampleY),
+                new Vector2(unit.routeWorldX, unit.routeWorldY),
                 new Vector2(unit.anchorTargetX, unit.anchorTargetY));
             return float.IsFinite(distance);
         }
@@ -1387,7 +1355,7 @@ namespace CastleDefender.Game
             if (IsMovementMode(unit, "LaneTravel") || IsMovementMode(unit, "ReturnToAnchor"))
                 return true;
 
-            if (IsMovementMode(unit, "FormationJoin")
+            if (IsMovementMode(unit, "AnchorJoin")
                 && TryGetAuthoritativeAnchorDistance(unit, out float anchorDistance))
             {
                 return anchorDistance > RouteProjectionAnchorBlendDistance;
@@ -1579,18 +1547,20 @@ namespace CastleDefender.Game
                 return false;
 
             bool authoritativeCombatPhase =
-                string.Equals(unit.presentationPhase, "CombatCommit", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(unit.presentationPhase, "CombatResolve", StringComparison.OrdinalIgnoreCase);
+                string.Equals(unit.presentationPhase, "CombatResolve", StringComparison.OrdinalIgnoreCase);
             bool isCombatState =
                 string.Equals(unit.movementState, "COMBAT", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(unit.state, "COMBAT", StringComparison.OrdinalIgnoreCase);
-            bool hasCombatTarget =
-                !string.IsNullOrWhiteSpace(unit.combatTargetId)
-                || !string.IsNullOrWhiteSpace(unit.blockedByStructureId)
-                || unit.blockedByStructure
-                || unit.isAttacking;
+            bool hasResolvedCombatEvidence =
+                unit.combatContact
+                || HasAuthoritativeAnchorSample(unit)
+                || unit.combatLockTicksRemaining > 0
+                || unit.regroupTicksRemaining > 0;
 
-            return authoritativeCombatPhase || isCombatState || hasCombatTarget;
+            if (!hasResolvedCombatEvidence)
+                return false;
+
+            return authoritativeCombatPhase || isCombatState;
         }
 
         bool TryResolveDesiredFacing(
@@ -1907,45 +1877,17 @@ namespace CastleDefender.Game
             }
 
             bool requiresAuthoritativeCombatSpace = RequiresAuthoritativeCombatSpaceProjection(unit);
-            if (requiresAuthoritativeCombatSpace)
-            {
-                if (TryResolveBattlefieldRouteWorldFallbackPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
-                {
-                    resolvedRouteSource = $"battlefield_routes:authoritative:{resolvedRouteSource}";
-                    return true;
-                }
-
-                if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
-                {
-                    resolvedRouteSource = $"battlefield_routes:authoritative:{resolvedRouteSource}";
-                    return true;
-                }
-            }
 
             string routeFailure = null;
-            if (TryResolveBattlefieldSegment(unit, lane, out string fromNode, out string toNode, out string segmentId, out string segmentFailure))
+            if (TryResolveBattlefieldSegment(unit, out _, out _, out string segmentId, out string segmentFailure))
             {
-                if (!TryResolveBattlefieldNodeWorld(fromNode, out Vector3 fromWorld, out string fromLaneKey, out string fromReason))
-                {
-                    routeFailure = fromReason;
-                }
-                else if (!TryResolveBattlefieldNodeWorld(toNode, out Vector3 toWorld, out string toLaneKey, out string toReason))
-                {
-                    routeFailure = toReason;
-                }
-                else if (!TryResolveBattlefieldSegmentProgress(unit, out float segmentProgress))
+                if (!TryResolveBattlefieldSegmentProgress(unit, out float segmentProgress))
                 {
                     routeFailure = $"segmentProgress is invalid ({unit.segmentProgress:0.###})";
                 }
                 else if (!TryBuildBattlefieldRoutePolyline(
-                    fromNode,
-                    toNode,
-                    fromWorld,
-                    toWorld,
-                    out Vector3 p0,
-                    out Vector3 p1,
-                    out Vector3 p2,
-                    out int pointCount,
+                    segmentId,
+                    out Vector3[] worldPolyline,
                     out string segmentShape,
                     out string polylineFailure))
                 {
@@ -1962,10 +1904,7 @@ namespace CastleDefender.Game
                     routeFailure = offsetFailure;
                 }
                 else if (!TrySampleBattlefieldPolyline(
-                    p0,
-                    p1,
-                    p2,
-                    pointCount,
+                    worldPolyline,
                     segmentProgress,
                     longitudinalOffset,
                     lateralOffset,
@@ -1976,8 +1915,7 @@ namespace CastleDefender.Game
                 }
                 else
                 {
-                    resolvedRouteSource =
-                        $"battlefield_routes:{segmentShape}:{segmentId}:from={fromLaneKey}:to={toLaneKey}";
+                    resolvedRouteSource = $"battlefield_routes:{segmentShape}:{segmentId}";
                     return true;
                 }
             }
@@ -1988,6 +1926,20 @@ namespace CastleDefender.Game
 
             if (requiresAuthoritativeCombatSpace)
             {
+                if (TryResolveBattlefieldRouteWorldFallbackPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
+                {
+                    resolvedRouteSource = $"battlefield_routes:authoritative_fallback:{resolvedRouteSource}";
+                    failureReason = routeFailure;
+                    return true;
+                }
+
+                if (TryResolveStanceAnchorWorldPosition(unit, lane, spatialLane, out worldPos, out routeForward, out resolvedRouteSource))
+                {
+                    resolvedRouteSource = $"battlefield_routes:authoritative_fallback:{resolvedRouteSource}";
+                    failureReason = routeFailure;
+                    return true;
+                }
+
                 failureReason = DescribeAuthoritativeCombatSpaceFailure(unit, lane, routeFailure);
                 return false;
             }
@@ -2012,71 +1964,31 @@ namespace CastleDefender.Game
         }
 
         bool TryBuildBattlefieldRoutePolyline(
-            string fromNode,
-            string toNode,
-            Vector3 fromWorld,
-            Vector3 toWorld,
-            out Vector3 p0,
-            out Vector3 p1,
-            out Vector3 p2,
-            out int pointCount,
+            string segmentId,
+            out Vector3[] points,
             out string segmentShape,
             out string failureReason)
         {
-            p0 = fromWorld;
-            p1 = default;
-            p2 = default;
-            pointCount = 0;
+            points = null;
             segmentShape = null;
             failureReason = null;
 
-            if (IsBarracksLinkSegment(fromNode, toNode))
+            if (!TryNormalizeBattlefieldSegmentId(segmentId, out string normalizedSegmentId))
             {
-                p1 = toWorld;
-                pointCount = 2;
-                segmentShape = "barracks_link";
-                return true;
-            }
-
-            if (IsWaveLaneSegment(fromNode, toNode))
-            {
-                p1 = toWorld;
-                pointCount = 2;
-                segmentShape = "wave_lane";
-                return true;
-            }
-
-            if (IsMineBridgeSegment(fromNode, toNode))
-            {
-                p1 = toWorld;
-                pointCount = 2;
-                segmentShape = "center_bridge";
-                return true;
-            }
-
-            if (!_hasBattlefieldMineWorld)
-            {
-                failureReason = IsCenterCrossSegment(fromNode, toNode)
-                    ? "Battlefield layout is missing the mine route node for center-cross routing."
-                    : "Battlefield layout is missing the mine route node for perimeter routing.";
-                LogBattlefieldRouteFailureOnce("layout:mine_missing", failureReason);
+                failureReason = $"Unsupported battlefield segment '{segmentId ?? "<null>"}'.";
                 return false;
             }
 
-            Vector3 mineWorld = _battlefieldMineWorld;
-            if (IsCenterCrossSegment(fromNode, toNode))
+            if (!_battlefieldRouteWorldPolylineBySegment.TryGetValue(normalizedSegmentId, out points)
+                || points == null
+                || points.Length < 2)
             {
-                p1 = mineWorld;
-                p2 = toWorld;
-                pointCount = 3;
-                segmentShape = "center_cross";
-                return true;
+                failureReason = $"Battlefield layout has no authored world polyline for segment '{normalizedSegmentId}'.";
+                LogBattlefieldRouteFailureOnce($"layout:route_segment_world_polyline:{normalizedSegmentId}", failureReason);
+                return false;
             }
 
-            p1 = ResolvePerimeterControlPoint(fromWorld, toWorld, mineWorld);
-            p2 = toWorld;
-            pointCount = 3;
-            segmentShape = "outer_perimeter";
+            segmentShape = $"server_authored_{points.Length}pt";
             return true;
         }
 
@@ -2152,7 +2064,7 @@ namespace CastleDefender.Game
                 return true;
             if (ShouldPreferBattlefieldRouteProjection(unit))
                 return false;
-            if (!IsMovementMode(unit, "FormationJoin"))
+            if (!IsMovementMode(unit, "AnchorJoin"))
                 return false;
 
             return TryGetAuthoritativeAnchorDistance(unit, out float anchorDistance)
@@ -2161,7 +2073,6 @@ namespace CastleDefender.Game
 
         bool TryResolveBattlefieldSegment(
             MLUnit unit,
-            MLLaneSnap lane,
             out string fromNode,
             out string toNode,
             out string segmentId,
@@ -2201,79 +2112,6 @@ namespace CastleDefender.Game
             return true;
         }
 
-        bool TryResolveBattlefieldNodeWorld(string nodeId, out Vector3 worldPos, out string laneKey, out string failureReason)
-        {
-            worldPos = default;
-            laneKey = null;
-            failureReason = null;
-
-            if (!TryNormalizeRouteNodeId(nodeId, out string normalizedNode))
-            {
-                failureReason = $"Unsupported route node '{nodeId ?? "<null>"}'.";
-                return false;
-            }
-
-            if (string.Equals(normalizedNode, RouteMineNode, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!_hasBattlefieldMineWorld)
-                {
-                    failureReason = "Battlefield layout is missing the mine route node.";
-                    return false;
-                }
-
-                worldPos = _battlefieldMineWorld;
-                laneKey = "mine_center";
-                return true;
-            }
-
-            if (TryParseBarracksRouteNodeId(normalizedNode, out int barracksLaneIndex, out string barracksId))
-            {
-                string coreNodeId = ResolveDefaultRouteNodeForLaneIndex(barracksLaneIndex);
-                if (string.IsNullOrWhiteSpace(coreNodeId)
-                    || !_battlefieldRouteNodeLaneByNode.TryGetValue(coreNodeId, out string barracksLaneKey))
-                {
-                    failureReason = $"No lane mapping found for barracks route node '{normalizedNode}'.";
-                    LogBattlefieldRouteFailureOnce($"node:{normalizedNode}:lane_missing", failureReason);
-                    return false;
-                }
-
-                barracksLaneKey = NormalizeBattlefieldLaneKey(barracksLaneKey);
-                laneKey = barracksLaneKey;
-                string barracksKey = BuildBattlefieldBarracksKey(barracksLaneKey, barracksId);
-                if (!_battlefieldBarracksByLaneAndId.TryGetValue(barracksKey, out worldPos))
-                {
-                    failureReason = $"BarracksSiteView anchor is missing for lane '{barracksLaneKey}' barracks '{barracksId}'.";
-                    LogBattlefieldRouteFailureOnce($"anchor:barracks:{barracksLaneKey}:{barracksId}", failureReason);
-                    return false;
-                }
-
-                return true;
-            }
-
-            if (!_battlefieldRouteNodeLaneByNode.TryGetValue(normalizedNode, out string mappedLaneKey))
-            {
-                failureReason = $"No lane mapping found for route node '{normalizedNode}'.";
-                LogBattlefieldRouteFailureOnce($"node:{normalizedNode}:lane_missing", failureReason);
-                return false;
-            }
-
-            mappedLaneKey = NormalizeBattlefieldLaneKey(mappedLaneKey);
-            laneKey = mappedLaneKey;
-            if (string.IsNullOrWhiteSpace(mappedLaneKey))
-            {
-                failureReason = $"Resolved route node '{normalizedNode}' to an empty lane key.";
-                LogBattlefieldRouteFailureOnce($"node:{normalizedNode}:lane_empty", failureReason);
-                return false;
-            }
-
-            if (_battlefieldRouteNodeWorldByNode.TryGetValue(normalizedNode, out worldPos))
-                return true;
-
-            failureReason = $"Route node '{normalizedNode}' has no authored world anchor for lane '{mappedLaneKey}'.";
-            LogBattlefieldRouteFailureOnce($"node:{normalizedNode}:world_missing", failureReason);
-            return false;
-        }
-
         static bool TryParseBattlefieldSegmentId(string segmentId, out string fromNode, out string toNode)
         {
             fromNode = null;
@@ -2291,6 +2129,16 @@ namespace CastleDefender.Game
                 return false;
             }
 
+            return true;
+        }
+
+        static bool TryNormalizeBattlefieldSegmentId(string segmentId, out string normalizedSegmentId)
+        {
+            normalizedSegmentId = null;
+            if (!TryParseBattlefieldSegmentId(segmentId, out string fromNode, out string toNode))
+                return false;
+
+            normalizedSegmentId = $"{fromNode}_{toNode}";
             return true;
         }
 
@@ -2365,25 +2213,6 @@ namespace CastleDefender.Game
             return true;
         }
 
-        static string GetBarracksRouteNodeId(string coreNodeId, string barracksId)
-        {
-            if (string.IsNullOrWhiteSpace(coreNodeId) || string.IsNullOrWhiteSpace(barracksId))
-                return null;
-
-            string suffix = BarracksActivityUtility.NormalizeBarracksId(barracksId) switch
-            {
-                "center" => BarracksRouteNodeCenterSuffix,
-                "left" => BarracksRouteNodeLeftSuffix,
-                "right" => BarracksRouteNodeRightSuffix,
-                _ => null,
-            };
-
-            if (string.IsNullOrWhiteSpace(suffix))
-                return null;
-
-            return $"{coreNodeId.Trim().ToUpperInvariant()}{suffix}";
-        }
-
         static bool TryParseBarracksRouteNodeId(string nodeId, out int laneIndex, out string barracksId)
         {
             laneIndex = -1;
@@ -2418,107 +2247,19 @@ namespace CastleDefender.Game
             return !string.IsNullOrWhiteSpace(barracksId);
         }
 
-        static bool IsWaveLaneSegment(string fromNode, string toNode)
-        {
-            return (string.Equals(fromNode, RouteWaveNodeA, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeA, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteWaveNodeB, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeB, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteWaveNodeC, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeC, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteWaveNodeD, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeD, StringComparison.OrdinalIgnoreCase));
-        }
-
-        static bool IsBarracksLinkSegment(string fromNode, string toNode)
-        {
-            return TryParseBarracksRouteNodeId(fromNode, out int laneIndex, out _)
-                && string.Equals(ResolveDefaultRouteNodeForLaneIndex(laneIndex), toNode, StringComparison.OrdinalIgnoreCase);
-        }
-
-        static bool IsCenterCrossSegment(string fromNode, string toNode)
-        {
-            return (string.Equals(fromNode, RouteNodeA, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeC, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteNodeC, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeA, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteNodeB, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeD, StringComparison.OrdinalIgnoreCase))
-                || (string.Equals(fromNode, RouteNodeD, StringComparison.OrdinalIgnoreCase) && string.Equals(toNode, RouteNodeB, StringComparison.OrdinalIgnoreCase));
-        }
-
-        static bool IsMineBridgeSegment(string fromNode, string toNode)
-        {
-            bool fromIsMine = string.Equals(fromNode, RouteMineNode, StringComparison.OrdinalIgnoreCase);
-            bool toIsMine = string.Equals(toNode, RouteMineNode, StringComparison.OrdinalIgnoreCase);
-            if (fromIsMine == toIsMine)
-                return false;
-
-            string laneNode = fromIsMine ? toNode : fromNode;
-            return string.Equals(laneNode, RouteNodeA, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(laneNode, RouteNodeB, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(laneNode, RouteNodeC, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(laneNode, RouteNodeD, StringComparison.OrdinalIgnoreCase);
-        }
-
-        static Vector3 ResolvePerimeterControlPoint(Vector3 from, Vector3 to, Vector3 mineCenter)
-        {
-            Vector3 midpoint = (from + to) * 0.5f;
-            Vector3 outward = midpoint - mineCenter;
-            outward.y = 0f;
-            if (outward.sqrMagnitude <= 0.0001f)
-            {
-                Vector3 edge = to - from;
-                edge.y = 0f;
-                outward = Vector3.Cross(Vector3.up, edge);
-            }
-
-            if (outward.sqrMagnitude <= 0.0001f)
-                outward = Vector3.forward;
-
-            float controlDistance = Mathf.Max(2f, Vector3.Distance(from, to) * PerimeterRouteControlScale);
-            return midpoint + outward.normalized * controlDistance;
-        }
-
         static bool TrySampleBattlefieldPolyline(
-            Vector3 p0,
-            Vector3 p1,
-            Vector3 p2,
-            int pointCount,
+            Vector3[] points,
             float progress,
             float longitudinalOffset,
             float lateralOffset,
             out Vector3 worldPos,
             out Vector3 routeForward)
         {
-            worldPos = p0;
+            worldPos = Vector3.zero;
             routeForward = Vector3.forward;
-            float clampedProgress = Mathf.Clamp01(progress);
 
-            if (pointCount <= 1)
+            if (!TrySampleVector3Polyline(points, progress, out worldPos, out routeForward))
                 return false;
-
-            if (pointCount == 2)
-            {
-                worldPos = Vector3.Lerp(p0, p1, clampedProgress);
-                routeForward = (p1 - p0).normalized;
-                worldPos = ApplyRouteOffsets(worldPos, routeForward, longitudinalOffset, lateralOffset);
-                return true;
-            }
-
-            float len01 = Vector3.Distance(p0, p1);
-            float len12 = Vector3.Distance(p1, p2);
-            float totalLen = len01 + len12;
-            if (totalLen <= 0.0001f)
-                return false;
-
-            float targetDistance = totalLen * clampedProgress;
-            if (targetDistance <= len01 || len12 <= 0.0001f)
-            {
-                float segmentT = len01 > 0.0001f ? targetDistance / len01 : 0f;
-                worldPos = Vector3.Lerp(p0, p1, segmentT);
-                routeForward = (p1 - p0).normalized;
-            }
-            else
-            {
-                float segmentDistance = targetDistance - len01;
-                float segmentT = len12 > 0.0001f ? segmentDistance / len12 : 0f;
-                worldPos = Vector3.Lerp(p1, p2, segmentT);
-                routeForward = (p2 - p1).normalized;
-            }
 
             worldPos = ApplyRouteOffsets(worldPos, routeForward, longitudinalOffset, lateralOffset);
             return true;
@@ -2545,7 +2286,7 @@ namespace CastleDefender.Game
             return worldPos;
         }
 
-        static bool TryResolveAuthoritativeRouteOffsets(
+        bool TryResolveAuthoritativeRouteOffsets(
             MLUnit unit,
             string segmentId,
             float segmentProgress,
@@ -2594,24 +2335,6 @@ namespace CastleDefender.Game
                 return false;
             }
 
-            bool hasExplicitRouteSample =
-                !string.IsNullOrWhiteSpace(unit.currentSegment)
-                || !string.IsNullOrWhiteSpace(unit.routeType);
-
-            if (hasExplicitRouteSample
-                && float.IsFinite(unit.routeWorldX)
-                && float.IsFinite(unit.routeWorldY))
-            {
-                point = new Vector2(unit.routeWorldX, unit.routeWorldY);
-                return true;
-            }
-
-            if (float.IsFinite(unit.gridX) && float.IsFinite(unit.gridY))
-            {
-                point = new Vector2(unit.gridX, unit.gridY);
-                return true;
-            }
-
             if (float.IsFinite(unit.routeWorldX) && float.IsFinite(unit.routeWorldY))
             {
                 point = new Vector2(unit.routeWorldX, unit.routeWorldY);
@@ -2619,46 +2342,100 @@ namespace CastleDefender.Game
             }
 
             failureReason =
-                $"authoritative sim point is invalid grid=({unit.gridX:0.###},{unit.gridY:0.###}) " +
+                $"authoritative routeWorld sample is invalid " +
                 $"routeWorld=({unit.routeWorldX:0.###},{unit.routeWorldY:0.###})";
             return false;
         }
 
-        static bool TrySampleRouteSpacePolyline(string segmentId, float progress, out Vector2 routeCenter, out Vector2 routeTangent)
+        bool TrySampleRouteSpacePolyline(string segmentId, float progress, out Vector2 routeCenter, out Vector2 routeTangent)
         {
             routeCenter = Vector2.zero;
             routeTangent = Vector2.up;
-            if (!RouteSegmentSimPolylines.TryGetValue(segmentId ?? string.Empty, out Vector2[] points) || points == null || points.Length < 2)
+            if (!TryNormalizeBattlefieldSegmentId(segmentId, out string normalizedSegmentId))
                 return false;
 
-            float clampedProgress = Mathf.Clamp01(progress);
-            if (points.Length == 2)
-            {
-                routeCenter = Vector2.Lerp(points[0], points[1], clampedProgress);
-                routeTangent = points[1] - points[0];
-                return routeTangent.sqrMagnitude > 0.0001f;
-            }
+            if (!_battlefieldRouteSpacePolylineBySegment.TryGetValue(normalizedSegmentId, out Vector2[] points)
+                || points == null
+                || points.Length < 2)
+                return false;
 
-            float len01 = Vector2.Distance(points[0], points[1]);
-            float len12 = Vector2.Distance(points[1], points[2]);
-            float totalLength = len01 + len12;
+            return TrySampleVector2Polyline(points, progress, out routeCenter, out routeTangent);
+        }
+
+        static bool TrySampleVector3Polyline(Vector3[] points, float progress, out Vector3 samplePoint, out Vector3 tangent)
+        {
+            samplePoint = Vector3.zero;
+            tangent = Vector3.forward;
+
+            if (points == null || points.Length < 2)
+                return false;
+
+            float totalLength = 0f;
+            for (int i = 0; i < points.Length - 1; i++)
+                totalLength += Vector3.Distance(points[i], points[i + 1]);
+
             if (totalLength <= 0.0001f)
                 return false;
 
-            float targetDistance = totalLength * clampedProgress;
-            if (targetDistance <= len01 || len12 <= 0.0001f)
+            float remainingDistance = totalLength * Mathf.Clamp01(progress);
+            for (int i = 0; i < points.Length - 1; i++)
             {
-                float segmentT = len01 > 0.0001f ? targetDistance / len01 : 0f;
-                routeCenter = Vector2.Lerp(points[0], points[1], segmentT);
-                routeTangent = points[1] - points[0];
-                return routeTangent.sqrMagnitude > 0.0001f;
+                Vector3 from = points[i];
+                Vector3 to = points[i + 1];
+                float segmentLength = Vector3.Distance(from, to);
+                if (segmentLength <= 0.0001f)
+                    continue;
+
+                if (remainingDistance <= segmentLength || i == points.Length - 2)
+                {
+                    float segmentT = Mathf.Clamp01(remainingDistance / segmentLength);
+                    samplePoint = Vector3.Lerp(from, to, segmentT);
+                    tangent = (to - from).normalized;
+                    return tangent.sqrMagnitude > 0.0001f;
+                }
+
+                remainingDistance -= segmentLength;
             }
 
-            float segmentDistance = targetDistance - len01;
-            float secondSegmentT = len12 > 0.0001f ? segmentDistance / len12 : 0f;
-            routeCenter = Vector2.Lerp(points[1], points[2], secondSegmentT);
-            routeTangent = points[2] - points[1];
-            return routeTangent.sqrMagnitude > 0.0001f;
+            return false;
+        }
+
+        static bool TrySampleVector2Polyline(Vector2[] points, float progress, out Vector2 samplePoint, out Vector2 tangent)
+        {
+            samplePoint = Vector2.zero;
+            tangent = Vector2.up;
+
+            if (points == null || points.Length < 2)
+                return false;
+
+            float totalLength = 0f;
+            for (int i = 0; i < points.Length - 1; i++)
+                totalLength += Vector2.Distance(points[i], points[i + 1]);
+
+            if (totalLength <= 0.0001f)
+                return false;
+
+            float remainingDistance = totalLength * Mathf.Clamp01(progress);
+            for (int i = 0; i < points.Length - 1; i++)
+            {
+                Vector2 from = points[i];
+                Vector2 to = points[i + 1];
+                float segmentLength = Vector2.Distance(from, to);
+                if (segmentLength <= 0.0001f)
+                    continue;
+
+                if (remainingDistance <= segmentLength || i == points.Length - 2)
+                {
+                    float segmentT = Mathf.Clamp01(remainingDistance / segmentLength);
+                    samplePoint = Vector2.Lerp(from, to, segmentT);
+                    tangent = to - from;
+                    return tangent.sqrMagnitude > 0.0001f;
+                }
+
+                remainingDistance -= segmentLength;
+            }
+
+            return false;
         }
 
         static string ResolveSourceBarracksKey(MLUnit unit)
@@ -2715,10 +2492,20 @@ namespace CastleDefender.Game
         static bool TryResolveLayoutWorldPoint(MLWorldPoint point, out Vector3 worldPos)
         {
             worldPos = default;
-            if (point == null)
+            if (point == null || !float.IsFinite(point.x) || !float.IsFinite(point.y))
                 return false;
 
             worldPos = new Vector3(point.x, 0f, point.y);
+            return true;
+        }
+
+        static bool TryResolveRouteSpacePoint(MLWorldPoint point, out Vector2 routePoint)
+        {
+            routePoint = default;
+            if (point == null || !float.IsFinite(point.x) || !float.IsFinite(point.y))
+                return false;
+
+            routePoint = new Vector2(point.x, point.y);
             return true;
         }
 
@@ -2909,7 +2696,7 @@ namespace CastleDefender.Game
             Debug.LogError(
                 $"[SpawnAudit][ClientPositionFail] lane={lane?.laneIndex ?? -1} spatialLane={spatialLane} " +
                 $"unitId='{unit?.id ?? "<null>"}' unitType='{unit?.type ?? "<null>"}' team='{lane?.team ?? "<null>"}' " +
-                $"groupId='{unit?.groupId ?? "<null>"}' waypointKind='{unit?.currentWaypointTargetKind ?? "<null>"}' " +
+                $"waypointKind='{unit?.currentWaypointTargetKind ?? "<null>"}' " +
                 $"sourceBarracksKey='{ResolveSourceBarracksKey(unit)}' " +
                 $"routeType='{unit?.routeType ?? "<null>"}' currentSegment='{unit?.currentSegment ?? "<null>"}' " +
                 $"segmentProgress={(unit != null ? unit.segmentProgress : float.NaN):0.###} " +
@@ -3316,3 +3103,4 @@ namespace CastleDefender.Game
         }
     }
 }
+

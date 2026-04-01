@@ -301,7 +301,7 @@ namespace CastleDefender.UI
             header.fontSizeMax = 16f;
             header.overflowMode = TextOverflowModes.Ellipsis;
 
-            var ordersLabel = EnsureText(root, "OrdersLabel", "Formation Orders", 11f, FontStyles.Normal);
+            var ordersLabel = EnsureText(root, "OrdersLabel", "Lane Orders", 11f, FontStyles.Normal);
             ordersLabel.alignment = TextAlignmentOptions.Left;
             ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
             ordersLabel.enableWordWrapping = false;
@@ -477,9 +477,9 @@ namespace CastleDefender.UI
             bool hasDefendWorldAnchor = TryEstimateLaneHoldWorldPosition(latestSnapshot, ownerLaneIndex, ownerLane, out var defendWorldAnchor);
 
             if (section.OrdersLabel != null)
-                section.OrdersLabel.text = canIssueOrders ? "Lane Formation Orders" : "Formation Orders Unavailable";
+                section.OrdersLabel.text = canIssueOrders ? "Lane Orders" : "Orders Unavailable";
             if (section.TroopsLabel != null)
-                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Formation Troops" : "Active Troops";
+                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Troops" : "Active Troops";
 
             ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, ActionSender.SetLaneAttack);
             ConfigureCommandButton(
@@ -1244,9 +1244,9 @@ namespace CastleDefender.UI
             if (positionSamples.Count <= 0)
                 return false;
 
-            if (ownerLane?.formationAnchor != null && IsFinite(ownerLane.formationAnchor.x) && IsFinite(ownerLane.formationAnchor.y))
+            if (ownerLane?.commandAnchor != null && IsFinite(ownerLane.commandAnchor.x) && IsFinite(ownerLane.commandAnchor.y))
             {
-                var anchor = new Vector2(ownerLane.formationAnchor.x, ownerLane.formationAnchor.y);
+                var anchor = new Vector2(ownerLane.commandAnchor.x, ownerLane.commandAnchor.y);
                 positionSamples.Sort((left, right) =>
                 {
                     float leftDistance = (new Vector2(left.gridX, left.gridY) - anchor).sqrMagnitude;

@@ -819,7 +819,7 @@ function createMultilaneRuntime({
       ...room.settings,
       laneTeams,
       matchSeed: matchSeedNum,
-      startingCombatMilitiaCount: 5,
+      startingCombatMilitiaCount: 0,
     });
 
     try {

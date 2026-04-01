@@ -88,7 +88,6 @@ function createBarracksUnit(typeKey, overrides = {}) {
     sourceBarracksId: overrides.sourceBarracksId ?? "center",
     sourceBarracksKey: overrides.sourceBarracksId ?? "center",
     spawnSourceType: "barracks_roster",
-    groupId: overrides.groupId ?? "packet:0:center:0",
     hp: overrides.hp ?? def.hp,
     maxHp: overrides.maxHp ?? def.hp,
     baseDmg: overrides.baseDmg ?? def.dmg,
@@ -200,7 +199,7 @@ test("melee stop distances force shield and sword units closer to visible contac
   assert.ok(swordVsRaiderStop <= 2.1, `sword units should step further into dungeon mobs before dealing damage, got ${swordVsRaiderStop}`);
 });
 
-test("combat-contact snapshots serialize attack intent for lane defenders", () => {
+test("combat-contact snapshots serialize defend intent for lane defenders", () => {
   const game = createGame();
   const lane = game.lanes[0];
 
@@ -238,7 +237,7 @@ test("combat-contact snapshots serialize attack intent for lane defenders", () =
 
   assert.ok(defenderSnap, "expected the defender to be serialized into the ML snapshot");
   assert.equal(defenderSnap.presentationPhase, "CombatResolve");
-  assert.equal(defenderSnap.presentationIntent, "Attack");
+  assert.equal(defenderSnap.presentationIntent, "Defend");
   assert.equal(defenderSnap.combatContact, true);
   assert.equal(defenderSnap.combatTargetId, enemy.id);
 });
@@ -274,7 +273,7 @@ test("defend groups leave the waypoint and free-roam toward an intruder once com
     atkCd: 0,
     combatState: "IDLE",
     routeState: "MOVING",
-    movementMode: "FormationJoin",
+    movementMode: "AnchorJoin",
     commandState: "DEFEND",
   }));
 
@@ -347,7 +346,7 @@ test("defenders start charging toward an intruder on the first defend-bubble pic
     atkCd: 0,
     combatState: "IDLE",
     routeState: "MOVING",
-    movementMode: "FormationJoin",
+    movementMode: "AnchorJoin",
     commandState: "DEFEND",
   }));
 
@@ -474,6 +473,73 @@ test("defenders prefer nearby individual hostiles before falling back to a share
   );
 });
 
+test("defenders distribute across a clustered hostile blob instead of dogpiling one propagated target", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  tick(game, 1);
+  assert.ok(lane.outsideGateAnchor, "expected defend mode to expose an outside gate anchor");
+
+  const anchor = lane.outsideGateAnchor;
+  const defenders = Array.from({ length: 6 }, (_, index) => createBarracksUnit("tt_light_infantry", {
+    id: `cluster_${index}`,
+    posX: anchor.x + (((index % 3) - 1) * 0.55),
+    posY: anchor.y + (Math.floor(index / 3) * 0.45),
+    routeWorldX: anchor.x + (((index % 3) - 1) * 0.55),
+    routeWorldY: anchor.y + (Math.floor(index / 3) * 0.45),
+    baseSpeed: 0.24,
+    atkCd: 0,
+    commandState: "DEFEND",
+  }));
+
+  const intruders = [
+    createWaveUnit("raider", {
+      id: "cluster_intruder_a",
+      posX: anchor.x - 0.8,
+      posY: anchor.y - 4.4,
+      routeWorldX: anchor.x - 0.8,
+      routeWorldY: anchor.y - 4.4,
+      baseSpeed: 0,
+      atkCd: 999,
+    }),
+    createWaveUnit("raider", {
+      id: "cluster_intruder_b",
+      posX: anchor.x,
+      posY: anchor.y - 4.8,
+      routeWorldX: anchor.x,
+      routeWorldY: anchor.y - 4.8,
+      baseSpeed: 0,
+      atkCd: 999,
+    }),
+    createWaveUnit("raider", {
+      id: "cluster_intruder_c",
+      posX: anchor.x + 0.8,
+      posY: anchor.y - 4.4,
+      routeWorldX: anchor.x + 0.8,
+      routeWorldY: anchor.y - 4.4,
+      baseSpeed: 0,
+      atkCd: 999,
+    }),
+  ];
+
+  lane.units.push(...defenders, ...intruders);
+
+  tick(game, 2);
+
+  const chosenTargets = new Set(
+    lane.units
+      .filter((unit) => unit && unit.id.startsWith("cluster_"))
+      .map((unit) => unit.combatTarget?.unitId)
+      .filter(Boolean)
+  );
+
+  assert.ok(
+    chosenTargets.size >= 3,
+    `expected the defenders to split across the nearby clustered hostiles, got ${chosenTargets.size} unique targets`
+  );
+});
+
 test("defend units pick up an intruder while it is still near the gate approach, not only after it reaches local melee range", () => {
   const game = createGame();
   const lane = game.lanes[0];
@@ -505,7 +571,7 @@ test("defend units pick up an intruder while it is still near the gate approach,
       atkCd: 0,
       combatState: "IDLE",
       routeState: "MOVING",
-      movementMode: "FormationJoin",
+      movementMode: "AnchorJoin",
       commandState: "DEFEND",
     }),
     createBarracksUnit("tt_light_infantry", {
@@ -518,7 +584,7 @@ test("defend units pick up an intruder while it is still near the gate approach,
       atkCd: 0,
       combatState: "IDLE",
       routeState: "MOVING",
-      movementMode: "FormationJoin",
+      movementMode: "AnchorJoin",
       commandState: "DEFEND",
     }),
   ];
@@ -554,7 +620,7 @@ test("defenders prefer a close hostile inside the defend bubble even if it still
     atkCd: 0,
     combatState: "IDLE",
     routeState: "MOVING",
-    movementMode: "FormationJoin",
+    movementMode: "AnchorJoin",
     commandState: "DEFEND",
   }));
 
@@ -623,7 +689,7 @@ test("exactly overlapping defenders break apart instead of staying as a single s
       atkCd: 0,
       combatState: "IDLE",
       routeState: "MOVING",
-      movementMode: "FormationJoin",
+      movementMode: "AnchorJoin",
       commandState: "DEFEND",
     }),
     createBarracksUnit("tt_light_infantry", {
@@ -636,7 +702,7 @@ test("exactly overlapping defenders break apart instead of staying as a single s
       atkCd: 0,
       combatState: "IDLE",
       routeState: "MOVING",
-      movementMode: "FormationJoin",
+      movementMode: "AnchorJoin",
       commandState: "DEFEND",
     }),
   ];
@@ -654,7 +720,7 @@ test("exactly overlapping defenders break apart instead of staying as a single s
   assert.ok(distance >= 0.2, `expected stacked defenders to separate, got distance ${distance}`);
 });
 
-test("no-formation hold layout spreads defenders into a shallow line instead of a circular clump", () => {
+test("anchor-slot hold layout spreads defenders into a shallow line instead of a circular clump", () => {
   const game = createGame();
   const lane = game.lanes[0];
 
@@ -673,7 +739,7 @@ test("no-formation hold layout spreads defenders into a shallow line instead of 
     atkCd: 0,
     combatState: "IDLE",
     routeState: "MOVING",
-    movementMode: "FormationJoin",
+    movementMode: "AnchorJoin",
     commandState: "DEFEND",
   }));
 
@@ -692,7 +758,7 @@ test("no-formation hold layout spreads defenders into a shallow line instead of 
   );
 });
 
-test("no-formation melee surround wraps a stationary intruder instead of leaving all defenders on the approach side", () => {
+test("melee surround wraps a stationary intruder instead of leaving all defenders on the approach side", () => {
   const game = createGame();
   const lane = game.lanes[0];
 
@@ -711,7 +777,7 @@ test("no-formation melee surround wraps a stationary intruder instead of leaving
     atkCd: 0,
     combatState: "IDLE",
     routeState: "MOVING",
-    movementMode: "FormationJoin",
+    movementMode: "AnchorJoin",
     commandState: "DEFEND",
   }));
 
@@ -756,3 +822,5 @@ test("no-formation melee surround wraps a stationary intruder instead of leaving
     "expected defenders to occupy both lateral sides of the target instead of staying in a single approach blob"
   );
 });
+
+

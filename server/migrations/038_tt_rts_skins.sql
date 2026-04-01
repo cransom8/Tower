@@ -12,7 +12,7 @@ INSERT INTO skin_catalog (skin_key, unit_type, name, description, price, currenc
 
 -- ── Tier 2: Basic Infantry ────────────────────────────────────────────────────
   ('tt_light_infantry', 'hobgoblin',       'Light Infantry',   'Standard footsoldier in padded armour.',           0, 'free', '', true),
-  ('tt_spearman',       'ghoul',           'Spearman',         'Disciplined spear-line unit. Holds formation.',    0, 'free', '', true),
+  ('tt_spearman',       'ghoul',           'Spearman',         'Disciplined spear-line unit. Holds the line.',    0, 'free', '', true),
 
 -- ── Tier 2–3: Ranged ─────────────────────────────────────────────────────────
   ('tt_archer',         'harpy',           'Archer',           'Bowman trained for rapid volley fire.',            0, 'free', '', true),

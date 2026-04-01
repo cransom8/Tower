@@ -234,7 +234,6 @@ test("pressure response: bot switches the lane into defend posture", () => {
   const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 140, startIncome: 14 });
   game.lanes[0].commandState = "ATTACK";
   game.lanes[0].commandAnchorProgress = 1;
-  game.lanes[0].formationAnchorProgress = 1;
   game.lanes[0].commandTargetLaneIndex = 1;
   const bot = new BotBrain({
     laneIndex: 0,
@@ -361,3 +360,4 @@ test("self-play 2v2 completes with active fortress bots and no invalid actions",
   for (const lane of result.summary.laneSummaries)
     assert.equal(lane.invalidActions, 0, `lane ${lane.laneIndex} emitted invalid actions`);
 });
+

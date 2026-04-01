@@ -91,6 +91,14 @@ function equalsIgnoreCase(left, right) {
   return String(left || "").toLowerCase() === String(right || "").toLowerCase();
 }
 
+function toFiniteNullableNumber(value) {
+  if (value === null || value === undefined || value === "")
+    return null;
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
 function getSnapshotUnitAnchorDistance(unit) {
   const posX = Number(unit && unit.posX);
   const posY = Number(unit && unit.posY);
@@ -110,6 +118,7 @@ function resolveSnapshotCombatMetadata(game, lane, unit, deps) {
     getWaveUnitTargetDistance,
     getUnitStopDistance,
     CONTACT_SLOT_TOLERANCE,
+    isUnitInCombatContact,
   } = deps;
 
   const fallbackKind = unit && unit.combatTarget && unit.combatTarget.kind
@@ -140,11 +149,15 @@ function resolveSnapshotCombatMetadata(game, lane, unit, deps) {
     ? Number(CONTACT_SLOT_TOLERANCE)
     : 0;
 
+  const combatContact = typeof isUnitInCombatContact === "function"
+    ? isUnitInCombatContact(lane, unit, resolvedTarget)
+    : (Number.isFinite(distance)
+      && Number.isFinite(stopDistance)
+      && distance <= stopDistance + contactTolerance);
+
   return {
     combatTargetKind: resolvedTarget.kind || fallbackKind,
-    combatContact: Number.isFinite(distance)
-      && Number.isFinite(stopDistance)
-      && distance <= stopDistance + contactTolerance,
+    combatContact,
   };
 }
 
@@ -186,12 +199,12 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
     presentationPhase = "CombatRegroup";
   } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR || "ReturnToAnchor")) {
     presentationPhase = "ReturnToSlot";
-  } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.FORMATION_JOIN || "FormationJoin")) {
-    presentationPhase = settledAtAnchor ? "FormationHold" : "FormationJoin";
+  } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.ANCHOR_JOIN || "AnchorJoin")) {
+    presentationPhase = settledAtAnchor ? "AnchorHold" : "AnchorJoin";
   } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.LANE_TRAVEL || "LaneTravel")) {
     presentationPhase = "LaneTravel";
   } else if (settledAtAnchor) {
-    presentationPhase = "FormationHold";
+    presentationPhase = "AnchorHold";
   }
 
   let presentationIntent = "Idle";
@@ -206,7 +219,7 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
       presentationIntent = "Move";
       break;
     case "CombatResolve":
-      presentationIntent = "Attack";
+      presentationIntent = isDefending ? "Defend" : "Attack";
       break;
     case "CombatRegroup":
       if (settledAtAnchor)
@@ -219,10 +232,10 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
         ? (isDefending ? "Defend" : "Idle")
         : (isRetreating ? "Retreat" : "Move");
       break;
-    case "FormationHold":
+    case "AnchorHold":
       presentationIntent = isDefending ? "Defend" : "Idle";
       break;
-    case "FormationJoin":
+    case "AnchorJoin":
     case "LaneTravel":
       presentationIntent = isRetreating ? "Retreat" : "Move";
       break;
@@ -313,6 +326,8 @@ function createMLSnapshot(game, deps) {
         id: p.id,
         ownerLane: p.ownerLane,
         sourceKind: p.sourceKind,
+        sourceId: p.sourceId || null,
+        targetId: p.targetId || null,
         projectileType: p.projectileType,
         damageType: p.damageType,
         isSplash: p.isSplash,
@@ -393,9 +408,7 @@ function createMLSnapshot(game, deps) {
           isHero: !!u.isHero,
           heroKey: u.heroKey || null,
           heroVisualStyleKey: u.heroVisualStyleKey || null,
-          groupId: u.groupId || null,
           combatRole: u.combatRole || null,
-          preferredBand: u.preferredBand || null,
           pathIdx: u.pathIdx,
           gridX: gx,
           gridY: gy,
@@ -417,20 +430,20 @@ function createMLSnapshot(game, deps) {
           presentationIntent: presentation.presentationIntent,
           blockedByStructure: !!u.blockedByStructure,
           blockedByStructureId: u.blockedByStructureId || null,
-          routeWorldX: Number.isFinite(Number(u.routeWorldX)) ? Number(u.routeWorldX) : gx,
-          routeWorldY: Number.isFinite(Number(u.routeWorldY)) ? Number(u.routeWorldY) : gy,
-          currentSlotIndex: Number.isInteger(u.currentSlotIndex) ? u.currentSlotIndex : -1,
-          anchorTargetX: Number.isFinite(Number(u.anchorTargetX)) ? Number(u.anchorTargetX) : null,
-          anchorTargetY: Number.isFinite(Number(u.anchorTargetY)) ? Number(u.anchorTargetY) : null,
-          anchorTargetProgress: Number.isFinite(Number(u.anchorTargetProgress)) ? Number(u.anchorTargetProgress) : null,
-          groupCenterX: Number.isFinite(Number(u.groupCenterX)) ? Number(u.groupCenterX) : null,
-          groupCenterY: Number.isFinite(Number(u.groupCenterY)) ? Number(u.groupCenterY) : null,
-          cohesionRadius: Number.isFinite(Number(u.cohesionRadius)) ? Number(u.cohesionRadius) : null,
-          leashFromGroupCenter: Number.isFinite(Number(u.leashFromGroupCenter)) ? Number(u.leashFromGroupCenter) : null,
-          currentWaypointTargetX: Number.isFinite(Number(u.currentWaypointTargetX)) ? Number(u.currentWaypointTargetX) : null,
-          currentWaypointTargetY: Number.isFinite(Number(u.currentWaypointTargetY)) ? Number(u.currentWaypointTargetY) : null,
+          routeWorldX: toFiniteNullableNumber(u.routeWorldX) ?? toFiniteNullableNumber(u.posX),
+          routeWorldY: toFiniteNullableNumber(u.routeWorldY) ?? toFiniteNullableNumber(u.posY),
+          anchorTargetX: toFiniteNullableNumber(u.anchorTargetX),
+          anchorTargetY: toFiniteNullableNumber(u.anchorTargetY),
+          anchorTargetProgress: toFiniteNullableNumber(u.anchorTargetProgress),
+          assignedSlotIndex: Number.isInteger(u && u.assignedSlotIndex) ? u.assignedSlotIndex : null,
+          anchorCenterX: toFiniteNullableNumber(u.anchorCenterX),
+          anchorCenterY: toFiniteNullableNumber(u.anchorCenterY),
+          anchorHoldRadius: toFiniteNullableNumber(u.anchorHoldRadius),
+          anchorLeashRadius: toFiniteNullableNumber(u.anchorLeashRadius),
+          currentWaypointTargetX: toFiniteNullableNumber(u.currentWaypointTargetX),
+          currentWaypointTargetY: toFiniteNullableNumber(u.currentWaypointTargetY),
           currentWaypointTargetKind: u.currentWaypointTargetKind || null,
-          combatLeashRadius: Number.isFinite(Number(u.combatLeashRadius)) ? Number(u.combatLeashRadius) : null,
+          combatLeashRadius: toFiniteNullableNumber(u.combatLeashRadius),
           canEngage: !!u.canEngage,
           hp: u.hp,
           maxHp: u.maxHp,
@@ -481,20 +494,20 @@ function createMLSnapshot(game, deps) {
               y: Number(lane.enemyCoreAnchor.y) || 0,
             }
           : null,
-        formationAnchor: lane.formationAnchor
+        commandAnchor: lane.commandAnchor
           ? {
-              x: Number(lane.formationAnchor.x) || 0,
-              y: Number(lane.formationAnchor.y) || 0,
+              x: Number(lane.commandAnchor.x) || 0,
+              y: Number(lane.commandAnchor.y) || 0,
             }
           : null,
-        formationFacing: lane.formationFacing
+        commandFacing: lane.commandFacing
           ? {
-              x: Number(lane.formationFacing.x) || 0,
-              y: Number(lane.formationFacing.y) || 0,
+              x: Number(lane.commandFacing.x) || 0,
+              y: Number(lane.commandFacing.y) || 0,
             }
           : null,
-        formationSlots: Array.isArray(lane.formationSlots)
-          ? lane.formationSlots.map((slot) => ({
+        commandSlots: Array.isArray(lane.commandSlots)
+          ? lane.commandSlots.map((slot) => ({
               slotIndex: Number.isInteger(slot && slot.slotIndex) ? slot.slotIndex : -1,
               unitId: slot && slot.unitId ? slot.unitId : null,
               x: Number(slot && slot.x) || 0,
@@ -502,42 +515,6 @@ function createMLSnapshot(game, deps) {
             }))
           : [],
         assignedUnits: Array.isArray(lane.assignedUnits) ? lane.assignedUnits.slice() : [],
-        packets: Array.isArray(lane.packetStates)
-          ? lane.packetStates.map((packet) => ({
-              groupId: packet && packet.groupId ? packet.groupId : null,
-              laneId: Number.isInteger(packet && packet.laneId) ? packet.laneId : null,
-              sourceLaneIndex: Number.isInteger(packet && packet.sourceLaneIndex) ? packet.sourceLaneIndex : null,
-              sourceBarracksId: packet && packet.sourceBarracksId ? packet.sourceBarracksId : null,
-              stance: packet && packet.stance ? packet.stance : null,
-              currentWaypointTarget: packet && packet.currentWaypointTarget
-                ? {
-                    kind: packet.currentWaypointTarget.kind || null,
-                    laneIndex: Number.isInteger(packet.currentWaypointTarget.laneIndex) ? packet.currentWaypointTarget.laneIndex : null,
-                    x: Number(packet.currentWaypointTarget.x) || 0,
-                    y: Number(packet.currentWaypointTarget.y) || 0,
-                  }
-                : null,
-              groupCenter: packet && packet.groupCenter
-                ? {
-                    x: Number(packet.groupCenter.x) || 0,
-                    y: Number(packet.groupCenter.y) || 0,
-                  }
-                : null,
-              cohesionRadius: Number(packet && packet.cohesionRadius) || 0,
-              movementMode: packet && packet.movementMode ? packet.movementMode : null,
-              packetIndex: Number.isInteger(packet && packet.packetIndex) ? packet.packetIndex : -1,
-              assignedUnits: Array.isArray(packet && packet.assignedUnits) ? packet.assignedUnits.slice() : [],
-              formationSlots: Array.isArray(packet && packet.formationSlots)
-                ? packet.formationSlots.map((slot) => ({
-                    slotIndex: Number.isInteger(slot && slot.slotIndex) ? slot.slotIndex : -1,
-                    unitId: slot && slot.unitId ? slot.unitId : null,
-                    band: slot && slot.band ? slot.band : null,
-                    x: Number(slot && slot.x) || 0,
-                    y: Number(slot && slot.y) || 0,
-                  }))
-                : [],
-            }))
-          : [],
         engagementRadius: Number.isFinite(Number(lane.engagementRadius)) ? Number(lane.engagementRadius) : 0,
         combatEnabled: !!lane.combatEnabled,
         gold: lane.gold,
@@ -633,14 +610,18 @@ function createMLPublicConfig(options, deps) {
     };
   }
 
-  function createWorldPointFromAuthored(entry, contextLabel) {
+  function createFinitePointFromEntry(entry, contextLabel) {
     if (!entry || !Number.isFinite(Number(entry.x)) || !Number.isFinite(Number(entry.y))) {
       throw new Error(
-        `[sim-multilane-serialization] Missing authored world point for ${contextLabel}.`
+        `[sim-multilane-serialization] Missing finite point for ${contextLabel}.`
       );
     }
 
     return createWorldPoint(entry.x, entry.y);
+  }
+
+  function createWorldPointFromAuthored(entry, contextLabel) {
+    return createFinitePointFromEntry(entry, contextLabel);
   }
 
   function normalizeLaneLayoutKey(slot) {
@@ -659,10 +640,116 @@ function createMLPublicConfig(options, deps) {
     const routeSegments = [];
     const lanes = [];
     const slotByLaneIndex = new Map();
+    const coreNodeIds = new Set();
     const nodeLaneKeyByNodeId = new Map();
     const nodeWorldByNodeId = new Map();
     const laneFrontGateByLaneKey = new Map();
     const waveNodeIds = new Set();
+    const centerCrossSegmentIds = new Set(["A_C", "C_A", "B_D", "D_B"]);
+    const routeMineNodeId = "M";
+
+    function resolvePerimeterControlPoint(fromWorld, toWorld, mineCenterWorld) {
+      const midpoint = {
+        x: (Number(fromWorld.x) + Number(toWorld.x)) * 0.5,
+        y: (Number(fromWorld.y) + Number(toWorld.y)) * 0.5,
+      };
+      let outward = {
+        x: midpoint.x - Number(mineCenterWorld.x),
+        y: midpoint.y - Number(mineCenterWorld.y),
+      };
+      let outwardLength = Math.hypot(outward.x, outward.y);
+      if (outwardLength <= 0.0001) {
+        const edge = {
+          x: Number(toWorld.x) - Number(fromWorld.x),
+          y: Number(toWorld.y) - Number(fromWorld.y),
+        };
+        outward = {
+          x: -edge.y,
+          y: edge.x,
+        };
+        outwardLength = Math.hypot(outward.x, outward.y);
+      }
+
+      if (outwardLength <= 0.0001) {
+        outward = { x: 0, y: 1 };
+        outwardLength = 1;
+      }
+
+      const controlDistance = Math.max(
+        2,
+        Math.hypot(Number(toWorld.x) - Number(fromWorld.x), Number(toWorld.y) - Number(fromWorld.y)) * 0.28
+      );
+      return createWorldPoint(
+        midpoint.x + ((outward.x / outwardLength) * controlDistance),
+        midpoint.y + ((outward.y / outwardLength) * controlDistance)
+      );
+    }
+
+    function buildAuthoredSegmentWorldPoints(segmentId, segmentPoints, fromNodeId, toNodeId, fromWorld, toWorld, frontGatePoint, mineWorldPoint) {
+      const routePointCount = Array.isArray(segmentPoints) ? segmentPoints.length : 0;
+      if (routePointCount < 2) {
+        throw new Error(
+          `[sim-multilane-serialization] Route segment '${segmentId}' is missing route-space points.`
+        );
+      }
+
+      if (routePointCount === 2) {
+        return [
+          createWorldPoint(fromWorld.x, fromWorld.y),
+          createWorldPoint(toWorld.x, toWorld.y),
+        ];
+      }
+
+      if (routePointCount !== 3) {
+        throw new Error(
+          `[sim-multilane-serialization] Route segment '${segmentId}' uses unsupported route-space point count ${routePointCount}.`
+        );
+      }
+
+      if (waveNodeIds.has(fromNodeId)) {
+        if (!frontGatePoint) {
+          throw new Error(
+            `[sim-multilane-serialization] Wave route segment '${segmentId}' is missing its authored front gate control point.`
+          );
+        }
+
+        return [
+          createWorldPoint(fromWorld.x, fromWorld.y),
+          createWorldPoint(frontGatePoint.x, frontGatePoint.y),
+          createWorldPoint(toWorld.x, toWorld.y),
+        ];
+      }
+
+      if (centerCrossSegmentIds.has(segmentId)) {
+        return [
+          createWorldPoint(fromWorld.x, fromWorld.y),
+          createWorldPoint(mineWorldPoint.x, mineWorldPoint.y),
+          createWorldPoint(toWorld.x, toWorld.y),
+        ];
+      }
+
+      const fromIsMine = fromNodeId === routeMineNodeId;
+      const toIsMine = toNodeId === routeMineNodeId;
+      if (fromIsMine || toIsMine) {
+        return [
+          createWorldPoint(fromWorld.x, fromWorld.y),
+          createWorldPoint(toWorld.x, toWorld.y),
+        ];
+      }
+
+      if (coreNodeIds.has(fromNodeId) && coreNodeIds.has(toNodeId)) {
+        const controlPoint = resolvePerimeterControlPoint(fromWorld, toWorld, mineWorldPoint);
+        return [
+          createWorldPoint(fromWorld.x, fromWorld.y),
+          controlPoint,
+          createWorldPoint(toWorld.x, toWorld.y),
+        ];
+      }
+
+      throw new Error(
+        `[sim-multilane-serialization] Route segment '${segmentId}' could not resolve authored world control points.`
+      );
+    }
 
     for (let laneIndex = 0; laneIndex < slotDefinitions.length; laneIndex += 1) {
       const slot = slotDefinitions[laneIndex];
@@ -747,6 +834,7 @@ function createMLPublicConfig(options, deps) {
         laneKey,
         world: createWorldPoint(coreWorld.x, coreWorld.y),
       });
+      coreNodeIds.add(coreNodeId);
       routeNodes.push({
         nodeId: waveNodeId,
         laneIndex,
@@ -829,13 +917,25 @@ function createMLPublicConfig(options, deps) {
       const frontGatePoint = segmentLaneKey
         ? laneFrontGateByLaneKey.get(segmentLaneKey) || null
         : null;
-      const authoredSegmentPoints = [];
-
-      authoredSegmentPoints.push(createWorldPoint(fromWorld.x, fromWorld.y));
-      if (waveNodeIds.has(fromNodeId) && frontGatePoint) {
-        authoredSegmentPoints.push(createWorldPoint(frontGatePoint.x, frontGatePoint.y));
+      const authoredSegmentPoints = buildAuthoredSegmentWorldPoints(
+        segmentId,
+        segmentPoints,
+        fromNodeId,
+        toNodeId,
+        fromWorld,
+        toWorld,
+        frontGatePoint,
+        mineWorld
+      );
+      const routeSpacePoints = [];
+      for (let pointIndex = 0; pointIndex < segmentPoints.length; pointIndex += 1) {
+        routeSpacePoints.push(
+          createFinitePointFromEntry(
+            segmentPoints[pointIndex],
+            `route-space point ${pointIndex} for segment '${segmentId}'`
+          )
+        );
       }
-      authoredSegmentPoints.push(createWorldPoint(toWorld.x, toWorld.y));
 
       routeSegments.push({
         segmentId,
@@ -843,6 +943,7 @@ function createMLPublicConfig(options, deps) {
         toNodeId,
         laneKey: segmentLaneKey,
         points: authoredSegmentPoints,
+        routeSpacePoints,
       });
     }
 

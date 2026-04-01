@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using CastleDefender.Net;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -12,8 +14,10 @@ namespace CastleDefender.Game
         static readonly Color DungeonHpBarFrame = new(0.88f, 0.62f, 1.00f, 0.88f);
         static readonly Color HostileHpBarFill = new(0.98f, 0.48f, 0.20f, 0.98f);
         static readonly Color HostileHpBarFrame = new(1.00f, 0.74f, 0.44f, 0.84f);
+        static readonly Dictionary<string, LaneSnapshotCombatant> s_activeCombatants = new(StringComparer.OrdinalIgnoreCase);
         BarracksSpawnCombatProfile _combatProfile;
         string _combatantId;
+        string _registeredCombatantId;
         string _defenderTeamKey;
         string _ownerTeamKey;
         BattleTeam _team = BattleTeam.Red;
@@ -30,6 +34,27 @@ namespace CastleDefender.Game
         Renderer[] _renderers;
         bool _initialized;
         bool _locallyDefeated;
+        string _debugPresentationPhase;
+        string _debugPresentationIntent;
+        string _debugMovementMode;
+        string _debugMovementState;
+        string _debugCombatTargetId;
+        string _debugCurrentTargetId;
+        string _debugCurrentSegment;
+        string _debugCurrentWaypointTargetKind;
+        string _debugRouteType;
+        string _debugSpawnSourceType;
+        bool _debugCombatContact;
+        bool _debugIsAttacking;
+        bool _debugIsWaveUnit;
+        int _debugAssignedSlotIndex = -1;
+        int _debugOwnerLaneIndex = -1;
+        int _debugTargetLaneIndex = -1;
+        float _debugSegmentProgress;
+        float _debugRouteWorldX;
+        float _debugRouteWorldY;
+        float _debugAnchorTargetX;
+        float _debugAnchorTargetY;
 
         public string CombatantId => !string.IsNullOrWhiteSpace(_combatantId) ? _combatantId : name;
         public bool IsAlive => _initialized && !_locallyDefeated && _displayHp > 0f;
@@ -43,11 +68,60 @@ namespace CastleDefender.Game
         public bool IsLocallyDefeated => _locallyDefeated;
         public bool HasCombatTarget => false;
         public float LastAttackAt => _lastAttackAt;
+        public string DebugPresentationPhase => _debugPresentationPhase ?? string.Empty;
+        public string DebugPresentationIntent => _debugPresentationIntent ?? string.Empty;
+        public string DebugMovementMode => _debugMovementMode ?? string.Empty;
+        public string DebugMovementState => _debugMovementState ?? string.Empty;
+        public string DebugCombatTargetId => _debugCombatTargetId ?? string.Empty;
+        public string DebugCurrentTargetId => _debugCurrentTargetId ?? string.Empty;
+        public string DebugCurrentSegment => _debugCurrentSegment ?? string.Empty;
+        public string DebugCurrentWaypointTargetKind => _debugCurrentWaypointTargetKind ?? string.Empty;
+        public string DebugRouteType => _debugRouteType ?? string.Empty;
+        public string DebugSpawnSourceType => _debugSpawnSourceType ?? string.Empty;
+        public bool DebugCombatContact => _debugCombatContact;
+        public bool DebugIsAttacking => _debugIsAttacking;
+        public bool DebugIsWaveUnit => _debugIsWaveUnit;
+        public int DebugAssignedSlotIndex => _debugAssignedSlotIndex;
+        public int DebugOwnerLaneIndex => _debugOwnerLaneIndex;
+        public int DebugTargetLaneIndex => _debugTargetLaneIndex;
+        public float DebugSegmentProgress => _debugSegmentProgress;
+        public float DebugRouteWorldX => _debugRouteWorldX;
+        public float DebugRouteWorldY => _debugRouteWorldY;
+        public float DebugAnchorTargetX => _debugAnchorTargetX;
+        public float DebugAnchorTargetY => _debugAnchorTargetY;
+
+        public static bool TryResolveWorldPosition(string combatantId, out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (string.IsNullOrWhiteSpace(combatantId))
+                return false;
+
+            if (!s_activeCombatants.TryGetValue(combatantId.Trim(), out LaneSnapshotCombatant combatant)
+                || combatant == null
+                || !combatant.isActiveAndEnabled)
+            {
+                return false;
+            }
+
+            worldPos = combatant.transform.position;
+            return true;
+        }
 
         void OnEnable()
         {
+            RegisterActiveCombatant();
             EnsureHpBar();
             RefreshHpBarVisual();
+        }
+
+        void OnDisable()
+        {
+            UnregisterActiveCombatant();
+        }
+
+        void OnDestroy()
+        {
+            UnregisterActiveCombatant();
         }
 
         public void DebugTick(float dt, float now)
@@ -96,6 +170,31 @@ namespace CastleDefender.Game
             _lastAttackAt = attackTime;
         }
 
+        public void ApplyPresentationSnapshot(MLUnit unit)
+        {
+            _debugPresentationPhase = unit?.presentationPhase;
+            _debugPresentationIntent = unit?.presentationIntent;
+            _debugMovementMode = unit?.movementMode;
+            _debugMovementState = unit?.movementState;
+            _debugCombatTargetId = unit?.combatTargetId;
+            _debugCurrentTargetId = unit?.currentTargetId;
+            _debugCurrentSegment = unit?.currentSegment;
+            _debugCurrentWaypointTargetKind = unit?.currentWaypointTargetKind;
+            _debugRouteType = unit?.routeType;
+            _debugSpawnSourceType = unit?.spawnSourceType;
+            _debugCombatContact = unit != null && unit.combatContact;
+            _debugIsAttacking = unit != null && unit.isAttacking;
+            _debugIsWaveUnit = unit != null && unit.isWaveUnit;
+            _debugAssignedSlotIndex = unit != null ? unit.assignedSlotIndex : -1;
+            _debugOwnerLaneIndex = unit != null ? unit.ownerLaneIndex : -1;
+            _debugTargetLaneIndex = unit != null ? unit.targetLaneIndex : -1;
+            _debugSegmentProgress = unit != null ? unit.segmentProgress : 0f;
+            _debugRouteWorldX = unit != null ? unit.routeWorldX : 0f;
+            _debugRouteWorldY = unit != null ? unit.routeWorldY : 0f;
+            _debugAnchorTargetX = unit != null ? unit.anchorTargetX : 0f;
+            _debugAnchorTargetY = unit != null ? unit.anchorTargetY : 0f;
+        }
+
         // Kept as a snapshot-reconciliation hook for runtime tests and any future
         // purely-visual client hit feedback. The server snapshot remains authoritative.
         public void ReceiveDamage(float damage, object attacker)
@@ -133,6 +232,7 @@ namespace CastleDefender.Game
             _locallyDefeated = false;
             _initialized = true;
             _renderers = null;
+            RegisterActiveCombatant();
 
             EnsureHpBar();
             RefreshHpBarVisual();
@@ -331,6 +431,42 @@ namespace CastleDefender.Game
             }
 
             return null;
+        }
+
+        void RegisterActiveCombatant()
+        {
+            string trimmedId = !string.IsNullOrWhiteSpace(_combatantId)
+                ? _combatantId.Trim()
+                : null;
+
+            if (string.IsNullOrWhiteSpace(trimmedId))
+            {
+                UnregisterActiveCombatant();
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_registeredCombatantId)
+                && !string.Equals(_registeredCombatantId, trimmedId, StringComparison.OrdinalIgnoreCase))
+            {
+                s_activeCombatants.Remove(_registeredCombatantId);
+            }
+
+            s_activeCombatants[trimmedId] = this;
+            _registeredCombatantId = trimmedId;
+        }
+
+        void UnregisterActiveCombatant()
+        {
+            if (string.IsNullOrWhiteSpace(_registeredCombatantId))
+                return;
+
+            if (s_activeCombatants.TryGetValue(_registeredCombatantId, out LaneSnapshotCombatant registered)
+                && registered == this)
+            {
+                s_activeCombatants.Remove(_registeredCombatantId);
+            }
+
+            _registeredCombatantId = null;
         }
     }
 }

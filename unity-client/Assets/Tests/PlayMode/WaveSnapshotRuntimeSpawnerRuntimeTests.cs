@@ -5,6 +5,17 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
+public sealed class SnapshotAuthorityDriftDriver : MonoBehaviour
+{
+    public int TickCount { get; private set; }
+
+    void Update()
+    {
+        TickCount++;
+        transform.position += Vector3.right * 0.5f;
+    }
+}
+
 public class WaveSnapshotRuntimeSpawnerRuntimeTests
 {
     [UnityTest]
@@ -204,6 +215,127 @@ public class WaveSnapshotRuntimeSpawnerRuntimeTests
             if (registry != null)
                 UnityEngine.Object.DestroyImmediate(registry);
             DestroyIfPresent("Yellow_Gate_Front");
+            DestroyIfPresent("Wave_Center_Anchor");
+        }
+    }
+
+    [UnityTest]
+    public System.Collections.IEnumerator SnapshotRuntime_Disables_LocalPrefabAuthority_Components()
+    {
+        Type registryType = FindType("CastleDefender.Game.UnitPrefabRegistry");
+        Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
+
+        Assert.That(registryType, Is.Not.Null);
+        Assert.That(spawnerType, Is.Not.Null);
+
+        var root = new GameObject("WaveSnapshotRuntimeSpawnerRuntimeTests_SnapshotSanitizer");
+        ScriptableObject registry = null;
+        GameObject prefab = null;
+
+        try
+        {
+            CreateWaveCenterAnchor("Wave_Center_Anchor", new Vector3(0f, 0f, 0f));
+            CreateFrontGateAnchor("Red_Gate_Front", new Vector3(-12f, 0f, 12f));
+
+            registry = ScriptableObject.CreateInstance(registryType);
+            prefab = CreateUnitPrefab();
+            prefab.AddComponent<SnapshotAuthorityDriftDriver>();
+            prefab.AddComponent<CapsuleCollider>();
+            var rigidbody = prefab.AddComponent<Rigidbody>();
+            rigidbody.useGravity = true;
+            rigidbody.isKinematic = false;
+            rigidbody.detectCollisions = true;
+
+            ConfigureSkinEntries(registry, prefab);
+            InvokeNoArgs(registry, "Rebuild");
+
+            var spawnerHost = new GameObject("WaveRuntime_SnapshotSanitizer");
+            spawnerHost.transform.SetParent(root.transform, false);
+            var spawner = spawnerHost.AddComponent(spawnerType);
+            spawnerType.GetField("Registry", BindingFlags.Instance | BindingFlags.Public).SetValue(spawner, registry);
+
+            var snapshot = new MLSnapshot
+            {
+                lanes = new[]
+                {
+                    new MLLaneSnap
+                    {
+                        laneIndex = 0,
+                        team = "red",
+                        slotColor = "red",
+                        slotKey = "left_a",
+                        branchId = "left_branch_a",
+                        units = new[]
+                        {
+                            new MLUnit
+                            {
+                                id = "wu_snapshot_sanitizer",
+                                type = "goblin",
+                                skinKey = "tt_peasant",
+                                laneId = 0,
+                                allegianceKey = "dungeon",
+                                isWaveUnit = true,
+                                spawnSourceType = "scheduled_wave",
+                                stance = "ATTACK",
+                                pathContractType = "wave_lane",
+                                routeType = "WAVE_LANE",
+                                routeStartNode = "WA",
+                                routeTargetNode = "A",
+                                pathId = "WA_A",
+                                currentWaypointIndex = 0,
+                                nextWaypoint = "A",
+                                currentSegment = "WA_A",
+                                segmentProgress = 0f,
+                                movementState = "MOVING",
+                                routeWorldX = 0f,
+                                routeWorldY = 0f,
+                                hp = 10f,
+                                maxHp = 10f,
+                                moveSpeed = 1f,
+                            }
+                        }
+                    }
+                }
+            };
+
+            Invoke(spawner, "DebugApplySnapshot", snapshot);
+            yield return null;
+
+            Transform unit = spawnerHost.transform.Find("SnapshotUnit_wu_snapshot_sanitizer_goblin_tt_peasant");
+            Assert.That(unit, Is.Not.Null);
+
+            var driftDriver = unit.GetComponent<SnapshotAuthorityDriftDriver>();
+            var presenterRigidbody = unit.GetComponent<Rigidbody>();
+            var presenterCollider = unit.GetComponent<CapsuleCollider>();
+            Assert.That(driftDriver, Is.Not.Null);
+            Assert.That(presenterRigidbody, Is.Not.Null);
+            Assert.That(presenterCollider, Is.Not.Null);
+
+            Vector3 initialPosition = unit.position;
+            yield return null;
+            yield return null;
+            yield return null;
+
+            Assert.That(driftDriver.enabled, Is.False, "snapshot presenters should disable prefab-side movement scripts");
+            Assert.That(driftDriver.TickCount, Is.EqualTo(0), "disabled local movement scripts should never tick on snapshot presenters");
+            Assert.That(presenterRigidbody.isKinematic, Is.True, "snapshot presenters should harden prefab rigidbodies into inert physics shells");
+            Assert.That(presenterRigidbody.useGravity, Is.False);
+            Assert.That(presenterRigidbody.detectCollisions, Is.False);
+            Assert.That(presenterCollider.enabled, Is.False, "prefab colliders should be disabled so they cannot push server-driven presenters around");
+            Assert.That(
+                Vector3.Distance(initialPosition, unit.position),
+                Is.LessThan(0.001f),
+                "a sanitized snapshot presenter should stay locked to the authoritative snapshot position instead of drifting under prefab-side control");
+        }
+        finally
+        {
+            if (root != null)
+                UnityEngine.Object.DestroyImmediate(root);
+            if (prefab != null)
+                UnityEngine.Object.DestroyImmediate(prefab);
+            if (registry != null)
+                UnityEngine.Object.DestroyImmediate(registry);
+            DestroyIfPresent("Red_Gate_Front");
             DestroyIfPresent("Wave_Center_Anchor");
         }
     }

@@ -301,7 +301,7 @@ namespace CastleDefender.UI
             header.fontSizeMax = 16f;
             header.overflowMode = TextOverflowModes.Ellipsis;
 
-            var ordersLabel = EnsureText(root, "OrdersLabel", "Formation Orders", 11f, FontStyles.Normal);
+            var ordersLabel = EnsureText(root, "OrdersLabel", "Lane Orders", 11f, FontStyles.Normal);
             ordersLabel.alignment = TextAlignmentOptions.Left;
             ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
             ordersLabel.textWrappingMode = TextWrappingModes.NoWrap;
@@ -477,9 +477,9 @@ namespace CastleDefender.UI
             bool hasDefendWorldAnchor = TryEstimateLaneHoldWorldPosition(latestSnapshot, ownerLaneIndex, ownerLane, out var defendWorldAnchor);
 
             if (section.OrdersLabel != null)
-                section.OrdersLabel.text = canIssueOrders ? "Lane Formation Orders" : "Formation Orders Unavailable";
+                section.OrdersLabel.text = canIssueOrders ? "Lane Orders" : "Orders Unavailable";
             if (section.TroopsLabel != null)
-                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Formation Troops" : "Active Troops";
+                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Troops" : "Active Troops";
 
             ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, ActionSender.SetLaneAttack);
             ConfigureCommandButton(
@@ -1290,28 +1290,9 @@ namespace CastleDefender.UI
                 return true;
             }
 
-            if (lane.packets != null && lane.packets.Length > 0)
+            if (lane.commandAnchor != null && IsFinite(lane.commandAnchor.x) && IsFinite(lane.commandAnchor.y))
             {
-                var sum = Vector2.zero;
-                int count = 0;
-                for (int i = 0; i < lane.packets.Length; i++)
-                {
-                    var packet = lane.packets[i];
-                    if (packet?.groupCenter == null || !IsFinite(packet.groupCenter.x) || !IsFinite(packet.groupCenter.y))
-                        continue;
-                    sum += new Vector2(packet.groupCenter.x, packet.groupCenter.y);
-                    count += 1;
-                }
-                if (count > 0)
-                {
-                    anchor = sum / count;
-                    return true;
-                }
-            }
-
-            if (lane.formationAnchor != null && IsFinite(lane.formationAnchor.x) && IsFinite(lane.formationAnchor.y))
-            {
-                anchor = new Vector2(lane.formationAnchor.x, lane.formationAnchor.y);
+                anchor = new Vector2(lane.commandAnchor.x, lane.commandAnchor.y);
                 return true;
             }
 
@@ -1322,25 +1303,6 @@ namespace CastleDefender.UI
 
         static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
         {
-            if (lane?.packets != null && lane.packets.Length > 0)
-            {
-                var packetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                for (int packetIndex = 0; packetIndex < lane.packets.Length; packetIndex++)
-                {
-                    var packet = lane.packets[packetIndex];
-                    if (packet?.assignedUnits == null || packet.assignedUnits.Length <= 0)
-                        continue;
-                    for (int unitIndex = 0; unitIndex < packet.assignedUnits.Length; unitIndex++)
-                    {
-                        var id = packet.assignedUnits[unitIndex];
-                        if (!string.IsNullOrWhiteSpace(id))
-                            packetIds.Add(id);
-                    }
-                }
-                if (packetIds.Count > 0)
-                    return packetIds;
-            }
-
             if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
                 return null;
 
@@ -1531,25 +1493,6 @@ namespace CastleDefender.UI
 
         static HashSet<string> BuildAssignedUnitIdSet(MLLaneSnap lane)
         {
-            if (lane?.packets != null && lane.packets.Length > 0)
-            {
-                var packetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                for (int packetIndex = 0; packetIndex < lane.packets.Length; packetIndex++)
-                {
-                    var packet = lane.packets[packetIndex];
-                    if (packet?.assignedUnits == null || packet.assignedUnits.Length <= 0)
-                        continue;
-                    for (int unitIndex = 0; unitIndex < packet.assignedUnits.Length; unitIndex++)
-                    {
-                        var id = packet.assignedUnits[unitIndex];
-                        if (!string.IsNullOrWhiteSpace(id))
-                            packetIds.Add(id);
-                    }
-                }
-                if (packetIds.Count > 0)
-                    return packetIds;
-            }
-
             if (lane?.assignedUnits == null || lane.assignedUnits.Length <= 0)
                 return null;
 

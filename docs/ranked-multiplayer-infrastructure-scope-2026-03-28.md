@@ -63,7 +63,7 @@ That is acceptable for development and small closed testing, but it is not the f
 - Live match state is in process memory.
 - Reconnect grace state is in process memory.
 - Socket ownership and session ownership assume a single process.
-- Queue formation directly launches matches in the same server runtime.
+- Queue matching directly launches matches in the same server runtime.
 - API traffic and live match ticks compete for the same process budget.
 
 ## Honest Distance Estimate
@@ -125,7 +125,7 @@ Responsibilities:
 - parties
 - private lobbies
 - public queue
-- match formation
+- match assembly
 - rank/MMR reads and writes
 - player profile and progression APIs
 - reconnect routing metadata
@@ -334,7 +334,7 @@ Needed change:
 
 Move reconnect routing metadata to Redis once platform and worker are split.
 
-### 3. Queue Formation Is In-Process
+### 3. Queue Matching Is In-Process
 
 Current owner files:
 
@@ -343,7 +343,7 @@ Current owner files:
 
 Gap:
 
-Queue formation directly triggers room creation in the same runtime.
+Queue matching directly triggers room creation in the same runtime.
 
 Needed change:
 

@@ -1,6 +1,6 @@
 // ProjectileSystem.cs — Renders projectiles from ALL lanes in the ML battlefield.
 // Projectiles from the server have a 0..1 progress value; this script
-// positions them between source and target tiles in branch world space each frame.
+// resolves their endpoints from authoritative live objects each frame.
 //
 // SETUP (Game_ML.unity):
 //   Attach alongside GameplayPresentationRoot.
@@ -42,9 +42,12 @@ namespace CastleDefender.Game
             public bool       landedFxPlayed;
             public string     projectileType;
             public string     damageType;
+            public string     sourceId;
+            public string     targetId;
         }
 
         readonly Dictionary<string, ProjView> _projs = new();
+        readonly HashSet<string> _loggedResolutionFailures = new();
         bool _subscribed;
         SnapshotApplier _boundSnapshotApplier;
 
@@ -57,6 +60,7 @@ namespace CastleDefender.Game
                 _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
             _boundSnapshotApplier = null;
             _subscribed = false;
+            DestroyAll();
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -111,25 +115,41 @@ namespace CastleDefender.Game
             {
                 seen.Add(p.id);
 
-                if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
-                    view = CreateProjectile(p);
+                if (!TryResolveProjectileEndpointWorldPosition(p, lane, resolveSource: true, out Vector3 fromWorld, out string sourceFailure))
+                {
+                    LogProjectileResolutionFailure(p, lane, "source", sourceFailure);
+                    DestroyProjectileView(p.id);
+                    continue;
+                }
 
-                // Use ownerLane for branch-local world positions
-                view.from     = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.fromX, p.fromY);
-                view.to       = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.toX,   p.toY);
+                if (!TryResolveProjectileEndpointWorldPosition(p, lane, resolveSource: false, out Vector3 toWorld, out string targetFailure))
+                {
+                    LogProjectileResolutionFailure(p, lane, "target", targetFailure);
+                    DestroyProjectileView(p.id);
+                    continue;
+                }
+
+                if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
+                    view = CreateProjectile(p, fromWorld, toWorld);
+
+                if (view == null || view.go == null)
+                    continue;
+
+                view.from     = fromWorld;
+                view.to       = toWorld;
                 view.progress = p.progress;
                 view.isSplash = p.isSplash;
+                view.sourceId = p.sourceId;
+                view.targetId = p.targetId;
             }
         }
 
-        ProjView CreateProjectile(MLProjectile p)
+        ProjView CreateProjectile(MLProjectile p, Vector3 from, Vector3 to)
         {
             bool isCannon = p.projectileType == "cannon";
             var  prefab   = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
             if (prefab == null) return new ProjView();
 
-            var from = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.fromX, p.fromY);
-            var to   = BattlefieldSpaceMapper.TileToWorld(p.ownerLane, p.toX,   p.toY);
             var go   = Instantiate(prefab, from, Quaternion.identity, transform);
             go.name  = $"Proj_{p.id}";
 
@@ -168,6 +188,8 @@ namespace CastleDefender.Game
                 landedFxPlayed = false,
                 projectileType = p.projectileType,
                 damageType     = p.damageType,
+                sourceId       = p.sourceId,
+                targetId       = p.targetId,
             };
             _projs[p.id] = view;
 
@@ -227,6 +249,87 @@ namespace CastleDefender.Game
             foreach (var kv in _projs)
                 if (kv.Value?.go != null) Destroy(kv.Value.go);
             _projs.Clear();
+        }
+
+        bool TryResolveProjectileEndpointWorldPosition(
+            MLProjectile projectile,
+            MLLaneSnap lane,
+            bool resolveSource,
+            out Vector3 worldPos,
+            out string failureReason)
+        {
+            worldPos = default;
+            failureReason = null;
+
+            if (projectile == null)
+            {
+                failureReason = "projectile payload is null";
+                return false;
+            }
+
+            string endpointId = resolveSource ? projectile.sourceId : projectile.targetId;
+            if (string.IsNullOrWhiteSpace(endpointId))
+            {
+                failureReason = resolveSource ? "sourceId is missing" : "targetId is missing";
+                return false;
+            }
+
+            if (LaneSnapshotCombatant.TryResolveWorldPosition(endpointId, out worldPos))
+                return true;
+
+            if (TryResolveFortressPadWorldPosition(endpointId, lane, out worldPos))
+                return true;
+
+            failureReason =
+                $"authoritative endpoint '{endpointId}' was not found for " +
+                $"{(resolveSource ? "source" : "target")} kind='{projectile.sourceKind ?? "<null>"}'";
+            return false;
+        }
+
+        static bool TryResolveFortressPadWorldPosition(string padId, MLLaneSnap lane, out Vector3 worldPos)
+        {
+            worldPos = default;
+            if (string.IsNullOrWhiteSpace(padId))
+                return false;
+
+            var anchor = FortressPadAnchor.FindAnchor(padId, lane?.slotColor, lane?.laneIndex ?? -1);
+            if (anchor == null)
+                return false;
+
+            Transform focus = anchor.FocusTransform != null ? anchor.FocusTransform : anchor.transform;
+            if (focus == null)
+                return false;
+
+            worldPos = focus.position;
+            return true;
+        }
+
+        void LogProjectileResolutionFailure(MLProjectile projectile, MLLaneSnap lane, string endpointKind, string failureReason)
+        {
+            string key = $"{projectile?.id ?? "<null>"}:{endpointKind}:{failureReason}";
+            if (!_loggedResolutionFailures.Add(key))
+                return;
+
+            Debug.LogError(
+                $"[ProjectileSystem] Failed to resolve authoritative {endpointKind} endpoint " +
+                $"for projectile='{projectile?.id ?? "<null>"}' lane={lane?.laneIndex ?? -1} " +
+                $"sourceKind='{projectile?.sourceKind ?? "<null>"}' sourceId='{projectile?.sourceId ?? "<null>"}' " +
+                $"targetId='{projectile?.targetId ?? "<null>"}' reason='{failureReason ?? "<unknown>"}'.",
+                this);
+        }
+
+        void DestroyProjectileView(string projectileId)
+        {
+            if (string.IsNullOrWhiteSpace(projectileId))
+                return;
+
+            if (!_projs.TryGetValue(projectileId, out var view))
+                return;
+
+            if (view?.go != null)
+                Destroy(view.go);
+
+            _projs.Remove(projectileId);
         }
 
         // ── Audio / FX helpers ────────────────────────────────────────────────
