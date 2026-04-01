@@ -2668,62 +2668,29 @@ function getLaneTownCoreMaxHp(lane) {
   return fortressSystem.getLaneTownCoreMaxHp(lane);
 }
 
+const FORTRESS_SYSTEM_DEPS = Object.freeze({
+  getLaneCombatAxes,
+  getPadWorldPosition,
+  isScheduledWaveUnit,
+  shouldKeepUnitAfterLaneDefeat,
+  resolveLaneAllegianceKey,
+  log,
+  getBarracksUpgradeCost(nextTier) {
+    const nextDef = getBarracksUpgradeDef(nextTier);
+    if (nextDef && Number.isFinite(nextDef.upgradeCost))
+      return Math.max(0, Math.floor(Number(nextDef.upgradeCost)));
+
+    const fallback = getBarracksLevelDef(nextTier);
+    return Math.max(0, Math.floor(Number(fallback.cost) || 0));
+  },
+});
+
 function buildTownCoreStateSummary(game) {
-  if (!game || !Array.isArray(game.lanes)) return [];
-  return game.lanes.map((lane) => {
-    const corePad = getLaneTownCorePad(lane);
-    return {
-      laneIndex: lane ? lane.laneIndex : null,
-      side: lane ? lane.side : null,
-      eliminated: !!(lane && lane.eliminated),
-      corePadId: corePad ? corePad.padId : null,
-      coreHp: corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0,
-      coreMaxHp: corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1,
-      waveUnits: lane && Array.isArray(lane.units)
-        ? lane.units.filter((unit) => unit && unit.hp > 0 && isScheduledWaveUnit(unit)).length
-        : 0,
-      defenders: lane && Array.isArray(lane.units)
-        ? lane.units.filter((unit) => unit && unit.hp > 0 && unit.isDefender).length
-        : 0,
-    };
-  });
+  return fortressSystem.buildTownCoreStateSummary(game, FORTRESS_SYSTEM_DEPS);
 }
 
 function getFortressPadCombatTarget(lane, padState, positionOverride = null) {
-  if (!lane || !padState) return null;
-  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
-  if (currentTier <= 0)
-    return null;
-  const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
-  if (currentHp <= 0) return null;
-  const fallbackPos = Number.isFinite(Number(padState.combatOffsetX))
-    && Number.isFinite(Number(padState.combatOffsetY))
-    ? (() => {
-        const axes = getLaneCombatAxes(lane.laneIndex);
-        if (!axes)
-          return getPadWorldPosition(lane.laneIndex, padState.gridX, padState.gridY);
-        return {
-          x: axes.core.x + (axes.lateral.x * Number(padState.combatOffsetX)) + (axes.forward.x * Number(padState.combatOffsetY)),
-          y: axes.core.y + (axes.lateral.y * Number(padState.combatOffsetX)) + (axes.forward.y * Number(padState.combatOffsetY)),
-        };
-      })()
-    : getPadWorldPosition(lane.laneIndex, padState.gridX, padState.gridY);
-  const pos = positionOverride && Number.isFinite(positionOverride.x) && Number.isFinite(positionOverride.y)
-    ? { x: Number(positionOverride.x), y: Number(positionOverride.y) }
-    : fallbackPos;
-  return {
-    id: padState.padId,
-    unitId: padState.padId,
-    laneIndex: lane.laneIndex,
-    kind: "fortress_pad",
-    padId: padState.padId,
-    buildingType: padState.buildingType,
-    type: padState.buildingType,
-    posX: pos.x,
-    posY: pos.y,
-    hp: currentHp,
-    maxHp: Math.max(1, Math.floor(Number(padState.maxHp) || 1)),
-  };
+  return fortressSystem.getFortressPadCombatTarget(lane, padState, positionOverride, FORTRESS_SYSTEM_DEPS);
 }
 
 function getBarracksSiteCombatTarget(lane, barracksId) {
@@ -2755,9 +2722,7 @@ function getBarracksSiteCombatTarget(lane, barracksId) {
 }
 
 function getLaneTownCoreCombatTarget(lane) {
-  const corePad = getLaneTownCorePad(lane);
-  const objectivePoint = corePad ? getPadWorldPosition(lane.laneIndex, corePad.gridX, corePad.gridY) : null;
-  return getFortressPadCombatTarget(lane, corePad, objectivePoint);
+  return fortressSystem.getLaneTownCoreCombatTarget(lane, FORTRESS_SYSTEM_DEPS);
 }
 
 function getBuildingTierDisplayName(buildingType, tier) {
@@ -2927,102 +2892,15 @@ function countBuiltBarracksSites(lane) {
 }
 
 function markLaneDefeated(game, lane, defeatContext = null) {
-  if (!lane || lane.eliminated) return;
-  lane.eliminated = true;
-  const corePad = getLaneTownCorePad(lane);
-  log.warn("[TownCoreTrace] lane eliminated", {
-    tick: game && Number.isInteger(game.tick) ? game.tick : null,
-    laneIndex: lane.laneIndex,
-    side: lane.side,
-    reason: defeatContext && defeatContext.reason ? defeatContext.reason : "town_core_destroyed",
-    corePadId: corePad ? corePad.padId : null,
-    coreHp: corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0,
-    coreMaxHp: corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1,
-    remainingActiveLanes: game && Array.isArray(game.lanes)
-      ? game.lanes.filter((candidate) => candidate && candidate !== lane && !candidate.eliminated).map((candidate) => ({
-          laneIndex: candidate.laneIndex,
-          coreHp: getLaneTownCoreHp(candidate),
-          coreMaxHp: getLaneTownCoreMaxHp(candidate),
-        }))
-      : [],
-    preservedOccupiers: Array.isArray(lane.units)
-      ? lane.units.filter((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit)).length
-      : 0,
-  });
-  lane.units = (lane.units || []).filter((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit));
-  lane.spawnQueue = (lane.spawnQueue || []).filter((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit));
-  lane.projectiles = [];
+  return fortressSystem.markLaneDefeated(game, lane, defeatContext, FORTRESS_SYSTEM_DEPS);
 }
 
 function recomputeTeamHpState(game) {
-  if (!game || !Array.isArray(game.lanes)) return;
-
-  const totals = { left: 0, right: 0 };
-  const maxTotals = { left: 0, right: 0 };
-
-  for (const lane of game.lanes) {
-    if (!lane) continue;
-    const hp = getLaneTownCoreHp(lane);
-    const maxHp = getLaneTownCoreMaxHp(lane);
-    lane.lives = hp;
-
-    if (hp <= 0) markLaneDefeated(game, lane, { reason: "town_core_destroyed" });
-
-    if (lane.side === "left" || lane.side === "right") {
-      totals[lane.side] += hp;
-      maxTotals[lane.side] += maxHp;
-    }
-  }
-
-  game.teamHp = totals;
-  game.teamHpMax = Math.max(maxTotals.left, maxTotals.right, 0);
+  return fortressSystem.recomputeTeamHpState(game, FORTRESS_SYSTEM_DEPS);
 }
 
 function applyFortressPadDamage(game, lane, padId, damage) {
-  if (!game || !lane || lane.eliminated || !padId) {
-    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
-  }
-
-  const padState = getFortressPadState(lane, padId);
-  if (!padState) {
-    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
-  }
-
-  const prevHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
-  if (prevHp <= 0) {
-    return { damageApplied: 0, destroyed: true, remainingHp: 0 };
-  }
-
-  const appliedDamage = Math.max(0, Math.floor(Number(damage) || 0));
-  if (appliedDamage <= 0) {
-    return { damageApplied: 0, destroyed: false, remainingHp: prevHp };
-  }
-
-  padState.hp = Math.max(0, prevHp - appliedDamage);
-  const damageApplied = prevHp - padState.hp;
-  if (padState.buildingType === "town_core" && damageApplied > 0)
-    lane.lifeLossThisRound += damageApplied;
-
-  recomputeTeamHpState(game);
-  if (padState.buildingType === "town_core" && damageApplied > 0) {
-    log.info("[TownCoreTrace] core damaged", {
-      tick: game.tick,
-      laneIndex: lane.laneIndex,
-      padId,
-      damageApplied,
-      previousHp: prevHp,
-      remainingHp: Math.max(0, Math.floor(Number(padState.hp) || 0)),
-      maxHp: Math.max(1, Math.floor(Number(padState.maxHp) || 1)),
-      laneEliminated: !!lane.eliminated,
-      teamHp: game.teamHp,
-      coreStates: buildTownCoreStateSummary(game),
-    });
-  }
-  return {
-    damageApplied,
-    destroyed: padState.hp <= 0,
-    remainingHp: Math.max(0, Math.floor(Number(padState.hp) || 0)),
-  };
+  return fortressSystem.applyFortressPadDamage(game, lane, padId, damage, FORTRESS_SYSTEM_DEPS);
 }
 
 function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart) {
@@ -3038,20 +2916,7 @@ function getFortressDependencyRequirements(buildingType, targetTier) {
 }
 
 function getFortressDependencyLockedReason(lane, buildingType, targetTier) {
-  const requirements = getFortressDependencyRequirements(buildingType, targetTier);
-  for (const requirement of requirements) {
-    if (!requirement || !requirement.buildingType)
-      continue;
-
-    const requiredTier = Math.max(1, Math.floor(Number(requirement.minTier) || 1));
-    const builtTier = getHighestBuiltFortressPadTier(lane, requirement.buildingType);
-    if (builtTier >= requiredTier)
-      continue;
-
-    return `${getBuildingDisplayName(requirement.buildingType)}: ${getBuildingTierDisplayName(requirement.buildingType, requiredTier)}`;
-  }
-
-  return null;
+  return fortressSystem.getFortressDependencyLockedReason(lane, buildingType, targetTier);
 }
 
 function getFortressBuildCost(buildingType) {
@@ -3059,85 +2924,11 @@ function getFortressBuildCost(buildingType) {
 }
 
 function getFortressUpgradeCost(buildingType, nextTier) {
-  if (buildingType === "barracks") {
-    const nextDef = getBarracksUpgradeDef(nextTier);
-    if (nextDef && Number.isFinite(nextDef.upgradeCost))
-      return Math.max(0, Math.floor(Number(nextDef.upgradeCost)));
-
-    const fallback = getBarracksLevelDef(nextTier);
-    return Math.max(0, Math.floor(Number(fallback.cost) || 0));
-  }
-
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  if (!buildingDef || !buildingDef.upgradeCosts) return Infinity;
-  const cost = buildingDef.upgradeCosts[nextTier];
-  return Number.isFinite(cost) ? Math.max(0, Math.floor(cost)) : Infinity;
+  return fortressSystem.getFortressUpgradeCost(buildingType, nextTier, FORTRESS_SYSTEM_DEPS);
 }
 
 function describeFortressPad(game, lane, padState) {
-  if (!padState) return null;
-  const buildingDef = FORTRESS_BUILDING_DEFS[padState.buildingType];
-  if (!buildingDef) return null;
-
-  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
-  const maxTier = getFortressMaxTier(padState.buildingType);
-  const built = currentTier > 0;
-  const nextTier = Math.min(maxTier, currentTier + 1);
-  const targetTier = built ? nextTier : 1;
-  const townCoreTier = getTownCoreTier(lane);
-  const requiredTownCoreTier = getFortressRequiredTownCoreTier(
-    padState.buildingType,
-    targetTier
-  );
-  const dependencyLockedReason = getFortressDependencyLockedReason(
-    lane,
-    padState.buildingType,
-    targetTier
-  );
-  const canBuild = !built
-    && townCoreTier >= requiredTownCoreTier
-    && !dependencyLockedReason;
-  const canUpgrade = built
-    && currentTier < maxTier
-    && townCoreTier >= requiredTownCoreTier
-    && !dependencyLockedReason;
-
-  let buildState = FORTRESS_BUILD_STATES.locked;
-  if (!built) {
-    buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
-  } else if (currentTier >= maxTier) {
-    buildState = FORTRESS_BUILD_STATES.maxTier;
-  } else if (canUpgrade) {
-    buildState = FORTRESS_BUILD_STATES.upgradeAvailable;
-  } else {
-    buildState = FORTRESS_BUILD_STATES.built;
-  }
-
-  let lockedReason = null;
-  if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
-    lockedReason = dependencyLockedReason
-      ? `Requires ${dependencyLockedReason}`
-      : `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
-  } else if (built && currentTier < maxTier && !canUpgrade) {
-    lockedReason = dependencyLockedReason
-      ? `Upgrade requires ${dependencyLockedReason}`
-      : `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
-  }
-
-  return {
-    buildingDef,
-    buildState,
-    canBuild,
-    canUpgrade,
-    lockedReason,
-    currentTier,
-    maxTier,
-    buildCost: getFortressBuildCost(padState.buildingType),
-    nextUpgradeCost: built && currentTier < maxTier
-      ? getFortressUpgradeCost(padState.buildingType, nextTier)
-      : 0,
-    requiredTownCoreTier,
-  };
+  return fortressSystem.describeFortressPad(game, lane, padState, FORTRESS_SYSTEM_DEPS);
 }
 
 function getBarracksRosterDefinition(rosterKey) {
@@ -3339,44 +3130,7 @@ function createBarracksRosterSnapshot(game, lane) {
 }
 
 function createFortressPadSnapshot(game, lane, padState) {
-  const descriptor = describeFortressPad(game, lane, padState);
-  if (!descriptor) return null;
-  const buildingDef = descriptor.buildingDef;
-  const currentTier = descriptor.currentTier;
-  const built = currentTier > 0;
-  const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
-  const maxHp = Math.max(0, Math.floor(Number(padState.maxHp) || 0));
-
-  return {
-    padId: padState.padId,
-    allegianceKey: resolveLaneAllegianceKey(lane),
-    ownerLaneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
-    gridX: padState.gridX,
-    gridY: padState.gridY,
-    buildingType: padState.buildingType,
-    buildingName: buildingDef.displayName,
-    displayName: padState.displayName,
-    branchKey: buildingDef.branchKey || padState.buildingType,
-    branchLabel: getBuildingBranchLabel(padState.buildingType),
-    buildState: descriptor.buildState,
-    tier: currentTier,
-    maxTier: descriptor.maxTier,
-    currentTierName: getBuildingTierDisplayName(padState.buildingType, currentTier),
-    nextTier: currentTier < descriptor.maxTier ? currentTier + 1 : currentTier,
-    nextTierName: currentTier < descriptor.maxTier
-      ? getBuildingTierDisplayName(padState.buildingType, currentTier + 1)
-      : getBuildingTierDisplayName(padState.buildingType, currentTier),
-    isBuilt: built,
-    canBuild: descriptor.canBuild,
-    canUpgrade: descriptor.canUpgrade,
-    buildCost: descriptor.buildCost,
-    upgradeCost: Number.isFinite(descriptor.nextUpgradeCost) ? descriptor.nextUpgradeCost : 0,
-    requiredTownCoreTier: descriptor.requiredTownCoreTier,
-    requiredTownCoreTierName: getBuildingTierDisplayName("town_core", descriptor.requiredTownCoreTier),
-    hp: currentHp,
-    maxHp,
-    lockedReason: descriptor.lockedReason,
-  };
+  return fortressSystem.createFortressPadSnapshot(game, lane, padState, FORTRESS_SYSTEM_DEPS);
 }
 
 function buildBarracksRosterSpawnEntries(game, lane, barracksId = null) {
@@ -3999,24 +3753,7 @@ function findNextActiveOpponentLaneIndex(game, fromLaneIndex) {
 }
 
 function applyFortressBuildOnPad(game, lane, padId) {
-  const padState = getFortressPadState(lane, padId);
-  if (!padState) return { ok: false, reason: "Unknown building pad" };
-  if (padState.buildingType === "barracks")
-    return { ok: false, reason: "Select Barracks Left, Center, or Right to buy that building." };
-  const descriptor = describeFortressPad(game, lane, padState);
-  if (!descriptor) return { ok: false, reason: "Unknown building pad" };
-  if (!descriptor.canBuild) return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
-  if (lane.gold < descriptor.buildCost) return { ok: false, reason: "Not enough gold" };
-
-  lane.gold -= descriptor.buildCost;
-  lane.totalBuildSpend += descriptor.buildCost;
-  lane.buildSpendThisRound += descriptor.buildCost;
-  padState.tier = 1;
-  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, 1, game.teamHpMax);
-  padState.hp = padState.maxHp;
-  if (!Array.isArray(padState.costHistory)) padState.costHistory = [];
-  padState.costHistory.push({ cost: descriptor.buildCost });
-  return { ok: true };
+  return fortressSystem.applyFortressBuildOnPad(game, lane, padId, FORTRESS_SYSTEM_DEPS);
 }
 
 function applyBarracksSiteBuildAction(game, lane, barracksId) {
@@ -4075,26 +3812,7 @@ function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
 }
 
 function applyFortressUpgrade(game, lane, padId) {
-  const padState = getFortressPadState(lane, padId);
-  if (!padState) return { ok: false, reason: "Unknown building pad" };
-  if (padState.buildingType === "barracks")
-    return { ok: false, reason: "Select Barracks Left, Center, or Right to upgrade that building." };
-
-  const descriptor = describeFortressPad(game, lane, padState);
-  if (!descriptor) return { ok: false, reason: "Unknown building pad" };
-  if (!descriptor.canUpgrade) return { ok: false, reason: descriptor.lockedReason || "Upgrade unavailable" };
-  if (lane.gold < descriptor.nextUpgradeCost) return { ok: false, reason: "Not enough gold" };
-
-  const nextTier = padState.tier + 1;
-  lane.gold -= descriptor.nextUpgradeCost;
-  lane.totalBuildSpend += descriptor.nextUpgradeCost;
-  lane.buildSpendThisRound += descriptor.nextUpgradeCost;
-  padState.tier = nextTier;
-  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, nextTier, game.teamHpMax);
-  padState.hp = padState.maxHp;
-  if (!Array.isArray(padState.costHistory)) padState.costHistory = [];
-  padState.costHistory.push({ cost: descriptor.nextUpgradeCost });
-  return { ok: true };
+  return fortressSystem.applyFortressUpgrade(game, lane, padId, FORTRESS_SYSTEM_DEPS);
 }
 
 function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
