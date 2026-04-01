@@ -1,5 +1,6 @@
 using CastleDefender.Game;
 using CastleDefender.Net;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -74,11 +75,27 @@ public class CameraController : MonoBehaviour
     float _defaultOrtho;
     float _defaultTilt;
     float _defaultYaw;
+    bool _applyingSavedPreferences;
 
     public static bool IsLmbPanning { get; private set; }
     public float CurrentZoom => _targetOrtho;
     public float CurrentTilt => _targetTilt;
     public float CurrentRotation => Mathf.DeltaAngle(0f, _targetYaw);
+
+    void OnEnable()
+    {
+        UserPreferencesManager.PreferencesChanged += HandlePreferencesChanged;
+    }
+
+    void OnDisable()
+    {
+        UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
+    }
+
+    void OnDestroy()
+    {
+        UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
+    }
 
     void Start()
     {
@@ -88,6 +105,7 @@ public class CameraController : MonoBehaviour
 
         ConfigureBoundsFromGrid();
         SyncCameraStateFromTransform(true);
+        StartCoroutine(ApplySavedPreferencesNextFrame());
     }
 
     void Update()
@@ -361,6 +379,7 @@ public class CameraController : MonoBehaviour
         _targetYaw = _defaultYaw;
         ClampTargetFocus();
         UpdateTargetPose();
+        ReportPreferenceChange();
     }
 
     public void PanTo(Vector3 worldPos)
@@ -374,6 +393,7 @@ public class CameraController : MonoBehaviour
     {
         _targetTilt = Mathf.Clamp(tiltDegrees, TiltMin, TiltMax);
         UpdateTargetPose();
+        ReportPreferenceChange();
     }
 
     public void AdjustTilt(float delta)
@@ -385,6 +405,7 @@ public class CameraController : MonoBehaviour
     {
         _targetYaw = yawDegrees;
         UpdateTargetPose();
+        ReportPreferenceChange();
     }
 
     public void AdjustRotation(float deltaDegrees)
@@ -395,6 +416,7 @@ public class CameraController : MonoBehaviour
     public void SetZoom(float zoomSize)
     {
         _targetOrtho = Mathf.Clamp(zoomSize, OrthoSizeMin, OrthoSizeMax);
+        ReportPreferenceChange();
     }
 
     public void AdjustZoom(float delta)
@@ -422,6 +444,7 @@ public class CameraController : MonoBehaviour
 
         MainCam.orthographicSize = previousOrtho;
         UpdateTargetPose();
+        ReportPreferenceChange();
     }
 
     /// <summary>
@@ -437,6 +460,63 @@ public class CameraController : MonoBehaviour
         CameraTarget.position = _targetPos;
         CameraTarget.rotation = _targetRotation;
         MainCam.orthographicSize = _targetOrtho;
+    }
+
+    IEnumerator ApplySavedPreferencesNextFrame()
+    {
+        yield return null;
+        ApplySavedPreferences(UserPreferencesManager.CurrentPreferences.camera);
+    }
+
+    void HandlePreferencesChanged(UserPreferencesData preferences)
+    {
+        ApplySavedPreferences(preferences?.camera);
+    }
+
+    public void ApplySavedPreferences(UserCameraPreferences preferences)
+    {
+        if (preferences == null || !EnsureCameraReferences())
+            return;
+
+        _applyingSavedPreferences = true;
+        try
+        {
+            bool changed = false;
+
+            if (preferences.tilt.HasValue)
+            {
+                _targetTilt = Mathf.Clamp(preferences.tilt.Value, TiltMin, TiltMax);
+                _defaultTilt = _targetTilt;
+                changed = true;
+            }
+
+            if (preferences.zoom.HasValue)
+            {
+                _targetOrtho = Mathf.Clamp(preferences.zoom.Value, OrthoSizeMin, OrthoSizeMax);
+                _defaultOrtho = _targetOrtho;
+                changed = true;
+            }
+
+            if (preferences.rotation.HasValue)
+            {
+                _targetYaw = preferences.rotation.Value;
+                _defaultYaw = _targetYaw;
+                changed = true;
+            }
+
+            if (!changed)
+                return;
+
+            ClampTargetFocus();
+            UpdateTargetPose();
+            CameraTarget.position = _targetPos;
+            CameraTarget.rotation = _targetRotation;
+            MainCam.orthographicSize = _targetOrtho;
+        }
+        finally
+        {
+            _applyingSavedPreferences = false;
+        }
     }
 
     void ConfigureBoundsFromGrid()
@@ -513,5 +593,13 @@ public class CameraController : MonoBehaviour
     bool IsPointerOverUi(int pointerId)
     {
         return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject(pointerId);
+    }
+
+    void ReportPreferenceChange()
+    {
+        if (_applyingSavedPreferences)
+            return;
+
+        UserPreferencesManager.NotifyCameraPreferencesChanged(CurrentTilt, CurrentZoom, CurrentRotation);
     }
 }

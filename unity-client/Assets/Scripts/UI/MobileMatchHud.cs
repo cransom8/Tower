@@ -160,6 +160,8 @@ namespace CastleDefender.UI
         TMP_Text _txtSettingsTiltValue;
         TMP_Text _txtSettingsZoomValue;
         TMP_Text _txtSettingsRotationValue;
+        TMP_Text _txtSettingsEngagementValue;
+        TMP_Text _txtSettingsHealthBarsValue;
         TMP_Text _txtBarracksLevel;
         TMP_Text _progressionDockStatus;
         BarracksPanel _runtimeBarracksPanel;
@@ -2312,13 +2314,18 @@ namespace CastleDefender.UI
 
             DestroyCanvasChildren("SettingsPanel");
 
+            const int settingRowCount = 5;
+            const float quitButtonHeight = 40f;
+            float rowsHeight = ResolveSettingsRowsHeight(settingRowCount);
+            float panelHeight = ResolveSettingsPanelHeight(rowsHeight, quitButtonHeight);
+
             var root = new GameObject("SettingsPanel", typeof(RectTransform), typeof(FloatingSettingsPanel));
             root.transform.SetParent(_canvasRect, false);
             var rect = root.GetComponent<RectTransform>();
             rect.anchorMin = new Vector2(1f, 1f);
             rect.anchorMax = new Vector2(1f, 1f);
             rect.pivot = new Vector2(1f, 1f);
-            rect.sizeDelta = new Vector2(settingsPanelSize.x + settingsButtonSize + settingsPanelGap, Mathf.Max(settingsPanelSize.y, settingsButtonSize));
+            rect.sizeDelta = new Vector2(settingsPanelSize.x + settingsButtonSize + settingsPanelGap, Mathf.Max(panelHeight, settingsButtonSize));
             rect.anchoredPosition = new Vector2(-settingsRightInset, -settingsTopInset);
             _settingsPanelRoot = rect;
 
@@ -2328,7 +2335,7 @@ namespace CastleDefender.UI
             panelRect.anchorMin = new Vector2(1f, 1f);
             panelRect.anchorMax = new Vector2(1f, 1f);
             panelRect.pivot = new Vector2(1f, 1f);
-            panelRect.sizeDelta = settingsPanelSize;
+            panelRect.sizeDelta = new Vector2(settingsPanelSize.x, panelHeight);
 
             var panelImage = panel.GetComponent<Image>();
             panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.96f);
@@ -2351,7 +2358,7 @@ namespace CastleDefender.UI
             var rows = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
             rows.transform.SetParent(panel.transform, false);
             var rowsLayoutElement = rows.GetComponent<LayoutElement>();
-            rowsLayoutElement.preferredHeight = settingsPanelSize.y - 34f;
+            rowsLayoutElement.preferredHeight = rowsHeight;
             rowsLayoutElement.flexibleHeight = 1f;
 
             var rowsLayout = rows.GetComponent<VerticalLayoutGroup>();
@@ -2402,10 +2409,36 @@ namespace CastleDefender.UI
                 new Color(0.28f, 0.20f, 0.16f, 0.98f),
                 out var rotateRightButton);
 
+            CreateSettingsActionRow(
+                rows.transform,
+                "EngagementRow",
+                "EngagementOff",
+                "Ring Off",
+                new Color(0.24f, 0.18f, 0.32f, 0.98f),
+                out var engagementOffButton,
+                out _txtSettingsEngagementValue,
+                "EngagementOn",
+                "Ring On",
+                new Color(0.24f, 0.18f, 0.32f, 0.98f),
+                out var engagementOnButton);
+
+            CreateSettingsActionRow(
+                rows.transform,
+                "HealthBarsRow",
+                "HealthBarsOff",
+                "HP Off",
+                new Color(0.23f, 0.26f, 0.16f, 0.98f),
+                out var healthBarsOffButton,
+                out _txtSettingsHealthBarsValue,
+                "HealthBarsOn",
+                "HP On",
+                new Color(0.23f, 0.26f, 0.16f, 0.98f),
+                out var healthBarsOnButton);
+
             var quitButton = CreateSettingsActionButton(rows.transform, "QuitButton", "Quit", new Color(0.42f, 0.17f, 0.17f, 0.98f));
             var quitLayout = quitButton.GetComponent<LayoutElement>();
             if (quitLayout != null)
-                quitLayout.preferredHeight = 40f;
+                quitLayout.preferredHeight = quitButtonHeight;
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
@@ -2446,6 +2479,10 @@ namespace CastleDefender.UI
             zoomOutButton.onClick.AddListener(() => AdjustCameraZoom(settingsZoomStep));
             rotateLeftButton.onClick.AddListener(() => AdjustCameraRotation(-settingsRotateStep));
             rotateRightButton.onClick.AddListener(() => AdjustCameraRotation(settingsRotateStep));
+            engagementOffButton.onClick.AddListener(() => UserPreferencesManager.SetEngagementCirclesVisible(false));
+            engagementOnButton.onClick.AddListener(() => UserPreferencesManager.SetEngagementCirclesVisible(true));
+            healthBarsOffButton.onClick.AddListener(() => UserPreferencesManager.SetHealthBarsVisible(false));
+            healthBarsOnButton.onClick.AddListener(() => UserPreferencesManager.SetHealthBarsVisible(true));
             quitButton.onClick.AddListener(OnQuitPressed);
         }
 
@@ -2629,21 +2666,32 @@ namespace CastleDefender.UI
 
         void RefreshSettingsPanelValues()
         {
-            if (_txtSettingsTiltValue == null && _txtSettingsZoomValue == null && _txtSettingsRotationValue == null)
-                return;
-
-            var controller = FindFirstObjectByType<global::CameraController>();
-            if (controller == null)
+            if (_txtSettingsTiltValue == null
+                && _txtSettingsZoomValue == null
+                && _txtSettingsRotationValue == null
+                && _txtSettingsEngagementValue == null
+                && _txtSettingsHealthBarsValue == null)
             {
-                SetSettingsValue(_txtSettingsTiltValue, "--");
-                SetSettingsValue(_txtSettingsZoomValue, "--");
-                SetSettingsValue(_txtSettingsRotationValue, "--");
                 return;
             }
 
-            SetSettingsValue(_txtSettingsTiltValue, FormatSettingsValue(controller.CurrentTilt));
-            SetSettingsValue(_txtSettingsZoomValue, FormatSettingsValue(controller.CurrentZoom));
-            SetSettingsValue(_txtSettingsRotationValue, FormatSettingsValue(controller.CurrentRotation));
+            var controller = FindFirstObjectByType<global::CameraController>();
+            var preferences = UserPreferencesManager.CurrentPreferenceView;
+            if (controller == null)
+            {
+                SetSettingsValue(_txtSettingsTiltValue, preferences.camera.tilt.HasValue ? FormatSettingsValue(preferences.camera.tilt.Value) : "--");
+                SetSettingsValue(_txtSettingsZoomValue, preferences.camera.zoom.HasValue ? FormatSettingsValue(preferences.camera.zoom.Value) : "--");
+                SetSettingsValue(_txtSettingsRotationValue, preferences.camera.rotation.HasValue ? FormatSettingsValue(preferences.camera.rotation.Value) : "--");
+            }
+            else
+            {
+                SetSettingsValue(_txtSettingsTiltValue, FormatSettingsValue(controller.CurrentTilt));
+                SetSettingsValue(_txtSettingsZoomValue, FormatSettingsValue(controller.CurrentZoom));
+                SetSettingsValue(_txtSettingsRotationValue, FormatSettingsValue(controller.CurrentRotation));
+            }
+
+            SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
+            SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
         }
 
         static void SetSettingsValue(TMP_Text label, string value)
@@ -2659,6 +2707,28 @@ namespace CastleDefender.UI
                 return Mathf.RoundToInt(roundedValue).ToString();
 
             return roundedValue.ToString("0.#");
+        }
+
+        float ResolveSettingsRowsHeight(int rowCount)
+        {
+            if (rowCount <= 0)
+                return 0f;
+
+            const float rowHeight = 42f;
+            return (rowCount * rowHeight) + ((rowCount - 1) * settingsButtonSpacing);
+        }
+
+        float ResolveSettingsPanelHeight(float rowsHeight, float quitButtonHeight)
+        {
+            const float titleHeight = 16f;
+            const float verticalPadding = 20f;
+            const float layoutGaps = 12f;
+            return rowsHeight + quitButtonHeight + titleHeight + verticalPadding + layoutGaps;
+        }
+
+        static string FormatToggleValue(bool enabled)
+        {
+            return enabled ? "On" : "Off";
         }
 
         void OnQuitPressed()

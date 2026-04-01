@@ -58,6 +58,7 @@ namespace CastleDefender.Game
             if (!s_activeSites.Contains(this))
                 s_activeSites.Add(this);
 
+            UserPreferencesManager.PreferencesChanged += HandlePreferencesChanged;
             ValidateIdentity();
             EnsureInteractionCollider();
             SubscribeSnapshots();
@@ -75,6 +76,7 @@ namespace CastleDefender.Game
         void OnDisable()
         {
             s_activeSites.Remove(this);
+            UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
             UnsubscribeSnapshots();
             if (_overlayRoot != null)
                 _overlayRoot.gameObject.SetActive(false);
@@ -88,6 +90,7 @@ namespace CastleDefender.Game
 
         void OnDestroy()
         {
+            UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
             if (_overlayRoot != null)
                 Destroy(_overlayRoot.gameObject);
         }
@@ -233,6 +236,12 @@ namespace CastleDefender.Game
 
         void RefreshFromSnapshot()
         {
+            if (!UserPreferencesManager.ShowHealthBars)
+            {
+                HideHud();
+                return;
+            }
+
             var lane = ResolveLane();
             if (lane == null)
             {
@@ -253,6 +262,11 @@ namespace CastleDefender.Game
             _lastMissingSiteLogKey = null;
             ApplyVisualState(site);
             UpdateHud(site);
+        }
+
+        void HandlePreferencesChanged(UserPreferencesData _)
+        {
+            RefreshFromSnapshot();
         }
 
         MLLaneSnap ResolveLane()

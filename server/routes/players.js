@@ -5,6 +5,9 @@ const express      = require('express');
 const router       = express.Router();
 const db           = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const {
+  normalizePlayerPreferences,
+} = require('../lib/playerPreferences');
 
 const VALID_REGIONS = new Set(['global', 'na', 'eu', 'asia']);
 
@@ -13,6 +16,7 @@ router.get('/me', requireAuth, async (req, res) => {
   try {
     const result = await db.query(
       `SELECT p.id, p.display_name, p.region, p.status, p.created_at,
+              p.preferences_json,
               r.mu, r.sigma, r.rating, r.wins, r.losses, r.updated_at AS rating_updated_at
        FROM players p
        LEFT JOIN ratings r ON r.player_id = p.id AND r.mode = '2v2_ranked'
@@ -20,9 +24,30 @@ router.get('/me', requireAuth, async (req, res) => {
       [req.player.sub]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
-    res.json(result.rows[0]);
+    const { preferences_json, ...player } = result.rows[0];
+    res.json({
+      ...player,
+      preferences: normalizePlayerPreferences(preferences_json),
+    });
   } catch (err) {
     log.error('[players] GET /me:', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.get('/me/preferences', requireAuth, async (req, res) => {
+  try {
+    const result = await db.query(
+      'SELECT preferences_json FROM players WHERE id = $1',
+      [req.player.sub]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
+
+    res.json({
+      preferences: normalizePlayerPreferences(result.rows[0].preferences_json),
+    });
+  } catch (err) {
+    log.error('[players] GET /me/preferences:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -91,6 +116,30 @@ router.patch('/me', requireAuth, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     log.error('[players] PATCH /me:', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/me/preferences', requireAuth, async (req, res) => {
+  try {
+    const incoming = req.body?.preferences ?? req.body;
+    const normalizedPreferences = normalizePlayerPreferences(incoming);
+
+    const result = await db.query(
+      `UPDATE players
+          SET preferences_json = $1::jsonb,
+              updated_at = NOW()
+        WHERE id = $2
+      RETURNING preferences_json`,
+      [JSON.stringify(normalizedPreferences), req.player.sub]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
+
+    res.json({
+      preferences: normalizePlayerPreferences(result.rows[0].preferences_json),
+    });
+  } catch (err) {
+    log.error('[players] PUT /me/preferences:', { err: err.message });
     res.status(500).json({ error: 'Server error' });
   }
 });

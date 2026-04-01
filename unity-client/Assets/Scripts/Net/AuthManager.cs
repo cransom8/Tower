@@ -32,6 +32,7 @@ namespace CastleDefender.Net
     {
         // ── Singleton ─────────────────────────────────────────────────────────
         public static AuthManager Instance { get; private set; }
+        public static event Action AuthStateChanged;
 
         // ── State ─────────────────────────────────────────────────────────────
         public static string Token           { get; private set; }
@@ -86,6 +87,8 @@ namespace CastleDefender.Net
 #endif
             if (!string.IsNullOrEmpty(Token))
                 DecodeToken();
+
+            NotifyAuthStateChanged();
         }
 
         /// <summary>Call after a successful login (e.g. non-OAuth flow or token refresh).</summary>
@@ -98,6 +101,7 @@ namespace CastleDefender.Net
             try { JSIO_SetJWT(token); } catch { }
 #endif
             Instance?.DecodeToken();
+            NotifyAuthStateChanged();
         }
 
         /// <summary>Sign out — clears token everywhere.</summary>
@@ -112,6 +116,7 @@ namespace CastleDefender.Net
             try { JSIO_ClearJWT(); } catch { }
 #endif
             Debug.Log("[Auth] Signed out");
+            NotifyAuthStateChanged();
         }
 
         // ── JWT decode ────────────────────────────────────────────────────────
@@ -162,6 +167,12 @@ namespace CastleDefender.Net
         public static void SignInWithGoogle(string serverUrl)
         {
             Application.OpenURL(serverUrl.TrimEnd('/') + "/auth/google");
+        }
+
+        static void NotifyAuthStateChanged()
+        {
+            AuthStateChanged?.Invoke();
+            UserPreferencesManager.NotifyAuthenticationChanged();
         }
 
         // ─────────────────────────────────────────────────────────────────────

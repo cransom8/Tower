@@ -36,6 +36,7 @@ namespace CastleDefender.Game
                 return;
 
             _anchor ??= GetComponent<FortressPadAnchor>();
+            UserPreferencesManager.PreferencesChanged += HandlePreferencesChanged;
             SubscribeSnapshots();
             RefreshFromSnapshot();
         }
@@ -53,12 +54,14 @@ namespace CastleDefender.Game
             if (!Application.isPlaying)
                 return;
 
+            UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
             UnsubscribeSnapshots();
             HideHud();
         }
 
         void OnDestroy()
         {
+            UserPreferencesManager.PreferencesChanged -= HandlePreferencesChanged;
             if (_overlayRoot != null)
                 Destroy(_overlayRoot.gameObject);
         }
@@ -94,6 +97,12 @@ namespace CastleDefender.Game
 
         void RefreshFromSnapshot()
         {
+            if (!UserPreferencesManager.ShowHealthBars)
+            {
+                HideHud();
+                return;
+            }
+
             if (_anchor == null)
             {
                 HideHud();
@@ -127,6 +136,11 @@ namespace CastleDefender.Game
 
             _overlayRoot.gameObject.SetActive(true);
             UpdateHud(pad);
+        }
+
+        void HandlePreferencesChanged(UserPreferencesData _)
+        {
+            RefreshFromSnapshot();
         }
 
         void UpdateHud(MLFortressPad pad)

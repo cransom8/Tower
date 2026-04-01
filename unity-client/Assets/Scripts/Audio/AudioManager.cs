@@ -59,11 +59,11 @@ public class AudioManager : MonoBehaviour
     // ── Sources ───────────────────────────────────────────────────────────────
     AudioSource _sfxSource;
     AudioSource _ambientSource;
+    bool _applyingUserPreferences;
 
-    // Prefs keys
-    const string PrefMaster  = "vol_master";
-    const string PrefSFX     = "vol_sfx";
-    const string PrefAmbient = "vol_ambient";
+    public float CurrentMasterVolume { get; private set; } = 1f;
+    public float CurrentSfxVolume { get; private set; } = 1f;
+    public float CurrentAmbientVolume { get; private set; } = 0.5f;
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -119,20 +119,44 @@ public class AudioManager : MonoBehaviour
     /// <summary>Set master volume (0..1). Persists across sessions.</summary>
     public void SetMasterVolume(float linear)
     {
+        linear = Mathf.Clamp01(linear);
+        CurrentMasterVolume = linear;
         SetMixerVolume("MasterVol", linear);
-        PlayerPrefs.SetFloat(PrefMaster, linear);
+        if (!_applyingUserPreferences)
+            NotifyManagedAudioPreferenceChange("NotifyMasterVolumeChanged", linear);
     }
 
     public void SetSFXVolume(float linear)
     {
+        linear = Mathf.Clamp01(linear);
+        CurrentSfxVolume = linear;
         SetMixerVolume("SFXVol", linear);
-        PlayerPrefs.SetFloat(PrefSFX, linear);
+        if (!_applyingUserPreferences)
+            NotifyManagedAudioPreferenceChange("NotifySfxVolumeChanged", linear);
     }
 
     public void SetAmbientVolume(float linear)
     {
+        linear = Mathf.Clamp01(linear);
+        CurrentAmbientVolume = linear;
         SetMixerVolume("AmbientVol", linear);
-        PlayerPrefs.SetFloat(PrefAmbient, linear);
+        if (!_applyingUserPreferences)
+            NotifyManagedAudioPreferenceChange("NotifyAmbientVolumeChanged", linear);
+    }
+
+    public void ApplyUserPreferenceVolumes(float masterVolume, float sfxVolume, float ambientVolume)
+    {
+        _applyingUserPreferences = true;
+        try
+        {
+            SetMasterVolume(masterVolume);
+            SetSFXVolume(sfxVolume);
+            SetAmbientVolume(ambientVolume);
+        }
+        finally
+        {
+            _applyingUserPreferences = false;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -196,9 +220,13 @@ public class AudioManager : MonoBehaviour
 
     void LoadVolumes()
     {
-        SetMixerVolume("MasterVol",  PlayerPrefs.GetFloat(PrefMaster,  1f));
-        SetMixerVolume("SFXVol",     PlayerPrefs.GetFloat(PrefSFX,     1f));
-        SetMixerVolume("AmbientVol", PlayerPrefs.GetFloat(PrefAmbient, 0.5f));
+        if (TryGetManagedAudioPreferences(out float masterVolume, out float sfxVolume, out float ambientVolume))
+        {
+            ApplyUserPreferenceVolumes(masterVolume, sfxVolume, ambientVolume);
+            return;
+        }
+
+        ApplyUserPreferenceVolumes(CurrentMasterVolume, CurrentSfxVolume, CurrentAmbientVolume);
     }
 
     void SetMixerVolume(string param, float linear)
@@ -234,4 +262,66 @@ public class AudioManager : MonoBehaviour
         SFX.Error           => error,
         _                   => null
     };
+
+    static bool TryGetManagedAudioPreferences(out float masterVolume, out float sfxVolume, out float ambientVolume)
+    {
+        masterVolume = 1f;
+        sfxVolume = 1f;
+        ambientVolume = 0.5f;
+
+        System.Type managerType = FindType("CastleDefender.Net.UserPreferencesManager");
+        if (managerType == null)
+            return false;
+
+        managerType.GetMethod("EnsureInstance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.Invoke(null, null);
+
+        masterVolume = ReadStaticFloat(managerType, "SavedMasterVolume", masterVolume);
+        sfxVolume = ReadStaticFloat(managerType, "SavedSfxVolume", sfxVolume);
+        ambientVolume = ReadStaticFloat(managerType, "SavedAmbientVolume", ambientVolume);
+        return true;
+    }
+
+    static void NotifyManagedAudioPreferenceChange(string methodName, float value)
+    {
+        System.Type managerType = FindType("CastleDefender.Net.UserPreferencesManager");
+        if (managerType == null)
+            return;
+
+        managerType.GetMethod(
+                methodName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                null,
+                new[] { typeof(float) },
+                null)
+            ?.Invoke(null, new object[] { value });
+    }
+
+    static float ReadStaticFloat(System.Type type, string propertyName, float fallback)
+    {
+        object value = type
+            ?.GetProperty(propertyName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null);
+        return value is float floatValue ? floatValue : fallback;
+    }
+
+    static System.Type FindType(string fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName))
+            return null;
+
+        System.Type type = System.Type.GetType(fullName, false);
+        if (type != null)
+            return type;
+
+        System.Reflection.Assembly[] assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+        for (int i = 0; i < assemblies.Length; i++)
+        {
+            type = assemblies[i].GetType(fullName, false);
+            if (type != null)
+                return type;
+        }
+
+        return null;
+    }
 }
