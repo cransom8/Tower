@@ -10,8 +10,8 @@
  * older clients, AI code, and room flows cannot quietly reactivate them.
  *
  * Wired to sim-core (computeDamage, fireProjectile, resolveProjectile, mulberry32 RNG)
- * and the unitTypes DB cache. UNIT_DEFS / TOWER_DEFS serve as last-resort fallbacks
- * for units not present in the DB (e.g. during local dev without migrations).
+ * and the unitTypes DB cache. UNIT_DEFS / TOWER_DEFS remain exported only for
+ * backward compatibility; live unit and tower data comes from unitTypes.
  * Match-start economy and wave settings are expected to come from the active
  * multilane config and should fail loudly when missing or invalid.
  */
@@ -38,15 +38,44 @@ const {
   resolveFortSkinKey,
   isFortArchetypeKey,
 } = require("./game/fortUnitCatalog");
+const fortressSystem = require("./game/multilane/fortressSystem");
+const barracksSystem = require("./game/multilane/barracksSystem");
+const routeGraph = require("./game/multilane/routeGraph");
 const {
   getCurrentBarracksMult,
   getBarracksUpgradeDef,
-  getMaxBarracksLevel,
 } = require("./barracksLevels");
 const {
   createMLSnapshot: buildMLSnapshot,
   createMLPublicConfig: buildMLPublicConfig,
 } = require("./sim-multilane-serialization");
+const {
+  FRONT_GATE_COMBAT_OFFSET,
+  FORTRESS_BUILD_STATES,
+  FORTRESS_BUILDING_DEFS,
+  FORTRESS_PAD_DEFS,
+} = fortressSystem;
+const {
+  BARRACKS_LEVEL_ONE_SPEED_MULT,
+  SPEED_UPGRADE_STEP,
+  BARRACKS_COST_BASE,
+  BARRACKS_REQ_INCOME_BASE,
+  BARRACKS_ROSTER_REFUND_PCT,
+  STARTING_COMBAT_TEST_BARRACKS_ID,
+  STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY,
+  BARRACKS_SPAWN_ROLE_ORDER,
+  BARRACKS_SITE_DEFS,
+  BARRACKS_ROSTER_DEFS,
+  HERO_ROSTER_DEFS,
+  MARKET_ROSTER_DEFS,
+} = barracksSystem;
+const {
+  ROUTE_TYPES,
+  LANE_NODE_IDS,
+  RouteMineNode,
+  ROUTE_GRAPH_NODE_POSITIONS,
+  ROUTE_SEGMENT_POLYLINES,
+} = routeGraph;
 
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
@@ -78,9 +107,6 @@ const MIN_UNIT_SPACING = 0.8;      // minimum pathIdx gap enforced by applySepar
 // reads consistently. Barracks progression then scales that baseline up in
 // 0.25x steps, starting at half-speed until the player invests in upgrades.
 const BASE_COMBAT_PATH_SPEED = 0.25;
-const BARRACKS_LEVEL_ONE_SPEED_MULT = 0.50;
-const SPEED_UPGRADE_STEP = 0.25;
-
 // Mobile defender constants
 const DEFENDER_BASE_SPEED   = BASE_COMBAT_PATH_SPEED * BARRACKS_LEVEL_ONE_SPEED_MULT;
 const ENGAGEMENT_RANGE_PADDING = 2.0; // extra leash beyond attack range before a unit opens fire
@@ -156,16 +182,6 @@ const BATTLEFIELD_TOPOLOGY = Object.freeze({
     { branchId: "right_branch_b", ownerLaneIndex: 3, buildable: true },
   ],
   sharedZonesBuildable: false,
-});
-
-// Battlefield Routes are authoritative movement state for all live mobile units.
-// OUTER_LOOP   -> perimeter route chaining town cores
-// CENTER_CROSS -> center bridge route between opposing cores
-// WAVE_LANE    -> lane-specific wave spawn routes from battlefield edge to town core
-const ROUTE_TYPES = Object.freeze({
-  OUTER_LOOP: "OUTER_LOOP",
-  CENTER_CROSS: "CENTER_CROSS",
-  WAVE_LANE: "WAVE_LANE",
 });
 
 // Keep SCHEDULED_WAVE as a compatibility alias while older callers are archived.
@@ -247,10 +263,6 @@ const UNIT_PREFERRED_BANDS = Object.freeze({
   PRIEST_REAR: "priest_rear",
 });
 
-const ROUTE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
-const WAVE_SPAWN_NODE_IDS = Object.freeze(["WA", "WB", "WC", "WD"]);
-const LANE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
-const RouteMineNode = "M";
 const OPPOSING_LANE_INDEX = Object.freeze([1, 0, 3, 2]);
 const ROUTE_TRACE_MIN_DISTANCE_TO_CORE = 6.5;
 const ROUTE_BLOCKING_CORRIDOR_RADIUS = 4.5;
@@ -260,8 +272,7 @@ const DEFENDER_HOLD_LEASH = 7.5;
 const ROUTE_SLOT_ROW_SPACING = 1.15;
 const ROUTE_SLOT_COLUMN_SPACING = 1.15;
 const ROUTE_TARGET_PRESSURE_DISTANCE_PENALTY = ROUTE_SLOT_COLUMN_SPACING * 0.7;
-const ROUTE_TANGENT_SAMPLE_DELTA = 0.003;
-const LANE_COMMAND_DEFENSE_RADIUS = 9.0;
+const LANE_COMMAND_DEFENSE_RADIUS = ROUTE_BLOCKING_CORRIDOR_RADIUS * 3;
 const LANE_COMMAND_COMBAT_LEASH = 8.0;
 const LANE_COMMAND_HOME_CONTAINER_PROGRESS = 0.18;
 const LANE_ANCHOR_APPROACH_PROGRESS_TOLERANCE = 0.025;
@@ -281,12 +292,12 @@ const LANE_COMBAT_SWITCH_DISTANCE_MARGIN = 0.75;
 // Keep home-side command anchors aligned with the fortress front-gate combat
 // offset so DEFEND units actually stage at the gate instead of collapsing
 // around the Town Core.
-const FRONT_GATE_COMBAT_OFFSET = 10.2;
 const FORTRESS_INTERIOR_ASSAULT_RADIUS = FRONT_GATE_COMBAT_OFFSET + ROUTE_BLOCKING_CORRIDOR_RADIUS;
 const STRUCTURE_TARGET_VICINITY_PADDING = ROUTE_SLOT_ROW_SPACING * 1.5;
 const INSIDE_GATE_ANCHOR_OFFSET = FRONT_GATE_COMBAT_OFFSET - 2.0;
 const OUTSIDE_GATE_ANCHOR_OFFSET = FRONT_GATE_COMBAT_OFFSET + 4.0;
 const ANCHOR_SUPPORT_TARGET_RADIUS = 7.5;
+const WAVE_ROUTE_COMBAT_RECOVERY_TICKS = Math.max(1, Math.round(TICK_HZ * 1.0));
 const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   spawn_unit: "Manual CMD sends were removed. Units must come from Barracks.",
   place_unit: "Tile-grid defender placement is disabled in fortress mode",
@@ -298,383 +309,49 @@ const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   set_autosend: "CMD autosend was removed. Units must come from Barracks.",
 });
 
-const ROUTE_GRAPH_CORE_NODE_POSITIONS = Object.freeze({
-  M: Object.freeze({ x: 0, y: 0 }),
-  A: Object.freeze({ x: -24, y: 24 }),
-  B: Object.freeze({ x: 24, y: 24 }),
-  C: Object.freeze({ x: 24, y: -24 }),
-  D: Object.freeze({ x: -24, y: -24 }),
-});
-
-const LANE_COMBAT_AXES = Object.freeze([
-  Object.freeze({
-    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.A,
-    lateral: Object.freeze({ x: 1, y: 0 }),
-    forward: Object.freeze({ x: 0, y: -1 }),
-  }),
-  Object.freeze({
-    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.B,
-    lateral: Object.freeze({ x: -1, y: 0 }),
-    forward: Object.freeze({ x: 0, y: -1 }),
-  }),
-  Object.freeze({
-    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.C,
-    lateral: Object.freeze({ x: -1, y: 0 }),
-    forward: Object.freeze({ x: 0, y: 1 }),
-  }),
-  Object.freeze({
-    core: ROUTE_GRAPH_CORE_NODE_POSITIONS.D,
-    lateral: Object.freeze({ x: 1, y: 0 }),
-    forward: Object.freeze({ x: 0, y: 1 }),
-  }),
-]);
-
-const BARRACKS_SITE_COMBAT_OFFSETS = Object.freeze({
-  center: Object.freeze({ x: 0, y: 2 }),
-  left: Object.freeze({ x: -4, y: 2 }),
-  right: Object.freeze({ x: 4, y: 2 }),
-});
-
-const BARRACKS_ROUTE_NODE_SUFFIXES = Object.freeze({
-  center: "CTR",
-  left: "LFT",
-  right: "RGT",
-});
-
-const ROUTE_GRAPH_NODE_POSITIONS = Object.freeze(buildBarracksRouteGraphNodePositions());
-
-// Route graph polylines are simulation-space Battlefield Route segments.
-// Client runtime projects these segment ids into rendered board-space anchors.
-const ROUTE_SEGMENT_POLYLINES = Object.freeze({
-  A_B: Object.freeze([
-    Object.freeze({ x: -24, y: 24 }),
-    Object.freeze({ x: 0, y: 28 }),
-    Object.freeze({ x: 24, y: 24 }),
-  ]),
-  B_C: Object.freeze([
-    Object.freeze({ x: 24, y: 24 }),
-    Object.freeze({ x: 28, y: 0 }),
-    Object.freeze({ x: 24, y: -24 }),
-  ]),
-  C_D: Object.freeze([
-    Object.freeze({ x: 24, y: -24 }),
-    Object.freeze({ x: 0, y: -28 }),
-    Object.freeze({ x: -24, y: -24 }),
-  ]),
-  D_A: Object.freeze([
-    Object.freeze({ x: -24, y: -24 }),
-    Object.freeze({ x: -28, y: 0 }),
-    Object.freeze({ x: -24, y: 24 }),
-  ]),
-  A_C: Object.freeze([
-    Object.freeze({ x: -24, y: 24 }),
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: -24 }),
-  ]),
-  C_A: Object.freeze([
-    Object.freeze({ x: 24, y: -24 }),
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: 24 }),
-  ]),
-  B_D: Object.freeze([
-    Object.freeze({ x: 24, y: 24 }),
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: -24 }),
-  ]),
-  D_B: Object.freeze([
-    Object.freeze({ x: -24, y: -24 }),
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: 24 }),
-  ]),
-  A_M: Object.freeze([
-    Object.freeze({ x: -24, y: 24 }),
-    Object.freeze({ x: 0, y: 0 }),
-  ]),
-  M_A: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: 24 }),
-  ]),
-  B_M: Object.freeze([
-    Object.freeze({ x: 24, y: 24 }),
-    Object.freeze({ x: 0, y: 0 }),
-  ]),
-  M_B: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: 24 }),
-  ]),
-  C_M: Object.freeze([
-    Object.freeze({ x: 24, y: -24 }),
-    Object.freeze({ x: 0, y: 0 }),
-  ]),
-  M_C: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: 24, y: -24 }),
-  ]),
-  D_M: Object.freeze([
-    Object.freeze({ x: -24, y: -24 }),
-    Object.freeze({ x: 0, y: 0 }),
-  ]),
-  M_D: Object.freeze([
-    Object.freeze({ x: 0, y: 0 }),
-    Object.freeze({ x: -24, y: -24 }),
-  ]),
-  ...buildWaveLanePolylines(),
-  ...buildBarracksRouteLinkPolylines(),
-});
-
-const ROUTE_SEGMENT_LENGTHS = Object.freeze(Object.fromEntries(
-  Object.entries(ROUTE_SEGMENT_POLYLINES).map(([segmentId, points]) => [segmentId, getPolylineLength(points)])
-));
-
-function getPolylineLength(points) {
-  if (!Array.isArray(points) || points.length < 2) return 0;
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    total += pointDistance(points[i], points[i + 1]);
-  }
-  return total;
-}
-
-function pointDistance(a, b) {
-  const dx = Number(b.x) - Number(a.x);
-  const dy = Number(b.y) - Number(a.y);
-  return Math.sqrt((dx * dx) + (dy * dy));
-}
-
-function samplePolyline(points, progress) {
-  const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
-  const total = getPolylineLength(points);
-  if (!Array.isArray(points) || points.length === 0)
-    return { point: { x: 0, y: 0 }, tangent: { x: 0, y: 1 } };
-  if (points.length === 1 || total <= 0)
-    return { point: { x: Number(points[0].x) || 0, y: Number(points[0].y) || 0 }, tangent: { x: 0, y: 1 } };
-
-  const target = total * clamped;
-  let walked = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const from = points[i];
-    const to = points[i + 1];
-    const segLen = pointDistance(from, to);
-    if (segLen <= 0)
-      continue;
-    if (walked + segLen >= target) {
-      const localT = (target - walked) / segLen;
-      const tangent = normalize2D({
-        x: Number(to.x) - Number(from.x),
-        y: Number(to.y) - Number(from.y),
-      });
-      return {
-        point: {
-          x: lerp(Number(from.x), Number(to.x), localT),
-          y: lerp(Number(from.y), Number(to.y), localT),
-        },
-        tangent,
-      };
-    }
-    walked += segLen;
-  }
-
-  const last = points[points.length - 1];
-  const prev = points[points.length - 2];
-  return {
-    point: { x: Number(last.x) || 0, y: Number(last.y) || 0 },
-    tangent: normalize2D({
-      x: Number(last.x) - Number(prev.x),
-      y: Number(last.y) - Number(prev.y),
-    }),
-  };
-}
-
-function lerp(a, b, t) {
-  return a + ((b - a) * t);
-}
-
+// Route topology and reusable route math now live in server/game/multilane/routeGraph.js.
 function normalize2D(vec) {
-  const x = Number(vec && vec.x) || 0;
-  const y = Number(vec && vec.y) || 0;
-  const len = Math.sqrt((x * x) + (y * y));
-  if (len <= 0.00001)
-    return { x: 0, y: 0 };
-  return { x: x / len, y: y / len };
+  return routeGraph.normalize2D(vec);
 }
 
 function perpendicular2D(vec) {
-  const safe = normalize2D(vec);
-  return { x: -safe.y, y: safe.x };
+  return routeGraph.perpendicular2D(vec);
 }
 
 function getLaneNodeId(laneIndex) {
-  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < LANE_NODE_IDS.length
-    ? LANE_NODE_IDS[laneIndex]
-    : null;
+  return routeGraph.getLaneNodeId(laneIndex);
 }
 
 function getWaveSpawnNodeId(laneIndex) {
-  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < WAVE_SPAWN_NODE_IDS.length
-    ? WAVE_SPAWN_NODE_IDS[laneIndex]
-    : null;
-}
-
-function getNodeIndex(nodeId) {
-  return ROUTE_NODE_IDS.indexOf(nodeId);
+  return routeGraph.getWaveSpawnNodeId(laneIndex);
 }
 
 function getLaneCombatAxes(laneIndex) {
-  return Number.isInteger(laneIndex) && laneIndex >= 0 && laneIndex < LANE_COMBAT_AXES.length
-    ? LANE_COMBAT_AXES[laneIndex]
-    : null;
+  return routeGraph.getLaneCombatAxes(laneIndex);
 }
 
 function getBarracksRouteStartNodeId(laneIndex, barracksId) {
-  const coreNodeId = getLaneNodeId(laneIndex);
-  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
-  const suffix = normalizedBarracksId ? BARRACKS_ROUTE_NODE_SUFFIXES[normalizedBarracksId] : null;
-  if (!coreNodeId || !suffix)
-    return null;
-  return `${coreNodeId}${suffix}`;
+  return routeGraph.getBarracksRouteStartNodeId(laneIndex, barracksId);
 }
 
 function getLaneCoreNodeIdForRouteNode(nodeId) {
-  const normalizedNodeId = String(nodeId || "").trim().toUpperCase();
-  if (ROUTE_NODE_IDS.includes(normalizedNodeId))
-    return normalizedNodeId;
-
-  for (const coreNodeId of ROUTE_NODE_IDS) {
-    if (normalizedNodeId.startsWith(coreNodeId)) {
-      const suffix = normalizedNodeId.slice(coreNodeId.length);
-      if (suffix === BARRACKS_ROUTE_NODE_SUFFIXES.center
-          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.left
-          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.right) {
-        return coreNodeId;
-      }
-    }
-  }
-
-  return null;
+  return routeGraph.getLaneCoreNodeIdForRouteNode(nodeId);
 }
 
 function isBarracksRouteStartNode(nodeId) {
-  const normalizedNodeId = String(nodeId || "").trim().toUpperCase();
-  return normalizedNodeId.length > 1
-    && getLaneCoreNodeIdForRouteNode(normalizedNodeId) !== normalizedNodeId
-    && getLaneCoreNodeIdForRouteNode(normalizedNodeId) !== null;
-}
-
-function buildBarracksRouteGraphNodePositions() {
-  const positions = {
-    ...ROUTE_GRAPH_CORE_NODE_POSITIONS,
-  };
-
-  for (let laneIndex = 0; laneIndex < LANE_COMBAT_AXES.length; laneIndex += 1) {
-    const axes = LANE_COMBAT_AXES[laneIndex];
-    const coreNodeId = LANE_NODE_IDS[laneIndex];
-    if (!axes || !coreNodeId)
-      continue;
-
-    for (const barracksId of Object.keys(BARRACKS_SITE_COMBAT_OFFSETS)) {
-      const routeNodeId = getBarracksRouteStartNodeId(laneIndex, barracksId);
-      const offset = BARRACKS_SITE_COMBAT_OFFSETS[barracksId];
-      if (!routeNodeId || !offset)
-        continue;
-
-      positions[routeNodeId] = Object.freeze({
-        x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
-        y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
-      });
-    }
-  }
-
-  return positions;
-}
-
-function buildBarracksRouteLinkPolylines() {
-  const segments = {};
-  for (let laneIndex = 0; laneIndex < LANE_NODE_IDS.length; laneIndex += 1) {
-    const coreNodeId = LANE_NODE_IDS[laneIndex];
-    const corePos = ROUTE_GRAPH_CORE_NODE_POSITIONS[coreNodeId];
-    if (!coreNodeId || !corePos)
-      continue;
-
-    for (const barracksId of Object.keys(BARRACKS_SITE_COMBAT_OFFSETS)) {
-      const routeNodeId = getBarracksRouteStartNodeId(laneIndex, barracksId);
-      const routeNodePos = routeNodeId ? ROUTE_GRAPH_NODE_POSITIONS[routeNodeId] : null;
-      if (!routeNodeId || !routeNodePos)
-        continue;
-
-      segments[`${routeNodeId}_${coreNodeId}`] = Object.freeze([
-        Object.freeze({ x: routeNodePos.x, y: routeNodePos.y }),
-        Object.freeze({ x: corePos.x, y: corePos.y }),
-      ]);
-    }
-  }
-
-  return segments;
-}
-
-function buildWaveLanePolylines() {
-  const segments = {};
-  for (let laneIndex = 0; laneIndex < LANE_NODE_IDS.length; laneIndex += 1) {
-    const waveNodeId = WAVE_SPAWN_NODE_IDS[laneIndex];
-    const coreNodeId = LANE_NODE_IDS[laneIndex];
-    const axes = getLaneCombatAxes(laneIndex);
-    const corePos = coreNodeId ? ROUTE_GRAPH_CORE_NODE_POSITIONS[coreNodeId] : null;
-    if (!waveNodeId || !coreNodeId || !axes || !corePos)
-      continue;
-
-    const frontGatePoint = Object.freeze({
-      x: corePos.x + (Number(axes.forward.x) * FRONT_GATE_COMBAT_OFFSET),
-      y: corePos.y + (Number(axes.forward.y) * FRONT_GATE_COMBAT_OFFSET),
-    });
-    segments[`${waveNodeId}_${coreNodeId}`] = Object.freeze([
-      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.y }),
-      frontGatePoint,
-      Object.freeze({ x: corePos.x, y: corePos.y }),
-    ]);
-  }
-
-  return segments;
+  return routeGraph.isBarracksRouteStartNode(nodeId);
 }
 
 function getWaveSpawnWorldPosition(laneIndex) {
-  if (!Number.isInteger(laneIndex) || laneIndex < 0 || laneIndex >= LANE_NODE_IDS.length)
-    return null;
-
-  return {
-    x: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.x,
-    y: ROUTE_GRAPH_CORE_NODE_POSITIONS.M.y,
-  };
+  return routeGraph.getWaveSpawnWorldPosition(laneIndex);
 }
 
 function getPadWorldPosition(laneIndex, gridX, gridY) {
-  const axes = getLaneCombatAxes(laneIndex);
-  if (!axes)
-    return { x: 0, y: 0 };
-
-  const lateralOffset = (Number(gridX) || 0) - 3;
-  const forwardOffset = 25 - (Number(gridY) || 0);
-  return {
-    x: axes.core.x + (axes.lateral.x * lateralOffset) + (axes.forward.x * forwardOffset),
-    y: axes.core.y + (axes.lateral.y * lateralOffset) + (axes.forward.y * forwardOffset),
-  };
+  return routeGraph.getPadWorldPosition(laneIndex, gridX, gridY);
 }
 
 function getBarracksSiteWorldPosition(laneIndex, barracksId) {
-  const axes = getLaneCombatAxes(laneIndex);
-  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
-  const offset = normalizedBarracksId ? BARRACKS_SITE_COMBAT_OFFSETS[normalizedBarracksId] : null;
-  if (!axes || !offset)
-    return null;
-
-  return {
-    x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
-    y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
-  };
-}
-
-function getNextClockwiseLaneIndex(laneIndex) {
-  if (!Number.isInteger(laneIndex))
-    return null;
-  return (laneIndex + 1 + LANE_NODE_IDS.length) % LANE_NODE_IDS.length;
+  return routeGraph.getBarracksSiteWorldPosition(laneIndex, barracksId);
 }
 
 function resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex) {
@@ -1066,159 +743,23 @@ function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId) {
 }
 
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
-  if (!routeType)
-    return null;
-
-  const routeSourceNodeId = String(sourceNodeId || "").trim().toUpperCase();
-  const routeTargetNodeId = String(targetNodeId || "").trim().toUpperCase();
-  const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeSourceNodeId);
-  const prependBarracksLink = isBarracksRouteStartNode(routeSourceNodeId) && sourceCoreNodeId
-    ? `${routeSourceNodeId}_${sourceCoreNodeId}`
-    : null;
-
-  if (prependBarracksLink && routeTargetNodeId && sourceCoreNodeId && routeTargetNodeId === sourceCoreNodeId)
-    return [prependBarracksLink];
-
-  if (routeType === ROUTE_TYPES.WAVE_LANE) {
-    if (!routeSourceNodeId || !routeTargetNodeId)
-      return null;
-    return [`${routeSourceNodeId}_${routeTargetNodeId}`];
-  }
-
-  if (routeType === ROUTE_TYPES.CENTER_CROSS) {
-    if (!routeSourceNodeId || !routeTargetNodeId || !sourceCoreNodeId)
-      return null;
-    const segments = [];
-    if (prependBarracksLink)
-      segments.push(prependBarracksLink);
-    segments.push(`${sourceCoreNodeId}_${RouteMineNode}`);
-    segments.push(`${RouteMineNode}_${routeTargetNodeId}`);
-    return segments;
-  }
-
-  if (routeType !== ROUTE_TYPES.OUTER_LOOP)
-    return null;
-
-  if (!sourceCoreNodeId)
-    return null;
-
-  const sourceIndex = getNodeIndex(sourceCoreNodeId);
-  if (sourceIndex < 0)
-    return null;
-
-  const segments = prependBarracksLink ? [prependBarracksLink] : [];
-  for (let step = 0; step < ROUTE_NODE_IDS.length; step++) {
-    const from = ROUTE_NODE_IDS[(sourceIndex + step) % ROUTE_NODE_IDS.length];
-    const to = ROUTE_NODE_IDS[(sourceIndex + step + 1) % ROUTE_NODE_IDS.length];
-    segments.push(`${from}_${to}`);
-  }
-  return segments;
+  return routeGraph.buildRouteSegments(routeType, sourceNodeId, targetNodeId);
 }
 
 function parseRouteSegmentId(segmentId) {
-  const parts = String(segmentId || "").trim().toUpperCase().split("_");
-  if (parts.length !== 2 || !parts[0] || !parts[1])
-    return null;
-  return {
-    fromNode: parts[0],
-    toNode: parts[1],
-  };
+  return routeGraph.parseRouteSegmentId(segmentId);
 }
 
 function getRouteLength(routeSegments) {
-  if (!Array.isArray(routeSegments))
-    return 0;
-  return routeSegments.reduce((sum, segmentId) => sum + (ROUTE_SEGMENT_LENGTHS[segmentId] || 0), 0);
+  return routeGraph.getRouteLength(routeSegments);
 }
 
 function sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset = 0) {
-  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return null;
-
-  const safeIndex = Math.max(0, Math.min(routeSegments.length - 1, Math.floor(Number(segmentIndex) || 0)));
-  const segmentId = routeSegments[safeIndex];
-  const points = ROUTE_SEGMENT_POLYLINES[segmentId];
-  if (!Array.isArray(points) || points.length < 2)
-    return null;
-  const sample = samplePolyline(ROUTE_SEGMENT_POLYLINES[segmentId], segmentProgress);
-  const lateral = perpendicular2D(sample.tangent);
-  return {
-    segmentId,
-    point: {
-      x: sample.point.x + (lateral.x * (Number(lateralOffset) || 0)),
-      y: sample.point.y + (lateral.y * (Number(lateralOffset) || 0)),
-    },
-    tangent: sample.tangent,
-  };
+  return routeGraph.sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset);
 }
 
 function advanceRouteState(unit, deltaDistance) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
-    return false;
-
-  let remaining = Number(deltaDistance) || 0;
-  const isLooping = unit.routeType === ROUTE_TYPES.OUTER_LOOP;
-  let advanced = false;
-
-  while (Math.abs(remaining) > 0.0001) {
-    const currentSegmentId = unit.routeSegments[unit.routeSegmentIndex];
-    const segmentLength = Math.max(0.0001, ROUTE_SEGMENT_LENGTHS[currentSegmentId] || 0.0001);
-    const distanceOnSegment = Math.max(0, Math.min(1, Number(unit.segmentProgress) || 0)) * segmentLength;
-
-    if (remaining > 0) {
-      const distanceToEnd = segmentLength - distanceOnSegment;
-      if (remaining < distanceToEnd) {
-        unit.segmentProgress = (distanceOnSegment + remaining) / segmentLength;
-        remaining = 0;
-        advanced = true;
-        break;
-      }
-
-      remaining -= distanceToEnd;
-      unit.segmentProgress = 1;
-      advanced = true;
-
-      if (unit.routeSegmentIndex >= unit.routeSegments.length - 1) {
-        if (!isLooping) {
-          remaining = 0;
-          break;
-        }
-        unit.routeSegmentIndex = 0;
-        unit.segmentProgress = 0;
-        continue;
-      }
-
-      unit.routeSegmentIndex += 1;
-      unit.segmentProgress = 0;
-      continue;
-    }
-    const distanceToStart = distanceOnSegment;
-    if (Math.abs(remaining) < distanceToStart) {
-      unit.segmentProgress = (distanceOnSegment + remaining) / segmentLength;
-      remaining = 0;
-      advanced = true;
-      break;
-    }
-
-    remaining += distanceToStart;
-    unit.segmentProgress = 0;
-    advanced = true;
-
-    if (unit.routeSegmentIndex <= 0) {
-      if (!isLooping) {
-        remaining = 0;
-        break;
-      }
-      unit.routeSegmentIndex = unit.routeSegments.length - 1;
-      unit.segmentProgress = 1;
-      continue;
-    }
-
-    unit.routeSegmentIndex -= 1;
-    unit.segmentProgress = 1;
-  }
-
-  return advanced;
+  return routeGraph.advanceRouteState(unit, deltaDistance);
 }
 
 function moveScalarToward(value, target, maxDelta) {
@@ -1282,58 +823,11 @@ function setUnitRouteSnapshotState(unit) {
 }
 
 function computeUnitRoutePathIndex(unit) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
-    return 0;
-
-  const totalLength = Math.max(0.0001, getRouteLength(unit.routeSegments));
-  let distance = 0;
-  for (let i = 0; i < unit.routeSegmentIndex; i++) {
-    distance += ROUTE_SEGMENT_LENGTHS[unit.routeSegments[i]] || 0;
-  }
-  const currentSegmentId = unit.routeSegments[unit.routeSegmentIndex];
-  const currentSegmentLength = ROUTE_SEGMENT_LENGTHS[currentSegmentId] || 0;
-  distance += Math.max(0, Math.min(1, Number(unit.segmentProgress) || 0)) * currentSegmentLength;
-  return distance / totalLength;
+  return routeGraph.computeUnitRoutePathIndex(unit);
 }
 
 function sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset = 0, lateralOffset = 0) {
-  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return null;
-
-  const clampedProgress = Math.max(0, Math.min(1, Number(routeProgress) || 0));
-  const centerSample = sampleRouteByDistanceNorm(routeSegments, clampedProgress, 0);
-  if (!centerSample)
-    return null;
-
-  const beforeSample = sampleRouteByDistanceNorm(
-    routeSegments,
-    Math.max(0, clampedProgress - ROUTE_TANGENT_SAMPLE_DELTA),
-    0
-  );
-  const afterSample = sampleRouteByDistanceNorm(
-    routeSegments,
-    Math.min(1, clampedProgress + ROUTE_TANGENT_SAMPLE_DELTA),
-    0
-  );
-
-  let tangent = centerSample.tangent;
-  if (beforeSample && afterSample) {
-    tangent = normalize2D({
-      x: Number(afterSample.point.x) - Number(beforeSample.point.x),
-      y: Number(afterSample.point.y) - Number(beforeSample.point.y),
-    });
-  }
-  tangent = normalize2D(tangent);
-  const lateral = perpendicular2D(tangent);
-
-  return {
-    segmentId: centerSample.segmentId,
-    point: {
-      x: Number(centerSample.point.x) + (tangent.x * (Number(longitudinalOffset) || 0)) + (lateral.x * (Number(lateralOffset) || 0)),
-      y: Number(centerSample.point.y) + (tangent.y * (Number(longitudinalOffset) || 0)) + (lateral.y * (Number(lateralOffset) || 0)),
-    },
-    tangent,
-  };
+  return routeGraph.sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset, lateralOffset);
 }
 
 function resolveSpawnOriginForUnit(unit, targetLane) {
@@ -1706,123 +1200,19 @@ function getUnitForwardDirection(unit) {
 }
 
 function buildSampledPathFromSegments(routeSegments, sampleCount = 28) {
-  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return [];
-
-  const safeCount = Math.max(2, Math.floor(Number(sampleCount) || 28));
-  const samples = [];
-  for (let i = 0; i < safeCount; i++) {
-    const distanceNorm = safeCount === 1 ? 0 : (i / (safeCount - 1));
-    const sample = sampleRouteByDistanceNorm(routeSegments, distanceNorm, 0);
-    if (!sample)
-      return [];
-    samples.push({
-      x: Number(sample.point.x.toFixed(3)),
-      y: Number(sample.point.y.toFixed(3)),
-    });
-  }
-  return samples;
+  return routeGraph.buildSampledPathFromSegments(routeSegments, sampleCount);
 }
 
 function sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset = 0) {
-  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return null;
-
-  const totalLength = Math.max(0.0001, getRouteLength(routeSegments));
-  let remainingDistance = Math.max(0, Math.min(1, Number(routeProgress) || 0)) * totalLength;
-
-  for (let i = 0; i < routeSegments.length; i++) {
-    const segmentId = routeSegments[i];
-    const segmentLength = Math.max(0.0001, ROUTE_SEGMENT_LENGTHS[segmentId] || 0.0001);
-    if (remainingDistance <= segmentLength || i === routeSegments.length - 1) {
-      return sampleRoutePosition(routeSegments, i, remainingDistance / segmentLength, lateralOffset);
-    }
-    remainingDistance -= segmentLength;
-  }
-
-  return sampleRoutePosition(routeSegments, routeSegments.length - 1, 1, lateralOffset);
+  return routeGraph.sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset);
 }
 
 function projectPointOntoPolyline(points, targetPoint) {
-  if (!Array.isArray(points) || points.length < 2 || !targetPoint)
-    return null;
-
-  const totalLength = Math.max(0.0001, getPolylineLength(points));
-  let walkedLength = 0;
-  let best = null;
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const from = points[i];
-    const to = points[i + 1];
-    const segVec = {
-      x: Number(to.x) - Number(from.x),
-      y: Number(to.y) - Number(from.y),
-    };
-    const segLenSq = (segVec.x * segVec.x) + (segVec.y * segVec.y);
-    const segLen = Math.sqrt(segLenSq);
-    if (segLen <= 0.0001)
-      continue;
-
-    const toTarget = {
-      x: Number(targetPoint.x) - Number(from.x),
-      y: Number(targetPoint.y) - Number(from.y),
-    };
-    const localT = Math.max(0, Math.min(1, dot2D(toTarget, segVec) / segLenSq));
-    const point = {
-      x: lerp(Number(from.x), Number(to.x), localT),
-      y: lerp(Number(from.y), Number(to.y), localT),
-    };
-    const delta = {
-      x: Number(targetPoint.x) - point.x,
-      y: Number(targetPoint.y) - point.y,
-    };
-    const distanceSq = (delta.x * delta.x) + (delta.y * delta.y);
-    const candidate = {
-      point,
-      tangent: normalize2D(segVec),
-      distanceSq,
-      progress: (walkedLength + (segLen * localT)) / totalLength,
-    };
-
-    if (!best || candidate.distanceSq < best.distanceSq)
-      best = candidate;
-
-    walkedLength += segLen;
-  }
-
-  return best;
+  return routeGraph.projectPointOntoPolyline(points, targetPoint);
 }
 
 function projectPointOntoRouteSegments(routeSegments, targetPoint) {
-  if (!Array.isArray(routeSegments) || routeSegments.length === 0 || !targetPoint)
-    return null;
-
-  const totalRouteLength = Math.max(0.0001, getRouteLength(routeSegments));
-  let walkedRouteLength = 0;
-  let best = null;
-
-  for (let i = 0; i < routeSegments.length; i++) {
-    const segmentId = routeSegments[i];
-    const points = ROUTE_SEGMENT_POLYLINES[segmentId];
-    const segmentLength = Math.max(0.0001, ROUTE_SEGMENT_LENGTHS[segmentId] || 0.0001);
-    const projection = projectPointOntoPolyline(points, targetPoint);
-    if (projection) {
-      const candidate = {
-        segmentIndex: i,
-        segmentId,
-        point: projection.point,
-        tangent: projection.tangent,
-        segmentProgress: Math.max(0, Math.min(1, Number(projection.progress) || 0)),
-        routeProgress: (walkedRouteLength + (segmentLength * projection.progress)) / totalRouteLength,
-        distanceSq: projection.distanceSq,
-      };
-      if (!best || candidate.distanceSq < best.distanceSq)
-        best = candidate;
-    }
-    walkedRouteLength += segmentLength;
-  }
-
-  return best;
+  return routeGraph.projectPointOntoRouteSegments(routeSegments, targetPoint);
 }
 
 function syncUnitRouteStateToWorldPosition(unit, worldPosition = null) {
@@ -2304,531 +1694,7 @@ function syncLaneCommandAssignments(game) {
 const UNIT_DEFS  = {};
 const TOWER_DEFS = {};
 
-const BARRACKS_COST_BASE = 100;
-const BARRACKS_REQ_INCOME_BASE = 8;
-const BARRACKS_ROSTER_REFUND_PCT = 70;
-
-const FORTRESS_BUILD_STATES = Object.freeze({
-  locked: "locked",
-  availableToBuild: "available_to_build",
-  built: "built",
-  upgradeAvailable: "upgrade_available",
-  maxTier: "max_tier",
-});
-
-function createFortressPadDef(
-  padId,
-  buildingType,
-  displayName,
-  gridX,
-  gridY,
-  options = {}
-) {
-  return Object.freeze({
-    padId,
-    buildingType,
-    displayName,
-    gridX,
-    gridY,
-    combatOffsetX: Number.isFinite(Number(options.combatOffsetX))
-      ? Number(options.combatOffsetX)
-      : null,
-    combatOffsetY: Number.isFinite(Number(options.combatOffsetY))
-      ? Number(options.combatOffsetY)
-      : null,
-  });
-}
-
-const FORTRESS_WALL_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front_left_01", displayName: "Front Left Wall 01", gridX: -2, gridY: 15, combatOffsetX: -4.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_02", displayName: "Front Left Wall 02", gridX: -1, gridY: 15, combatOffsetX: -3.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_03", displayName: "Front Left Wall 03", gridX: 0, gridY: 15, combatOffsetX: -2.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_04", displayName: "Front Left Wall 04", gridX: 1, gridY: 15, combatOffsetX: -1.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_06", displayName: "Front Left Wall 06", gridX: 2, gridY: 15, combatOffsetX: 0.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_07", displayName: "Front Left Wall 07", gridX: 3, gridY: 15, combatOffsetX: 1.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_right_01", displayName: "Front Right Wall 01", gridX: 4, gridY: 15, combatOffsetX: 2.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_right_02", displayName: "Front Right Wall 02", gridX: 5, gridY: 15, combatOffsetX: 3.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "back_left_01", displayName: "Back Left Wall 01", gridX: -2, gridY: 29, combatOffsetX: -4.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_02", displayName: "Back Left Wall 02", gridX: -1, gridY: 29, combatOffsetX: -3.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_04", displayName: "Back Left Wall 04", gridX: 0, gridY: 29, combatOffsetX: -2.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_05", displayName: "Back Left Wall 05", gridX: 1, gridY: 29, combatOffsetX: -1.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_01", displayName: "Back Right Wall 01", gridX: 4, gridY: 29, combatOffsetX: 1.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_02", displayName: "Back Right Wall 02", gridX: 5, gridY: 29, combatOffsetX: 2.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "right_side_03", displayName: "Right Side Wall 03", gridX: 7, gridY: 17, combatOffsetX: 6.0, combatOffsetY: 9.0 }),
-  Object.freeze({ key: "right_side_04_a", displayName: "Right Side Wall 04A", gridX: 7, gridY: 19, combatOffsetX: 6.0, combatOffsetY: 7.0 }),
-  Object.freeze({ key: "right_side_04_b", displayName: "Right Side Wall 04B", gridX: 7, gridY: 21, combatOffsetX: 6.0, combatOffsetY: 5.0 }),
-  Object.freeze({ key: "right_side_05", displayName: "Right Side Wall 05", gridX: 7, gridY: 23, combatOffsetX: 6.0, combatOffsetY: 3.0 }),
-  Object.freeze({ key: "right_side_06", displayName: "Right Side Wall 06", gridX: 7, gridY: 25, combatOffsetX: 6.0, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "right_side_07", displayName: "Right Side Wall 07", gridX: 7, gridY: 27, combatOffsetX: 6.0, combatOffsetY: -1.0 }),
-]);
-
-const FORTRESS_GATE_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 16, combatOffsetX: 0.0, combatOffsetY: FRONT_GATE_COMBAT_OFFSET }),
-  Object.freeze({ key: "left", displayName: "Left Gate", gridX: -3, gridY: 24, combatOffsetX: -6.0, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "right", displayName: "Right Gate", gridX: 8, gridY: 24, combatOffsetX: 6.5, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "rear", displayName: "Rear Gate", gridX: 3, gridY: 30, combatOffsetX: 0.0, combatOffsetY: -6.0 }),
-]);
-
-const FORTRESS_TURRET_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front_left", displayName: "Front Left Tower", gridX: -2, gridY: 13, combatOffsetX: -5.0, combatOffsetY: 13.5 }),
-  Object.freeze({ key: "front_left_05", displayName: "Front Left Tower 05", gridX: 0, gridY: 12, combatOffsetX: -2.5, combatOffsetY: 14.5 }),
-  Object.freeze({ key: "front_right", displayName: "Front Right Tower", gridX: 6, gridY: 13, combatOffsetX: 5.0, combatOffsetY: 13.5 }),
-  Object.freeze({ key: "core_03", displayName: "Inner Tower 03", gridX: 1, gridY: 21, combatOffsetX: -2.5, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "core_04", displayName: "Inner Tower 04", gridX: 3, gridY: 21, combatOffsetX: 0.0, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "core_05", displayName: "Inner Tower 05", gridX: 5, gridY: 21, combatOffsetX: 2.5, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "front_gate_left", displayName: "Front Gate Tower Left", gridX: 1, gridY: 14, combatOffsetX: -2.5, combatOffsetY: 12.0 }),
-  Object.freeze({ key: "front_gate_right", displayName: "Front Gate Tower Right", gridX: 5, gridY: 14, combatOffsetX: 2.5, combatOffsetY: 12.0 }),
-  Object.freeze({ key: "back_left_03", displayName: "Back Left Tower 03", gridX: -2, gridY: 27, combatOffsetX: -5.0, combatOffsetY: -3.0 }),
-  Object.freeze({ key: "back_left_06", displayName: "Back Left Tower 06", gridX: 0, gridY: 28, combatOffsetX: -2.5, combatOffsetY: -4.0 }),
-  Object.freeze({ key: "back_left_07", displayName: "Back Left Tower 07", gridX: 2, gridY: 29, combatOffsetX: -0.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_03", displayName: "Back Right Tower 03", gridX: 6, gridY: 27, combatOffsetX: 5.0, combatOffsetY: -3.0 }),
-  Object.freeze({ key: "rear_gate_left", displayName: "Rear Gate Tower Left", gridX: 1, gridY: 30, combatOffsetX: -2.5, combatOffsetY: -6.5 }),
-  Object.freeze({ key: "rear_gate_right", displayName: "Rear Gate Tower Right", gridX: 5, gridY: 30, combatOffsetX: 2.5, combatOffsetY: -6.5 }),
-  Object.freeze({ key: "right_side_05", displayName: "Right Side Tower 05", gridX: 8, gridY: 17, combatOffsetX: 7.4, combatOffsetY: 9.0 }),
-  Object.freeze({ key: "right_side_06", displayName: "Right Side Tower 06", gridX: 8, gridY: 22, combatOffsetX: 7.4, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "right_side_07", displayName: "Right Side Tower 07", gridX: 8, gridY: 27, combatOffsetX: 7.4, combatOffsetY: -1.0 }),
-]);
-
-const FORTRESS_BUILDING_DEFS = Object.freeze({
-  town_core: {
-    displayName: "Civic",
-    branchKey: "civic",
-    branchLabel: "Civic Progression",
-    tierDisplayNames: Object.freeze([null, "House", "Town Hall", "Keep", "Castle"]),
-    maxTier: 4,
-    startsBuilt: true,
-    requiredTownCoreTier: 1,
-    baseMaxHp: TEAM_HP_START,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 2, 4: 3 },
-    upgradeCosts: {
-      2: 70,
-      3: 110,
-      4: 165,
-    },
-  },
-  barracks: {
-    displayName: "Barracks",
-    branchKey: "barracks",
-    branchLabel: "Barracks",
-    tierDisplayNames: Object.freeze([null, "Barracks"]),
-    maxTier: 1,
-    startsBuilt: true,
-    requiredTownCoreTier: 1,
-    baseMaxHp: 260,
-  },
-  blacksmith: {
-    displayName: "Blacksmith",
-    branchKey: "blacksmith",
-    branchLabel: "Blacksmith",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    baseMaxHp: 225,
-    buildCost: 60,
-    upgradeCosts: {
-      2: 95,
-      3: 145,
-    },
-  },
-  archery_tower: {
-    displayName: "Archery Tower",
-    branchKey: "archery",
-    branchLabel: "Archery Tower",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    baseMaxHp: 190,
-    buildCost: 50,
-    upgradeCosts: {
-      2: 85,
-      3: 130,
-    },
-  },
-  temple: {
-    displayName: "Temple",
-    branchKey: "temple",
-    branchLabel: "Temple",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    baseMaxHp: 205,
-    buildCost: 70,
-    upgradeCosts: {
-      2: 105,
-      3: 160,
-    },
-  },
-  wizard_tower: {
-    displayName: "Wizard Tower",
-    branchKey: "wizard",
-    branchLabel: "Wizard Tower",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    baseMaxHp: 195,
-    buildCost: 75,
-    upgradeCosts: {
-      2: 115,
-      3: 170,
-    },
-  },
-  market: {
-    displayName: "Market",
-    branchKey: "market",
-    branchLabel: "Market",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    baseMaxHp: 200,
-    buildCost: 60,
-    upgradeCosts: {
-      2: 100,
-      3: 150,
-    },
-  },
-  stable: {
-    displayName: "Stable",
-    branchKey: "stable",
-    branchLabel: "Stable",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 2,
-    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
-    baseMaxHp: 205,
-    buildCost: 60,
-    upgradeCosts: {
-      2: 100,
-      3: 150,
-    },
-  },
-  workshop: {
-    displayName: "Workshop",
-    branchKey: "workshop",
-    branchLabel: "Workshop",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 2,
-    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
-    baseMaxHp: 205,
-    buildCost: 60,
-    upgradeCosts: {
-      2: 100,
-      3: 150,
-    },
-  },
-  library: {
-    displayName: "Library",
-    branchKey: "library",
-    branchLabel: "Library",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 2,
-    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
-    baseMaxHp: 200,
-    buildCost: 60,
-    upgradeCosts: {
-      2: 100,
-      3: 150,
-    },
-  },
-  lumber_mill: {
-    displayName: "Lumber Mill",
-    branchKey: "lumber_mill",
-    branchLabel: "Lumber Mill",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    requiresLumberMill: false,
-    requiresTurretTier3: false,
-    baseMaxHp: 210,
-    buildCost: 50,
-    upgradeCosts: {
-      2: 80,
-      3: 125,
-    },
-  },
-  wall: {
-    displayName: "Wall",
-    branchKey: "wall",
-    branchLabel: "Walls",
-    progressionCategory: "Wall",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    dependencyRequirementsByTier: {
-      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
-      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
-    },
-    baseMaxHp: 180,
-    buildCost: 20,
-    upgradeCosts: {
-      2: 40,
-      3: 80,
-    },
-  },
-  gate: {
-    displayName: "Gate",
-    branchKey: "gate",
-    branchLabel: "Gates",
-    progressionCategory: "Gate",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    dependencyRequirementsByTier: {
-      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
-      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
-    },
-    baseMaxHp: 260,
-    buildCost: 20,
-    upgradeCosts: {
-      2: 40,
-      3: 80,
-    },
-  },
-  turret: {
-    displayName: "Turret",
-    branchKey: "base_tower",
-    branchLabel: "Base Towers",
-    progressionCategory: "BaseTower",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    requiresLumberMill: true,
-    requiresTurretTier3: false,
-    dependencyRequirementsByTier: {
-      1: Object.freeze([{ buildingType: "lumber_mill", minTier: 1 }]),
-    },
-    baseMaxHp: 210,
-    buildCost: 40,
-    upgradeCosts: {
-      2: 80,
-      3: 140,
-    },
-  },
-  tower_archer: {
-    displayName: "Archer Tower",
-    branchKey: "archer_tower",
-    branchLabel: "Archer Towers",
-    progressionCategory: "ArcherTower",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    requiresLumberMill: false,
-    requiresTurretTier3: true,
-    dependencyRequirementsByTier: {
-      1: Object.freeze([{ buildingType: "turret", minTier: 3 }]),
-    },
-    baseMaxHp: 220,
-    buildCost: 180,
-    upgradeCosts: {
-      2: 260,
-      3: 380,
-    },
-  },
-});
-
-const FORTRESS_PAD_DEFS = Object.freeze([
-  createFortressPadDef("town_core_pad", "town_core", "Civic", 3, 25),
-  createFortressPadDef("barracks_pad", "barracks", "Barracks", 7, 25),
-  createFortressPadDef("blacksmith_pad", "blacksmith", "Blacksmith", 1, 20),
-  createFortressPadDef("temple_pad", "temple", "Temple", 5, 20),
-  createFortressPadDef("wizard_tower_pad", "wizard_tower", "Wizard Tower", 7, 20),
-  createFortressPadDef("archery_tower_pad", "archery_tower", "Archery Tower", 9, 20),
-  createFortressPadDef("market_pad", "market", "Market", 3, 20),
-  createFortressPadDef("stable_pad", "stable", "Stable", 1, 15),
-  createFortressPadDef("workshop_pad", "workshop", "Workshop", 3, 15),
-  createFortressPadDef("library_pad", "library", "Library", 5, 15),
-  createFortressPadDef("lumber_mill_pad", "lumber_mill", "Lumber Mill", 7, 15),
-  ...FORTRESS_WALL_PAD_LAYOUT.map((slot) => createFortressPadDef(
-    `wall_${slot.key}_pad`,
-    "wall",
-    slot.displayName,
-    slot.gridX,
-    slot.gridY,
-    {
-      combatOffsetX: slot.combatOffsetX,
-      combatOffsetY: slot.combatOffsetY,
-    }
-  )),
-  ...FORTRESS_GATE_PAD_LAYOUT.map((slot) => createFortressPadDef(
-    `gate_${slot.key}_pad`,
-    "gate",
-    slot.displayName,
-    slot.gridX,
-    slot.gridY,
-    {
-      combatOffsetX: slot.combatOffsetX,
-      combatOffsetY: slot.combatOffsetY,
-    }
-  )),
-  ...FORTRESS_TURRET_PAD_LAYOUT.map((slot) => createFortressPadDef(
-    `turret_${slot.key}_pad`,
-    "turret",
-    slot.displayName,
-    slot.gridX,
-    slot.gridY,
-    {
-      combatOffsetX: slot.combatOffsetX,
-      combatOffsetY: slot.combatOffsetY,
-    }
-  )),
-]);
-
-const BARRACKS_ROLE_SORT_ORDER = Object.freeze({
-  melee: 0,
-  ranged: 1,
-  support: 2,
-  siege: 3,
-});
-
-// Spawn queue rows advance toward the castle as spawnIndex grows, so queue support first
-// and melee last to produce the intended spawn order: melee front, ranged middle, support back.
-const BARRACKS_SPAWN_ROLE_ORDER = Object.freeze(["support", "ranged", "melee", "siege"]);
-const STARTING_COMBAT_TEST_BARRACKS_ID = "center";
-const STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY = "militia";
-
-const BARRACKS_SITE_DEFS = Object.freeze([
-  {
-    barracksId: "center",
-    displayName: "Barracks Center",
-    slot: "center",
-    sortIndex: 0,
-    startsBuilt: false,
-    buildCost: BARRACKS_COST_BASE,
-    legacyTierUnlock: 1,
-  },
-  {
-    barracksId: "left",
-    displayName: "Barracks Left",
-    slot: "left",
-    sortIndex: 1,
-    startsBuilt: false,
-    buildCost: BARRACKS_COST_BASE,
-    legacyTierUnlock: 2,
-  },
-  {
-    barracksId: "right",
-    displayName: "Barracks Right",
-    slot: "right",
-    sortIndex: 2,
-    startsBuilt: false,
-    buildCost: BARRACKS_COST_BASE,
-    legacyTierUnlock: 3,
-  },
-]);
-
-const BARRACKS_ROSTER_DEFS = Object.freeze([
-  { rosterKey: "militia", displayName: "Militia", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "barracks", requiredBuildingTier: 1, tier: 1, sortIndex: 10 },
-  { rosterKey: "spearman", displayName: "Spearman", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 1, tier: 1, sortIndex: 20 },
-  { rosterKey: "shieldman", displayName: "Shieldman", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 1, tier: 1, sortIndex: 30 },
-  { rosterKey: "swordsman", displayName: "Swordsman", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 40 },
-  { rosterKey: "halberdier", displayName: "Halberdier", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 50 },
-  { rosterKey: "shield_guard", displayName: "Shield Guard", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 2, tier: 2, sortIndex: 60 },
-  { rosterKey: "knight", displayName: "Knight", role: "melee", branchKey: "infantry", branchLabel: "Infantry", productionBuildingType: "blacksmith", archetypeKey: "infantry_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 70 },
-  { rosterKey: "lancer", displayName: "Lancer", role: "melee", branchKey: "polearm", branchLabel: "Polearm", productionBuildingType: "blacksmith", archetypeKey: "polearm_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 80 },
-  { rosterKey: "guardian", displayName: "Guardian", role: "melee", branchKey: "shield", branchLabel: "Shield", productionBuildingType: "blacksmith", archetypeKey: "shield_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "blacksmith", requiredBuildingTier: 3, tier: 3, sortIndex: 90 },
-  { rosterKey: "cleric", displayName: "Cleric", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 1, tier: 1, sortIndex: 110 },
-  { rosterKey: "priest", displayName: "Priest", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 2, tier: 2, sortIndex: 120 },
-  { rosterKey: "high_priest", displayName: "High Priest", role: "support", branchKey: "healing", branchLabel: "Temple", productionBuildingType: "temple", archetypeKey: "support_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "temple", requiredBuildingTier: 3, tier: 3, sortIndex: 130 },
-  { rosterKey: "mage", displayName: "Mage", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 1, tier: 1, sortIndex: 140 },
-  { rosterKey: "wizard", displayName: "Wizard", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 2, tier: 2, sortIndex: 150 },
-  { rosterKey: "thaumaturge", displayName: "Thaumaturge", role: "ranged", branchKey: "arcane", branchLabel: "Wizard Tower", productionBuildingType: "wizard_tower", archetypeKey: "arcane_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "wizard_tower", requiredBuildingTier: 3, tier: 3, sortIndex: 160 },
-  { rosterKey: "archer", displayName: "Archer", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t1", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 1, tier: 1, sortIndex: 170 },
-  { rosterKey: "crossbowman", displayName: "Crossbowman", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t2", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 2, tier: 2, sortIndex: 180 },
-  { rosterKey: "ranger", displayName: "Ranger", role: "ranged", branchKey: "ranged", branchLabel: "Archery", productionBuildingType: "archery_tower", archetypeKey: "ranged_t3", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "archery_tower", requiredBuildingTier: 3, tier: 3, sortIndex: 190 },
-]);
-
-const HERO_ROSTER_DEFS = Object.freeze([
-  { heroKey: "king", displayName: "King", role: "hero", roleLabel: "Hero", spawnRole: "melee", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_king", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 70, cooldownTicks: 90 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "regal_gold", sortIndex: 10 },
-  { heroKey: "paladin", displayName: "Paladin", role: "hero", roleLabel: "Hero", spawnRole: "melee", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_paladin", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 60, cooldownTicks: 75 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "holy_silver", sortIndex: 20 },
-  { heroKey: "bishop", displayName: "Bishop", role: "hero", roleLabel: "Hero", spawnRole: "support", branchKey: "heroes", branchLabel: "Heroes", archetypeKey: "hero_bishop", presentationKey: DEFAULT_FORT_PRESENTATION_KEY, unlockBuildingType: "town_core", requiredBuildingTier: 4, summonSourceBuildingType: "barracks", summonCost: 55, cooldownTicks: 65 * TICK_HZ, activeLimit: 1, heroVisualStyleKey: "radiant_bishop", sortIndex: 30 },
-]);
-
-const MARKET_ROSTER_DEFS = Object.freeze([
-  {
-    unitKey: "peasant",
-    displayName: "Peasant",
-    role: "economy",
-    roleLabel: "Economy",
-    branchKey: "market",
-    branchLabel: "Market",
-    productionBuildingType: "market",
-    archetypeKey: "economy_t1",
-    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
-    unlockBuildingType: "market",
-    requiredBuildingTier: 1,
-    tier: 1,
-    economyLapGold: 4,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
-    nextUnitKey: "settler",
-    description: "Carries starter trade goods between the Town Core and Market.",
-    sortIndex: 10,
-  },
-  {
-    unitKey: "settler",
-    displayName: "Settler",
-    role: "economy",
-    roleLabel: "Economy",
-    branchKey: "market",
-    branchLabel: "Market",
-    productionBuildingType: "market",
-    archetypeKey: "economy_t2",
-    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
-    unlockBuildingType: "market",
-    requiredBuildingTier: 2,
-    tier: 2,
-    economyLapGold: 7,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
-    nextUnitKey: "trader",
-    description: "Carries more goods and trade value than Peasants between the Town Core and Market.",
-    sortIndex: 20,
-  },
-  {
-    unitKey: "trader",
-    displayName: "Trader",
-    role: "economy",
-    roleLabel: "Economy",
-    branchKey: "market",
-    branchLabel: "Market",
-    productionBuildingType: "market",
-    archetypeKey: "economy_t3",
-    presentationKey: DEFAULT_FORT_PRESENTATION_KEY,
-    unlockBuildingType: "market",
-    requiredBuildingTier: 3,
-    tier: 3,
-    economyLapGold: 10,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
-    nextUnitKey: null,
-    description: "Top-tier trade runner carrying the highest-value cargo between the Town Core and Market.",
-    sortIndex: 30,
-  },
-]);
+// Fortress, barracks, and market catalogs now live in server/game/multilane/*System.js.
 
 // ── Phase G: Ability system helpers ───────────────────────────────────────────
 
@@ -3058,47 +1924,15 @@ function resolveTowerDef(key) {
 // ── Barracks helpers ───────────────────────────────────────────────────────────
 
 function getBarracksLevelDef(level) {
-  const lvl = Math.max(1, Math.floor(Number(level) || 1));
-  if (lvl === 1) {
-    return {
-      hpMult: 1,
-      dmgMult: 1,
-      speedMult: getBarracksSpeedMultForLevel(1),
-      structMult: 1,
-      unitCostMult: 1,
-      unitIncomeMult: 1,
-      incomeBonus: 0,
-      cost: 0,
-      reqIncome: 0,
-    };
-  }
-  const statMult = Math.pow(2, lvl - 1);       // x2 per barracks upgrade
-  const gateMult = Math.pow(2, lvl - 2);
-  return {
-    hpMult: statMult,
-    dmgMult: statMult,
-    speedMult: getBarracksSpeedMultForLevel(lvl),
-    structMult: statMult,
-    unitCostMult: statMult,
-    unitIncomeMult: statMult,
-    incomeBonus: 0,
-    cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
-    reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
-  };
+  return barracksSystem.getBarracksLevelDef(level);
 }
 
 function getBarracksSpeedMultForLevel(level) {
-  const lvl = Math.max(1, Math.floor(Number(level) || 1));
-  return BARRACKS_LEVEL_ONE_SPEED_MULT + ((lvl - 1) * SPEED_UPGRADE_STEP);
+  return barracksSystem.getBarracksSpeedMultForLevel(level);
 }
 
 function getBarracksSpeedMult(_br) {
-  const br = _br && typeof _br === "object" ? _br : null;
-  if (br && Number.isFinite(br.speedMult))
-    return Math.max(0.01, Number(br.speedMult));
-  if (br && Number.isFinite(br.level))
-    return Math.max(0.01, getBarracksSpeedMultForLevel(br.level));
-  return 1;
+  return barracksSystem.getBarracksSpeedMult(_br);
 }
 
 function getLaneWaveSpeedMult(lane) {
@@ -3439,27 +2273,15 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
 }
 
 function buildRoutePathId(routeSegments) {
-  if (!Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return null;
-  return routeSegments.join(">");
+  return routeGraph.buildRoutePathId(routeSegments);
 }
 
 function resolveUnitNextWaypoint(unit) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length <= 0)
-    return null;
-
-  const currentIndex = Math.max(0, Math.min(unit.routeSegments.length - 1, Math.floor(Number(unit.routeSegmentIndex) || 0)));
-  const segmentId = unit.routeSegments[currentIndex];
-  const parts = String(segmentId || "").split("_");
-  return parts.length === 2 ? parts[1] : null;
+  return routeGraph.resolveUnitNextWaypoint(unit);
 }
 
 function dot2D(a, b) {
-  const ax = Number(a && a.x) || 0;
-  const ay = Number(a && a.y) || 0;
-  const bx = Number(b && b.x) || 0;
-  const by = Number(b && b.y) || 0;
-  return (ax * bx) + (ay * by);
+  return routeGraph.dot2D(a, b);
 }
 
 function resolveCenteredSpawnColumn(slotIndex) {
@@ -3569,98 +2391,35 @@ function getBarracksUnitIncomeMult(br) {
 }
 
 function getFortressMaxTier(buildingType) {
-  if (buildingType === "barracks")
-    return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
-
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  return buildingDef ? Math.max(1, Math.floor(Number(buildingDef.maxTier) || 1)) : 1;
+  return fortressSystem.getFortressMaxTier(buildingType);
 }
 
 function createFortressPadStates(teamHpStart) {
-  return FORTRESS_PAD_DEFS.map((padDef) => {
-    const buildingDef = FORTRESS_BUILDING_DEFS[padDef.buildingType];
-    const tier = buildingDef && buildingDef.startsBuilt ? 1 : 0;
-    const maxHp = tier > 0
-      ? resolveFortressBuildingMaxHp(padDef.buildingType, tier, teamHpStart)
-      : 0;
-    return {
-      padId: padDef.padId,
-      buildingType: padDef.buildingType,
-      displayName: padDef.displayName,
-      gridX: padDef.gridX,
-      gridY: padDef.gridY,
-      combatOffsetX: Number.isFinite(Number(padDef.combatOffsetX))
-        ? Number(padDef.combatOffsetX)
-        : null,
-      combatOffsetY: Number.isFinite(Number(padDef.combatOffsetY))
-        ? Number(padDef.combatOffsetY)
-        : null,
-      tier,
-      maxHp,
-      hp: maxHp,
-      costHistory: tier > 0 ? [] : null,
-    };
-  });
+  return fortressSystem.createFortressPadStates(teamHpStart);
 }
 
 function createBarracksRosterCounts() {
-  const counts = {};
-  for (const def of BARRACKS_ROSTER_DEFS) counts[def.rosterKey] = 0;
-  return counts;
+  return barracksSystem.createBarracksRosterCounts();
 }
 
 function createBarracksSiteRosterCounts() {
-  const siteCounts = {};
-  for (const siteDef of BARRACKS_SITE_DEFS)
-    siteCounts[siteDef.barracksId] = createBarracksRosterCounts();
-  return siteCounts;
+  return barracksSystem.createBarracksSiteRosterCounts();
 }
 
 function getBarracksSiteDef(barracksId) {
-  return BARRACKS_SITE_DEFS.find((entry) => entry && entry.barracksId === barracksId) || null;
+  return barracksSystem.getBarracksSiteDef(barracksId);
 }
 
 function normalizeBarracksSiteId(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  switch (raw) {
-    case "left":
-    case "left_barracks":
-    case "barracks_left":
-      return "left";
-    case "right":
-    case "right_barracks":
-    case "barracks_right":
-      return "right";
-    case "center":
-    case "centre":
-    case "center_barracks":
-    case "barracks_center":
-    case "barracks_centre":
-      return "center";
-    default:
-      return "";
-  }
+  return barracksSystem.normalizeBarracksSiteId(value);
 }
 
 function summarizeBarracksSiteCounts(siteCounts) {
-  if (!siteCounts || typeof siteCounts !== "object") return "<missing>";
-  const entries = Object.entries(siteCounts)
-    .map(([rosterKey, count]) => ({
-      rosterKey,
-      ownedCount: Math.max(0, Math.floor(Number(count) || 0)),
-    }))
-    .filter((entry) => entry.ownedCount > 0)
-    .sort((a, b) => String(a.rosterKey).localeCompare(String(b.rosterKey)));
-  if (entries.length === 0) return "<empty>";
-  return entries.map((entry) => `${entry.rosterKey}:${entry.ownedCount}`).join(",");
+  return barracksSystem.summarizeBarracksSiteCounts(siteCounts);
 }
 
 function summarizeBarracksSiteRosterEntries(rosterEntries) {
-  if (!Array.isArray(rosterEntries)) return "<missing>";
-  const entries = rosterEntries
-    .filter((entry) => entry && Math.max(0, Math.floor(Number(entry.ownedCount) || 0)) > 0)
-    .map((entry) => `${entry.rosterKey}:${Math.max(0, Math.floor(Number(entry.ownedCount) || 0))}`);
-  return entries.length > 0 ? entries.join(",") : "<empty>";
+  return barracksSystem.summarizeBarracksSiteRosterEntries(rosterEntries);
 }
 
 function logBarracksRosterState(lane, reason) {
@@ -3676,156 +2435,51 @@ function logBarracksRosterState(lane, reason) {
 }
 
 function getBarracksSiteCounts(lane, barracksId) {
-  if (!lane) return null;
-  const normalizedId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedId)
-    return null;
-  if (!lane.barracksSiteRosterCounts || typeof lane.barracksSiteRosterCounts !== "object")
-    lane.barracksSiteRosterCounts = createBarracksSiteRosterCounts();
-
-  if (!lane.barracksSiteRosterCounts[normalizedId])
-    lane.barracksSiteRosterCounts[normalizedId] = createBarracksRosterCounts();
-
-  return lane.barracksSiteRosterCounts[normalizedId];
+  return barracksSystem.getBarracksSiteCounts(lane, barracksId);
 }
 
 function hasOwnedBarracksUnits(lane, barracksId) {
-  const siteCounts = getBarracksSiteCounts(lane, barracksId);
-  if (!siteCounts) return false;
-  for (const value of Object.values(siteCounts)) {
-    if (Math.max(0, Math.floor(Number(value) || 0)) > 0)
-      return true;
-  }
-  return false;
+  return barracksSystem.hasOwnedBarracksUnits(lane, barracksId);
 }
 
 function getBarracksSiteTierRequirement(siteDef) {
-  return siteDef ? Math.max(1, Math.floor(Number(siteDef.legacyTierUnlock) || 1)) : 1;
+  return barracksSystem.getBarracksSiteTierRequirement(siteDef);
 }
 
 function getBarracksSiteBuildCost(siteDef) {
-  return siteDef ? Math.max(0, Math.floor(Number(siteDef.buildCost) || 0)) : 0;
+  return barracksSystem.getBarracksSiteBuildCost(siteDef);
 }
 
 function getBarracksSiteMaxLevel() {
-  return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
+  return barracksSystem.getBarracksSiteMaxLevel();
 }
 
 function normalizeBarracksSiteLevel(level) {
-  return Math.min(
-    getBarracksSiteMaxLevel(),
-    Math.max(1, Math.floor(Number(level) || 1))
-  );
+  return barracksSystem.normalizeBarracksSiteLevel(level);
 }
 
 function getBarracksSiteBaseMaxHp() {
-  const buildingDef = FORTRESS_BUILDING_DEFS.barracks;
-  return Math.max(1, Math.floor(Number(buildingDef && buildingDef.baseMaxHp) || 260));
+  return barracksSystem.getBarracksSiteBaseMaxHp();
 }
 
 function getBarracksSiteSendIntervalTicks(level) {
-  const safeLevel = normalizeBarracksSiteLevel(level);
-  const seconds = Math.max(5, 30 - ((safeLevel - 1) * 10));
-  return seconds * TICK_HZ;
+  return barracksSystem.getBarracksSiteSendIntervalTicks(level);
 }
 
 function createBarracksSiteState(siteDef, options = {}) {
-  const built = !!options.isBuilt;
-  const level = built ? normalizeBarracksSiteLevel(options.level) : 0;
-  const baseMaxHp = getBarracksSiteBaseMaxHp();
-  const interval = level > 0 ? getBarracksSiteSendIntervalTicks(level) : 0;
-  const maxHp = built ? baseMaxHp : 0;
-  const hp = built
-    ? Math.max(0, Math.min(maxHp, Math.floor(Number(options.hp) || maxHp)))
-    : 0;
-
-  return {
-    barracksId: siteDef.barracksId,
-    isBuilt: built,
-    level,
-    hp,
-    maxHp,
-    nextSendTick: built
-      ? Math.max(1, Math.floor(Number(options.nextSendTick) || interval))
-      : 0,
-    costHistory: Array.isArray(options.costHistory) ? options.costHistory.slice() : [],
-  };
+  return barracksSystem.createBarracksSiteState(siteDef, options);
 }
 
 function createBarracksSiteStates(_teamHpStart, legacyBarracksLevel = 1) {
-  const states = {};
-  const safeLegacyLevel = normalizeBarracksSiteLevel(legacyBarracksLevel);
-  for (const siteDef of BARRACKS_SITE_DEFS) {
-    const built = !!siteDef.startsBuilt;
-    states[siteDef.barracksId] = createBarracksSiteState(siteDef, {
-      isBuilt: built,
-      level: built ? safeLegacyLevel : 0,
-      hp: built ? getBarracksSiteBaseMaxHp() : 0,
-      nextSendTick: built ? getBarracksSiteSendIntervalTicks(safeLegacyLevel) : 0,
-    });
-  }
-  return states;
+  return barracksSystem.createBarracksSiteStates(_teamHpStart, legacyBarracksLevel);
 }
 
 function syncLegacyBarracksAggregate(lane) {
-  if (!lane) return;
-
-  const states = lane.barracksSiteStates && typeof lane.barracksSiteStates === "object"
-    ? Object.values(lane.barracksSiteStates)
-    : [];
-  let aggregateLevel = 1;
-  for (const state of states) {
-    if (!state || !state.isBuilt) continue;
-    aggregateLevel = Math.max(aggregateLevel, normalizeBarracksSiteLevel(state.level));
-  }
-
-  lane.barracks = Object.assign({ level: aggregateLevel }, getBarracksLevelDef(aggregateLevel));
+  return barracksSystem.syncLegacyBarracksAggregate(lane);
 }
 
 function ensureBarracksSiteStates(lane, game) {
-  if (!lane) return {};
-
-  const legacyBarracksLevel = normalizeBarracksSiteLevel(
-    lane.barracks && lane.barracks.level
-  );
-  const legacyNextSendTick = game && Number.isInteger(game.nextBarracksSendTick)
-    ? game.nextBarracksSendTick
-    : null;
-  const existing = lane.barracksSiteStates && typeof lane.barracksSiteStates === "object"
-    ? lane.barracksSiteStates
-    : {};
-  const next = {};
-
-  for (const siteDef of BARRACKS_SITE_DEFS) {
-    const siteId = siteDef.barracksId;
-    const current = existing[siteId];
-    const shouldStartBuilt = !!siteDef.startsBuilt
-      || hasOwnedBarracksUnits(lane, siteId)
-      || legacyBarracksLevel >= getBarracksSiteTierRequirement(siteDef);
-
-    if (current && typeof current === "object") {
-      const built = !!current.isBuilt || hasOwnedBarracksUnits(lane, siteId);
-      next[siteId] = createBarracksSiteState(siteDef, {
-        isBuilt: built,
-        level: built ? (current.level || legacyBarracksLevel) : 0,
-        hp: current.hp,
-        nextSendTick: current.nextSendTick,
-        costHistory: current.costHistory,
-      });
-      continue;
-    }
-
-    next[siteId] = createBarracksSiteState(siteDef, {
-      isBuilt: shouldStartBuilt,
-      level: shouldStartBuilt ? legacyBarracksLevel : 0,
-      hp: shouldStartBuilt ? getBarracksSiteBaseMaxHp() : 0,
-      nextSendTick: shouldStartBuilt ? legacyNextSendTick : 0,
-    });
-  }
-
-  lane.barracksSiteStates = next;
-  syncLegacyBarracksAggregate(lane);
-  return next;
+  return barracksSystem.ensureBarracksSiteStates(lane, game);
 }
 
 function getBarracksSiteState(lane, barracksId, game) {
@@ -3974,7 +2628,7 @@ function resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId = null) 
 }
 
 function getHeroRosterDefinition(heroKey) {
-  return HERO_ROSTER_DEFS.find((entry) => entry.heroKey === heroKey) || null;
+  return barracksSystem.getHeroRosterDefinition(heroKey);
 }
 
 function getHeroRosterLockedReason(heroDef) {
@@ -3987,44 +2641,31 @@ function getHeroRosterLockedReason(heroDef) {
 }
 
 function getFortressPadState(lane, padId) {
-  if (!lane || !Array.isArray(lane.fortressPads)) return null;
-  return lane.fortressPads.find((pad) => pad && pad.padId === padId) || null;
+  return fortressSystem.getFortressPadState(lane, padId);
 }
 
 function getFortressPadByBuildingType(lane, buildingType) {
-  if (!lane || !Array.isArray(lane.fortressPads)) return null;
-  return lane.fortressPads.find((pad) => pad && pad.buildingType === buildingType) || null;
+  return fortressSystem.getFortressPadByBuildingType(lane, buildingType);
 }
 
 function getHighestBuiltFortressPadTier(lane, buildingType) {
-  if (!lane || !Array.isArray(lane.fortressPads) || !buildingType)
-    return 0;
-
-  let bestTier = 0;
-  for (const pad of lane.fortressPads) {
-    if (!pad || pad.buildingType !== buildingType)
-      continue;
-    bestTier = Math.max(bestTier, Math.max(0, Math.floor(Number(pad.tier) || 0)));
-  }
-  return bestTier;
+  return fortressSystem.getHighestBuiltFortressPadTier(lane, buildingType);
 }
 
 function getTownCoreTier(lane) {
-  return Math.max(1, getHighestBuiltFortressPadTier(lane, "town_core") || 1);
+  return fortressSystem.getTownCoreTier(lane);
 }
 
 function getLaneTownCorePad(lane) {
-  return getFortressPadByBuildingType(lane, "town_core");
+  return fortressSystem.getLaneTownCorePad(lane);
 }
 
 function getLaneTownCoreHp(lane) {
-  const corePad = getLaneTownCorePad(lane);
-  return corePad ? Math.max(0, Math.floor(Number(corePad.hp) || 0)) : 0;
+  return fortressSystem.getLaneTownCoreHp(lane);
 }
 
 function getLaneTownCoreMaxHp(lane) {
-  const corePad = getLaneTownCorePad(lane);
-  return corePad ? Math.max(1, Math.floor(Number(corePad.maxHp) || 1)) : 1;
+  return fortressSystem.getLaneTownCoreMaxHp(lane);
 }
 
 function buildTownCoreStateSummary(game) {
@@ -4120,28 +2761,15 @@ function getLaneTownCoreCombatTarget(lane) {
 }
 
 function getBuildingTierDisplayName(buildingType, tier) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  const safeTier = Math.max(0, Math.floor(Number(tier) || 0));
-  const tierNames = buildingDef && buildingDef.tierDisplayNames;
-  if (Array.isArray(tierNames) && tierNames[safeTier])
-    return String(tierNames[safeTier]);
-  return safeTier > 0 ? `Tier ${safeTier}` : "Unbuilt";
+  return fortressSystem.getBuildingTierDisplayName(buildingType, tier);
 }
 
 function getBuildingBranchLabel(buildingType) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  return buildingDef && String(buildingDef.branchLabel || "").trim() !== ""
-    ? buildingDef.branchLabel
-    : buildingDef && buildingDef.displayName
-      ? buildingDef.displayName
-      : buildingType;
+  return fortressSystem.getBuildingBranchLabel(buildingType);
 }
 
 function getBuildingDisplayName(buildingType) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  return buildingDef && String(buildingDef.displayName || "").trim() !== ""
-    ? buildingDef.displayName
-    : buildingType;
+  return fortressSystem.getBuildingDisplayName(buildingType);
 }
 
 function isHeroUnlockedForLane(lane, heroDef) {
@@ -4398,39 +3026,15 @@ function applyFortressPadDamage(game, lane, padId, damage) {
 }
 
 function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  if (!buildingDef) return 0;
-  if (buildingType === "town_core")
-    return Math.max(1, Math.floor(Number(teamHpStart) || TEAM_HP_START));
-
-  const safeTier = Math.max(1, Math.floor(Number(tier) || 1));
-  const baseHp = Math.max(1, Number(buildingDef.baseMaxHp) || 100);
-  return Math.floor(baseHp * (1 + 0.25 * (safeTier - 1)));
+  return fortressSystem.resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart);
 }
 
 function getFortressRequiredTownCoreTier(buildingType, targetTier) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  const safeTier = Math.max(1, Math.floor(Number(targetTier) || 1));
-  if (!buildingDef) return safeTier;
-
-  const perTier = buildingDef.requiredTownCoreTierByTier;
-  if (perTier && Number.isFinite(Number(perTier[safeTier])))
-    return Math.max(1, Math.floor(Number(perTier[safeTier]) || 1));
-
-  const explicitTier = Math.floor(Number(buildingDef.requiredTownCoreTier) || 0);
-  if (explicitTier > 0) return explicitTier;
-
-  return safeTier;
+  return fortressSystem.getFortressRequiredTownCoreTier(buildingType, targetTier);
 }
 
 function getFortressDependencyRequirements(buildingType, targetTier) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  const safeTier = Math.max(1, Math.floor(Number(targetTier) || 1));
-  if (!buildingDef || !buildingDef.dependencyRequirementsByTier)
-    return [];
-
-  const requirements = buildingDef.dependencyRequirementsByTier[safeTier];
-  return Array.isArray(requirements) ? requirements : [];
+  return fortressSystem.getFortressDependencyRequirements(buildingType, targetTier);
 }
 
 function getFortressDependencyLockedReason(lane, buildingType, targetTier) {
@@ -4451,8 +3055,7 @@ function getFortressDependencyLockedReason(lane, buildingType, targetTier) {
 }
 
 function getFortressBuildCost(buildingType) {
-  const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
-  return buildingDef ? Math.max(0, Math.floor(Number(buildingDef.buildCost) || 0)) : 0;
+  return fortressSystem.getFortressBuildCost(buildingType);
 }
 
 function getFortressUpgradeCost(buildingType, nextTier) {
@@ -4538,7 +3141,7 @@ function describeFortressPad(game, lane, padState) {
 }
 
 function getBarracksRosterDefinition(rosterKey) {
-  return BARRACKS_ROSTER_DEFS.find((entry) => entry.rosterKey === rosterKey) || null;
+  return barracksSystem.getBarracksRosterDefinition(rosterKey);
 }
 
 function getBarracksRosterBuyCost(rosterDef) {
@@ -4566,12 +3169,11 @@ function getBarracksRosterSellRefund(rosterDef) {
 }
 
 function getBarracksRoleSortIndex(role) {
-  return BARRACKS_ROLE_SORT_ORDER[role] ?? 99;
+  return barracksSystem.getBarracksRoleSortIndex(role);
 }
 
 function getBarracksSpawnQueueRoleSortIndex(role) {
-  const index = BARRACKS_SPAWN_ROLE_ORDER.indexOf(role);
-  return index >= 0 ? index : 99;
+  return barracksSystem.getBarracksSpawnQueueRoleSortIndex(role);
 }
 
 function createBarracksSiteRosterSnapshot(game, lane, barracksId) {
@@ -6175,6 +4777,7 @@ function clearUnitCombatTarget(unit, gameTick = 0, options = {}) {
     return;
 
   const hadTarget = !!(unit.combatTarget && unit.combatTarget.unitId);
+  const suppressRegroup = !!(options && options.suppressRegroup);
   unit.combatTarget = null;
   unit.combatTargetId = null;
   unit.currentTargetId = null;
@@ -6185,7 +4788,15 @@ function clearUnitCombatTarget(unit, gameTick = 0, options = {}) {
   unit.simpleContactApproachX = 0;
   unit.simpleContactApproachY = 0;
 
-  if (!hadTarget || !isLaneControlledUnit(unit))
+  if (!hadTarget)
+    return;
+
+  if (suppressRegroup) {
+    unit.regroupUntilTick = 0;
+    return;
+  }
+
+  if (!isLaneControlledUnit(unit))
     return;
 
   const nextRegroupTick = Number.isFinite(Number(options.regroupUntilTick))
@@ -6210,6 +4821,7 @@ function assignUnitCombatTarget(unit, targetDescriptor, gameTick = 0) {
   unit.combatTargetId = targetDescriptor.unitId;
   unit.currentTargetId = targetDescriptor.unitId;
   unit.combatTargetLockedUntilTick = 0;
+  unit.routeRecoveringFromCombatTicks = 0;
   if (!previousTargetId || previousTargetId !== targetDescriptor.unitId)
     unit.regroupUntilTick = 0;
   return true;
@@ -7249,10 +5861,11 @@ function getStructureTargetAcquisitionRange(unit, target) {
   return getUnitStopDistance(unit.type, target.type) + STRUCTURE_TARGET_VICINITY_PADDING;
 }
 
-function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false) {
+function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null) {
   if (!game || !lane || !unit)
     return null;
 
+  const directEngagementOnly = !!(options && options.directEngagementOnly);
   const defendSeek = isLaneControlledUnit(unit)
     && getLaneCommandStateForUnit(game, unit) === LANE_COMMAND_STATES.DEFEND;
   const defendAnchorState = defendSeek
@@ -7276,16 +5889,19 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
       const dist = Math.sqrt((dx * dx) + (dy * dy));
       const emergencyInteriorTarget = defendSeek
         && isTargetInsideHomeFortressEmergencyZone(game, unit, candidate);
+      const baseEngagementRange = getUnitEngagementRange(unit.type);
       const rangeLimit = requireAttackRange
         ? getUnitStopDistance(unit.type, candidate.type) + CONTACT_SLOT_TOLERANCE
-        : (emergencyInteriorTarget
-          ? Math.max(getUnitEngagementRange(unit.type), FORTRESS_INTERIOR_ASSAULT_RADIUS)
-          : (defendSeek
-            ? Math.max(
-              getUnitEngagementRange(unit.type),
-              (Number(defendAnchorState && defendAnchorState.engagementRadius) || LANE_COMMAND_DEFENSE_RADIUS) + ROUTE_SLOT_ROW_SPACING
-            )
-            : getUnitEngagementRange(unit.type))) + CONTACT_SLOT_TOLERANCE;
+        : (directEngagementOnly
+          ? baseEngagementRange
+          : (emergencyInteriorTarget
+            ? Math.max(baseEngagementRange, FORTRESS_INTERIOR_ASSAULT_RADIUS)
+            : (defendSeek
+              ? Math.max(
+                baseEngagementRange,
+                (Number(defendAnchorState && defendAnchorState.engagementRadius) || LANE_COMMAND_DEFENSE_RADIUS) + ROUTE_SLOT_ROW_SPACING
+              )
+              : baseEngagementRange))) + CONTACT_SLOT_TOLERANCE;
       if (dist > rangeLimit)
         continue;
 
@@ -7326,6 +5942,19 @@ function getWaveUnitPreferredTarget(game, lane, unit) {
   if (routeUnitInEngageRange) return { kind: "unit", entity: routeUnitInEngageRange.entity, laneIndex: routeUnitInEngageRange.laneIndex, reason: "route_unit_engage_range", preferenceScore: routeUnitInEngageRange.preferenceScore };
 
   return null;
+}
+
+function hasImmediateFollowThroughCombatTarget(game, lane, unit) {
+  if (!game || !lane || !unit || !isLaneControlledUnit(unit))
+    return false;
+  if (!canLaneControlledUnitSeekCombat(game, unit))
+    return false;
+
+  const routeUnitInAttackRange = findHostileRouteUnitTarget(game, lane, unit, true);
+  if (routeUnitInAttackRange)
+    return true;
+
+  return !!findHostileRouteUnitTarget(game, lane, unit, false, { directEngagementOnly: true });
 }
 
 function getLaneBlockingStructureTargets(lane, unit = null) {
@@ -8009,7 +6638,9 @@ function mlTick(game) {
         if (u.combatTarget && u.combatTarget.unitId) {
           const targetStillValid = !!resolvedCombatTarget && isUnitCombatTargetStillValid(game, lane, u, resolvedCombatTarget);
           if (!targetStillValid) {
-            clearUnitCombatTarget(u, game.tick);
+            clearUnitCombatTarget(u, game.tick, {
+              suppressRegroup: !resolvedCombatTarget && hasImmediateFollowThroughCombatTarget(game, lane, u),
+            });
             resolvedCombatTarget = null;
           }
         }
@@ -8100,7 +6731,9 @@ function mlTick(game) {
       } else if (u.combatTarget && u.combatTarget.unitId) {
         let target = resolveWaveCombatTarget(game, lane, u.combatTarget);
         if (!target) {
-          clearUnitCombatTarget(u, game.tick);
+          clearUnitCombatTarget(u, game.tick, {
+            suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, u),
+          });
         } else if (target.kind === "unit") {
           u.combatState = WAVE_UNIT_STATES.COMBAT;
           u.routeState = WAVE_UNIT_STATES.COMBAT;
@@ -8135,7 +6768,9 @@ function mlTick(game) {
                   killedByType: u.type,
                   killedByLane: lane.laneIndex,
                 });
-                clearUnitCombatTarget(u, game.tick);
+                clearUnitCombatTarget(u, game.tick, {
+                  suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, u),
+                });
               }
               u.atkCd = cooldownTicks;
               attackedTarget = true;
@@ -8214,9 +6849,20 @@ function mlTick(game) {
               });
             }
           } else {
+            const routeSpeed = u.baseSpeed || 0.18;
             if (startedTickWithCombatTarget || startedTickInCombat)
               syncUnitRouteStateToWorldPosition(u);
-            advanceRouteState(u, u.baseSpeed || 0.18);
+            if (startedTickWithCombatTarget || startedTickInCombat) {
+              u.routeRecoveringFromCombatTicks = Math.max(
+                Number(u.routeRecoveringFromCombatTicks) || 0,
+                WAVE_ROUTE_COMBAT_RECOVERY_TICKS
+              );
+            }
+            if ((Number(u.routeRecoveringFromCombatTicks) || 0) > 0) {
+              relaxUnitRouteOffsets(u, routeSpeed);
+              u.routeRecoveringFromCombatTicks = Math.max(0, (Number(u.routeRecoveringFromCombatTicks) || 0) - 1);
+            }
+            advanceRouteState(u, routeSpeed);
             setUnitRouteSnapshotState(u);
             u._missingRouteLogged = false;
             if (ENABLE_WAVE_UNIT_TRACE) {
