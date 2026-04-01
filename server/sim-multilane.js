@@ -40,6 +40,7 @@ const {
 } = require("./game/fortUnitCatalog");
 const fortressSystem = require("./game/multilane/fortressSystem");
 const barracksSystem = require("./game/multilane/barracksSystem");
+const laneCommandSystem = require("./game/multilane/laneCommandSystem");
 const routeGraph = require("./game/multilane/routeGraph");
 const {
   getCurrentBarracksMult,
@@ -355,391 +356,109 @@ function getBarracksSiteWorldPosition(laneIndex, barracksId) {
 }
 
 function resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex) {
-  if (!game || !Array.isArray(game.lanes))
-    return null;
-
-  for (let step = 1; step <= game.lanes.length; step++) {
-    const idx = (sourceLaneIndex + step) % game.lanes.length;
-    if (isOpponentLane(game, sourceLaneIndex, idx))
-      return idx;
-  }
-  return null;
+  return laneCommandSystem.resolveOuterLoopTargetLaneIndex
+    ? laneCommandSystem.resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex, LANE_COMMAND_SYSTEM_DEPS)
+    : null;
 }
 
 function resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex) {
-  const opposingIdx = Number.isInteger(sourceLaneIndex) && sourceLaneIndex >= 0 && sourceLaneIndex < OPPOSING_LANE_INDEX.length
-    ? OPPOSING_LANE_INDEX[sourceLaneIndex]
-    : null;
-  if (Number.isInteger(opposingIdx) && isOpponentLane(game, sourceLaneIndex, opposingIdx))
-    return opposingIdx;
-  return resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex);
+  return laneCommandSystem.resolveCenterCrossTargetLaneIndex
+    ? laneCommandSystem.resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex, LANE_COMMAND_SYSTEM_DEPS)
+    : resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex);
 }
 
 function normalizeLaneCommandState(value) {
-  const normalized = String(value || "").trim().toUpperCase();
-  switch (normalized) {
-    case LANE_COMMAND_STATES.ATTACK:
-    case "ADVANCE":
-      return LANE_COMMAND_STATES.ATTACK;
-    case LANE_COMMAND_STATES.DEFEND:
-    case "HOLD":
-      return LANE_COMMAND_STATES.DEFEND;
-    case LANE_COMMAND_STATES.RETREAT:
-    case "CALLBACK":
-      return LANE_COMMAND_STATES.RETREAT;
-    default:
-      return null;
-  }
+  return laneCommandSystem.normalizeLaneCommandState(value, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function isLaneCombatEnabledCommandState(commandState) {
-  return commandState === LANE_COMMAND_STATES.ATTACK
-    || commandState === LANE_COMMAND_STATES.DEFEND;
+  return laneCommandSystem.isLaneCombatEnabledCommandState(commandState, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getDefaultLaneObjectiveLaneIndex(game, sourceLaneIndex) {
-  if (!Number.isInteger(sourceLaneIndex) || sourceLaneIndex < 0)
-    return null;
-
-  const opposingLaneIndex = OPPOSING_LANE_INDEX[sourceLaneIndex];
-  if (game && Array.isArray(game.lanes) && Number.isInteger(opposingLaneIndex)
-      && opposingLaneIndex >= 0 && opposingLaneIndex < game.lanes.length) {
-    return opposingLaneIndex;
-  }
-
-  if (game && Array.isArray(game.lanes) && game.lanes.length > 1) {
-    const resolved = resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex);
-    if (Number.isInteger(resolved))
-      return resolved;
-  }
-
-  return sourceLaneIndex;
+  return laneCommandSystem.getDefaultLaneObjectiveLaneIndex
+    ? laneCommandSystem.getDefaultLaneObjectiveLaneIndex(game, sourceLaneIndex, LANE_COMMAND_SYSTEM_DEPS)
+    : sourceLaneIndex;
 }
 
 function getLaneCommandState(lane) {
-  return normalizeLaneCommandState(lane && lane.commandState) || LANE_COMMAND_STATES.DEFEND;
+  return laneCommandSystem.getLaneCommandState(lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandObjectiveLaneIndex(game, laneOrLaneIndex) {
-  const lane = typeof laneOrLaneIndex === "object"
-    ? laneOrLaneIndex
-    : getSourceLane(game, laneOrLaneIndex);
-  if (!lane || !Number.isInteger(lane.laneIndex))
-    return null;
-
-  const explicit = Number.isInteger(lane.commandTargetLaneIndex)
-    ? lane.commandTargetLaneIndex
-    : null;
-  if (explicit !== null && game && Array.isArray(game.lanes)
-      && explicit >= 0 && explicit < game.lanes.length) {
-    return explicit;
-  }
-
-  return getDefaultLaneObjectiveLaneIndex(game, lane.laneIndex);
+  return laneCommandSystem.getLaneCommandObjectiveLaneIndex(game, laneOrLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandRouteObjectiveLaneIndex(game, laneOrLaneIndex) {
-  const lane = typeof laneOrLaneIndex === "object"
-    ? laneOrLaneIndex
-    : getSourceLane(game, laneOrLaneIndex);
-  if (!lane || !Number.isInteger(lane.laneIndex))
-    return null;
-
-  const commandState = getLaneCommandState(lane);
-  if (commandState === LANE_COMMAND_STATES.RETREAT)
-    return lane.laneIndex;
-
-  return getLaneCommandObjectiveLaneIndex(game, lane);
+  return laneCommandSystem.getLaneCommandRouteObjectiveLaneIndex(game, laneOrLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandEngagementRadius(lane) {
-  const commandState = getLaneCommandState(lane);
-  if (!isLaneCombatEnabledCommandState(commandState))
-    return 0;
-  const explicitRadius = Number(lane && lane.engagementRadius);
-  if (Number.isFinite(explicitRadius) && explicitRadius > 0)
-    return commandState === LANE_COMMAND_STATES.DEFEND
-      ? Math.max(explicitRadius, LANE_COMMAND_DEFENSE_RADIUS)
-      : Math.max(explicitRadius, LANE_COMMAND_COMBAT_LEASH);
-  return commandState === LANE_COMMAND_STATES.DEFEND
-    ? LANE_COMMAND_DEFENSE_RADIUS
-    : LANE_COMMAND_COMBAT_LEASH;
+  return laneCommandSystem.getLaneCommandEngagementRadius(lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandAnchorProgress(lane) {
-  const commandState = getLaneCommandState(lane);
-  if (commandState === LANE_COMMAND_STATES.ATTACK)
-    return 1;
-  if (commandState === LANE_COMMAND_STATES.DEFEND || commandState === LANE_COMMAND_STATES.RETREAT)
-    return 0;
-  const raw = Number(lane && lane.commandAnchorProgress);
-  if (!Number.isFinite(raw))
-    return 0;
-  return Math.max(0, Math.min(1, raw));
+  return laneCommandSystem.getLaneCommandAnchorProgress(lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneCommandContainerLaneIndex(game, lane) {
-  if (!lane || !Number.isInteger(lane.laneIndex))
-    return null;
-
-  const commandState = getLaneCommandState(lane);
-  if (commandState === LANE_COMMAND_STATES.RETREAT)
-    return lane.laneIndex;
-
-  const objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
-  if (!Number.isInteger(objectiveLaneIndex))
-    return lane.laneIndex;
-
-  return getLaneCommandAnchorProgress(lane) <= LANE_COMMAND_HOME_CONTAINER_PROGRESS
-    ? lane.laneIndex
-    : objectiveLaneIndex;
+  return laneCommandSystem.resolveLaneCommandContainerLaneIndex(game, lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveRouteNodeLaneIndex(nodeId) {
-  const coreNodeId = getLaneCoreNodeIdForRouteNode(nodeId);
-  return coreNodeId ? getNodeIndex(coreNodeId) : -1;
+  return laneCommandSystem.resolveRouteNodeLaneIndex(nodeId, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneControlledUnitCurrentSegmentLaneIndex(unit) {
-  const currentSegment = String(unit && unit.currentSegment || "").trim().toUpperCase();
-  if (currentSegment === "")
-    return null;
-
-  const parts = currentSegment.split("_");
-  if (parts.length !== 2)
-    return null;
-
-  const fromLaneIndex = resolveRouteNodeLaneIndex(parts[0]);
-  const toLaneIndex = resolveRouteNodeLaneIndex(parts[1]);
-  if (fromLaneIndex >= 0 && toLaneIndex >= 0)
-    return fromLaneIndex === toLaneIndex
-      ? fromLaneIndex
-      : ((Math.max(0, Math.min(1, Number(unit && unit.segmentProgress) || 0)) < 0.5)
-        ? fromLaneIndex
-        : toLaneIndex);
-  if (fromLaneIndex >= 0)
-    return fromLaneIndex;
-  if (toLaneIndex >= 0)
-    return toLaneIndex;
-  return null;
+  return laneCommandSystem.resolveLaneControlledUnitCurrentSegmentLaneIndex(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit) {
-  const fallbackLaneIndex = resolveLaneCommandContainerLaneIndex(game, ownerLane);
-  if (!ownerLane || !isLaneControlledUnit(unit))
-    return fallbackLaneIndex;
-  if (USE_PER_UNIT_ANCHOR_SLOTS)
-    return fallbackLaneIndex;
-
-  const currentSegmentLaneIndex = resolveLaneControlledUnitCurrentSegmentLaneIndex(unit);
-  if (Number.isInteger(currentSegmentLaneIndex) && currentSegmentLaneIndex >= 0)
-    return currentSegmentLaneIndex;
-
-  const routeStartLaneIndex = resolveRouteNodeLaneIndex(unit && unit.routeStartNode);
-  const routeTargetLaneIndex = resolveRouteNodeLaneIndex(unit && unit.routeTargetNode);
-  if (routeStartLaneIndex < 0 || routeTargetLaneIndex < 0)
-    return fallbackLaneIndex;
-  if (routeStartLaneIndex === routeTargetLaneIndex)
-    return routeStartLaneIndex;
-
-  const routeProgress = computeUnitRoutePathIndex(unit);
-  if (!Number.isFinite(routeProgress))
-    return fallbackLaneIndex;
-
-  return routeProgress < 0.5
-    ? routeStartLaneIndex
-    : routeTargetLaneIndex;
+  return laneCommandSystem.resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildLaneCommandCoreRouteSegments(sourceLaneIndex, objectiveLaneIndex) {
-  const sourceNodeId = getLaneNodeId(sourceLaneIndex);
-  const objectiveNodeId = getLaneNodeId(objectiveLaneIndex);
-  if (!sourceNodeId || !objectiveNodeId)
-    return null;
-  if (sourceNodeId === objectiveNodeId)
-    return [];
-  return buildRouteSegments(ROUTE_TYPES.CENTER_CROSS, sourceNodeId, objectiveNodeId);
+  return laneCommandSystem.buildLaneCommandCoreRouteSegments(sourceLaneIndex, objectiveLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksId, objectiveLaneIndex) {
-  const sourceNodeId = getBarracksRouteStartNodeId(sourceLaneIndex, sourceBarracksId);
-  const sourceCoreNodeId = getLaneNodeId(sourceLaneIndex);
-  const coreRouteSegments = buildLaneCommandCoreRouteSegments(sourceLaneIndex, objectiveLaneIndex);
-  if (!sourceNodeId || !sourceCoreNodeId || !Array.isArray(coreRouteSegments))
-    return null;
-  return [`${sourceNodeId}_${sourceCoreNodeId}`, ...coreRouteSegments];
+  return laneCommandSystem.buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksId, objectiveLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildLaneCommandAnchorSet(game, lane) {
-  if (!game || !lane || !Number.isInteger(lane.laneIndex))
-    return null;
-
-  const axes = getLaneCombatAxes(lane.laneIndex);
-  if (!axes)
-    return null;
-
-  const objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
-  const objectiveLane = getLaneByIndex(game, objectiveLaneIndex);
-  const enemyCoreTarget = objectiveLane ? getLaneTownCoreCombatTarget(objectiveLane) : null;
-  const attackFacing = enemyCoreTarget
-    ? normalize2D({
-        x: Number(enemyCoreTarget.posX) - Number(axes.core.x),
-        y: Number(enemyCoreTarget.posY) - Number(axes.core.y),
-      })
-    : axes.forward;
-
-  return {
-    insideGateAnchor: {
-      x: Number(axes.core.x) - (Number(axes.forward.x) * INSIDE_GATE_ANCHOR_OFFSET),
-      y: Number(axes.core.y) - (Number(axes.forward.y) * INSIDE_GATE_ANCHOR_OFFSET),
-    },
-    outsideGateAnchor: {
-      x: Number(axes.core.x) + (Number(axes.forward.x) * OUTSIDE_GATE_ANCHOR_OFFSET),
-      y: Number(axes.core.y) + (Number(axes.forward.y) * OUTSIDE_GATE_ANCHOR_OFFSET),
-    },
-    enemyCoreAnchor: enemyCoreTarget
-      ? {
-          x: Number(enemyCoreTarget.posX) || 0,
-          y: Number(enemyCoreTarget.posY) || 0,
-        }
-      : {
-          x: Number(axes.core.x) || 0,
-          y: Number(axes.core.y) || 0,
-        },
-    objectiveLaneIndex,
-    forward: axes.forward,
-    lateral: axes.lateral,
-    attackFacing,
-  };
+  return laneCommandSystem.buildLaneCommandAnchorSet(game, lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function sampleLaneCommandAnchor(game, lane) {
-  if (!game || !lane || !Number.isInteger(lane.laneIndex))
-    return null;
-
-  const commandState = getLaneCommandState(lane);
-  const anchorSet = buildLaneCommandAnchorSet(game, lane);
-  if (!anchorSet)
-    return null;
-  const objectiveLaneIndex = getLaneCommandRouteObjectiveLaneIndex(game, lane);
-  const baseRouteSegments = buildLaneCommandCoreRouteSegments(lane.laneIndex, objectiveLaneIndex);
-  if (!Array.isArray(baseRouteSegments))
-    return null;
-  const anchorProgress = getLaneCommandAnchorProgress(lane);
-  const anchorKind = commandState === LANE_COMMAND_STATES.RETREAT
-    ? LANE_STANCE_ANCHOR_KINDS.INSIDE_GATE
-    : (commandState === LANE_COMMAND_STATES.DEFEND
-      ? LANE_STANCE_ANCHOR_KINDS.OUTSIDE_GATE
-      : LANE_STANCE_ANCHOR_KINDS.ENEMY_CORE);
-  const anchorPoint = anchorKind === LANE_STANCE_ANCHOR_KINDS.INSIDE_GATE
-    ? anchorSet.insideGateAnchor
-    : (anchorKind === LANE_STANCE_ANCHOR_KINDS.OUTSIDE_GATE
-      ? anchorSet.outsideGateAnchor
-      : anchorSet.enemyCoreAnchor);
-  const facing = normalize2D(
-    commandState === LANE_COMMAND_STATES.ATTACK
-      ? anchorSet.attackFacing
-      : anchorSet.forward
-  );
-  return {
-    commandState,
-    combatEnabled: isLaneCombatEnabledCommandState(commandState),
-    engagementRadius: getLaneCommandEngagementRadius(lane),
-    objectiveLaneIndex,
-    containerLaneIndex: resolveLaneCommandContainerLaneIndex(game, lane),
-    anchorProgress,
-    anchorKind,
-    anchorX: Number(anchorPoint && anchorPoint.x) || 0,
-    anchorY: Number(anchorPoint && anchorPoint.y) || 0,
-    facing,
-    lateral: perpendicular2D(facing),
-    insideGateAnchor: anchorSet.insideGateAnchor,
-    outsideGateAnchor: anchorSet.outsideGateAnchor,
-    enemyCoreAnchor: anchorSet.enemyCoreAnchor,
-    baseRouteSegments,
-  };
+  return laneCommandSystem.sampleLaneCommandAnchor(game, lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function normalizeLegacyDefenderUnit(game, fallbackLane, unit) {
-  if (!unit || !unit.isDefender)
-    return false;
-
-  const ownerLane = getSourceLane(game, Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1) || fallbackLane;
-  if (!ownerLane || !Number.isInteger(ownerLane.laneIndex))
-    return false;
-
-  const normalizedBarracksId = resolveUnitSourceBarracksId(unit) || "center";
-  const allegianceKey = resolveLaneAllegianceKey(ownerLane) || resolveUnitAllegianceKey(game, ownerLane, unit);
-
-  unit.isDefender = false;
-  unit.spawnSourceType = unit.isHero ? SPAWN_SOURCE_TYPES.BARRACKS_HERO : SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
-  unit.sourceLaneIndex = ownerLane.laneIndex;
-  unit.ownerLaneIndex = ownerLane.laneIndex;
-  unit.ownerLane = ownerLane.laneIndex;
-  unit.targetLaneIndex = Number.isInteger(unit.targetLaneIndex) ? unit.targetLaneIndex : ownerLane.laneIndex;
-  unit.laneId = unit.targetLaneIndex;
-  unit.sourceBarracksId = normalizedBarracksId;
-  unit.sourceBarracksKey = normalizedBarracksId;
-  unit.barracksId = normalizedBarracksId;
-  unit.allegianceKey = allegianceKey;
-  unit.sourceTeam = resolveLegacySourceTeamFromAllegianceKey(allegianceKey) || ownerLane.team || null;
-  unit.stance = null;
-  unit.pathContractType = null;
-  unit.combatTarget = null;
-  unit.combatTargetId = null;
-  unit.combatTargetLockedUntilTick = 0;
-  unit.regroupUntilTick = 0;
-  unit.defState = null;
-  unit._legacyDefenderNormalized = true;
-  return true;
+  return laneCommandSystem.normalizeLegacyDefenderUnit(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function normalizeLegacyDefenderUnits(game) {
-  if (!game || !Array.isArray(game.lanes))
-    return;
-
-  for (const lane of game.lanes) {
-    if (!lane || !Array.isArray(lane.units))
-      continue;
-
-    for (const unit of lane.units) {
-      if (normalizeLegacyDefenderUnit(game, lane, unit))
-        applyCanonicalUnitMirrors(game, lane, unit);
-    }
-  }
+  return laneCommandSystem.normalizeLegacyDefenderUnits(game, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function isLaneControlledUnit(unit) {
-  if (!unit || !Number.isInteger(unit.sourceLaneIndex) || unit.sourceLaneIndex < 0)
-    return false;
-  if (unit.isDefender)
-    return false;
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  return spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER
-    || spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_HERO;
+  return laneCommandSystem.isLaneControlledUnit(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandOwnerLane(game, unit) {
-  if (!isLaneControlledUnit(unit))
-    return null;
-  return getSourceLane(game, unit.sourceLaneIndex);
+  return laneCommandSystem.getLaneCommandOwnerLane(game, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function getLaneCommandStateForUnit(game, unit) {
-  return getLaneCommandState(getLaneCommandOwnerLane(game, unit));
+  return laneCommandSystem.getLaneCommandStateForUnit(game, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function isLaneCommandCombatEnabledForUnit(game, unit) {
-  if (!isLaneControlledUnit(unit))
-    return true;
-  return isLaneCombatEnabledCommandState(getLaneCommandStateForUnit(game, unit));
+  return laneCommandSystem.isLaneCommandCombatEnabledForUnit(game, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId) {
-  const sourceLane = getSourceLane(game, sourceLaneIndex);
-  if (!sourceLane)
-    return null;
-  return resolveLaneCommandContainerLaneIndex(game, sourceLane);
+  return laneCommandSystem.resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
@@ -780,46 +499,11 @@ function moveScalarToward(value, target, maxDelta) {
 }
 
 function relaxUnitRouteOffsets(unit, speed) {
-  if (!unit)
-    return;
-
-  const baseRelaxStep = Math.max(0.12, Math.abs(Number(speed) || 0) * 0.25);
-  const relaxStep = USE_PER_UNIT_ANCHOR_SLOTS && isLaneControlledUnit(unit)
-    ? Math.max(0.35, Math.abs(Number(speed) || 0) * 0.35)
-    : baseRelaxStep;
-  unit.routeLateralOffset = moveScalarToward(unit.routeLateralOffset, 0, relaxStep);
-  unit.routeLongitudinalOffset = moveScalarToward(
-    unit.routeLongitudinalOffset,
-    0,
-    USE_PER_UNIT_ANCHOR_SLOTS && isLaneControlledUnit(unit)
-      ? relaxStep
-      : (relaxStep * 0.6)
-  );
+  return laneCommandSystem.relaxUnitRouteOffsets(unit, speed, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function setUnitRouteSnapshotState(unit) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
-    return false;
-
-  const routeProgress = computeUnitRoutePathIndex(unit);
-  const longitudinalOffset = Number(unit.routeLongitudinalOffset) || 0;
-  const lateralOffset = Number(unit.routeLateralOffset) || 0;
-  const sample = sampleContinuousRoutePosition(
-    unit.routeSegments,
-    routeProgress,
-    longitudinalOffset,
-    lateralOffset
-  );
-  if (!sample)
-    return false;
-
-  unit.currentSegment = sample.segmentId;
-  unit.posX = sample.point.x;
-  unit.posY = sample.point.y;
-  unit.pathIdx = routeProgress;
-  unit.routeWorldX = unit.posX;
-  unit.routeWorldY = unit.posY;
-  return true;
+  return laneCommandSystem.setUnitRouteSnapshotState(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function computeUnitRoutePathIndex(unit) {
@@ -831,154 +515,23 @@ function sampleContinuousRoutePosition(routeSegments, routeProgress, longitudina
 }
 
 function resolveSpawnOriginForUnit(unit, targetLane) {
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE)
-    return getWaveSpawnWorldPosition(targetLane && targetLane.laneIndex);
-
-  const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
-  const sourceBarracksKey = normalizeBarracksSiteId(unit && (unit.sourceBarracksKey || unit.sourceBarracksId));
-  if (sourceLaneIndex < 0 || !sourceBarracksKey)
-    return null;
-
-  return getBarracksSiteWorldPosition(sourceLaneIndex, sourceBarracksKey);
+  return laneCommandSystem.resolveSpawnOriginForUnit
+    ? laneCommandSystem.resolveSpawnOriginForUnit(unit, targetLane, LANE_COMMAND_SYSTEM_DEPS)
+    : null;
 }
 
 function resolveRouteContractForUnit(game, targetLane, unit) {
-  if (!game || !targetLane || !unit)
-    return { ok: false, reason: "Missing game, target lane, or unit" };
-
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  const targetLaneIndex = targetLane.laneIndex;
-  const targetNodeId = getLaneNodeId(targetLaneIndex);
-  if (!targetNodeId)
-    return { ok: false, reason: `Target lane ${targetLaneIndex} is missing a route node` };
-
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE) {
-    const sourceNodeId = getWaveSpawnNodeId(targetLaneIndex);
-    const routeSegments = buildRouteSegments(ROUTE_TYPES.WAVE_LANE, sourceNodeId, targetNodeId);
-    if (!sourceNodeId || !routeSegments)
-      return { ok: false, reason: `Wave route is missing for lane ${targetLaneIndex}` };
-
-    const spawnOrigin = resolveSpawnOriginForUnit(unit, targetLane);
-    if (!spawnOrigin)
-      return { ok: false, reason: `Wave spawn origin is missing for lane ${targetLaneIndex}` };
-
-    return {
-      ok: true,
-      spawnSourceType,
-      routeType: ROUTE_TYPES.WAVE_LANE,
-      sourceNodeId,
-      targetNodeId,
-      routeSegments,
-      spawnOrigin,
-      pathId: buildRoutePathId(routeSegments),
-    };
-  }
-
-  const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
-  const sourceBarracksKey = normalizeBarracksSiteId(unit.sourceBarracksKey || unit.sourceBarracksId);
-  const objectiveLaneIndex = resolveUnitObjectiveLaneIndex(game, targetLane, unit);
-  const objectiveNodeId = getLaneNodeId(objectiveLaneIndex);
-  if (sourceLaneIndex < 0)
-    return { ok: false, reason: "Barracks unit is missing sourceLaneIndex" };
-  if (!sourceBarracksKey)
-    return { ok: false, reason: "Barracks unit is missing a valid sourceBarracksId" };
-  if (!objectiveNodeId)
-    return { ok: false, reason: `Barracks unit is missing a valid objective lane (${objectiveLaneIndex})` };
-
-  const sourceNodeId = getBarracksRouteStartNodeId(sourceLaneIndex, sourceBarracksKey);
-  if (!sourceNodeId)
-    return {
-      ok: false,
-      reason: `Barracks route start node is missing for lane=${sourceLaneIndex} barracks='${sourceBarracksKey}'`,
-    };
-
-  const routeSegments = buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksKey, objectiveLaneIndex);
-  if (!routeSegments)
-    return { ok: false, reason: `Lane command route could not be built for barracks '${sourceBarracksKey}'` };
-
-  const spawnOrigin = resolveSpawnOriginForUnit(unit, targetLane);
-  if (!spawnOrigin)
-    return { ok: false, reason: `Barracks spawn origin is missing for lane=${sourceLaneIndex} barracks='${sourceBarracksKey}'` };
-
-  return {
-    ok: true,
-      spawnSourceType,
-      routeType: ROUTE_TYPES.CENTER_CROSS,
-      sourceNodeId,
-      targetNodeId: objectiveNodeId,
-      objectiveLaneIndex,
-      routeSegments,
-    spawnOrigin,
-    pathId: buildRoutePathId(routeSegments),
-    barracksKey: sourceBarracksKey,
-    routeLabel: "lane_command_cross",
-  };
+  return laneCommandSystem.resolveRouteContractForUnit(game, targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveRedirectRouteContractForExistingLaneControlledUnit(game, currentLane, targetLane, unit) {
-  if (!game || !currentLane || !targetLane || !unit)
-    return { ok: false, reason: "Missing game, current lane, target lane, or unit" };
-  if (!isLaneControlledUnit(unit))
-    return resolveRouteContractForUnit(game, targetLane, unit);
-
-  const currentLaneIndex = Number.isInteger(currentLane.laneIndex)
-    ? currentLane.laneIndex
-    : resolveUnitTargetLaneIndex(game, currentLane, unit);
-  const routeTargetLaneIndex = resolveUnitObjectiveLaneIndex(game, targetLane, unit);
-  let sourceNodeId = getLaneNodeId(currentLaneIndex);
-  let targetNodeId = getLaneNodeId(routeTargetLaneIndex);
-  let routeSegments = buildLaneCommandCoreRouteSegments(currentLaneIndex, routeTargetLaneIndex);
-  let routeType = ROUTE_TYPES.CENTER_CROSS;
-  let routeLabel = "lane_command_redirect";
-
-  if ((!sourceNodeId || !targetNodeId || !Array.isArray(routeSegments) || routeSegments.length <= 0)
-      && Number.isInteger(currentLaneIndex)
-      && currentLaneIndex === routeTargetLaneIndex) {
-    const currentCoreNodeId = getLaneNodeId(currentLaneIndex);
-    const currentSegment = parseRouteSegmentId(unit && unit.currentSegment);
-    const sourceBarracksId = resolveUnitSourceBarracksId(unit);
-    const barracksNodeId = getBarracksRouteStartNodeId(
-      Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : currentLaneIndex,
-      sourceBarracksId
-    );
-
-    if (currentCoreNodeId && currentSegment) {
-      const fromCoreNodeId = getLaneCoreNodeIdForRouteNode(currentSegment.fromNode);
-      const toCoreNodeId = getLaneCoreNodeIdForRouteNode(currentSegment.toNode);
-      if (currentSegment.fromNode === RouteMineNode && toCoreNodeId === currentCoreNodeId) {
-        sourceNodeId = RouteMineNode;
-        targetNodeId = currentCoreNodeId;
-        routeSegments = [`${RouteMineNode}_${currentCoreNodeId}`];
-      } else if (currentSegment.toNode === RouteMineNode && fromCoreNodeId === currentCoreNodeId) {
-        sourceNodeId = RouteMineNode;
-        targetNodeId = currentCoreNodeId;
-        routeSegments = [`${RouteMineNode}_${currentCoreNodeId}`];
-      } else if (barracksNodeId
-          && ((currentSegment.fromNode === barracksNodeId && currentSegment.toNode === currentCoreNodeId)
-            || (currentSegment.toNode === barracksNodeId && currentSegment.fromNode === currentCoreNodeId))) {
-        sourceNodeId = barracksNodeId;
-        targetNodeId = currentCoreNodeId;
-        routeSegments = [`${barracksNodeId}_${currentCoreNodeId}`];
-      }
-      routeLabel = "lane_command_redirect_home";
-    }
-  }
-
-  if (!sourceNodeId || !targetNodeId || !Array.isArray(routeSegments) || routeSegments.length <= 0)
-    return resolveRouteContractForUnit(game, targetLane, unit);
-
-  return {
-    ok: true,
-    spawnSourceType: resolveSpawnSourceTypeFromUnit(unit),
-    routeType,
-    sourceNodeId,
-    targetNodeId,
-    objectiveLaneIndex: routeTargetLaneIndex,
-    routeSegments,
-    pathId: buildRoutePathId(routeSegments),
-    routeLabel,
-  };
+  return laneCommandSystem.resolveRedirectRouteContractForExistingLaneControlledUnit(
+    game,
+    currentLane,
+    targetLane,
+    unit,
+    LANE_COMMAND_SYSTEM_DEPS
+  );
 }
 
 function isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneIndex) {
@@ -994,197 +547,22 @@ function isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneI
 }
 
 function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos) {
-  if (!game || !targetLane || !unit)
-    return { ok: false, reason: "Missing game, target lane, or unit" };
-
-  const routeContract = resolveRouteContractForUnit(game, targetLane, unit);
-  if (!routeContract.ok) {
-    log.error("[SpawnAudit][ServerRoute] rejected", {
-      unitId: unit && unit.id,
-      unitType: unit && unit.type,
-      targetLaneIndex: targetLane && targetLane.laneIndex,
-      sourceLaneIndex: unit && unit.sourceLaneIndex,
-      sourceBarracksKey: unit && (unit.sourceBarracksKey || unit.sourceBarracksId) || null,
-      spawnSourceType: resolveSpawnSourceTypeFromUnit(unit),
-      reason: routeContract.reason,
-    });
-    return routeContract;
-  }
-
-  const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
-  const targetLaneIndex = targetLane.laneIndex;
-  const logicalX = spawnLogicalPos && Number.isFinite(spawnLogicalPos.x) ? Number(spawnLogicalPos.x) : SPAWN_X;
-  const logicalY = spawnLogicalPos && Number.isFinite(spawnLogicalPos.y) ? Number(spawnLogicalPos.y) : SPAWN_YG;
-
-  unit.spawnSourceType = routeContract.spawnSourceType;
-  unit.routeType = routeContract.routeType;
-  unit.routeStartNode = routeContract.sourceNodeId;
-  unit.routeTargetNode = routeContract.targetNodeId;
-  unit.objectiveLaneIndex = routeContract.objectiveLaneIndex ?? unit.objectiveLaneIndex ?? targetLane.laneIndex;
-  unit.routeSegments = routeContract.routeSegments;
-  unit.routeSegmentIndex = 0;
-  unit.segmentProgress = 0;
-  const startSample = sampleRoutePosition(unit.routeSegments, 0, 0, 0);
-  if (!startSample) {
-    const failure = {
-      ok: false,
-      reason: `Route sample is missing for path '${routeContract.pathId}'`,
-    };
-    log.error("[SpawnAudit][ServerRoute] rejected", {
-      unitId: unit.id,
-      unitType: unit.type,
-      targetLaneIndex,
-      sourceLaneIndex,
-      sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
-      spawnSourceType: unit.spawnSourceType,
-      reason: failure.reason,
-    });
-    return failure;
-  }
-  const routeTangent = normalize2D(startSample.tangent);
-  const routeLateral = perpendicular2D(routeTangent);
-  const originDelta = {
-    x: Number(routeContract.spawnOrigin.x) - Number(startSample.point.x),
-    y: Number(routeContract.spawnOrigin.y) - Number(startSample.point.y),
-  };
-  const spawnLateralOffset = (logicalX - SPAWN_X) * ROUTE_SLOT_COLUMN_SPACING;
-  const spawnLongitudinalOffset = -logicalY * ROUTE_SLOT_ROW_SPACING;
-  unit.routeLateralOffset = dot2D(originDelta, routeLateral) + spawnLateralOffset;
-  unit.routeLongitudinalOffset = dot2D(originDelta, routeTangent) + spawnLongitudinalOffset;
-  unit.stance = routeContract.spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-    ? UNIT_STANCES.ATTACK
-    : null;
-  unit.routeState = WAVE_UNIT_STATES.MOVING;
-  unit.combatState = WAVE_UNIT_STATES.MOVING;
-  unit.movementMode = UNIT_MOVEMENT_MODES.LANE_TRAVEL;
-  unit.blockedByStructure = false;
-  unit.blockedByStructureId = null;
-  unit.blockedByStructureType = null;
-  unit.combatTargetLockedUntilTick = 0;
-  unit.regroupUntilTick = 0;
-  unit.targetLaneIndex = targetLaneIndex;
-  unit.laneId = targetLaneIndex;
-  if (!setUnitRouteSnapshotState(unit)) {
-    const failure = {
-      ok: false,
-      reason: `Failed to materialize path snapshot state for path '${routeContract.pathId}'`,
-    };
-    log.error("[SpawnAudit][ServerRoute] rejected", {
-      unitId: unit.id,
-      unitType: unit.type,
-      targetLaneIndex,
-      sourceLaneIndex,
-      sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
-      spawnSourceType: unit.spawnSourceType,
-      reason: failure.reason,
-    });
-    return failure;
-  }
-  applyCanonicalUnitMirrors(game, targetLane, unit);
-
-  log.info("[SpawnAudit][ServerRoute] assigned", {
-    unitId: unit.id,
-    unitType: unit.type,
-    spawnSourceType: unit.spawnSourceType,
-    sourceLaneIndex,
-    targetLaneIndex,
-    sourceBarracksKey: routeContract.barracksKey || null,
-    spawnOriginX: Number.isFinite(routeContract.spawnOrigin.x) ? Number(routeContract.spawnOrigin.x.toFixed(3)) : null,
-    spawnOriginY: Number.isFinite(routeContract.spawnOrigin.y) ? Number(routeContract.spawnOrigin.y.toFixed(3)) : null,
-    routeType: routeContract.routeType,
-    routeLabel: routeContract.routeLabel || routeContract.pathId,
-    routeStartNode: routeContract.sourceNodeId,
-    routeTargetNode: routeContract.targetNodeId,
-    pathId: routeContract.pathId,
-    currentWaypointIndex: unit.routeSegmentIndex,
-    nextWaypoint: resolveUnitNextWaypoint(unit),
-    movementState: unit.routeState,
-    currentSegment: unit.currentSegment || null,
-    segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
-    routeWorldX: Number.isFinite(unit.routeWorldX) ? Number(unit.routeWorldX.toFixed(3)) : null,
-    routeWorldY: Number.isFinite(unit.routeWorldY) ? Number(unit.routeWorldY.toFixed(3)) : null,
-    routeLateralOffset: Number.isFinite(unit.routeLateralOffset) ? Number(unit.routeLateralOffset.toFixed(3)) : null,
-    routeLongitudinalOffset: Number.isFinite(unit.routeLongitudinalOffset) ? Number(unit.routeLongitudinalOffset.toFixed(3)) : null,
-  });
-
-  return {
-    ok: true,
-    pathId: routeContract.pathId,
-  };
+  return laneCommandSystem.initializeMovingUnitRouteState(
+    game,
+    targetLane,
+    unit,
+    spawnLogicalPos,
+    LANE_COMMAND_SYSTEM_DEPS
+  );
 }
 
 function applyRouteContractToExistingUnit(unit, routeContract, currentPosition = null) {
-  if (!unit || !routeContract || routeContract.ok === false)
-    return { ok: false, reason: "Missing unit or route contract" };
-  if (!Array.isArray(routeContract.routeSegments) || routeContract.routeSegments.length <= 0)
-    return { ok: false, reason: "Route contract is missing route segments" };
-
-  const startSample = sampleRoutePosition(routeContract.routeSegments, 0, 0, 0);
-  if (!startSample) {
-    return {
-      ok: false,
-      reason: `Route sample is missing for path '${routeContract.pathId || "<unknown>"}'`,
-    };
-  }
-
-  const safeCurrentPosition = currentPosition
-    && Number.isFinite(Number(currentPosition.x))
-    && Number.isFinite(Number(currentPosition.y))
-    ? { x: Number(currentPosition.x), y: Number(currentPosition.y) }
-    : { x: Number(unit.posX) || Number(startSample.point.x), y: Number(unit.posY) || Number(startSample.point.y) };
-  const projection = projectPointOntoRouteSegments(routeContract.routeSegments, safeCurrentPosition);
-  const routeSample = projection || {
-    segmentIndex: 0,
-    segmentProgress: 0,
-    segmentId: routeContract.routeSegments[0],
-    point: startSample.point,
-    tangent: startSample.tangent,
-  };
-  const routeTangent = normalize2D(routeSample.tangent);
-  const routeLateral = perpendicular2D(routeTangent);
-  const routeDelta = {
-    x: safeCurrentPosition.x - Number(routeSample.point.x),
-    y: safeCurrentPosition.y - Number(routeSample.point.y),
-  };
-
-  unit.routeType = routeContract.routeType;
-  unit.routeStartNode = routeContract.sourceNodeId;
-  unit.routeTargetNode = routeContract.targetNodeId;
-  unit.objectiveLaneIndex = routeContract.objectiveLaneIndex ?? unit.objectiveLaneIndex ?? unit.targetLaneIndex;
-  unit.routeSegments = routeContract.routeSegments;
-  unit.routeSegmentIndex = Math.max(
-    0,
-    Math.min(routeContract.routeSegments.length - 1, Math.floor(Number(routeSample.segmentIndex) || 0))
+  return laneCommandSystem.applyRouteContractToExistingUnit(
+    unit,
+    routeContract,
+    currentPosition,
+    LANE_COMMAND_SYSTEM_DEPS
   );
-  unit.segmentProgress = Math.max(0, Math.min(1, Number(routeSample.segmentProgress) || 0));
-  unit.currentSegment = routeSample.segmentId || routeContract.routeSegments[unit.routeSegmentIndex];
-  unit.routeLateralOffset = dot2D(routeDelta, routeLateral);
-  unit.routeLongitudinalOffset = dot2D(routeDelta, routeTangent);
-  unit.stance = null;
-  unit.routeState = WAVE_UNIT_STATES.MOVING;
-  unit.combatState = WAVE_UNIT_STATES.MOVING;
-  unit.movementMode = UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR;
-  unit.combatTarget = null;
-  unit.combatTargetId = null;
-  unit.combatTargetLockedUntilTick = 0;
-  unit.regroupUntilTick = 0;
-  unit.blockedByStructure = false;
-  unit.blockedByStructureId = null;
-  unit.blockedByStructureType = null;
-  unit._missingRouteLogged = false;
-
-  if (!setUnitRouteSnapshotState(unit)) {
-    return {
-      ok: false,
-      reason: `Failed to materialize path snapshot state for path '${routeContract.pathId || "<unknown>"}'`,
-    };
-  }
-  applyCanonicalUnitMirrors(null, null, unit);
-
-  return {
-    ok: true,
-    pathId: routeContract.pathId || buildRoutePathId(routeContract.routeSegments),
-  };
 }
 
 function getUnitForwardDirection(unit) {
@@ -1216,477 +594,67 @@ function projectPointOntoRouteSegments(routeSegments, targetPoint) {
 }
 
 function syncUnitRouteStateToWorldPosition(unit, worldPosition = null) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
-    return false;
-
-  const targetPoint = worldPosition
-    && Number.isFinite(Number(worldPosition.x))
-    && Number.isFinite(Number(worldPosition.y))
-    ? { x: Number(worldPosition.x), y: Number(worldPosition.y) }
-    : (Number.isFinite(Number(unit.posX)) && Number.isFinite(Number(unit.posY))
-      ? { x: Number(unit.posX), y: Number(unit.posY) }
-      : null);
-  if (!targetPoint)
-    return false;
-
-  const best = projectPointOntoRouteSegments(unit.routeSegments, targetPoint);
-  if (!best)
-    return false;
-
-  const tangent = normalize2D(best.tangent);
-  const lateral = perpendicular2D(tangent);
-  const delta = {
-    x: targetPoint.x - best.point.x,
-    y: targetPoint.y - best.point.y,
-  };
-
-  unit.routeSegmentIndex = best.segmentIndex;
-  unit.segmentProgress = Math.max(0, Math.min(1, Number(best.segmentProgress) || 0));
-  unit.currentSegment = best.segmentId;
-  unit.routeLongitudinalOffset = dot2D(delta, tangent);
-  unit.routeLateralOffset = dot2D(delta, lateral);
-  unit.posX = targetPoint.x;
-  unit.posY = targetPoint.y;
-  unit.pathIdx = computeUnitRoutePathIndex(unit);
-  unit.routeWorldX = targetPoint.x;
-  unit.routeWorldY = targetPoint.y;
-  return true;
+  return laneCommandSystem.syncUnitRouteStateToWorldPosition(unit, worldPosition, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function syncMovedUnitPathState(unit) {
-  if (!unit)
-    return false;
-
-  if (syncUnitRouteStateToWorldPosition(unit))
-    return true;
-
-  unit.pathIdx = unit.posY;
-  return false;
+  return laneCommandSystem.syncMovedUnitPathState(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneAnchorColumns(unitCount) {
-  const safeCount = Math.max(1, Math.floor(Number(unitCount) || 1));
-  return Math.max(1, Math.min(LANE_ANCHOR_MAX_COLUMNS, safeCount >= 4 ? 5 : safeCount));
+  return laneCommandSystem.resolveLaneAnchorColumns(unitCount, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveCenteredSlotOffset(columnIndex, columns) {
-  const safeColumns = Math.max(1, Math.floor(Number(columns) || 1));
-  const safeColumnIndex = Math.max(0, Math.min(safeColumns - 1, Math.floor(Number(columnIndex) || 0)));
-  const center = Math.floor(safeColumns / 2);
-  if (safeColumns % 2 === 1)
-    return safeColumnIndex - center;
-
-  const raw = safeColumnIndex < center
-    ? safeColumnIndex - center
-    : safeColumnIndex - center + 1;
-  return raw >= 0 ? raw - 0.5 : raw + 0.5;
+  return laneCommandSystem.resolveCenteredSlotOffset(columnIndex, columns, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneControlledUnitSortKey(unit) {
-  const assignedSlotIndex = Number(unit && unit.assignedSlotIndex);
-  if (Number.isFinite(assignedSlotIndex))
-    return `slot:${String(Math.floor(assignedSlotIndex)).padStart(6, "0")}:${unit.id}`;
-  const spawnIndex = Number(unit && unit.spawnIndex);
-  if (Number.isFinite(spawnIndex))
-    return `spawn:${String(Math.floor(spawnIndex)).padStart(6, "0")}:${unit.id}`;
-  return `id:${String(unit && unit.id || "")}`;
+  return laneCommandSystem.resolveLaneControlledUnitSortKey(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function normalizeCombatRole(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  switch (normalized) {
-    case UNIT_COMBAT_ROLES.SHIELD:
-      return UNIT_COMBAT_ROLES.SHIELD;
-    case UNIT_COMBAT_ROLES.SPEAR:
-    case "polearm":
-      return UNIT_COMBAT_ROLES.SPEAR;
-    case UNIT_COMBAT_ROLES.ARCHER:
-    case "ranged":
-      return UNIT_COMBAT_ROLES.ARCHER;
-    case UNIT_COMBAT_ROLES.MAGE:
-    case "arcane":
-      return UNIT_COMBAT_ROLES.MAGE;
-    case UNIT_COMBAT_ROLES.PRIEST:
-    case "support":
-    case "healer":
-      return UNIT_COMBAT_ROLES.PRIEST;
-    case UNIT_COMBAT_ROLES.SWORD:
-    case "melee":
-    case "hero":
-      return UNIT_COMBAT_ROLES.SWORD;
-    default:
-      return null;
-  }
+  return laneCommandSystem.normalizeCombatRole(value, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitCombatRole(unit) {
-  const explicitRole = normalizeCombatRole(unit && unit.combatRole);
-  if (explicitRole)
-    return explicitRole;
-
-  const sourceTokens = [
-    unit && unit.heroKey,
-    unit && unit.rosterKey,
-    unit && unit.role,
-    unit && unit.archetypeKey,
-    unit && unit.unitTypeKey,
-    unit && unit.type,
-  ]
-    .filter(Boolean)
-    .map((value) => String(value).trim().toLowerCase());
-  const joined = sourceTokens.join("|");
-  if (joined.includes("shield") || joined.includes("guardian"))
-    return UNIT_COMBAT_ROLES.SHIELD;
-  if (joined.includes("spear") || joined.includes("polearm") || joined.includes("halber") || joined.includes("lancer"))
-    return UNIT_COMBAT_ROLES.SPEAR;
-  if (joined.includes("priest") || joined.includes("cleric") || joined.includes("bishop") || joined.includes("support"))
-    return UNIT_COMBAT_ROLES.PRIEST;
-  if (joined.includes("mage") || joined.includes("wizard") || joined.includes("arcane") || joined.includes("thaum"))
-    return UNIT_COMBAT_ROLES.MAGE;
-  if (joined.includes("archer") || joined.includes("crossbow") || joined.includes("ranger") || joined.includes("ranged"))
-    return UNIT_COMBAT_ROLES.ARCHER;
-  return UNIT_COMBAT_ROLES.SWORD;
+  return laneCommandSystem.resolveUnitCombatRole(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveAnchorHoldDepthBias(combatRole) {
-  switch (normalizeCombatRole(combatRole)) {
-    case UNIT_COMBAT_ROLES.SHIELD:
-      return -0.6;
-    case UNIT_COMBAT_ROLES.SWORD:
-      return -0.25;
-    case UNIT_COMBAT_ROLES.SPEAR:
-      return 0.1;
-    case UNIT_COMBAT_ROLES.ARCHER:
-    case UNIT_COMBAT_ROLES.MAGE:
-      return 0.45;
-    case UNIT_COMBAT_ROLES.PRIEST:
-      return 0.8;
-    default:
-      return 0;
-  }
+  return laneCommandSystem.resolveAnchorHoldDepthBias(combatRole, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildLaneAnchorSlot(anchorState, unit, slotIndex, unitCount) {
-  const safeSlotIndex = Math.max(0, Math.floor(Number(slotIndex) || 0));
-  const columns = Math.max(3, Math.min(9, Math.max(resolveLaneAnchorColumns(unitCount), 3)));
-  const row = Math.floor(safeSlotIndex / columns);
-  const column = safeSlotIndex % columns;
-  const lateralIndex = resolveCenteredSlotOffset(column, columns);
-  const lateralDistance = lateralIndex * ROUTE_SLOT_COLUMN_SPACING * 1.15;
-  const depthDistance = (row * ROUTE_SLOT_ROW_SPACING * 0.78) + resolveAnchorHoldDepthBias(resolveUnitCombatRole(unit));
-  const anchorX = Number(anchorState && anchorState.anchorX) || 0;
-  const anchorY = Number(anchorState && anchorState.anchorY) || 0;
-  const facing = anchorState && anchorState.facing ? anchorState.facing : { x: 0, y: -1 };
-  const lateral = anchorState && anchorState.lateral ? anchorState.lateral : perpendicular2D(facing);
-  return {
-    slotIndex: safeSlotIndex,
-    row,
-    column,
-    x: anchorX + (lateral.x * lateralDistance) - (facing.x * depthDistance),
-    y: anchorY + (lateral.y * lateralDistance) - (facing.y * depthDistance),
-  };
+  return laneCommandSystem.buildLaneAnchorSlot(anchorState, unit, slotIndex, unitCount, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function computeLaneAnchorHoldRadius(anchorState, anchorSlots) {
-  const slots = Array.isArray(anchorSlots) ? anchorSlots : [];
-  const centerX = Number(anchorState && anchorState.anchorX) || 0;
-  const centerY = Number(anchorState && anchorState.anchorY) || 0;
-  let maxDistance = ROUTE_SLOT_COLUMN_SPACING;
-  for (const slot of slots) {
-    const dx = (Number(slot && slot.x) || 0) - centerX;
-    const dy = (Number(slot && slot.y) || 0) - centerY;
-    maxDistance = Math.max(maxDistance, Math.sqrt((dx * dx) + (dy * dy)));
-  }
-  return maxDistance + ROUTE_SLOT_ROW_SPACING;
+  return laneCommandSystem.computeLaneAnchorHoldRadius(anchorState, anchorSlots, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitAnchorLeashRadius(unit, anchorHoldRadius) {
-  const combatRole = resolveUnitCombatRole(unit);
-  const baseRadius = Math.max(anchorHoldRadius, ROUTE_SLOT_ROW_SPACING);
-  switch (combatRole) {
-    case UNIT_COMBAT_ROLES.PRIEST:
-      return Math.max(baseRadius + 0.75, 3.25);
-    case UNIT_COMBAT_ROLES.ARCHER:
-    case UNIT_COMBAT_ROLES.MAGE:
-      return Math.max(baseRadius + 1.25, 4.0);
-    default:
-      return Math.max(baseRadius + 2.0, 5.0);
-  }
+  return laneCommandSystem.resolveUnitAnchorLeashRadius(unit, anchorHoldRadius, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildAnchorWaypointTarget(anchorState) {
-  return anchorState
-    ? {
-        kind: anchorState.anchorKind || null,
-        laneIndex: Number.isInteger(anchorState.containerLaneIndex) ? anchorState.containerLaneIndex : null,
-        x: Number(anchorState.anchorX) || 0,
-        y: Number(anchorState.anchorY) || 0,
-      }
-    : null;
+  return laneCommandSystem.buildAnchorWaypointTarget(anchorState, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function shouldKeepUnitAfterLaneDefeat(lane, unit) {
-  if (!unit)
-    return false;
-  if (unit.isDefender)
-    return false;
-  if (isScheduledWaveUnit(unit))
-    return false;
-  return Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0 && unit.sourceLaneIndex !== lane.laneIndex;
+  return laneCommandSystem.shouldKeepUnitAfterLaneDefeat(lane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function laneHasOccupyingForces(lane) {
-  if (!lane)
-    return false;
-  const activeUnits = Array.isArray(lane.units)
-    && lane.units.some((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit) && unit.hp > 0);
-  if (activeUnits)
-    return true;
-  return Array.isArray(lane.spawnQueue)
-    && lane.spawnQueue.some((unit) => shouldKeepUnitAfterLaneDefeat(lane, unit));
+  return laneCommandSystem.laneHasOccupyingForces(lane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function requeueLaneControlledUnit(targetLane, unit) {
-  if (!targetLane || !unit)
-    return false;
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  unit.targetLaneIndex = targetLane.laneIndex;
-  unit.laneId = targetLane.laneIndex;
-  unit.combatTarget = null;
-  unit.combatTargetId = null;
-  unit.combatTargetLockedUntilTick = 0;
-  unit.regroupUntilTick = 0;
-  unit.assignedSlotIndex = null;
-  unit.stance = null;
-  unit.pathContractType = null;
-  unit.movementMode = UNIT_MOVEMENT_MODES.LANE_TRAVEL;
-  unit.routeType = null;
-  unit.routeStartNode = null;
-  unit.routeTargetNode = null;
-  unit.routeSegments = null;
-  unit.routeSegmentIndex = 0;
-  unit.segmentProgress = 0;
-  unit.currentSegment = null;
-  unit.routeWorldX = null;
-  unit.routeWorldY = null;
-  unit.routeLateralOffset = 0;
-  unit.routeLongitudinalOffset = 0;
-  unit.spawnIndex = Math.max(0, targetLane.spawnQueue.length);
-  unit.spawnLogicalPos = resolveSpawnLogicalPosition(spawnSourceType, unit.spawnIndex);
-  targetLane.spawnQueue.push(unit);
-  return true;
+  return laneCommandSystem.requeueLaneControlledUnit(targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function syncLaneCommandAssignments(game) {
-  if (!game || !Array.isArray(game.lanes))
-    return;
-
-  normalizeLegacyDefenderUnits(game);
-
-  for (const lane of game.lanes) {
-    if (!lane)
-      continue;
-    lane.commandSlots = [];
-    lane.assignedUnits = [];
-    lane.assignedUnitOrder = Array.isArray(lane.assignedUnitOrder)
-      ? lane.assignedUnitOrder
-      : [];
-    lane.insideGateAnchor = null;
-    lane.outsideGateAnchor = null;
-    lane.enemyCoreAnchor = null;
-  }
-
-  for (const lane of game.lanes) {
-    if (!lane || !Array.isArray(lane.units))
-      continue;
-
-    for (let unitIndex = lane.units.length - 1; unitIndex >= 0; unitIndex -= 1) {
-      const unit = lane.units[unitIndex];
-      if (!isLaneControlledUnit(unit))
-        continue;
-
-      const ownerLane = getLaneCommandOwnerLane(game, unit);
-      if (!ownerLane)
-        continue;
-
-      const targetLaneIndex = resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit);
-      const targetLane = getLaneByIndex(game, targetLaneIndex) || lane;
-      const routeObjectiveLaneIndex = getLaneCommandRouteObjectiveLaneIndex(game, ownerLane);
-      unit.targetLaneIndex = targetLane.laneIndex;
-      unit.laneId = targetLane.laneIndex;
-      unit.objectiveLaneIndex = routeObjectiveLaneIndex;
-
-      const currentPathId = buildRoutePathId(unit.routeSegments);
-      const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
-      const sourceBarracksId = resolveUnitSourceBarracksId(unit);
-      const sourceRouteNodeId = getBarracksRouteStartNodeId(sourceLaneIndex, sourceBarracksId);
-      const sourceCoreNodeId = getLaneNodeId(sourceLaneIndex);
-      const expectedSpawnEntrySegment = sourceRouteNodeId && sourceCoreNodeId
-        ? `${sourceRouteNodeId}_${sourceCoreNodeId}`
-        : null;
-      const currentRouteUsesBattlefieldCore = !!(
-        Array.isArray(unit.routeSegments)
-        && unit.routeSegments.length > 0
-        && expectedSpawnEntrySegment
-        && unit.routeSegments[0] !== expectedSpawnEntrySegment
-      );
-      const desiredTargetNodeId = getLaneNodeId(routeObjectiveLaneIndex);
-
-      let routeContract = null;
-      if (lane === targetLane
-          && currentRouteUsesBattlefieldCore
-          && desiredTargetNodeId
-          && unit.routeTargetNode === desiredTargetNodeId
-          && currentPathId) {
-        routeContract = {
-          ok: true,
-          pathId: currentPathId,
-          objectiveLaneIndex: routeObjectiveLaneIndex,
-          routeSegments: unit.routeSegments,
-        };
-      } else {
-        routeContract = resolveRouteContractForUnit(game, targetLane, unit);
-      }
-      const desiredPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
-      if (routeContract && routeContract.ok
-          && Array.isArray(unit.routeSegments) && unit.routeSegments.length > 0
-          && (lane !== targetLane || desiredPathId !== currentPathId || unit.objectiveLaneIndex !== routeObjectiveLaneIndex)) {
-        routeContract = resolveRedirectRouteContractForExistingLaneControlledUnit(game, lane, targetLane, unit);
-      }
-      const resolvedPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
-      if (routeContract && routeContract.ok
-          && (lane !== targetLane || resolvedPathId !== currentPathId || unit.objectiveLaneIndex !== routeObjectiveLaneIndex)) {
-        applyRouteContractToExistingUnit(unit, routeContract, {
-          x: Number(unit.posX),
-          y: Number(unit.posY),
-        });
-      }
-
-      if (lane !== targetLane) {
-        lane.units.splice(unitIndex, 1);
-        targetLane.units.push(unit);
-      }
-      applyCanonicalUnitMirrors(game, targetLane, unit);
-    }
-
-    if (!Array.isArray(lane.spawnQueue))
-      continue;
-
-    for (let queueIndex = lane.spawnQueue.length - 1; queueIndex >= 0; queueIndex -= 1) {
-      const unit = lane.spawnQueue[queueIndex];
-      if (!isLaneControlledUnit(unit))
-        continue;
-
-      const ownerLane = getLaneCommandOwnerLane(game, unit);
-      if (!ownerLane)
-        continue;
-
-      const targetLaneIndex = resolveLaneCommandContainerLaneIndex(game, ownerLane);
-      const targetLane = getLaneByIndex(game, targetLaneIndex) || lane;
-      unit.targetLaneIndex = targetLane.laneIndex;
-      unit.laneId = targetLane.laneIndex;
-      unit.objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, ownerLane);
-
-      if (lane !== targetLane) {
-        lane.spawnQueue.splice(queueIndex, 1);
-        requeueLaneControlledUnit(targetLane, unit);
-      } else {
-        unit.spawnIndex = queueIndex;
-        unit.spawnLogicalPos = resolveSpawnLogicalPosition(resolveSpawnSourceTypeFromUnit(unit), queueIndex);
-      }
-      applyCanonicalUnitMirrors(game, targetLane, unit);
-    }
-  }
-
-  for (const ownerLane of game.lanes) {
-    if (!ownerLane)
-      continue;
-
-    const anchorState = sampleLaneCommandAnchor(game, ownerLane);
-    ownerLane.combatEnabled = !!(anchorState && anchorState.combatEnabled);
-    ownerLane.engagementRadius = anchorState ? anchorState.engagementRadius : 0;
-    ownerLane.commandAnchorProgress = anchorState ? anchorState.anchorProgress : 0;
-    ownerLane.commandAnchor = anchorState
-      ? { x: anchorState.anchorX, y: anchorState.anchorY, laneIndex: anchorState.containerLaneIndex }
-      : null;
-    ownerLane.commandFacing = anchorState
-      ? { x: anchorState.facing.x, y: anchorState.facing.y }
-      : null;
-    ownerLane.insideGateAnchor = anchorState && anchorState.insideGateAnchor
-      ? { x: anchorState.insideGateAnchor.x, y: anchorState.insideGateAnchor.y }
-      : null;
-    ownerLane.outsideGateAnchor = anchorState && anchorState.outsideGateAnchor
-      ? { x: anchorState.outsideGateAnchor.x, y: anchorState.outsideGateAnchor.y }
-      : null;
-    ownerLane.enemyCoreAnchor = anchorState && anchorState.enemyCoreAnchor
-      ? { x: anchorState.enemyCoreAnchor.x, y: anchorState.enemyCoreAnchor.y }
-      : null;
-
-    const orderedEntries = [];
-    for (const lane of game.lanes) {
-      for (const unit of lane.units || []) {
-        if (!isLaneControlledUnit(unit) || unit.sourceLaneIndex !== ownerLane.laneIndex || unit.hp <= 0)
-          continue;
-
-        unit.combatRole = resolveUnitCombatRole(unit);
-        orderedEntries.push({ lane, unit });
-      }
-    }
-
-    orderedEntries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
-
-    const currentWaypointTarget = buildAnchorWaypointTarget(anchorState);
-    const commandSlots = orderedEntries.map((entry, unitIndex) => {
-      const slot = buildLaneAnchorSlot(anchorState, entry.unit, unitIndex, orderedEntries.length);
-      return {
-        slotIndex: unitIndex,
-        x: Number(slot.x.toFixed(3)),
-        y: Number(slot.y.toFixed(3)),
-        unitId: entry.unit.id,
-      };
-    });
-    const anchorHoldRadius = computeLaneAnchorHoldRadius(anchorState, commandSlots);
-    const anchorCenterX = anchorState ? Number(anchorState.anchorX) : 0;
-    const anchorCenterY = anchorState ? Number(anchorState.anchorY) : 0;
-    const anchorFacing = anchorState ? anchorState.facing : { x: 0, y: -1 };
-    const anchorLateral = anchorState ? anchorState.lateral : { x: 1, y: 0 };
-
-    for (let unitIndex = 0; unitIndex < orderedEntries.length; unitIndex += 1) {
-      const entry = orderedEntries[unitIndex];
-      const slot = commandSlots[unitIndex];
-      const anchorLeashRadius = resolveUnitAnchorLeashRadius(entry.unit, anchorHoldRadius);
-      entry.unit.assignedSlotIndex = unitIndex;
-      entry.unit.anchorTargetX = slot.x;
-      entry.unit.anchorTargetY = slot.y;
-      entry.unit.anchorTargetProgress = anchorState ? anchorState.anchorProgress : 0;
-      entry.unit.anchorFacingX = anchorFacing.x;
-      entry.unit.anchorFacingY = anchorFacing.y;
-      entry.unit.anchorLateralX = anchorLateral.x;
-      entry.unit.anchorLateralY = anchorLateral.y;
-      entry.unit.commandState = anchorState ? anchorState.commandState : getLaneCommandState(ownerLane);
-      entry.unit.anchorCenterX = anchorCenterX;
-      entry.unit.anchorCenterY = anchorCenterY;
-      entry.unit.anchorHoldRadius = anchorHoldRadius;
-      entry.unit.anchorLeashRadius = anchorLeashRadius;
-      entry.unit.currentWaypointTargetX = currentWaypointTarget ? currentWaypointTarget.x : null;
-      entry.unit.currentWaypointTargetY = currentWaypointTarget ? currentWaypointTarget.y : null;
-      entry.unit.currentWaypointTargetKind = currentWaypointTarget ? currentWaypointTarget.kind : null;
-      entry.unit.canEngage = !!(anchorState && anchorState.combatEnabled);
-      entry.unit.combatLeashRadius = anchorState
-        ? Math.max(anchorState.engagementRadius, anchorLeashRadius)
-        : anchorLeashRadius;
-      ownerLane.assignedUnits.push(entry.unit.id);
-      ownerLane.commandSlots.push({
-        slotIndex: ownerLane.commandSlots.length,
-        x: Number(slot.x.toFixed(3)),
-        y: Number(slot.y.toFixed(3)),
-        unitId: entry.unit.id,
-      });
-      applyCanonicalUnitMirrors(game, entry.lane, entry.unit);
-    }
-
-    ownerLane.assignedUnitOrder = ownerLane.assignedUnits.slice();
-  }
+  return laneCommandSystem.syncLaneCommandAssignments(game, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 // Unit and tower definitions are DB-driven via unitTypes.js.
@@ -2062,214 +1030,43 @@ function isScheduledWaveUnit(unit) {
 }
 
 function resolveUnitSourceBarracksId(unit) {
-  return normalizeBarracksSiteId(unit && (unit.sourceBarracksId || unit.sourceBarracksKey || unit.barracksId));
+  return laneCommandSystem.resolveUnitSourceBarracksId(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitTargetLaneIndex(game, fallbackLane, unit) {
-  if (Number.isInteger(unit && unit.targetLaneIndex))
-    return unit.targetLaneIndex;
-  if (Number.isInteger(unit && unit.laneId))
-    return unit.laneId;
-  if (fallbackLane && Number.isInteger(fallbackLane.laneIndex))
-    return fallbackLane.laneIndex;
-  if (Number.isInteger(unit && unit.ownerLaneIndex))
-    return unit.ownerLaneIndex;
-  return -1;
+  return laneCommandSystem.resolveUnitTargetLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitObjectiveLaneIndex(game, fallbackLane, unit) {
-  if (Number.isInteger(unit && unit.objectiveLaneIndex))
-    return unit.objectiveLaneIndex;
-
-  if (isLaneControlledUnit(unit)) {
-    const sourceLane = getSourceLane(game, Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1);
-    const objectiveLaneIndex = getLaneCommandRouteObjectiveLaneIndex(game, sourceLane);
-    if (Number.isInteger(objectiveLaneIndex))
-      return objectiveLaneIndex;
-  }
-
-  return resolveUnitTargetLaneIndex(game, fallbackLane, unit);
+  return laneCommandSystem.resolveUnitObjectiveLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitOwnerLaneIndex(game, fallbackLane, unit) {
-  if (Number.isInteger(unit && unit.ownerLaneIndex))
-    return unit.ownerLaneIndex;
-  if (Number.isInteger(unit && unit.ownerLane))
-    return unit.ownerLane;
-
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
-    return -1;
-
-  if (Number.isInteger(unit && unit.sourceLaneIndex))
-    return unit.sourceLaneIndex;
-
-  if (unit && unit.isDefender && fallbackLane && Number.isInteger(fallbackLane.laneIndex))
-    return fallbackLane.laneIndex;
-
-  return -1;
+  return laneCommandSystem.resolveUnitOwnerLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitStance(game, fallbackLane, unit) {
-  if (isLaneControlledUnit(unit)) {
-    const commandState = getLaneCommandStateForUnit(game, unit);
-    if (commandState === LANE_COMMAND_STATES.RETREAT)
-      return UNIT_STANCES.RETREAT;
-    if (commandState === LANE_COMMAND_STATES.DEFEND)
-      return UNIT_STANCES.DEFEND;
-    return UNIT_STANCES.ATTACK;
-  }
-
-  const explicitStance = normalizeUnitStance(unit && unit.stance);
-  if (explicitStance)
-    return explicitStance;
-
-  const explicitPathContractType = String(unit && unit.pathContractType || "").trim().toLowerCase();
-  if (explicitPathContractType === PATH_CONTRACT_TYPES.GUARD_ANCHOR
-      || explicitPathContractType === PATH_CONTRACT_TYPES.INTERCEPT)
-    return UNIT_STANCES.DEFEND;
-
-  if (unit && unit.isDefender)
-    return UNIT_STANCES.DEFEND;
-
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
-    return UNIT_STANCES.ATTACK;
-
-  const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
-  const targetLaneIndex = resolveUnitTargetLaneIndex(game, fallbackLane, unit);
-  if (sourceLaneIndex >= 0 && sourceLaneIndex === targetLaneIndex)
-    return UNIT_STANCES.HOLD;
-
-  return UNIT_STANCES.ATTACK;
+  return laneCommandSystem.resolveUnitStance(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function mapRouteTypeToPathContractType(routeType, barracksId) {
-  if (routeType === ROUTE_TYPES.WAVE_LANE)
-    return PATH_CONTRACT_TYPES.WAVE_LANE;
-  if (routeType === ROUTE_TYPES.CENTER_CROSS)
-    return PATH_CONTRACT_TYPES.BARRACKS_CROSS;
-  if (routeType === ROUTE_TYPES.OUTER_LOOP)
-    return PATH_CONTRACT_TYPES.BARRACKS_LOOP;
-
-  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
-  if (normalizedBarracksId === "center")
-    return PATH_CONTRACT_TYPES.BARRACKS_CROSS;
-  if (normalizedBarracksId === "left" || normalizedBarracksId === "right")
-    return PATH_CONTRACT_TYPES.BARRACKS_LOOP;
-  return null;
+  return laneCommandSystem.mapRouteTypeToPathContractType(routeType, barracksId, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitPathContractType(game, fallbackLane, unit) {
-  if (isLaneControlledUnit(unit)) {
-    const commandState = getLaneCommandStateForUnit(game, unit);
-    const combatTargetId = unit && (unit.combatTargetId || unit.combatTarget && unit.combatTarget.unitId);
-    if (combatTargetId && isLaneCommandCombatEnabledForUnit(game, unit))
-      return PATH_CONTRACT_TYPES.INTERCEPT;
-    if (commandState === LANE_COMMAND_STATES.RETREAT)
-      return PATH_CONTRACT_TYPES.RETREAT_ANCHOR;
-    if (commandState === LANE_COMMAND_STATES.DEFEND)
-      return PATH_CONTRACT_TYPES.GUARD_ANCHOR;
-    return PATH_CONTRACT_TYPES.BARRACKS_CROSS;
-  }
-
-  const stance = resolveUnitStance(game, fallbackLane, unit);
-  if (stance === UNIT_STANCES.DEFEND)
-    return unit && (unit.combatTargetId || unit.combatTarget && unit.combatTarget.unitId)
-      ? PATH_CONTRACT_TYPES.INTERCEPT
-      : PATH_CONTRACT_TYPES.GUARD_ANCHOR;
-
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
-    return PATH_CONTRACT_TYPES.WAVE_LANE;
-
-  return mapRouteTypeToPathContractType(unit && unit.routeType, resolveUnitSourceBarracksId(unit));
+  return laneCommandSystem.resolveUnitPathContractType(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveUnitAllegianceKey(game, fallbackLane, unit) {
-  const explicitAllegiance = normalizeAllegianceKey(unit && unit.allegianceKey);
-  if (explicitAllegiance)
-    return explicitAllegiance;
-
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  if (spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE)
-    return ALLEGIANCE_KEYS.DUNGEON;
-
-  const sourceTeam = normalizeAllegianceKey(unit && unit.sourceTeam);
-  if (sourceTeam)
-    return sourceTeam;
-
-  const sourceLane = getSourceLane(game, Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1);
-  const sourceLaneAllegiance = resolveLaneAllegianceKey(sourceLane);
-  if (sourceLaneAllegiance)
-    return sourceLaneAllegiance;
-
-  const ownerLane = getSourceLane(game, resolveUnitOwnerLaneIndex(game, fallbackLane, unit));
-  const ownerLaneAllegiance = resolveLaneAllegianceKey(ownerLane);
-  if (ownerLaneAllegiance)
-    return ownerLaneAllegiance;
-
-  return resolveLaneAllegianceKey(fallbackLane);
+  return laneCommandSystem.resolveUnitAllegianceKey(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLegacySourceTeamFromAllegianceKey(allegianceKey) {
-  const canonical = normalizeAllegianceKey(allegianceKey);
-  return canonical === ALLEGIANCE_KEYS.DUNGEON
-    ? null
-    : canonical;
+  return laneCommandSystem.resolveLegacySourceTeamFromAllegianceKey(allegianceKey, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
-  if (!unit)
-    return unit;
-
-  const unitId = unit.id || unit.unitId || null;
-  const unitTypeKey = unit.type || unit.unitTypeKey || null;
-  const spawnSourceType = resolveSpawnSourceTypeFromUnit(unit);
-  const ownerLaneIndex = resolveUnitOwnerLaneIndex(game, fallbackLane, unit);
-  const targetLaneIndex = resolveUnitTargetLaneIndex(game, fallbackLane, unit);
-  const objectiveLaneIndex = resolveUnitObjectiveLaneIndex(game, fallbackLane, unit);
-  const allegianceKey = resolveUnitAllegianceKey(game, fallbackLane, unit);
-  const pathContractType = resolveUnitPathContractType(game, fallbackLane, unit);
-  const sourceBarracksId = resolveUnitSourceBarracksId(unit);
-  const stance = resolveUnitStance(game, fallbackLane, unit);
-  const combatTargetId = unit.combatTargetId || (unit.combatTarget && unit.combatTarget.unitId) || null;
-  const combatRole = resolveUnitCombatRole(unit);
-  const isBarracksControlledUnit = Number.isInteger(unit.sourceLaneIndex)
-    && unit.sourceLaneIndex >= 0
-    && (spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER
-      || spawnSourceType === SPAWN_SOURCE_TYPES.BARRACKS_HERO);
-  const isDefenderUnit = !!unit.isDefender && !isBarracksControlledUnit;
-  const canEngage = isLaneCommandCombatEnabledForUnit(game, unit);
-
-  unit.unitId = unitId;
-  unit.id = unitId;
-  unit.unitTypeKey = unitTypeKey;
-  unit.type = unitTypeKey;
-  unit.spawnSourceType = spawnSourceType;
-  unit.allegianceKey = allegianceKey;
-  unit.ownerLaneIndex = ownerLaneIndex;
-  unit.ownerLane = ownerLaneIndex;
-  unit.targetLaneIndex = targetLaneIndex;
-  unit.laneId = targetLaneIndex;
-  unit.objectiveLaneIndex = objectiveLaneIndex;
-  unit.sourceBarracksId = sourceBarracksId;
-  unit.sourceBarracksKey = sourceBarracksId;
-  unit.barracksId = sourceBarracksId;
-  unit.heroKey = unit.heroKey || null;
-  unit.stance = stance;
-  unit.pathContractType = pathContractType;
-  unit.combatRole = combatRole;
-  unit.combatTargetId = combatTargetId;
-  unit.currentTargetId = combatTargetId;
-  unit.sourceTeam = resolveLegacySourceTeamFromAllegianceKey(allegianceKey);
-  unit.isWaveUnit = spawnSourceType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
-  unit.isDefender = isDefenderUnit;
-  unit.canEngage = canEngage;
-  unit.state = unit.combatState || unit.routeState || unit.state || WAVE_UNIT_STATES.IDLE;
-  if (!unit.movementMode)
-    unit.movementMode = UNIT_MOVEMENT_MODES.LANE_TRAVEL;
-  return unit;
+  return laneCommandSystem.applyCanonicalUnitMirrors(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function buildRoutePathId(routeSegments) {
@@ -2574,6 +1371,43 @@ const BARRACKS_SYSTEM_DEPS = Object.freeze({
   gridWidth: GRID_W,
   defaultHeroCombatRole: UNIT_COMBAT_ROLES.SWORD,
   spawnSourceTypes: SPAWN_SOURCE_TYPES,
+});
+
+const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
+  log,
+  getLaneByIndex,
+  getSourceLane,
+  isOpponentLane,
+  getLaneTownCoreCombatTarget,
+  getWaveSpawnWorldPosition,
+  getBarracksSiteWorldPosition,
+  resolveSpawnSourceTypeFromUnit,
+  resolveSpawnLogicalPosition,
+  normalizeBarracksSiteId,
+  normalizeAllegianceKey,
+  resolveLaneAllegianceKey,
+  normalizeUnitStance,
+  SPAWN_SOURCE_TYPES,
+  LANE_COMMAND_STATES,
+  UNIT_STANCES,
+  PATH_CONTRACT_TYPES,
+  UNIT_MOVEMENT_MODES,
+  WAVE_UNIT_STATES,
+  UNIT_COMBAT_ROLES,
+  LANE_STANCE_ANCHOR_KINDS,
+  ALLEGIANCE_KEYS,
+  OPPOSING_LANE_INDEX,
+  USE_PER_UNIT_ANCHOR_SLOTS,
+  LANE_COMMAND_DEFENSE_RADIUS,
+  LANE_COMMAND_COMBAT_LEASH,
+  LANE_COMMAND_HOME_CONTAINER_PROGRESS,
+  INSIDE_GATE_ANCHOR_OFFSET,
+  OUTSIDE_GATE_ANCHOR_OFFSET,
+  LANE_ANCHOR_MAX_COLUMNS,
+  ROUTE_SLOT_COLUMN_SPACING,
+  ROUTE_SLOT_ROW_SPACING,
+  SPAWN_X,
+  SPAWN_YG,
 });
 
 function buildTownCoreStateSummary(game) {
