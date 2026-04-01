@@ -44,6 +44,7 @@ const laneCommandSystem = require("./game/multilane/laneCommandSystem");
 const spawnSystem = require("./game/multilane/spawnSystem");
 const waveSystem = require("./game/multilane/waveSystem");
 const combatSystem = require("./game/multilane/combatSystem");
+const tickSystem = require("./game/multilane/tickSystem");
 const routeGraph = require("./game/multilane/routeGraph");
 const {
   getCurrentBarracksMult,
@@ -1404,6 +1405,79 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
   LANE_ANCHOR_MIXED_SEPARATION_SCALE,
   LANE_ANCHOR_SETTLED_MAX_LATERAL_OFFSET,
   LANE_ANCHOR_SETTLED_SLOT_SPACING_SLACK,
+});
+
+const TICK_SYSTEM_DEPS = Object.freeze({
+  log,
+  combatLog,
+  grantScheduledIncome,
+  runScheduledWaves,
+  runScheduledBarracksSends,
+  syncLaneCommandAssignments,
+  laneHasOccupyingForces,
+  initializeMovingUnitRouteState,
+  resolveSpawnSourceTypeFromUnit,
+  applyCanonicalUnitMirrors,
+  resolveAbilityHook,
+  resolveStatuses,
+  resolveUnitSupportProfile,
+  traceWaveUnitTick,
+  resolveWaveCombatTarget,
+  isUnitCombatTargetStillValid,
+  clearUnitCombatTarget,
+  hasImmediateFollowThroughCombatTarget,
+  isLaneControlledUnitInRegroupWindow,
+  canLaneControlledUnitSeekCombat,
+  getWaveUnitPreferredTarget,
+  shouldSwitchCombatTarget,
+  assignUnitCombatTarget,
+  findBlockingStructureTarget,
+  markTownCoreBreach,
+  findFriendlyHealTarget,
+  getUnitAttackRange,
+  dist2D,
+  assignUnitSupportTarget,
+  shouldUseSimpleContactApproach,
+  moveTowardContact2D,
+  moveTowardSimpleContact2D,
+  getLaneControlledCombatPocketPoint,
+  moveTowardPoint2D,
+  shouldLaneControlledUnitFreeRoamInCombat,
+  clampLaneControlledUnitToCombatLeash,
+  clearUnitSupportTarget,
+  getLaneByIndex,
+  resolveRouteUnitLane,
+  getUnitStopDistance,
+  getWaveUnitTargetDistance,
+  isLaneControlledUnit,
+  isUnitInCombatContact,
+  resolveUnitDef,
+  attackFortressPad,
+  shouldLaneControlledUnitRouteMarch,
+  syncUnitRouteStateToWorldPosition,
+  advanceLaneControlledUnitAlongRoute,
+  moveLaneControlledUnitToAnchor,
+  relaxUnitRouteOffsets,
+  advanceRouteState,
+  setUnitRouteSnapshotState,
+  buildRoutePathId,
+  resolveUnitNextWaypoint,
+  applySeparation2D,
+  resolveProjectile,
+  isScheduledWaveUnit,
+  createRoundSnapshotLane,
+  buildTownCoreStateSummary,
+  isCurrentWaveComplete,
+  startNextWaveNow,
+  WAVE_UNIT_STATES,
+  UNIT_MOVEMENT_MODES,
+  CONTACT_SLOT_TOLERANCE,
+  GRID_H,
+  GRID_W,
+  TICK_HZ,
+  MIN_UNIT_SPACING,
+  WAVE_ROUTE_COMBAT_RECOVERY_TICKS,
+  ENABLE_WAVE_UNIT_TRACE,
 });
 
 function buildTownCoreStateSummary(game) {
@@ -2901,6 +2975,8 @@ function startNextWaveNow(game) {
 }
 
 function mlTick(game) {
+  return tickSystem.mlTick(game, TICK_SYSTEM_DEPS);
+  /* legacy inline tick body extracted to tickSystem
   if (!game || game.phase !== "playing") return;
   game.tick += 1;
   if (!game.startedAt) game.startedAt = Date.now();
@@ -3375,6 +3451,7 @@ function mlTick(game) {
       startNextWaveNow(game);
     }
   }
+  */
 }
 
 function createMLSnapshot(game) {
