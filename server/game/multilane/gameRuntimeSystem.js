@@ -1,0 +1,739 @@
+"use strict";
+
+const DEFAULT_GRID_WIDTH = 11;
+const DEFAULT_GRID_HEIGHT = 28;
+const DEFAULT_SPAWN_X = 5;
+const DEFAULT_SPAWN_Y = 0;
+const DEFAULT_CASTLE_X = 5;
+const DEFAULT_CASTLE_Y = 27;
+const DEFAULT_TEAM_HP_START = 20;
+const DEFAULT_BUILD_PHASE_TICKS = 600;
+const DEFAULT_TRANSITION_PHASE_TICKS = 200;
+const DEFAULT_INCOME_INTERVAL_TICKS = 240;
+const DEFAULT_BARRACKS_SEND_TIMER_TICKS = 600;
+const DEFAULT_WAVE_TIMER_TICKS = 2400;
+const DEFAULT_LANE_COMMAND_COMBAT_LEASH = 8.0;
+
+const DEFAULT_ALLEGIANCE_KEYS = Object.freeze({
+  RED: "red",
+  YELLOW: "yellow",
+  BLUE: "blue",
+  GREEN: "green",
+});
+
+const DEFAULT_LANE_COMMAND_STATES = Object.freeze({
+  ATTACK: "ATTACK",
+  DEFEND: "DEFEND",
+  RETREAT: "RETREAT",
+});
+
+const DEFAULT_ROUTE_TYPES = Object.freeze({
+  WAVE_LANE: "WAVE_LANE",
+});
+
+const DEFAULT_FIXED_SLOT_LAYOUT = Object.freeze([
+  Object.freeze({ laneIndex: 0, slotKey: "left_a", side: "left", slotColor: "red", branchId: "left_branch_a", branchLabel: "Red Branch", castleSide: "right" }),
+  Object.freeze({ laneIndex: 1, slotKey: "left_b", side: "left", slotColor: "yellow", branchId: "left_branch_b", branchLabel: "Yellow Branch", castleSide: "right" }),
+  Object.freeze({ laneIndex: 2, slotKey: "right_a", side: "right", slotColor: "blue", branchId: "right_branch_a", branchLabel: "Blue Branch", castleSide: "left" }),
+  Object.freeze({ laneIndex: 3, slotKey: "right_b", side: "right", slotColor: "green", branchId: "right_branch_b", branchLabel: "Green Branch", castleSide: "left" }),
+]);
+
+const DEFAULT_BATTLEFIELD_TOPOLOGY = Object.freeze({
+  mapType: "lava_lake_funnel",
+  centerIslandId: "center_spawn_island",
+  sideOrder: Object.freeze(["left", "right"]),
+  castles: Object.freeze([
+    Object.freeze({ side: "left", castleId: "left_castle", bridgeId: "left_castle_bridge" }),
+    Object.freeze({ side: "right", castleId: "right_castle", bridgeId: "right_castle_bridge" }),
+  ]),
+  mergeZones: Object.freeze([
+    Object.freeze({ side: "left", landmassId: "left_merge_landmass", bridgeId: "left_castle_bridge" }),
+    Object.freeze({ side: "right", landmassId: "right_merge_landmass", bridgeId: "right_castle_bridge" }),
+  ]),
+  buildZones: Object.freeze([
+    Object.freeze({ branchId: "left_branch_a", ownerLaneIndex: 0, buildable: true }),
+    Object.freeze({ branchId: "left_branch_b", ownerLaneIndex: 1, buildable: true }),
+    Object.freeze({ branchId: "right_branch_a", ownerLaneIndex: 2, buildable: true }),
+    Object.freeze({ branchId: "right_branch_b", ownerLaneIndex: 3, buildable: true }),
+  ]),
+  sharedZonesBuildable: false,
+});
+
+const DEFAULT_OPPOSING_LANE_INDEX = Object.freeze([1, 0, 3, 2]);
+const DEFAULT_LEGACY_ACTION_REJECTION_REASONS = Object.freeze({});
+const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
+const DEFAULT_BARRACKS_ROSTER_DEFS = Object.freeze([]);
+
+function requireDepFunction(deps, name) {
+  const fn = deps && deps[name];
+  if (typeof fn !== "function")
+    throw new Error(`gameRuntimeSystem requires deps.${name}`);
+  return fn;
+}
+
+function getGridWidth(deps = {}) {
+  const value = Math.floor(Number(deps.GRID_W));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_GRID_WIDTH;
+}
+
+function getGridHeight(deps = {}) {
+  const value = Math.floor(Number(deps.GRID_H));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_GRID_HEIGHT;
+}
+
+function getSpawnX(deps = {}) {
+  const value = Math.floor(Number(deps.SPAWN_X));
+  return Number.isInteger(value) ? value : DEFAULT_SPAWN_X;
+}
+
+function getSpawnY(deps = {}) {
+  const value = Math.floor(Number(deps.SPAWN_YG));
+  return Number.isInteger(value) ? value : DEFAULT_SPAWN_Y;
+}
+
+function getCastleX(deps = {}) {
+  const value = Math.floor(Number(deps.CASTLE_X));
+  return Number.isInteger(value) ? value : DEFAULT_CASTLE_X;
+}
+
+function getCastleY(deps = {}) {
+  const value = Math.floor(Number(deps.CASTLE_YG));
+  return Number.isInteger(value) ? value : DEFAULT_CASTLE_Y;
+}
+
+function getTeamHpStart(deps = {}) {
+  const value = Math.floor(Number(deps.TEAM_HP_START));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_TEAM_HP_START;
+}
+
+function getBuildPhaseTicks(deps = {}) {
+  const value = Math.floor(Number(deps.BUILD_PHASE_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_BUILD_PHASE_TICKS;
+}
+
+function getTransitionPhaseTicks(deps = {}) {
+  const value = Math.floor(Number(deps.TRANSITION_PHASE_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_TRANSITION_PHASE_TICKS;
+}
+
+function getIncomeIntervalTicks(deps = {}) {
+  const value = Math.floor(Number(deps.INCOME_INTERVAL_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_INCOME_INTERVAL_TICKS;
+}
+
+function getBarracksSendTimerTicks(deps = {}) {
+  const value = Math.floor(Number(deps.BARRACKS_SEND_TIMER_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_BARRACKS_SEND_TIMER_TICKS;
+}
+
+function getWaveTimerTicks(deps = {}) {
+  const value = Math.floor(Number(deps.WAVE_TIMER_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_WAVE_TIMER_TICKS;
+}
+
+function getLaneCommandCombatLeash(deps = {}) {
+  const value = Number(deps.LANE_COMMAND_COMBAT_LEASH);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_LANE_COMMAND_COMBAT_LEASH;
+}
+
+function getAllegianceKeys(deps = {}) {
+  return deps.ALLEGIANCE_KEYS || DEFAULT_ALLEGIANCE_KEYS;
+}
+
+function getLaneCommandStates(deps = {}) {
+  return deps.LANE_COMMAND_STATES || DEFAULT_LANE_COMMAND_STATES;
+}
+
+function getRouteTypes(deps = {}) {
+  return deps.ROUTE_TYPES || DEFAULT_ROUTE_TYPES;
+}
+
+function getFixedSlotLayout(deps = {}) {
+  return Array.isArray(deps.FIXED_SLOT_LAYOUT) ? deps.FIXED_SLOT_LAYOUT : DEFAULT_FIXED_SLOT_LAYOUT;
+}
+
+function getBattlefieldTopologyTemplate(deps = {}) {
+  return deps.BATTLEFIELD_TOPOLOGY || DEFAULT_BATTLEFIELD_TOPOLOGY;
+}
+
+function getOpposingLaneIndex(deps = {}) {
+  return Array.isArray(deps.OPPOSING_LANE_INDEX) ? deps.OPPOSING_LANE_INDEX : DEFAULT_OPPOSING_LANE_INDEX;
+}
+
+function getLegacyActionRejectionReasons(deps = {}) {
+  return deps.LEGACY_ACTION_REJECTION_REASONS || DEFAULT_LEGACY_ACTION_REJECTION_REASONS;
+}
+
+function getBarracksSiteDefs(deps = {}) {
+  return Array.isArray(deps.BARRACKS_SITE_DEFS) ? deps.BARRACKS_SITE_DEFS : DEFAULT_BARRACKS_SITE_DEFS;
+}
+
+function getBarracksRosterDefs(deps = {}) {
+  return Array.isArray(deps.BARRACKS_ROSTER_DEFS) ? deps.BARRACKS_ROSTER_DEFS : DEFAULT_BARRACKS_ROSTER_DEFS;
+}
+
+function hasExplicitMlOption(src, key) {
+  return Object.prototype.hasOwnProperty.call(src, key)
+    && src[key] !== undefined
+    && src[key] !== null
+    && src[key] !== "";
+}
+
+function normalizeMlOptionNumber(src, key, defaultValue, min, max, integer = false) {
+  if (!hasExplicitMlOption(src, key))
+    return defaultValue;
+
+  const numericValue = Number(src[key]);
+  if (!Number.isFinite(numericValue))
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected a finite number.`);
+  if (numericValue < min || numericValue > max)
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected ${min}-${max}.`);
+  if (integer && !Number.isInteger(numericValue))
+    throw new Error(`[multilane-config] Invalid game option '${key}'; expected a whole number.`);
+  return Math.max(min, Math.min(max, numericValue));
+}
+
+function cloneSlotDef(slot, laneTeam, deps = {}) {
+  const normalizeAllegianceKey = requireDepFunction(deps, "normalizeAllegianceKey");
+  const allegianceKeys = getAllegianceKeys(deps);
+  const canonicalLaneTeam = normalizeAllegianceKey(
+    laneTeam || slot.team || slot.slotColor || (slot.side === "left" ? allegianceKeys.RED : allegianceKeys.BLUE)
+  );
+  const canonicalSlotColor = normalizeAllegianceKey(slot.slotColor) || canonicalLaneTeam;
+  return {
+    laneIndex: slot.laneIndex,
+    slotKey: slot.slotKey,
+    side: slot.side,
+    slotColor: canonicalSlotColor || slot.slotColor,
+    branchId: slot.branchId,
+    branchLabel: slot.branchLabel,
+    castleSide: slot.castleSide,
+    team: canonicalLaneTeam || allegianceKeys.RED,
+    allegianceKey: canonicalLaneTeam || allegianceKeys.RED,
+  };
+}
+
+function getTwoPlayerSlotBases(deps = {}) {
+  const fixedSlotLayout = getFixedSlotLayout(deps);
+  return [
+    fixedSlotLayout[0],
+    fixedSlotLayout[1]
+      ? Object.assign({}, fixedSlotLayout[1], {
+          laneIndex: 1,
+          side: "right",
+          castleSide: "left",
+        })
+      : null,
+  ].filter(Boolean);
+}
+
+function getDefaultSlotDefinitions(playerCount, laneTeams, deps = {}) {
+  const fixedSlotLayout = getFixedSlotLayout(deps);
+  const twoPlayerSlotBases = getTwoPlayerSlotBases(deps);
+  const safePlayerCount = Math.max(0, Math.floor(Number(playerCount) || 0));
+  const defs = [];
+  for (let i = 0; i < safePlayerCount; i += 1) {
+    const base = safePlayerCount === 2
+      ? (twoPlayerSlotBases[i] || fixedSlotLayout[i])
+      : (fixedSlotLayout[i] || {
+          laneIndex: i,
+          slotKey: `slot_${i}`,
+          side: i % 2 === 0 ? "left" : "right",
+          slotColor: `slot-${i}`,
+          branchId: `branch_${i}`,
+          branchLabel: `Branch ${i + 1}`,
+          castleSide: i % 2 === 0 ? "right" : "left",
+        });
+    defs.push(cloneSlotDef(base, laneTeams && laneTeams[i], deps));
+  }
+  return defs;
+}
+
+function getBattlefieldTopology(playerCount, laneTeams, deps = {}) {
+  const topology = getBattlefieldTopologyTemplate(deps);
+  const safePlayerCount = Math.max(0, Math.floor(Number(playerCount) || 0));
+  return {
+    mapType: topology.mapType,
+    centerIslandId: topology.centerIslandId,
+    sideOrder: Array.isArray(topology.sideOrder) ? topology.sideOrder.slice() : [],
+    castles: Array.isArray(topology.castles)
+      ? topology.castles.map((castle) => Object.assign({}, castle))
+      : [],
+    mergeZones: Array.isArray(topology.mergeZones)
+      ? topology.mergeZones.map((zone) => Object.assign({}, zone))
+      : [],
+    buildZones: Array.isArray(topology.buildZones)
+      ? topology.buildZones
+        .filter((zone) => zone.ownerLaneIndex < safePlayerCount)
+        .map((zone) => Object.assign({}, zone))
+      : [],
+    sharedZonesBuildable: !!topology.sharedZonesBuildable,
+    slotDefinitions: getDefaultSlotDefinitions(safePlayerCount, laneTeams, deps),
+  };
+}
+
+function normalizeGameOptions(options, deps = {}) {
+  const getMlRuntimeSettings = requireDepFunction(deps, "getMlRuntimeSettings");
+  const normalizeAllegianceKey = requireDepFunction(deps, "normalizeAllegianceKey");
+  const runtime = getMlRuntimeSettings();
+  const src = options && typeof options === "object" ? options : {};
+  const allegianceKeys = getAllegianceKeys(deps);
+  const defaultLaneTeams = [
+    allegianceKeys.RED,
+    allegianceKeys.YELLOW,
+    allegianceKeys.BLUE,
+    allegianceKeys.GREEN,
+  ];
+  const laneTeamsRaw = Array.isArray(src.laneTeams) ? src.laneTeams : [];
+  const laneTeams = laneTeamsRaw.map((team, idx) => {
+    const normalized = normalizeAllegianceKey(team);
+    if (normalized)
+      return normalized;
+    return defaultLaneTeams[idx] || `p${idx}`;
+  });
+  const topologyPlayerCount = Math.max(
+    0,
+    Math.floor(Number(src.playerCount) || laneTeams.length || getFixedSlotLayout(deps).length || 4)
+  );
+  return {
+    startGold: normalizeMlOptionNumber(src, "startGold", runtime.startGold, 0, 10000, true),
+    startIncome: normalizeMlOptionNumber(src, "startIncome", runtime.startIncome, 0, 1000),
+    livesStart: normalizeMlOptionNumber(src, "livesStart", runtime.livesStart, 1, 1000, true),
+    teamHpStart: normalizeMlOptionNumber(src, "teamHpStart", runtime.teamHpStart, 1, 1000, true),
+    buildPhaseTicks: normalizeMlOptionNumber(src, "buildPhaseTicks", runtime.buildPhaseTicks, 20, 7200, true),
+    transitionPhaseTicks: normalizeMlOptionNumber(src, "transitionPhaseTicks", runtime.transitionPhaseTicks, 20, 7200, true),
+    laneTeams,
+    matchSeed: typeof src.matchSeed === "number" ? (src.matchSeed >>> 0) : undefined,
+    startingCombatMilitiaCount: Math.max(0, Math.floor(Number(src.startingCombatMilitiaCount) || 0)),
+    battlefieldTopology: getBattlefieldTopology(topologyPlayerCount, laneTeams, deps),
+  };
+}
+
+function makeGrid(deps = {}) {
+  const gridWidth = getGridWidth(deps);
+  const gridHeight = getGridHeight(deps);
+  const spawnX = getSpawnX(deps);
+  const spawnY = getSpawnY(deps);
+  const castleX = getCastleX(deps);
+  const castleY = getCastleY(deps);
+  const grid = [];
+  for (let x = 0; x < gridWidth; x += 1) {
+    grid[x] = [];
+    for (let y = 0; y < gridHeight; y += 1)
+      grid[x][y] = { type: "empty", towerType: null, towerLevel: 0, atkCd: 0, targetMode: "first" };
+  }
+  if (grid[spawnX] && grid[spawnX][spawnY])
+    grid[spawnX][spawnY].type = "spawn";
+  if (grid[castleX] && grid[castleX][castleY])
+    grid[castleX][castleY].type = "castle";
+  return grid;
+}
+
+function createMLGame(playerCount, options, deps = {}) {
+  const buildRouteSegments = requireDepFunction(deps, "buildRouteSegments");
+  const getWaveSpawnNodeId = requireDepFunction(deps, "getWaveSpawnNodeId");
+  const getLaneNodeId = requireDepFunction(deps, "getLaneNodeId");
+  const buildSampledPathFromSegments = requireDepFunction(deps, "buildSampledPathFromSegments");
+  const getBarracksLevelDef = requireDepFunction(deps, "getBarracksLevelDef");
+  const createFortressPadStates = requireDepFunction(deps, "createFortressPadStates");
+  const createBarracksSiteStates = requireDepFunction(deps, "createBarracksSiteStates");
+  const createBarracksSiteRosterCounts = requireDepFunction(deps, "createBarracksSiteRosterCounts");
+  const seedStartingCombatTestMilitia = requireDepFunction(deps, "seedStartingCombatTestMilitia");
+  const recomputeTeamHpState = requireDepFunction(deps, "recomputeTeamHpState");
+  const mulberry32 = requireDepFunction(deps, "mulberry32");
+  const normalizeAllegianceKey = requireDepFunction(deps, "normalizeAllegianceKey");
+  const safePlayerCount = Math.max(0, Math.floor(Number(playerCount) || 0));
+  const opt = normalizeGameOptions(options, deps);
+  const battlefieldTopology = getBattlefieldTopology(safePlayerCount, opt.laneTeams, deps);
+  const slotDefinitions = battlefieldTopology.slotDefinitions;
+  const routeTypes = getRouteTypes(deps);
+  const laneCommandStates = getLaneCommandStates(deps);
+  const opposingLaneIndex = getOpposingLaneIndex(deps);
+  const lanes = [];
+
+  for (let i = 0; i < safePlayerCount; i += 1) {
+    const grid = makeGrid(deps);
+    const routeToCore = buildRouteSegments(routeTypes.WAVE_LANE, getWaveSpawnNodeId(i), getLaneNodeId(i));
+    const slot = slotDefinitions[i] || cloneSlotDef({
+      laneIndex: i,
+      slotKey: `slot_${i}`,
+      side: i % 2 === 0 ? "left" : "right",
+      slotColor: `slot-${i}`,
+      branchId: `branch_${i}`,
+      branchLabel: `Branch ${i + 1}`,
+      castleSide: i % 2 === 0 ? "right" : "left",
+    }, opt.laneTeams[i], deps);
+    lanes.push({
+      laneIndex: i,
+      team: slot.team,
+      allegianceKey: normalizeAllegianceKey(slot.team),
+      side: slot.side,
+      slotKey: slot.slotKey,
+      slotColor: slot.slotColor,
+      branchId: slot.branchId,
+      branchLabel: slot.branchLabel,
+      castleSide: slot.castleSide,
+      eliminated: false,
+      gold: opt.startGold + opt.startIncome,
+      income: opt.startIncome,
+      incomeRemainder: 0,
+      lives: opt.livesStart,
+      totalSendSpend: 0,
+      totalSendCount: 0,
+      totalBuildSpend: 0,
+      totalLeaksTaken: 0,
+      biggestLeakTaken: 0,
+      wavesHeld: 0,
+      wavesLeaked: 0,
+      currentHoldStreak: 0,
+      longestHoldStreak: 0,
+      leakCountThisRound: 0,
+      lifeLossThisRound: 0,
+      sendCountThisRound: 0,
+      sendSpendThisRound: 0,
+      buildSpendThisRound: 0,
+      grid,
+      path: buildSampledPathFromSegments(routeToCore, 28),
+      fullPath: buildSampledPathFromSegments(routeToCore, 56),
+      barracks: Object.assign({ level: 1 }, getBarracksLevelDef(1)),
+      waveSpeedMult: 1,
+      fortressPads: createFortressPadStates(opt.teamHpStart),
+      barracksSiteStates: createBarracksSiteStates(opt.teamHpStart, 1),
+      barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
+      heroCooldownReadyTicks: {},
+      units: [],
+      spawnQueue: [],
+      projectiles: [],
+      loadoutKeys: null,
+      commandState: laneCommandStates.DEFEND,
+      commandTargetLaneIndex: Number.isInteger(opposingLaneIndex[i]) && opposingLaneIndex[i] < safePlayerCount
+        ? opposingLaneIndex[i]
+        : (safePlayerCount > 1 ? ((i + 1) % safePlayerCount) : i),
+      commandAnchorProgress: 0,
+      commandAnchor: null,
+      commandFacing: null,
+      commandSlots: [],
+      assignedUnits: [],
+      assignedUnitOrder: [],
+      insideGateAnchor: null,
+      outsideGateAnchor: null,
+      enemyCoreAnchor: null,
+      engagementRadius: getLaneCommandCombatLeash(deps),
+      combatEnabled: true,
+    });
+  }
+
+  const game = {
+    tick: 0,
+    phase: "playing",
+    winner: null,
+    matchState: "active_survival",
+    officialWinnerLane: null,
+    officialWinningTeam: null,
+    officialWinningSide: null,
+    losingTeam: null,
+    losingSide: null,
+    awaitingPostWinDecision: false,
+    continuedIntoSurvival: true,
+    pvpResolvedAtTick: null,
+    survivalStartedAtTick: 0,
+    survivalStartRound: 1,
+    finalGameOverReason: null,
+    finalGameOverDebug: null,
+    playerCount: safePlayerCount,
+    lanes,
+    battlefieldTopology,
+    teamHp: { left: opt.teamHpStart, right: opt.teamHpStart },
+    teamHpMax: opt.teamHpStart,
+    buildPhaseTicks: opt.buildPhaseTicks,
+    transitionPhaseTicks: opt.transitionPhaseTicks,
+    incomeIntervalTicks: getIncomeIntervalTicks(deps),
+    barracksSendIntervalTicks: getBarracksSendTimerTicks(deps),
+    waveIntervalTicks: getWaveTimerTicks(deps),
+    roundState: "combat",
+    roundNumber: 1,
+    roundStateTicks: 0,
+    nextIncomeTick: getIncomeIntervalTicks(deps),
+    nextBarracksSendTick: getBarracksSendTimerTicks(deps),
+    nextWaveTick: getWaveTimerTicks(deps),
+    lastWaveSpawnTick: null,
+    hasSpawnedWave: false,
+    waveConfig: [],
+    roundSnapshots: [],
+    startedAt: null,
+    finalSnapshotCaptured: false,
+    _pendingEvents: [],
+    nextUnitId: 1,
+    nextProjectileId: 1,
+    rng: mulberry32(opt.matchSeed !== undefined ? opt.matchSeed : (Date.now() >>> 0)),
+    matchSeed: opt.matchSeed !== undefined ? opt.matchSeed : null,
+    configVersionId: null,
+    actionSeq: 0,
+  };
+  if (opt.startingCombatMilitiaCount > 0) {
+    for (const lane of lanes)
+      seedStartingCombatTestMilitia(game, lane, opt.startingCombatMilitiaCount);
+  }
+  recomputeTeamHpState(game);
+  return game;
+}
+
+function getLaneBuildValue(lane, deps = {}) {
+  const getBarracksSiteCounts = requireDepFunction(deps, "getBarracksSiteCounts");
+  const getBarracksRosterBuyCost = requireDepFunction(deps, "getBarracksRosterBuyCost");
+  let total = 0;
+  if (Array.isArray(lane && lane.fortressPads)) {
+    for (const pad of lane.fortressPads || []) {
+      if (!pad || !Array.isArray(pad.costHistory))
+        continue;
+      for (const entry of pad.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+  if (lane && lane.barracksSiteStates && typeof lane.barracksSiteStates === "object") {
+    for (const siteState of Object.values(lane.barracksSiteStates)) {
+      if (!siteState || !Array.isArray(siteState.costHistory))
+        continue;
+      for (const entry of siteState.costHistory)
+        total += Number(entry && entry.cost) || 0;
+    }
+  }
+  if (lane && lane.barracksSiteRosterCounts) {
+    for (const siteDef of getBarracksSiteDefs(deps)) {
+      const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId) || {};
+      for (const rosterDef of getBarracksRosterDefs(deps)) {
+        const ownedCount = Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
+        total += ownedCount * getBarracksRosterBuyCost(rosterDef);
+      }
+    }
+  }
+  return total;
+}
+
+function getLaneWaveResult(lane) {
+  if (!lane)
+    return "Unknown";
+  if (lane.eliminated && lane.lifeLossThisRound > 0)
+    return "Defeated";
+  if (lane.leakCountThisRound >= 5 || lane.lifeLossThisRound >= 5)
+    return "Crushed";
+  if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0)
+    return "Leaked";
+  return "Held";
+}
+
+function createRoundSnapshotLane(game, lane, deps = {}) {
+  return {
+    laneIndex: lane.laneIndex,
+    income: lane.income,
+    buildValue: getLaneBuildValue(lane, deps),
+    gold: Math.floor(lane.gold),
+    leaksTaken: lane.leakCountThisRound,
+    leakDamage: lane.lifeLossThisRound,
+    sendSpend: lane.sendSpendThisRound,
+    sendCount: lane.sendCountThisRound,
+    buildSpend: lane.buildSpendThisRound,
+    lives: lane.lives,
+    teamHp: lane.lives,
+    eliminated: lane.eliminated,
+    holdResult: getLaneWaveResult(lane),
+  };
+}
+
+function isOpponentLane(game, sourceLaneIndex, targetLaneIndex, deps = {}) {
+  const resolveLaneAllegianceKey = requireDepFunction(deps, "resolveLaneAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
+  const sourceLane = game && game.lanes && game.lanes[sourceLaneIndex];
+  const targetLane = game && game.lanes && game.lanes[targetLaneIndex];
+  if (!sourceLane || !targetLane)
+    return false;
+  if (targetLane.eliminated)
+    return false;
+  if (sourceLaneIndex === targetLaneIndex)
+    return false;
+  return areAllegiancesHostile(resolveLaneAllegianceKey(sourceLane), resolveLaneAllegianceKey(targetLane));
+}
+
+function findNextActiveOpponentLaneIndex(game, fromLaneIndex, deps = {}) {
+  if (!game || !Array.isArray(game.lanes) || game.lanes.length <= 1)
+    return null;
+  const total = Math.min(Number(game.playerCount) || game.lanes.length, game.lanes.length);
+  for (let step = 1; step < total; step += 1) {
+    const idx = (fromLaneIndex + step) % total;
+    if (isOpponentLane(game, fromLaneIndex, idx, deps))
+      return idx;
+  }
+  return null;
+}
+
+function applyLaneCommandAction(game, lane, commandState, data = null, deps = {}) {
+  const normalizeLaneCommandState = requireDepFunction(deps, "normalizeLaneCommandState");
+  const getLaneCommandAnchorProgress = requireDepFunction(deps, "getLaneCommandAnchorProgress");
+  const getLaneCommandObjectiveLaneIndex = requireDepFunction(deps, "getLaneCommandObjectiveLaneIndex");
+  const isLaneCombatEnabledCommandState = requireDepFunction(deps, "isLaneCombatEnabledCommandState");
+  const getLaneCommandEngagementRadius = requireDepFunction(deps, "getLaneCommandEngagementRadius");
+  const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
+  const laneCommandStates = getLaneCommandStates(deps);
+  const normalizedCommandState = normalizeLaneCommandState(commandState);
+  if (!lane || !normalizedCommandState)
+    return { ok: false, reason: "Invalid lane command" };
+
+  const requestedTargetLaneIndex = Number.isInteger(data && data.targetLaneIndex)
+    ? data.targetLaneIndex
+    : null;
+  if (requestedTargetLaneIndex !== null && isOpponentLane(game, lane.laneIndex, requestedTargetLaneIndex, deps))
+    lane.commandTargetLaneIndex = requestedTargetLaneIndex;
+
+  let anchorProgress = getLaneCommandAnchorProgress(lane);
+  if (normalizedCommandState === laneCommandStates.ATTACK)
+    anchorProgress = 1;
+  else
+    anchorProgress = 0;
+
+  lane.commandState = normalizedCommandState;
+  lane.commandAnchorProgress = anchorProgress;
+  lane.commandTargetLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
+  lane.combatEnabled = isLaneCombatEnabledCommandState(normalizedCommandState);
+  lane.engagementRadius = getLaneCommandEngagementRadius(lane);
+  syncLaneCommandAssignments(game);
+  return { ok: true };
+}
+
+function warnLegacyActionOnce(game, laneIndex, type, deps = {}) {
+  const log = deps && deps.log;
+  if (!game || !type)
+    return;
+  if (!(game.__legacyActionWarnings instanceof Set))
+    game.__legacyActionWarnings = new Set();
+  const warningKey = `${laneIndex}:${type}`;
+  if (game.__legacyActionWarnings.has(warningKey))
+    return;
+  game.__legacyActionWarnings.add(warningKey);
+  if (log && typeof log.warn === "function") {
+    log.warn("[ActionBoundary] rejected legacy fortress action", {
+      actionType: type,
+      laneIndex,
+      tick: Number(game.tick) || 0,
+    });
+  }
+}
+
+function rejectLegacyFortressAction(game, laneIndex, type, deps = {}) {
+  const reason = getLegacyActionRejectionReasons(deps)[type];
+  if (!reason)
+    return null;
+  warnLegacyActionOnce(game, laneIndex, type, deps);
+  return { ok: false, reason };
+}
+
+function applyMLAction(game, laneIndex, action, deps = {}) {
+  const applyFortressBuildOnPad = requireDepFunction(deps, "applyFortressBuildOnPad");
+  const getFortressPadByBuildingType = requireDepFunction(deps, "getFortressPadByBuildingType");
+  const applyFortressUpgrade = requireDepFunction(deps, "applyFortressUpgrade");
+  const normalizeBarracksSiteId = requireDepFunction(deps, "normalizeBarracksSiteId");
+  const applyBarracksSiteBuildAction = requireDepFunction(deps, "applyBarracksSiteBuildAction");
+  const applyBarracksSiteUpgradeAction = requireDepFunction(deps, "applyBarracksSiteUpgradeAction");
+  const buyBarracksUnit = requireDepFunction(deps, "buyBarracksUnit");
+  const sellBarracksUnit = requireDepFunction(deps, "sellBarracksUnit");
+  const deployBarracksHero = requireDepFunction(deps, "deployBarracksHero");
+  const laneCommandStates = getLaneCommandStates(deps);
+
+  if (!game || game.phase !== "playing")
+    return { ok: false, reason: "Game not active" };
+  if (laneIndex < 0 || laneIndex >= game.lanes.length)
+    return { ok: false, reason: "Bad laneIndex" };
+  const lane = game.lanes[laneIndex];
+  if (lane.eliminated)
+    return { ok: false, reason: "You have been eliminated" };
+  if (!action || typeof action.type !== "string")
+    return { ok: false, reason: "Bad action" };
+
+  game.actionSeq = (game.actionSeq || 0) + 1;
+  action.tickApply = game.tick;
+  action.laneId = laneIndex;
+  action.actionSeq = game.actionSeq;
+
+  const { type, data } = action;
+
+  if (type === "build_on_pad") {
+    const padId = String((data && data.padId) || "").trim();
+    if (!padId)
+      return { ok: false, reason: "Missing padId" };
+    return applyFortressBuildOnPad(game, lane, padId);
+  }
+
+  if (type === "upgrade_building") {
+    const rawPadId = String((data && data.padId) || "").trim();
+    const rawBuildingType = String((data && data.buildingType) || "").trim();
+    const padId = rawPadId || (getFortressPadByBuildingType(lane, rawBuildingType) || {}).padId;
+    if (!padId)
+      return { ok: false, reason: "Missing padId" };
+    return applyFortressUpgrade(game, lane, padId);
+  }
+
+  if (type === "build_barracks_site") {
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    if (!barracksId)
+      return { ok: false, reason: "Missing or invalid barracksId" };
+    return applyBarracksSiteBuildAction(game, lane, barracksId);
+  }
+
+  if (type === "upgrade_barracks_site") {
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
+    if (!barracksId)
+      return { ok: false, reason: "Missing or invalid barracksId" };
+    return applyBarracksSiteUpgradeAction(game, lane, barracksId);
+  }
+
+  if (type === "buy_barracks_unit") {
+    const rosterKey = String((data && data.rosterKey) || "").trim();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    const requestedCount = Math.max(1, Math.floor(Number((data && data.count) || 1) || 1));
+    const count = Math.min(25, requestedCount);
+    return buyBarracksUnit(game, laneIndex, lane, rosterKey, requestedBarracksId, count);
+  }
+
+  if (type === "sell_barracks_unit") {
+    const rosterKey = String((data && data.rosterKey) || "").trim();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    return sellBarracksUnit(laneIndex, lane, rosterKey, requestedBarracksId);
+  }
+
+  if (type === "deploy_barracks_hero") {
+    const heroKey = String((data && data.heroKey) || "").trim().toLowerCase();
+    const requestedBarracksId = String((data && data.barracksId) || "").trim();
+    return deployBarracksHero(game, laneIndex, lane, heroKey, requestedBarracksId);
+  }
+
+  if (type === "set_lane_attack")
+    return applyLaneCommandAction(game, lane, laneCommandStates.ATTACK, data, deps);
+
+  if (type === "set_lane_defend" || type === "set_lane_hold" || type === "set_lane_defend_point")
+    return applyLaneCommandAction(game, lane, laneCommandStates.DEFEND, data, deps);
+
+  if (type === "set_lane_retreat" || type === "set_lane_callback")
+    return applyLaneCommandAction(game, lane, laneCommandStates.RETREAT, data, deps);
+
+  if (type === "set_lane_command")
+    return applyLaneCommandAction(game, lane, data && data.commandState, data, deps);
+
+  const legacyRejection = rejectLegacyFortressAction(game, laneIndex, type, deps);
+  if (legacyRejection)
+    return legacyRejection;
+
+  return { ok: false, reason: "Unknown action type" };
+}
+
+module.exports = {
+  getDefaultSlotDefinitions,
+  normalizeGameOptions,
+  createMLGame,
+  getLaneBuildValue,
+  getLaneWaveResult,
+  createRoundSnapshotLane,
+  isOpponentLane,
+  findNextActiveOpponentLaneIndex,
+  applyMLAction,
+};
