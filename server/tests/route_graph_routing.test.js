@@ -925,7 +925,7 @@ test("lane-controlled defenders can switch from a queued target to a closer host
   );
 });
 
-test("lane-controlled defenders pause to regroup briefly after a kill before reacquiring the next threat", () => {
+test("lane-controlled defenders keep chaining through nearby threats instead of regrouping between adjacent kills", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -992,28 +992,99 @@ test("lane-controlled defenders pause to regroup briefly after a kill before rea
   tick(game, 1);
 
   const serverDefender = lane.units.find((unit) => unit.id === defender.id);
+  assert.ok(serverDefender, "the chaining defender should still be alive.");
+  assert.equal(
+    serverDefender.combatTarget?.unitId,
+    secondWave.id,
+    "after a kill, a lane-controlled defender should immediately chain onto another hostile that is already inside direct engagement range."
+  );
+  assert.ok(
+    Number(serverDefender.regroupUntilTick) <= game.tick,
+    "the regroup window should stay cleared while the defender is chaining through adjacent threats."
+  );
+});
+
+test("lane-controlled defenders still regroup after a kill when the next threat is outside direct engagement range", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.6, 0);
+  const firstWavePoint = getDefendAnchorPosition(lane, 0.1, 0);
+  const secondWavePoint = getDefendAnchorPosition(lane, 0.2, 5.5);
+  const defender = createAttacker({
+    id: "regroup_far_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 0,
+    baseDmg: 10,
+    baseSpeed: 1.0,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+  });
+  const firstWave = createAttacker({
+    id: "regroup_far_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 6,
+    maxHp: 6,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: firstWavePoint.posX,
+    posY: firstWavePoint.posY,
+  });
+  const secondWave = createAttacker({
+    id: "regroup_far_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 30,
+    maxHp: 30,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: secondWavePoint.posX,
+    posY: secondWavePoint.posY,
+  });
+
+  lane.units.push(defender, firstWave, secondWave);
+
+  tick(game, 1);
+
+  assert.equal(
+    lane.units.some((unit) => unit.id === firstWave.id),
+    false,
+    "the defender should finish the first weak contact on the opening attack."
+  );
+
+  tick(game, 1);
+
+  const serverDefender = lane.units.find((unit) => unit.id === defender.id);
   assert.ok(serverDefender, "the regrouping defender should still be alive.");
   assert.equal(
     serverDefender.combatTarget,
     null,
-    "after a kill, a lane-controlled defender should briefly regroup instead of immediately snapping to the next nearby target."
+    "after a kill, a lane-controlled defender should still regroup when no other hostile remains inside direct engagement range."
   );
   assert.ok(
     Number(serverDefender.regroupUntilTick) > game.tick,
-    "the regroup window should stay active for a short time after combat ends."
+    "the regroup window should stay active for a short time when there is no immediate follow-through target."
   );
-
-  tick(game, 10);
-
-  const laterDefender = lane.units.find((unit) => unit.id === defender.id);
-  const laterWave = lane.units.find((unit) => unit.id === secondWave.id);
-  assert.ok(laterDefender, "the defender should still exist after the regroup window.");
-  if (laterWave) {
-    assert.ok(
-      laterDefender.combatTarget?.unitId === laterWave.id || laterDefender.attackPulse > 0,
-      "once the regroup window ends, the defender should be able to reacquire the remaining threat."
-    );
-  }
+  assert.ok(
+    lane.units.some((unit) => unit.id === secondWave.id),
+    "the distant follow-up threat should still be present so the test is only measuring regroup behavior."
+  );
 });
 
 test("redirecting an attack lane reprojects existing attackers onto the new route instead of preserving a map-wide offset", () => {
@@ -1197,7 +1268,7 @@ test("snapshot contract exposes combat resolve state for lane-controlled contact
   assert.equal(snapDefender.combatLockTicksRemaining, 0, "lane-controlled contact no longer relies on a synthetic target-lock window.");
 });
 
-test("snapshot contract exposes combat regroup after a lane-controlled kill", () => {
+test("snapshot contract keeps nearby follow-through combat instead of exposing regroup between adjacent kills", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -1237,6 +1308,81 @@ test("snapshot contract exposes combat regroup after a lane-controlled kill", ()
   });
   const secondWave = createAttacker({
     id: "regroup_snapshot_wave_2",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 30,
+    maxHp: 30,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: secondWavePoint.posX,
+    posY: secondWavePoint.posY,
+  });
+
+  lane.units.push(defender, firstWave, secondWave);
+
+  tick(game, 2);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const snapLane = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  const snapDefender = snapLane.units.find((entry) => entry && entry.id === defender.id);
+
+  assert.ok(snapDefender, "expected the chaining defender to appear in the snapshot.");
+  assert.equal(
+    snapDefender.combatTargetId,
+    secondWave.id,
+    "the snapshot should keep the nearby follow-through target visible instead of dropping into regroup."
+  );
+  assert.ok(
+    snapDefender.presentationPhase === "CombatCommit" || snapDefender.presentationPhase === "CombatResolve",
+    `expected the chaining defender to remain in a combat presentation phase, got ${snapDefender.presentationPhase}`
+  );
+  assert.equal(snapDefender.regroupTicksRemaining, 0);
+});
+
+test("snapshot contract still exposes combat regroup after a lane-controlled kill when no nearby follow-through threat exists", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  const defenderPoint = getDefendAnchorPosition(lane, -0.6, 0);
+  const firstWavePoint = getDefendAnchorPosition(lane, 0.1, 0);
+  const secondWavePoint = getDefendAnchorPosition(lane, 0.2, 5.5);
+  const defender = createAttacker({
+    id: "regroup_far_snapshot_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 80,
+    maxHp: 80,
+    atkCd: 0,
+    baseDmg: 10,
+    baseSpeed: 1.0,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+  });
+  const firstWave = createAttacker({
+    id: "regroup_far_snapshot_wave_1",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    hp: 6,
+    maxHp: 6,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: firstWavePoint.posX,
+    posY: firstWavePoint.posY,
+  });
+  const secondWave = createAttacker({
+    id: "regroup_far_snapshot_wave_2",
     sourceLaneIndex: -1,
     sourceTeam: null,
     sourceBarracksId: null,
