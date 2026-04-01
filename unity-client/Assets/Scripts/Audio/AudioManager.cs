@@ -112,7 +112,14 @@ public class AudioManager : MonoBehaviour
             return;
 
         AudioClip clip = ClipFor(sfx);
-        if (clip == null) return;
+        PlayClip(clip, volumeScale);
+    }
+
+    public void PlayClip(AudioClip clip, float volumeScale = 1f)
+    {
+        if (this == null || _sfxSource == null || clip == null)
+            return;
+
         _sfxSource.PlayOneShot(clip, volumeScale);
     }
 

@@ -2730,6 +2730,8 @@ namespace CastleDefender.UI
                 _txtDetailsBody.lineSpacing = 8f;
                 _txtDetailsBody.paragraphSpacing = 6f;
             }
+
+            BuildDetailsSoundCard(contentGo.transform, compact);
         }
 
         void BuildDetailsPreviewCard(Transform parent, bool compact)
@@ -3159,15 +3161,15 @@ namespace CastleDefender.UI
 
         void BuildDetailsSoundCard(Transform parent, bool compact)
         {
-            var soundCard = CreateDetailsModalCard(parent, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 152f);
+            var soundCard = CreateDetailsModalCard(parent, "SoundCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), compact ? 186f : 172f);
             var soundHeader = MakeLabel(soundCard.transform, "Txt_SoundHeader", "Sound Hall", 15, ClassicRpgUiRuntime.WarmGold, 22f);
             ApplyReadableTextStyle(soundHeader, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
 
-            var soundRow = new GameObject("SoundPreviewRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
+            var soundRow = new GameObject("SoundPreviewStack", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             soundRow.transform.SetParent(soundCard.transform, false);
-            soundRow.GetComponent<LayoutElement>().preferredHeight = 44f;
-            var soundRowLayout = soundRow.GetComponent<HorizontalLayoutGroup>();
-            soundRowLayout.childAlignment = TextAnchor.MiddleCenter;
+            soundRow.GetComponent<LayoutElement>().preferredHeight = compact ? 96f : 88f;
+            var soundRowLayout = soundRow.GetComponent<VerticalLayoutGroup>();
+            soundRowLayout.childAlignment = TextAnchor.UpperCenter;
             soundRowLayout.childControlWidth = true;
             soundRowLayout.childControlHeight = true;
             soundRowLayout.childForceExpandWidth = true;
@@ -3175,6 +3177,8 @@ namespace CastleDefender.UI
             soundRowLayout.spacing = 8f;
 
             _btnDetailsPreviewSfx = MakeButton(soundRow.transform, "Btn_PreviewSfx", "Preview SFX", 42f, new Color(0.24f, 0.33f, 0.49f, 1f));
+            if (_btnDetailsPreviewSfx.TryGetComponent(out LayoutElement sfxLayout))
+                sfxLayout.preferredHeight = 42f;
             _txtDetailsPreviewSfx = _btnDetailsPreviewSfx.GetComponentInChildren<TMP_Text>();
             if (_txtDetailsPreviewSfx != null)
                 _txtDetailsPreviewSfx.fontSize = compact ? 12f : 13f;
@@ -3182,13 +3186,15 @@ namespace CastleDefender.UI
             _btnDetailsPreviewSfx.onClick.AddListener(PreviewSelectedUnitSfx);
 
             _btnDetailsPreviewVoice = MakeButton(soundRow.transform, "Btn_PreviewVoice", "Voice Lines", 42f, new Color(0.19f, 0.24f, 0.34f, 1f));
+            if (_btnDetailsPreviewVoice.TryGetComponent(out LayoutElement voiceLayout))
+                voiceLayout.preferredHeight = 42f;
             _txtDetailsPreviewVoice = _btnDetailsPreviewVoice.GetComponentInChildren<TMP_Text>();
             if (_txtDetailsPreviewVoice != null)
                 _txtDetailsPreviewVoice.fontSize = compact ? 12f : 13f;
             ApplyReadableTextStyle(_txtDetailsPreviewVoice, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
             _btnDetailsPreviewVoice.onClick.AddListener(PreviewSelectedUnitVoice);
 
-            _txtDetailsAudioStatus = MakeLabel(soundCard.transform, "Txt_AudioStatus", "", compact ? 11 : 12, new Color(0.80f, 0.84f, 0.92f), 46f);
+            _txtDetailsAudioStatus = MakeLabel(soundCard.transform, "Txt_AudioStatus", "", compact ? 11 : 12, new Color(0.80f, 0.84f, 0.92f), compact ? 64f : 46f);
             ApplyReadableTextStyle(_txtDetailsAudioStatus, new Color(0.80f, 0.84f, 0.92f), TextAlignmentOptions.Center);
             SetResponsiveWrappedText(_txtDetailsAudioStatus, 10f, compact ? 11f : 12f);
         }
@@ -4771,13 +4777,18 @@ namespace CastleDefender.UI
 
         void PreviewSelectedUnitVoice()
         {
-            if (!TryResolvePreviewVoice(_selectedUnit, out var sfx, out var label))
+            if (!TryResolvePreviewVoice(_selectedUnit, out var label))
             {
                 SetDetailsPreviewStatus("Voice lines are still pending for this unit.");
                 return;
             }
 
-            AudioManager.I?.Play(sfx, 0.9f);
+            if (!TryPlayPreviewVoice(_selectedUnit))
+            {
+                SetDetailsPreviewStatus("Voice mapping exists, but the generated clips have not been imported yet.");
+                return;
+            }
+
             SetDetailsPreviewStatus($"{_selectedUnit?.DisplayName ?? "This entry"} is previewing {label.ToLowerInvariant()} voice.");
         }
 
@@ -4793,7 +4804,7 @@ namespace CastleDefender.UI
         void RefreshDetailsPreviewButtons(RaceProgressionUnitDefinition unit)
         {
             bool hasSfx = TryResolvePreviewSfx(unit, out _, out var sfxLabel);
-            bool hasVoice = TryResolvePreviewVoice(unit, out _, out var voiceLabel);
+            bool hasVoice = TryResolvePreviewVoice(unit, out var voiceLabel);
 
             SetPreviewButtonState(
                 _btnDetailsPreviewSfx,
@@ -6309,7 +6320,7 @@ namespace CastleDefender.UI
                 return "Audio preview unavailable.";
 
             bool hasSfx = TryResolvePreviewSfx(unit, out _, out var sfxLabel);
-            bool hasVoice = TryResolvePreviewVoice(unit, out _, out var voiceLabel);
+            bool hasVoice = TryResolvePreviewVoice(unit, out var voiceLabel);
 
             var builder = new StringBuilder();
             builder.AppendLine(hasSfx
@@ -6375,6 +6386,7 @@ namespace CastleDefender.UI
 
             string unitId = NormalizeTechTreeKey(unit.Id);
             string laneId = NormalizeTechTreeKey(unit.LaneId);
+            string catalogKey = NormalizeTechTreeKey(ResolveTechTreeCatalogKey(unit) ?? unit.PortraitKey);
 
             if (unitId == "ballista")
             {
@@ -6403,6 +6415,45 @@ namespace CastleDefender.UI
                 sfx = unit.IsStartUnit ? AudioManager.SFX.BuildTower : AudioManager.SFX.UpgradeTower;
                 label = unit.IsStartUnit ? "Build Signal" : "Upgrade Fanfare";
                 return true;
+            }
+
+            switch (catalogKey)
+            {
+                case "tt_archer":
+                case "tt_crossbowman":
+                case "tt_mounted_scout":
+                    sfx = AudioManager.SFX.ArcherShoot;
+                    label = "Arrow Volley";
+                    return true;
+                case "tt_mage":
+                case "tt_mounted_mage":
+                case "tt_mounted_king":
+                    sfx = AudioManager.SFX.MageShoot;
+                    label = "Arcane Cast";
+                    return true;
+                case "tt_priest":
+                case "tt_high_priest":
+                case "tt_mounted_priest":
+                    sfx = AudioManager.SFX.MageShoot;
+                    label = "Sacred Cast";
+                    return true;
+                case "tt_peasant":
+                case "tt_scout":
+                case "tt_light_infantry":
+                case "tt_mounted_knight":
+                case "tt_spearman":
+                case "tt_halberdier":
+                case "tt_light_cavalry":
+                case "tt_heavy_infantry":
+                case "tt_heavy_swordman":
+                case "tt_heavy_cavalry":
+                case "tt_mounted_paladin":
+                case "tt_king":
+                case "tt_paladin":
+                case "tt_commander":
+                    sfx = AudioManager.SFX.FighterSlash;
+                    label = "Steel Clash";
+                    return true;
             }
 
             switch (laneId)
@@ -6435,11 +6486,52 @@ namespace CastleDefender.UI
             return false;
         }
 
-        static bool TryResolvePreviewVoice(RaceProgressionUnitDefinition unit, out AudioManager.SFX sfx, out string label)
+        static bool TryResolvePreviewVoice(RaceProgressionUnitDefinition unit, out string label)
         {
-            sfx = default;
             label = null;
-            return false;
+
+            MLUnit previewUnit = BuildPreviewVoiceUnit(unit);
+            if (previewUnit == null || !UnitVoiceLibrary.HasVoiceProfile(previewUnit))
+                return false;
+
+            label = previewUnit.isHero
+                ? $"{unit.DisplayName} Voice"
+                : $"{unit.DisplayName} Bark";
+            return true;
+        }
+
+        static bool TryPlayPreviewVoice(RaceProgressionUnitDefinition unit)
+        {
+            MLUnit previewUnit = BuildPreviewVoiceUnit(unit);
+            return previewUnit != null && UnitVoiceLibrary.TryPlay(previewUnit, UnitVoiceCue.Spawn, 0.9f);
+        }
+
+        static MLUnit BuildPreviewVoiceUnit(RaceProgressionUnitDefinition unit)
+        {
+            if (unit == null || unit.CardStyle == RaceProgressionUnitCardStyle.RequirementStep)
+                return null;
+
+            string unitId = NormalizeTechTreeKey(unit.Id);
+            string catalogKey = NormalizeTechTreeKey(ResolveTechTreeCatalogKey(unit) ?? unit.PortraitKey);
+            string heroKey = unitId switch
+            {
+                "king" => "king",
+                "paladin" => "paladin",
+                "bishop" => "bishop",
+                "commander" => "bishop",
+                _ => null,
+            };
+
+            return new MLUnit
+            {
+                id = $"preview:{unitId ?? catalogKey ?? "unknown"}",
+                type = catalogKey,
+                unitTypeKey = catalogKey,
+                catalogUnitKey = catalogKey,
+                skinKey = catalogKey,
+                isHero = !string.IsNullOrWhiteSpace(heroKey),
+                heroKey = heroKey,
+            };
         }
 
         string BuildUnitDetailsBodyText(RaceProgressionUnitDefinition unit)

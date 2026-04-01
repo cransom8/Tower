@@ -1,0 +1,249 @@
+{
+  "endpoint": "https://api.openai.com/v1/audio/speech",
+  "model": "gpt-4o-mini-tts",
+  "responseFormat": "wav",
+  "outputRoot": "unity-client/Assets/Resources/Generated/UnitVoices",
+  "defaultInstructions": "Deliver a short in-world medieval battlefield bark. Natural voice acting only. No narration, no background noise, no music, no microphone effect, no exaggerated trailer voice.",
+  "profiles": [
+    {
+      "key": "infantry",
+      "voice": "cedar",
+      "instructions": "Young adult human foot soldier. Brave but strained. Short clipped commands with a dusty fortress-militia feel.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Militia ready. Hold the line!" },
+          { "id": "02", "text": "Forward now. For the fortress!" }
+        ],
+        "attack": [
+          { "id": "01", "text": "Push them back!" },
+          { "id": "02", "text": "On me!" },
+          { "id": "03", "text": "Strike!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "I'm hit!" },
+          { "id": "02", "text": "Still standing!" }
+        ],
+        "death": [
+          { "id": "01", "text": "Tell them... hold..." },
+          { "id": "02", "text": "I fall..." }
+        ]
+      }
+    },
+    {
+      "key": "polearm",
+      "voice": "ash",
+      "instructions": "Disciplined human spearman or halberdier. Sharper cadence, drilled formation voice, practical and commanding.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Spears set. Brace!" },
+          { "id": "02", "text": "Polearms ready. Keep rank!" }
+        ],
+        "attack": [
+          { "id": "01", "text": "Thrust!" },
+          { "id": "02", "text": "Keep them back!" },
+          { "id": "03", "text": "Drive!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Ugh, hold ranks!" },
+          { "id": "02", "text": "I can fight!" }
+        ],
+        "death": [
+          { "id": "01", "text": "Line... broken..." },
+          { "id": "02", "text": "Stand firm..." }
+        ]
+      }
+    },
+    {
+      "key": "shield",
+      "voice": "onyx",
+      "instructions": "Veteran human heavy infantry. Deep grounded authority, armored confidence, concise and forceful.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Shields up. Advance!" },
+          { "id": "02", "text": "Guard line moving!" }
+        ],
+        "attack": [
+          { "id": "01", "text": "Break them!" },
+          { "id": "02", "text": "Through!" },
+          { "id": "03", "text": "Crush forward!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Armor held... mostly." },
+          { "id": "02", "text": "I've had worse!" }
+        ],
+        "death": [
+          { "id": "01", "text": "Guard... falling..." },
+          { "id": "02", "text": "Hold the gate..." }
+        ]
+      }
+    },
+    {
+      "key": "ranged",
+      "voice": "marin",
+      "instructions": "Alert human archer or ranger. Clear, agile, focused battlefield barks with fast reactions.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Bows ready!" },
+          { "id": "02", "text": "Eyes sharp. Loose on command!" }
+        ],
+        "attack": [
+          { "id": "01", "text": "Loose!" },
+          { "id": "02", "text": "Mark!" },
+          { "id": "03", "text": "Take them!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Ah! Still aiming!" },
+          { "id": "02", "text": "They've got my range!" }
+        ],
+        "death": [
+          { "id": "01", "text": "Can't... draw..." },
+          { "id": "02", "text": "My shot... ends..." }
+        ]
+      }
+    },
+    {
+      "key": "support",
+      "voice": "coral",
+      "instructions": "Human cleric or priest under battlefield pressure. Calm but urgent. Compassionate, resolute, never theatrical.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Mercy and steel. I am here." },
+          { "id": "02", "text": "Keep faith. We endure." }
+        ],
+        "attack": [
+          { "id": "01", "text": "Stand in the light!" },
+          { "id": "02", "text": "By grace, fall back!" },
+          { "id": "03", "text": "Be mended!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "I can still tend the wounded!" },
+          { "id": "02", "text": "Pain is passing!" }
+        ],
+        "death": [
+          { "id": "01", "text": "May they be sheltered..." },
+          { "id": "02", "text": "Light... receive me..." }
+        ]
+      }
+    },
+    {
+      "key": "arcane",
+      "voice": "sage",
+      "instructions": "Battle mage or wizard. Controlled breath, precise diction, dangerous confidence, brief spell-combat barks.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "The weave answers." },
+          { "id": "02", "text": "Arcane fire is ready." }
+        ],
+        "attack": [
+          { "id": "01", "text": "Burn!" },
+          { "id": "02", "text": "Break!" },
+          { "id": "03", "text": "By sigil and flame!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Concentration shaken!" },
+          { "id": "02", "text": "You'll pay for that!" }
+        ],
+        "death": [
+          { "id": "01", "text": "The spell... slips..." },
+          { "id": "02", "text": "Ashes to ether..." }
+        ]
+      }
+    },
+    {
+      "key": "economy",
+      "voice": "alloy",
+      "instructions": "Working human laborer pressed into danger. Honest, anxious, determined, plain-spoken medieval tone.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Right. Let's move." },
+          { "id": "02", "text": "I'm here. Keep me covered." }
+        ],
+        "attack": [
+          { "id": "01", "text": "Back off!" },
+          { "id": "02", "text": "Not today!" },
+          { "id": "03", "text": "Move!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Ah! I need a moment!" },
+          { "id": "02", "text": "I'm not done yet!" }
+        ],
+        "death": [
+          { "id": "01", "text": "Tell my family..." },
+          { "id": "02", "text": "No... no..." }
+        ]
+      }
+    },
+    {
+      "key": "hero_king",
+      "voice": "cedar",
+      "instructions": "A battle king. Regal, seasoned, forceful, never verbose. Clear authority over chaos.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "With me. We end this." },
+          { "id": "02", "text": "The crown stands with the wall." }
+        ],
+        "attack": [
+          { "id": "01", "text": "To victory!" },
+          { "id": "02", "text": "Break before me!" },
+          { "id": "03", "text": "Stand and strike!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "A king does not kneel!" },
+          { "id": "02", "text": "Is that all?" }
+        ],
+        "death": [
+          { "id": "01", "text": "Guard the realm..." },
+          { "id": "02", "text": "My watch... ends..." }
+        ]
+      }
+    },
+    {
+      "key": "hero_paladin",
+      "voice": "verse",
+      "instructions": "A paladin champion. Noble, steady, radiant conviction, strong battlefield presence without sounding theatrical.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "I answer the call." },
+          { "id": "02", "text": "Steel and oath. Forward." }
+        ],
+        "attack": [
+          { "id": "01", "text": "By oath, fall!" },
+          { "id": "02", "text": "Justice!" },
+          { "id": "03", "text": "Face the light!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "My oath still holds!" },
+          { "id": "02", "text": "I endure!" }
+        ],
+        "death": [
+          { "id": "01", "text": "My vow... remains..." },
+          { "id": "02", "text": "Light guide them..." }
+        ]
+      }
+    },
+    {
+      "key": "hero_bishop",
+      "voice": "fable",
+      "instructions": "A bishop commander. Scholarly, dignified, spiritually intense, calm under mortal danger.",
+      "clips": {
+        "spawn": [
+          { "id": "01", "text": "Wisdom and faith. March." },
+          { "id": "02", "text": "I will not leave this wall." }
+        ],
+        "attack": [
+          { "id": "01", "text": "Be judged!" },
+          { "id": "02", "text": "Let order return!" },
+          { "id": "03", "text": "Away from these gates!" }
+        ],
+        "hurt": [
+          { "id": "01", "text": "Pain is a passing tutor." },
+          { "id": "02", "text": "I remain." }
+        ],
+        "death": [
+          { "id": "01", "text": "Keep the people safe..." },
+          { "id": "02", "text": "Into mercy..." }
+        ]
+      }
+    }
+  ]
+}

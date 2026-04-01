@@ -20,6 +20,12 @@ namespace CastleDefender.Game
         const float AttackVisualMaxHoldSeconds = 0.58f;
         const float HitReactVisualMinHoldSeconds = 0.10f;
         const float HitReactVisualMaxHoldSeconds = 0.30f;
+        const float UnitVoiceAnyGlobalCooldownSeconds = 0.20f;
+        const float UnitVoicePerSpeakerCooldownSeconds = 1.10f;
+        const float SpawnVoiceCueCooldownSeconds = 0.12f;
+        const float AttackVoiceCueCooldownSeconds = 0.38f;
+        const float HurtVoiceCueCooldownSeconds = 0.42f;
+        const float DeathVoiceCueCooldownSeconds = 0.18f;
         const float CombatSfxCooldownSeconds = 0.06f;
         const float ImpactFxPerTargetCooldownSeconds = 0.08f;
         const float GroundProbeHeight = 32f;
@@ -118,6 +124,9 @@ namespace CastleDefender.Game
         [SerializeField] float spawnSnapDistance = 4f;
         [SerializeField] bool returnToLobbyOnContentFailure = true;
         [SerializeField] float contentFailureLobbyReturnDelaySeconds = 1.5f;
+        [Header("Combat Debug")]
+        [SerializeField] bool showEngagementRings = true;
+        [SerializeField] KeyCode toggleEngagementRingsKey = KeyCode.F8;
 
         readonly Dictionary<string, WaveView> _views = new();
         readonly HashSet<string> _seenIds = new();
@@ -138,8 +147,12 @@ namespace CastleDefender.Game
         readonly Dictionary<string, string> _battlefieldRouteNodeLaneByNode = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, float> _lastImpactFxAtByTarget = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<AudioManager.SFX, float> _lastCombatSfxAt = new();
+        readonly Dictionary<string, float> _lastUnitVoiceAtBySpeaker = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<UnitVoiceCue, float> _lastUnitVoiceAtByCue = new();
         string _lastSnapshotSummaryLog;
         float _lastSnapTime = -1f;
+        float _lastAnyUnitVoiceAt = float.MinValue;
+        bool _lastAppliedEngagementRingVisibility;
         bool _subscribed;
         bool _contentFailureTriggered;
         SnapshotApplier _boundSnapshotApplier;
@@ -168,6 +181,7 @@ namespace CastleDefender.Game
         {
             SyncDependenciesFromScene();
             DestroyOrphanedRuntimePresenters();
+            ApplyEngagementRingVisibility(showEngagementRings, publishMessage: false);
             TrySubscribeSnapshots();
         }
 
@@ -184,6 +198,7 @@ namespace CastleDefender.Game
         {
             SyncDependenciesFromScene();
             TrySubscribeSnapshots();
+            HandleEngagementRingDebugInput();
 
             float dt = Time.deltaTime;
             float now = Time.time;
@@ -274,6 +289,32 @@ namespace CastleDefender.Game
 
             if (sa.LatestML != null)
                 OnSnapshot(sa.LatestML);
+        }
+
+        void HandleEngagementRingDebugInput()
+        {
+            if (showEngagementRings != _lastAppliedEngagementRingVisibility)
+                ApplyEngagementRingVisibility(showEngagementRings, publishMessage: false);
+
+            if (toggleEngagementRingsKey == KeyCode.None || !Input.GetKeyDown(toggleEngagementRingsKey))
+                return;
+
+            ApplyEngagementRingVisibility(!showEngagementRings, publishMessage: true);
+        }
+
+        void ApplyEngagementRingVisibility(bool enabled, bool publishMessage)
+        {
+            showEngagementRings = enabled;
+            _lastAppliedEngagementRingVisibility = enabled;
+            LaneSnapshotCombatant.SetEngagementRingDebugEnabled(enabled);
+
+            if (!publishMessage)
+                return;
+
+            RuntimeDiagnosticsService.PublishSystem(
+                RuntimeLogSeverity.Info,
+                "Combat Debug",
+                $"Engagement rings {(enabled ? "enabled" : "disabled")} ({toggleEngagementRingsKey}).");
         }
 
         void OnSnapshot(MLSnapshot snap)
@@ -416,7 +457,17 @@ namespace CastleDefender.Game
                         FaceDirection(view.go.transform, view.snapshotVelocity);
 
                     if (hadPreviousSnapshot && previousSnapshotUnit != null && unit.hp + 0.01f < previousSnapshotUnit.hp)
-                        PlayHitReactFeedback(view, now);
+                    {
+                        if (unit.hp <= 0.01f)
+                        {
+                            TryPlayUnitVoice(unit, UnitVoiceCue.Death, now, 0.90f, bypassChance: true);
+                        }
+                        else
+                        {
+                            PlayHitReactFeedback(view, now);
+                            TryPlayUnitVoice(unit, UnitVoiceCue.Hurt, now, 0.82f);
+                        }
+                    }
 
                     if (unit.attackPulse > 0 && unit.attackPulse != view.lastServerAttackPulse)
                     {
@@ -424,6 +475,7 @@ namespace CastleDefender.Game
                         view.combatant?.NotifyAttack(now);
                         PlayAttackAnimation(view);
                         PlayAttackFeedback(snap, lane, unit, previousSnapshotUnit, now);
+                        TryPlayUnitVoice(unit, UnitVoiceCue.Attack, now, 0.72f);
                     }
 
                     view.lastServerAttackPulse = unit.attackPulse;
@@ -618,6 +670,7 @@ namespace CastleDefender.Game
             go.SetActive(true);
             SetVisualState(view, UnitAnimationResolver.ResolveRuntimeIntent(unit, moving: false, attacking: false));
             AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, 0.25f);
+            TryPlayUnitVoice(unit, UnitVoiceCue.Spawn, Time.time, 0.78f);
             LogVerboseSpawnAudit(
                 $"[SpawnAudit][ClientInstantiate] unitId='{unit.id}' unitType='{unit.type}' " +
                 $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
@@ -836,6 +889,9 @@ namespace CastleDefender.Game
         {
             if (!_views.TryGetValue(id, out var view))
                 return;
+
+            if (view.latestSnapshotUnit != null && view.latestSnapshotUnit.hp <= 0.01f)
+                TryPlayUnitVoice(view.latestSnapshotUnit, UnitVoiceCue.Death, Time.time, 0.90f, bypassChance: true);
 
             DestroyImpactFxHistory(id);
             DestroyImpactFxHistory(view.latestSnapshotUnit != null ? view.latestSnapshotUnit.combatTargetId : null);
@@ -3100,6 +3156,82 @@ namespace CastleDefender.Game
                 return;
 
             _lastImpactFxAtByTarget.Remove(targetId);
+        }
+
+        void TryPlayUnitVoice(MLUnit unit, UnitVoiceCue cue, float now, float volumeScale, bool bypassChance = false)
+        {
+            if (unit == null || !UnitVoiceLibrary.HasVoiceProfile(unit))
+                return;
+
+            string speakerId = ResolveVoiceSpeakerId(unit);
+            if (!string.IsNullOrWhiteSpace(speakerId)
+                && _lastUnitVoiceAtBySpeaker.TryGetValue(speakerId, out float lastSpeakerVoiceAt)
+                && now - lastSpeakerVoiceAt < UnitVoicePerSpeakerCooldownSeconds)
+            {
+                return;
+            }
+
+            if (_lastUnitVoiceAtByCue.TryGetValue(cue, out float lastCueVoiceAt)
+                && now - lastCueVoiceAt < ResolveVoiceCueCooldown(cue))
+            {
+                return;
+            }
+
+            if (now - _lastAnyUnitVoiceAt < UnitVoiceAnyGlobalCooldownSeconds)
+                return;
+
+            if (!bypassChance && UnityEngine.Random.value > ResolveVoiceChance(unit, cue))
+                return;
+
+            if (!UnitVoiceLibrary.TryPlay(unit, cue, volumeScale))
+                return;
+
+            if (!string.IsNullOrWhiteSpace(speakerId))
+                _lastUnitVoiceAtBySpeaker[speakerId] = now;
+
+            _lastUnitVoiceAtByCue[cue] = now;
+            _lastAnyUnitVoiceAt = now;
+        }
+
+        static float ResolveVoiceChance(MLUnit unit, UnitVoiceCue cue)
+        {
+            bool isHero = unit != null && (unit.isHero || !string.IsNullOrWhiteSpace(unit.heroKey));
+            return cue switch
+            {
+                // Keep heroes more expressive, but make common troop barks reliable enough
+                // that a player can actually notice the system during normal play.
+                UnitVoiceCue.Spawn => isHero ? 1f : 1f,
+                UnitVoiceCue.Attack => isHero ? 0.50f : 0.22f,
+                UnitVoiceCue.Hurt => isHero ? 0.90f : 0.45f,
+                UnitVoiceCue.Death => isHero ? 1f : 1f,
+                _ => 0.15f,
+            };
+        }
+
+        static float ResolveVoiceCueCooldown(UnitVoiceCue cue) => cue switch
+        {
+            UnitVoiceCue.Spawn => SpawnVoiceCueCooldownSeconds,
+            UnitVoiceCue.Attack => AttackVoiceCueCooldownSeconds,
+            UnitVoiceCue.Hurt => HurtVoiceCueCooldownSeconds,
+            UnitVoiceCue.Death => DeathVoiceCueCooldownSeconds,
+            _ => AttackVoiceCueCooldownSeconds,
+        };
+
+        static string ResolveVoiceSpeakerId(MLUnit unit)
+        {
+            if (unit == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(unit.id))
+                return unit.id.Trim();
+            if (!string.IsNullOrWhiteSpace(unit.unitId))
+                return unit.unitId.Trim();
+            if (!string.IsNullOrWhiteSpace(unit.catalogUnitKey))
+                return unit.catalogUnitKey.Trim();
+            if (!string.IsNullOrWhiteSpace(unit.type))
+                return unit.type.Trim();
+
+            return null;
         }
     }
 }
