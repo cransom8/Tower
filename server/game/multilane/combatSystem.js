@@ -11,6 +11,15 @@ const DEFAULT_UNIT_COMBAT_ROLES = Object.freeze({
   SPEAR: "spear",
 });
 
+const DEFAULT_UNIT_MOVEMENT_MODES = Object.freeze({
+  COMBAT_ENGAGE: "CombatEngage",
+});
+
+const DEFAULT_WAVE_UNIT_STATES = Object.freeze({
+  IDLE: "IDLE",
+  COMBAT: "COMBAT",
+});
+
 const DEFAULT_FORTRESS_BUILDING_DEFS = Object.freeze({});
 const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
 
@@ -27,6 +36,14 @@ function getLaneCommandStates(deps = {}) {
 
 function getUnitCombatRoles(deps = {}) {
   return deps.UNIT_COMBAT_ROLES || DEFAULT_UNIT_COMBAT_ROLES;
+}
+
+function getUnitMovementModes(deps = {}) {
+  return deps.UNIT_MOVEMENT_MODES || DEFAULT_UNIT_MOVEMENT_MODES;
+}
+
+function getWaveUnitStates(deps = {}) {
+  return deps.WAVE_UNIT_STATES || DEFAULT_WAVE_UNIT_STATES;
 }
 
 function getFortressBuildingDefs(deps = {}) {
@@ -104,6 +121,50 @@ function getFortressInteriorAssaultRadius(deps = {}) {
 function getStructureTargetVicinityPadding(deps = {}) {
   const value = Number(deps.STRUCTURE_TARGET_VICINITY_PADDING);
   return Number.isFinite(value) && value >= 0 ? value : 1.5;
+}
+
+function getGridHeight(deps = {}) {
+  const value = Math.floor(Number(deps.GRID_H));
+  return Number.isInteger(value) && value > 0 ? value : 28;
+}
+
+function getSepDamp(deps = {}) {
+  const value = Number(deps.SEP_DAMP);
+  return Number.isFinite(value) && value > 0 ? value : 0.35;
+}
+
+function getSepMaxPush(deps = {}) {
+  const value = Number(deps.SEP_MAX_PUSH);
+  return Number.isFinite(value) && value > 0 ? value : 0.16;
+}
+
+function getLaneAnchorSettledSeparationDistance(deps = {}) {
+  const value = Number(deps.LANE_ANCHOR_SETTLED_SEPARATION_DISTANCE);
+  return Number.isFinite(value) && value > 0 ? value : 0.9;
+}
+
+function getLaneAnchorSettledSeparationScale(deps = {}) {
+  const value = Number(deps.LANE_ANCHOR_SETTLED_SEPARATION_SCALE);
+  return Number.isFinite(value) && value > 0 ? value : 0.25;
+}
+
+function getLaneAnchorMixedSeparationScale(deps = {}) {
+  const value = Number(deps.LANE_ANCHOR_MIXED_SEPARATION_SCALE);
+  return Number.isFinite(value) && value > 0 ? value : 0.6;
+}
+
+function getLaneAnchorSettledMaxLateralOffset(deps = {}) {
+  const value = Number(deps.LANE_ANCHOR_SETTLED_MAX_LATERAL_OFFSET);
+  return Number.isFinite(value) && value > 0 ? value : 0.15;
+}
+
+function getLaneAnchorSettledSlotSpacingSlack(deps = {}) {
+  const value = Number(deps.LANE_ANCHOR_SETTLED_SLOT_SPACING_SLACK);
+  return Number.isFinite(value) && value >= 0 ? value : 0.12;
+}
+
+function getEnableWaveUnitTrace(deps = {}) {
+  return deps.ENABLE_WAVE_UNIT_TRACE === true;
 }
 
 function moveTowardContact2D(unit, target, speed, stopDistance, minX, maxX, minY, maxY, deps = {}) {
@@ -1064,6 +1125,551 @@ function findBlockingStructureTarget(game, lane, unit, deps = {}) {
   return best;
 }
 
+function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
+  const combatLog = deps && deps.combatLog;
+  const log = deps && deps.log;
+  const getLaneTownCoreHp = requireDepFunction(deps, "getLaneTownCoreHp");
+  const getLaneTownCoreMaxHp = requireDepFunction(deps, "getLaneTownCoreMaxHp");
+  if (!game || !lane || !unit || unit.hasBreachedTownCore)
+    return;
+
+  unit.hasBreachedTownCore = true;
+  lane.totalLeaksTaken += 1;
+  lane.leakCountThisRound += 1;
+  if (log && typeof log.info === "function") {
+    log.info("[TownCoreTrace] core target acquired", {
+      tick: game.tick,
+      laneIndex: lane.laneIndex,
+      attackerId: unit.id,
+      attackerType: unit.type,
+      attackerHp: Math.max(0, Math.floor(Number(unit.hp) || 0)),
+      pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
+      corePadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
+      coreHp: getLaneTownCoreHp(lane),
+      coreMaxHp: getLaneTownCoreMaxHp(lane),
+    });
+  }
+  if (combatLog && typeof combatLog.logEvent === "function") {
+    combatLog.logEvent(game, "leak", {
+      unitId: unit.id,
+      unitType: unit.type,
+      lane: lane.laneIndex,
+      targetPadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
+      breachOnly: true,
+    });
+  }
+}
+
+function attackFortressPad(game, lane, attacker, target, deps = {}) {
+  const log = deps && deps.log;
+  const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
+  const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
+  const getFortressPadState = requireDepFunction(deps, "getFortressPadState");
+  const applyFortressPadDamage = requireDepFunction(deps, "applyFortressPadDamage");
+  if (!game || !lane || !attacker || !target || target.kind !== "fortress_pad") {
+    return { damageApplied: 0, destroyed: false, remainingHp: 0 };
+  }
+
+  const targetLane = Number.isInteger(target.laneIndex)
+    ? (getLaneByIndex(game, target.laneIndex) || lane)
+    : lane;
+  const unitDef = resolveUnitDef(attacker.type);
+  const rawDamage = Math.max(1, Math.floor(Number(attacker.baseDmg) || Number(unitDef && unitDef.dmg) || 1));
+  const cooldownTicks = Math.max(1, Math.floor(Number(attacker.atkCdTicks) || Number(unitDef && unitDef.atkCdTicks) || 20));
+  const targetPad = getFortressPadState(targetLane, target.padId || target.id);
+  const prevHp = targetPad ? Math.max(0, Math.floor(Number(targetPad.hp) || 0)) : 0;
+  const result = applyFortressPadDamage(game, targetLane, target.padId || target.id, rawDamage);
+
+  attacker.attackPulse = (attacker.attackPulse || 0) + 1;
+  attacker.atkCd = cooldownTicks;
+  if (targetPad && targetPad.buildingType === "town_core" && log && typeof log.info === "function") {
+    log.info("[TownCoreTrace] core attacked", {
+      tick: game.tick,
+      laneIndex: targetLane.laneIndex,
+      attackerId: attacker.id,
+      attackerType: attacker.type,
+      corePadId: targetPad.padId,
+      attemptedDamage: rawDamage,
+      appliedDamage: result.damageApplied,
+      previousHp: prevHp,
+      remainingHp: result.remainingHp,
+      destroyed: !!result.destroyed,
+    });
+  }
+  return result;
+}
+
+function clampUnitToAnchor(unit, anchorX, anchorY, maxRadius, minX, maxX, minY, maxY, deps = {}) {
+  const syncMovedUnitPathState = requireDepFunction(deps, "syncMovedUnitPathState");
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY) || maxRadius <= 0)
+    return;
+
+  const dx = Number(unit.posX) - anchorX;
+  const dy = Number(unit.posY) - anchorY;
+  const distance = Math.sqrt((dx * dx) + (dy * dy));
+  if (distance <= maxRadius || distance < 0.001)
+    return;
+
+  const scale = maxRadius / distance;
+  unit.posX = Math.max(minX, Math.min(maxX, anchorX + (dx * scale)));
+  unit.posY = Math.max(minY, Math.min(maxY, anchorY + (dy * scale)));
+  syncMovedUnitPathState(unit);
+}
+
+function clampLaneControlledUnitToCombatLeash(unit, minX, maxX, minY, maxY, target = null, deps = {}) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  const getLaneControlledSharedCombatAnchor = requireDepFunction(deps, "getLaneControlledSharedCombatAnchor");
+  if (!isLaneControlledUnit(unit))
+    return false;
+  if (target && !shouldAnchorClampLaneControlledCombat(unit, target, deps))
+    return false;
+
+  const anchor = getLaneControlledSharedCombatAnchor(unit);
+  if (!anchor)
+    return false;
+
+  const previousX = Number(unit.posX);
+  const previousY = Number(unit.posY);
+  clampUnitToAnchor(
+    unit,
+    anchor.x,
+    anchor.y,
+    getLaneControlledCombatLeashRadius(unit, deps),
+    minX,
+    maxX,
+    minY,
+    maxY,
+    deps
+  );
+  return previousX !== Number(unit.posX) || previousY !== Number(unit.posY);
+}
+
+function isLaneControlledUnitSettledAtAnchor(unit, deps = {}) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  const unitMovementModes = getUnitMovementModes(deps);
+  if (!isLaneControlledUnit(unit))
+    return false;
+  if (unit.combatTarget || unit.movementMode === unitMovementModes.COMBAT_ENGAGE)
+    return false;
+
+  const anchorX = Number.isFinite(Number(unit && unit.anchorTargetX))
+    ? Number(unit.anchorTargetX)
+    : Number(unit && unit.anchorCenterX);
+  const anchorY = Number.isFinite(Number(unit && unit.anchorTargetY))
+    ? Number(unit.anchorTargetY)
+    : Number(unit && unit.anchorCenterY);
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY))
+    return false;
+
+  const dx = Number(unit.posX) - anchorX;
+  const dy = Number(unit.posY) - anchorY;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy))
+    return false;
+
+  return Math.sqrt((dx * dx) + (dy * dy)) <= getLaneAnchorSettledSeparationDistance(deps);
+}
+
+function getUnitAnchorLateralAxis(unit) {
+  const axisX = Number(unit && unit.anchorLateralX);
+  const axisY = Number(unit && unit.anchorLateralY);
+  const magnitude = Math.sqrt((axisX * axisX) + (axisY * axisY));
+  if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || magnitude < 0.001)
+    return null;
+
+  return {
+    x: axisX / magnitude,
+    y: axisY / magnitude,
+  };
+}
+
+function getPairSpacing(left, right, fallback, deps = {}) {
+  let spacing = Math.max(
+    fallback,
+    getUnitContactRadius(left && left.type, deps) + getUnitContactRadius(right && right.type, deps)
+  );
+
+  const leftTargetId = left && left.combatTarget && left.combatTarget.unitId
+    ? left.combatTarget.unitId
+    : (left ? left.combatTargetId : null);
+  const rightTargetId = right && right.combatTarget && right.combatTarget.unitId
+    ? right.combatTarget.unitId
+    : (right ? right.combatTargetId : null);
+  const sharedTargetSpacing = !!(
+    getUsePerUnitAnchorSlots(deps)
+    && leftTargetId
+    && rightTargetId
+    && leftTargetId === rightTargetId
+    && getUnitAttackRange(left && left.type, deps) <= 2.0
+    && getUnitAttackRange(right && right.type, deps) <= 2.0
+  );
+  if (sharedTargetSpacing) {
+    spacing = Math.max(
+      spacing,
+      getUnitContactRadius(left && left.type, deps) + getUnitContactRadius(right && right.type, deps) + 0.20
+    );
+  }
+
+  return spacing;
+}
+
+function tryResolveSettledAnchorPairSpacing(left, right, minSpacing, fallbackSpacing, deps = {}) {
+  if (!isLaneControlledUnitSettledAtAnchor(left, deps) || !isLaneControlledUnitSettledAtAnchor(right, deps))
+    return null;
+  if (!Number.isFinite(Number(left && left.anchorTargetX)) || !Number.isFinite(Number(left && left.anchorTargetY)))
+    return null;
+  if (!Number.isFinite(Number(right && right.anchorTargetX)) || !Number.isFinite(Number(right && right.anchorTargetY)))
+    return null;
+
+  const anchorDx = Number(right.anchorTargetX) - Number(left.anchorTargetX);
+  const anchorDy = Number(right.anchorTargetY) - Number(left.anchorTargetY);
+  const anchorDistance = Math.sqrt((anchorDx * anchorDx) + (anchorDy * anchorDy));
+  if (!Number.isFinite(anchorDistance) || anchorDistance <= 0)
+    return null;
+
+  const settledSlotSpacing = Math.max(
+    minSpacing,
+    anchorDistance - getLaneAnchorSettledSlotSpacingSlack(deps)
+  );
+  return Math.min(fallbackSpacing, settledSlotSpacing);
+}
+
+function clampLaneControlledUnitToAnchorDrift(unit, minX, maxX, minY, maxY, deps = {}) {
+  const syncMovedUnitPathState = requireDepFunction(deps, "syncMovedUnitPathState");
+  if (!isLaneControlledUnitSettledAtAnchor(unit, deps))
+    return false;
+  if (!Number.isFinite(Number(unit && unit.anchorTargetX)) || !Number.isFinite(Number(unit && unit.anchorTargetY)))
+    return false;
+
+  const lateralAxis = getUnitAnchorLateralAxis(unit);
+  if (!lateralAxis)
+    return false;
+
+  const anchorX = Number(unit.anchorTargetX);
+  const anchorY = Number(unit.anchorTargetY);
+  const lateralOffset = ((Number(unit.posX) - anchorX) * lateralAxis.x)
+    + ((Number(unit.posY) - anchorY) * lateralAxis.y);
+  const clampedOffset = Math.max(
+    -getLaneAnchorSettledMaxLateralOffset(deps),
+    Math.min(getLaneAnchorSettledMaxLateralOffset(deps), lateralOffset)
+  );
+  if (Math.abs(clampedOffset - lateralOffset) <= 0.0001)
+    return false;
+
+  unit.posX = Math.max(minX, Math.min(maxX, Number(unit.posX) + (lateralAxis.x * (clampedOffset - lateralOffset))));
+  unit.posY = Math.max(minY, Math.min(maxY, Number(unit.posY) + (lateralAxis.y * (clampedOffset - lateralOffset))));
+  syncMovedUnitPathState(unit);
+  return true;
+}
+
+function getPairLateralAxis(left, right) {
+  const axisLeft = getUnitAnchorLateralAxis(left);
+  const axisRight = getUnitAnchorLateralAxis(right);
+  if (axisLeft && axisRight) {
+    const summedX = axisLeft.x + axisRight.x;
+    const summedY = axisLeft.y + axisRight.y;
+    const magnitude = Math.sqrt((summedX * summedX) + (summedY * summedY));
+    if (magnitude >= 0.001) {
+      return {
+        x: summedX / magnitude,
+        y: summedY / magnitude,
+      };
+    }
+  }
+
+  return axisLeft || axisRight || { x: 1, y: 0 };
+}
+
+function shouldPreferLateralSpacing(left, right, dx, dy, deps = {}) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  if (getUsePerUnitAnchorSlots(deps) && (isLaneControlledUnit(left) || isLaneControlledUnit(right)))
+    return false;
+  return !!(left && right && !left.isDefender && !right.isDefender && Math.abs(dy) >= Math.abs(dx));
+}
+
+function resolveExactOverlapAxis(left, right) {
+  const seedSource = `${String(left && left.id || "")}|${String(right && right.id || "")}`;
+  let hash = 0;
+  for (let i = 0; i < seedSource.length; i += 1)
+    hash = ((hash * 33) + seedSource.charCodeAt(i)) >>> 0;
+
+  const angle = (hash % 360) * (Math.PI / 180);
+  return {
+    x: Math.cos(angle),
+    y: Math.sin(angle),
+  };
+}
+
+function getSharedTargetTangentialAxis(game, lane, left, right, deps = {}) {
+  const leftTargetId = left && left.combatTarget && left.combatTarget.unitId
+    ? left.combatTarget.unitId
+    : (left ? left.combatTargetId : null);
+  const rightTargetId = right && right.combatTarget && right.combatTarget.unitId
+    ? right.combatTarget.unitId
+    : (right ? right.combatTargetId : null);
+  if (!leftTargetId || !rightTargetId || leftTargetId !== rightTargetId)
+    return null;
+
+  const liveTarget = resolveWaveCombatTarget(
+    game,
+    lane,
+    left && left.combatTarget && left.combatTarget.unitId ? left.combatTarget : (right ? right.combatTarget : null),
+    deps
+  );
+  const targetX = Number(liveTarget && liveTarget.posX);
+  const targetY = Number(liveTarget && liveTarget.posY);
+  if (!Number.isFinite(targetX) || !Number.isFinite(targetY))
+    return null;
+
+  const leftDistance = getWaveUnitTargetDistance(left, liveTarget);
+  const rightDistance = getWaveUnitTargetDistance(right, liveTarget);
+  const leftStopDistance = getUnitStopDistance(left && left.type, liveTarget && liveTarget.type, deps);
+  const rightStopDistance = getUnitStopDistance(right && right.type, liveTarget && liveTarget.type, deps);
+  const tangentialSpreadDistance = Math.max(2.0, Math.max(leftStopDistance, rightStopDistance) + 1.25);
+  if (!Number.isFinite(leftDistance) || !Number.isFinite(rightDistance)
+      || leftDistance > tangentialSpreadDistance
+      || rightDistance > tangentialSpreadDistance) {
+    return null;
+  }
+
+  const midX = (Number(left.posX) + Number(right.posX)) * 0.5;
+  const midY = (Number(left.posY) + Number(right.posY)) * 0.5;
+  const radialX = midX - targetX;
+  const radialY = midY - targetY;
+  const radialMagnitude = Math.sqrt((radialX * radialX) + (radialY * radialY));
+  if (!Number.isFinite(radialMagnitude) || radialMagnitude < 0.001)
+    return null;
+
+  return {
+    x: -radialY / radialMagnitude,
+    y: radialX / radialMagnitude,
+  };
+}
+
+function shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps = {}) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  const areRouteUnitsHostile = requireDepFunction(deps, "areRouteUnitsHostile");
+  const canLaneControlledUnitSeekCombat = requireDepFunction(deps, "canLaneControlledUnitSeekCombat");
+  if (!getUsePerUnitAnchorSlots(deps))
+    return false;
+  if (!left || !right || !Number.isFinite(distance))
+    return false;
+  if ((left.combatTargetId && left.combatTargetId === right.id) || (right.combatTargetId && right.combatTargetId === left.id))
+    return false;
+
+  const laneControlled = isLaneControlledUnit(left)
+    ? left
+    : (isLaneControlledUnit(right) ? right : null);
+  const other = laneControlled === left ? right : left;
+  if (!laneControlled || !other)
+    return false;
+  if (!areRouteUnitsHostile(game, laneControlled, other))
+    return false;
+  if (!canLaneControlledUnitSeekCombat(game, laneControlled, other))
+    return false;
+
+  const stopDistance = getUnitStopDistance(laneControlled.type, other.type, deps);
+  const collisionWakeDistance = Math.max(2.4, stopDistance + 0.9);
+  return distance <= collisionWakeDistance;
+}
+
+function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY, deps = {}) {
+  const syncMovedUnitPathState = requireDepFunction(deps, "syncMovedUnitPathState");
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  const shouldLaneControlledUnitFreeRoamInCombat = requireDepFunction(deps, "shouldLaneControlledUnitFreeRoamInCombat");
+  const unitMovementModes = getUnitMovementModes(deps);
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let i = 0; i < units.length; i += 1) {
+      for (let j = i + 1; j < units.length; j += 1) {
+        const left = units[i];
+        const right = units[j];
+        const simpleLaneSpacing = getUsePerUnitAnchorSlots(deps)
+          && (isLaneControlledUnit(left) || isLaneControlledUnit(right));
+        let dx = Number(right.posX) - Number(left.posX);
+        let dy = Number(right.posY) - Number(left.posY);
+        let distance = Math.sqrt((dx * dx) + (dy * dy));
+        const activeCombatSpacing = !simpleLaneSpacing
+          || shouldLaneControlledUnitFreeRoamInCombat(left)
+          || shouldLaneControlledUnitFreeRoamInCombat(right)
+          || shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps);
+        if (!activeCombatSpacing)
+          continue;
+
+        if (distance < 0.001) {
+          const overlapAxis = resolveExactOverlapAxis(left, right);
+          dx = overlapAxis.x * 0.001;
+          dy = overlapAxis.y * 0.001;
+          distance = 0.001;
+        }
+
+        let pairSpacing = getPairSpacing(left, right, minSpacing, deps);
+        if (distance >= pairSpacing)
+          continue;
+
+        const settledLeft = isLaneControlledUnitSettledAtAnchor(left, deps);
+        const settledRight = isLaneControlledUnitSettledAtAnchor(right, deps);
+        if (settledLeft && settledRight) {
+          const settledPairSpacing = tryResolveSettledAnchorPairSpacing(left, right, minSpacing, pairSpacing, deps);
+          if (Number.isFinite(settledPairSpacing))
+            pairSpacing = settledPairSpacing;
+        }
+        if (distance >= pairSpacing)
+          continue;
+
+        const separationScale = settledLeft && settledRight
+          ? getLaneAnchorSettledSeparationScale(deps)
+          : (settledLeft || settledRight ? getLaneAnchorMixedSeparationScale(deps) : 1);
+        const push = Math.min((pairSpacing - distance) * getSepDamp(deps), getSepMaxPush(deps)) * separationScale;
+        if (push <= 0.0001)
+          continue;
+
+        const sharedTargetTangentialAxis = simpleLaneSpacing && activeCombatSpacing
+          ? getSharedTargetTangentialAxis(game, lane, left, right, deps)
+          : null;
+        if (sharedTargetTangentialAxis) {
+          const projectionLeft = (Number(left.posX) * sharedTargetTangentialAxis.x) + (Number(left.posY) * sharedTargetTangentialAxis.y);
+          const projectionRight = (Number(right.posX) * sharedTargetTangentialAxis.x) + (Number(right.posY) * sharedTargetTangentialAxis.y);
+          const chooseNegativeLeft = projectionLeft < projectionRight
+            || (Math.abs(projectionLeft - projectionRight) < 0.001 && String(left.id) <= String(right.id));
+          const negative = chooseNegativeLeft ? left : right;
+          const positive = chooseNegativeLeft ? right : left;
+          negative.posX = Math.max(minX, Math.min(maxX, negative.posX - (sharedTargetTangentialAxis.x * push)));
+          negative.posY = Math.max(minY, Math.min(maxY, negative.posY - (sharedTargetTangentialAxis.y * push)));
+          positive.posX = Math.max(minX, Math.min(maxX, positive.posX + (sharedTargetTangentialAxis.x * push)));
+          positive.posY = Math.max(minY, Math.min(maxY, positive.posY + (sharedTargetTangentialAxis.y * push)));
+          syncMovedUnitPathState(negative);
+          syncMovedUnitPathState(positive);
+          continue;
+        }
+
+        if (!simpleLaneSpacing && (shouldPreferLateralSpacing(left, right, dx, dy, deps) || (settledLeft && settledRight))) {
+          const lateralAxis = getPairLateralAxis(left, right);
+          const projectionLeft = (Number(left.posX) * lateralAxis.x) + (Number(left.posY) * lateralAxis.y);
+          const projectionRight = (Number(right.posX) * lateralAxis.x) + (Number(right.posY) * lateralAxis.y);
+          const chooseNegativeLeft = projectionLeft < projectionRight
+            || (Math.abs(projectionLeft - projectionRight) < 0.001 && String(left.id) <= String(right.id));
+          const negative = chooseNegativeLeft ? left : right;
+          const positive = chooseNegativeLeft ? right : left;
+          negative.posX = Math.max(minX, Math.min(maxX, negative.posX - (lateralAxis.x * push)));
+          negative.posY = Math.max(minY, Math.min(maxY, negative.posY - (lateralAxis.y * push)));
+          positive.posX = Math.max(minX, Math.min(maxX, positive.posX + (lateralAxis.x * push)));
+          positive.posY = Math.max(minY, Math.min(maxY, positive.posY + (lateralAxis.y * push)));
+          syncMovedUnitPathState(negative);
+          syncMovedUnitPathState(positive);
+          if (negative.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+            clampLaneControlledUnitToCombatLeash(negative, minX, maxX, minY, maxY, null, deps);
+          if (positive.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+            clampLaneControlledUnitToCombatLeash(positive, minX, maxX, minY, maxY, null, deps);
+          clampLaneControlledUnitToAnchorDrift(negative, minX, maxX, minY, maxY, deps);
+          clampLaneControlledUnitToAnchorDrift(positive, minX, maxX, minY, maxY, deps);
+          continue;
+        }
+
+        left.posX = Math.max(minX, Math.min(maxX, left.posX - ((dx / distance) * push)));
+        left.posY = Math.max(minY, Math.min(maxY, left.posY - ((dy / distance) * push)));
+        syncMovedUnitPathState(left);
+        if (left.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+          clampLaneControlledUnitToCombatLeash(left, minX, maxX, minY, maxY, null, deps);
+        if (!simpleLaneSpacing)
+          clampLaneControlledUnitToAnchorDrift(left, minX, maxX, minY, maxY, deps);
+
+        right.posX = Math.max(minX, Math.min(maxX, right.posX + ((dx / distance) * push)));
+        right.posY = Math.max(minY, Math.min(maxY, right.posY + ((dy / distance) * push)));
+        syncMovedUnitPathState(right);
+        if (right.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+          clampLaneControlledUnitToCombatLeash(right, minX, maxX, minY, maxY, null, deps);
+        if (!simpleLaneSpacing)
+          clampLaneControlledUnitToAnchorDrift(right, minX, maxX, minY, maxY, deps);
+      }
+    }
+  }
+}
+
+function traceWaveUnitTick(game, lane, unit, target, details = {}, deps = {}) {
+  const log = deps && deps.log;
+  if (!getEnableWaveUnitTrace(deps))
+    return;
+  if (!game || !lane || !unit)
+    return;
+
+  const targetId = target ? (target.unitId || target.id || null) : null;
+  const targetType = target
+    ? (target.kind === "unit"
+      ? "defender"
+      : target.kind === "fortress_pad"
+        ? (target.buildingType || target.type || "fortress_pad")
+        : target.kind || null)
+    : null;
+  const distanceToTarget = target ? getWaveUnitTargetDistance(unit, target) : null;
+  const waveUnitStates = getWaveUnitStates(deps);
+  const shouldLog = !!(
+    details.coreDamageApplied
+    || details.movementAdvanced
+    || targetId
+    || unit.combatState === waveUnitStates.COMBAT
+    || Number(unit.posY) >= getGridHeight(deps) - 2
+  );
+  if (!shouldLog || !log || typeof log.info !== "function")
+    return;
+
+  log.info("[WaveUnitTrace] tick", {
+    tick: game.tick,
+    laneIndex: lane.laneIndex,
+    unitId: unit.id,
+    unitType: unit.type,
+    routeType: unit.routeType || null,
+    currentSegment: unit.currentSegment || null,
+    segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
+    state: unit.combatState || waveUnitStates.IDLE,
+    movementMode: unit.movementMode || null,
+    inCombat: unit.combatState === waveUnitStates.COMBAT,
+    targetId,
+    targetType,
+    blockedByStructure: !!unit.blockedByStructure,
+    blockedByStructureId: unit.blockedByStructureId || null,
+    distanceToTarget: Number.isFinite(distanceToTarget) ? Number(distanceToTarget.toFixed(3)) : null,
+    movementAdvanced: !!details.movementAdvanced,
+    coreDamageApplied: !!details.coreDamageApplied,
+    pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
+    preferredTargetReason: details.preferredTargetReason || null,
+  });
+}
+
+function doAttack(game, lane, attacker, target, deps = {}) {
+  const fireProjectile = requireDepFunction(deps, "fireProjectile");
+  const getTowerStats = requireDepFunction(deps, "getTowerStats");
+  const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
+  const stats = getTowerStats(attacker.type, 1);
+  const unitDef = resolveUnitDef(attacker.type);
+  const damage = attacker.baseDmg || (stats ? stats.dmg : (unitDef ? unitDef.dmg : 5));
+  const cooldownTicks = attacker.atkCdTicks || (stats ? stats.atkCdTicks : 30);
+  const attackRange = getUnitAttackRange(attacker.type, deps);
+
+  if (attackRange > 2.0) {
+    const behavior = stats ? (stats.projBehavior || "single") : "single";
+    fireProjectile(
+      game,
+      lane,
+      { id: attacker.id, kind: "unit", x: attacker.posX, y: attacker.posY },
+      target.id,
+      {
+        dmg: damage,
+        damageType: stats ? stats.damageType : "NORMAL",
+        behavior,
+        behaviorParams: stats ? (stats.projBehaviorParams || {}) : {},
+        travelTicks: stats ? (stats.projectileTicks || 8) : 8,
+        isSplash: behavior === "splash",
+        projectileType: attacker.type,
+        abilities: [],
+      }
+    );
+  } else {
+    target.hp = Math.max(0, target.hp - damage);
+  }
+
+  attacker.attackPulse = (attacker.attackPulse || 0) + 1;
+  attacker.atkCd = cooldownTicks;
+}
+
 module.exports = {
   moveTowardContact2D,
   updateSimpleContactApproachMemory,
@@ -1100,4 +1706,21 @@ module.exports = {
   hasImmediateFollowThroughCombatTarget,
   getLaneBlockingStructureTargets,
   findBlockingStructureTarget,
+  markTownCoreBreach,
+  attackFortressPad,
+  clampUnitToAnchor,
+  clampLaneControlledUnitToCombatLeash,
+  getPairSpacing,
+  tryResolveSettledAnchorPairSpacing,
+  isLaneControlledUnitSettledAtAnchor,
+  getUnitAnchorLateralAxis,
+  clampLaneControlledUnitToAnchorDrift,
+  getPairLateralAxis,
+  shouldPreferLateralSpacing,
+  resolveExactOverlapAxis,
+  getSharedTargetTangentialAxis,
+  shouldApplySimpleLaneHostileCollision,
+  applySeparation2D,
+  traceWaveUnitTick,
+  doAttack,
 };
