@@ -41,6 +41,7 @@ const {
 const fortressSystem = require("./game/multilane/fortressSystem");
 const barracksSystem = require("./game/multilane/barracksSystem");
 const laneCommandSystem = require("./game/multilane/laneCommandSystem");
+const spawnSystem = require("./game/multilane/spawnSystem");
 const waveSystem = require("./game/multilane/waveSystem");
 const routeGraph = require("./game/multilane/routeGraph");
 const {
@@ -904,12 +905,6 @@ function getBarracksSpeedMult(_br) {
   return barracksSystem.getBarracksSpeedMult(_br);
 }
 
-function getLaneWaveSpeedMult(lane) {
-  if (!lane || !Number.isFinite(Number(lane.waveSpeedMult)))
-    return 1;
-  return Math.max(0.01, Number(lane.waveSpeedMult));
-}
-
 function getBaseCombatPathSpeed(_unitTypeKey) {
   return BASE_COMBAT_PATH_SPEED;
 }
@@ -928,21 +923,6 @@ function normalizeAllegianceKey(value) {
       return ALLEGIANCE_KEYS.GREEN;
     case "dungeon":
       return ALLEGIANCE_KEYS.DUNGEON;
-    default:
-      return null;
-  }
-}
-
-function normalizeSpawnSourceType(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  switch (normalized) {
-    case "scheduled_wave":
-    case "dungeon_wave":
-      return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
-    case SPAWN_SOURCE_TYPES.BARRACKS_ROSTER:
-      return SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
-    case SPAWN_SOURCE_TYPES.BARRACKS_HERO:
-      return SPAWN_SOURCE_TYPES.BARRACKS_HERO;
     default:
       return null;
   }
@@ -997,37 +977,15 @@ function getSourceLane(game, sourceLaneIndex) {
 }
 
 function resolveSpawnSourceTypeFromWaveDef(waveDef) {
-  const explicitSourceType = normalizeSpawnSourceType(waveDef && waveDef.spawnSourceType);
-  if (explicitSourceType)
-    return explicitSourceType;
-
-  if (waveDef && waveDef.isHero)
-    return SPAWN_SOURCE_TYPES.BARRACKS_HERO;
-
-  const sourceBarracksId = resolveUnitSourceBarracksId(waveDef);
-  if (waveDef && (sourceBarracksId
-      || Number.isInteger(waveDef.sourceLaneIndex) && waveDef.sourceLaneIndex >= 0))
-    return SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
-
-  if (waveDef && waveDef.isWaveUnit)
-    return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
-
-  return SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+  return spawnSystem.resolveSpawnSourceTypeFromWaveDef(waveDef, SPAWN_SYSTEM_DEPS);
 }
 
 function resolveSpawnSourceTypeFromUnit(unit) {
-  const explicitSourceType = normalizeSpawnSourceType(unit && unit.spawnSourceType);
-  if (explicitSourceType)
-    return explicitSourceType;
-
-  if (unit && unit.isDefender)
-    return unit.isHero ? SPAWN_SOURCE_TYPES.BARRACKS_HERO : SPAWN_SOURCE_TYPES.BARRACKS_ROSTER;
-
-  return resolveSpawnSourceTypeFromWaveDef(unit);
+  return spawnSystem.resolveSpawnSourceTypeFromUnit(unit, SPAWN_SYSTEM_DEPS);
 }
 
 function isScheduledWaveUnit(unit) {
-  return resolveSpawnSourceTypeFromUnit(unit) === SPAWN_SOURCE_TYPES.DUNGEON_WAVE;
+  return spawnSystem.isScheduledWaveUnit(unit, SPAWN_SYSTEM_DEPS);
 }
 
 function resolveUnitSourceBarracksId(unit) {
@@ -1082,96 +1040,16 @@ function dot2D(a, b) {
   return routeGraph.dot2D(a, b);
 }
 
-function resolveCenteredSpawnColumn(slotIndex) {
-  const centerColumn = Math.max(0, Math.min(GRID_W - 1, Math.floor(Number(SPAWN_X) || 0)));
-  const safeSlotIndex = Math.max(0, Math.floor(Number(slotIndex) || 0));
-  if (safeSlotIndex <= 0)
-    return centerColumn;
-
-  const step = Math.ceil(safeSlotIndex / 2);
-  const offset = safeSlotIndex % 2 === 1 ? -step : step;
-  return Math.max(0, Math.min(GRID_W - 1, centerColumn + offset));
-}
-
 function resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex) {
-  const safeSpawnIndex = Math.max(0, Math.floor(Number(resolvedSpawnIndex) || 0));
-  const row = Math.floor(safeSpawnIndex / GRID_W);
-  const slotInRow = safeSpawnIndex % GRID_W;
-  if (spawnType === SPAWN_SOURCE_TYPES.SCHEDULED_WAVE) {
-    return {
-      x: resolveCenteredSpawnColumn(slotInRow),
-      y: row,
-    };
-  }
-
-  return {
-    x: slotInRow,
-    y: row,
-  };
+  return spawnSystem.resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex, SPAWN_SYSTEM_DEPS);
 }
 
 function validateSpawnDefinition(game, targetLane, waveDef, options = {}) {
-  const spawnType = resolveSpawnSourceTypeFromWaveDef(waveDef);
-  const allowUnbuiltBarracks = !!(
-    options.allowUnbuiltBarracks
-    || (waveDef && waveDef.allowUnbuiltBarracks)
-  );
-  const requestedSpawnIndex = Number.isInteger(waveDef && waveDef.spawnIndex)
-    ? waveDef.spawnIndex
-    : Math.max(0, targetLane && Array.isArray(targetLane.spawnQueue) ? targetLane.spawnQueue.length : 0);
-  const resolvedSpawnIndex = Math.max(0, requestedSpawnIndex);
-  const logicalPos = resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex);
-  const sourceLaneIndex = Number.isInteger(waveDef && waveDef.sourceLaneIndex) ? waveDef.sourceLaneIndex : -1;
-  const sourceLane = getSourceLane(game, sourceLaneIndex);
-  const sourceBarracksKey = normalizeBarracksSiteId(
-    waveDef && (waveDef.sourceBarracksKey || waveDef.sourceBarracksId)
-  );
-  const sourceTeam = normalizeAllegianceKey(waveDef && waveDef.sourceTeam);
-
-  if (!targetLane)
-    return { ok: false, reason: "Missing target lane", spawnType };
-
-  if (logicalPos.x < 0 || logicalPos.x >= GRID_W || logicalPos.y < 0)
-    return { ok: false, reason: "Resolved spawn index is out of legal queue bounds", spawnType };
-
-  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && !sourceLane)
-    return { ok: false, reason: "Spawn source lane is missing", spawnType };
-
-  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && !sourceBarracksKey)
-    return { ok: false, reason: "Spawn source barracks id is missing", spawnType };
-
-  if ((spawnType === SPAWN_SOURCE_TYPES.BARRACKS_ROSTER || spawnType === SPAWN_SOURCE_TYPES.BARRACKS_HERO)
-      && sourceLane && sourceTeam && resolveLaneAllegianceKey(sourceLane) !== sourceTeam)
-    return { ok: false, reason: "Spawn source team does not match source lane ownership", spawnType };
-
-  if ((spawnType === "barracks_roster" || spawnType === "barracks_hero") && sourceLane && !allowUnbuiltBarracks) {
-    const descriptor = describeBarracksSite(game, sourceLane, sourceBarracksKey);
-    if (!descriptor || !descriptor.isBuilt)
-      return { ok: false, reason: "Spawn source barracks does not exist or is not built on the source lane", spawnType };
-  }
-
-  if (spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE && !getWaveSpawnWorldPosition(targetLane.laneIndex))
-    return { ok: false, reason: "Wave spawn origin is missing for the target lane", spawnType };
-
-  return {
-    ok: true,
-    spawnType,
-    sourceLaneIndex,
-    sourceTeam,
-    sourceBarracksKey,
-    requestedSpawnIndex,
-    resolvedSpawnIndex,
-    logicalPos,
-  };
+  return spawnSystem.validateSpawnDefinition(game, targetLane, waveDef, options, SPAWN_SYSTEM_DEPS);
 }
 
 function getEffectiveWaveEntrySpeedMult(game, lane, waveDef) {
-  const safeWaveDef = waveDef && typeof waveDef === "object" ? waveDef : {};
-  const authoredSpeedMult = Math.max(0.01, Number(safeWaveDef.speed_mult || 1));
-  const sourceLane = getSourceLane(game, safeWaveDef.sourceLaneIndex);
-  if (sourceLane)
-    return authoredSpeedMult * getBarracksSpeedMult(sourceLane.barracks);
-  return authoredSpeedMult * getLaneWaveSpeedMult(lane);
+  return spawnSystem.getEffectiveWaveEntrySpeedMult(game, lane, waveDef, SPAWN_SYSTEM_DEPS);
 }
 
 function getBarracksUnitCostMult(br) {
@@ -1409,6 +1287,34 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   ROUTE_SLOT_ROW_SPACING,
   SPAWN_X,
   SPAWN_YG,
+});
+
+const SPAWN_SYSTEM_DEPS = Object.freeze({
+  log,
+  getSourceLane,
+  getBarracksSpeedMult,
+  normalizeAllegianceKey,
+  normalizeBarracksSiteId,
+  resolveLaneAllegianceKey,
+  describeBarracksSite,
+  getWaveSpawnWorldPosition,
+  resolveUnitDef,
+  getBaseCombatPathSpeed,
+  getLaneCommandRouteObjectiveLaneIndex,
+  resolveGameplayCatalogUnitKey,
+  buildAbilitiesForUnitType,
+  applyCanonicalUnitMirrors,
+  isFortArchetypeKey,
+  GRID_W,
+  SPAWN_X,
+  MAX_UNITS_PER_LANE,
+  DEFAULT_FORT_PRESENTATION_KEY,
+  SPAWN_SOURCE_TYPES,
+  ALLEGIANCE_KEYS,
+  UNIT_STANCES,
+  PATH_CONTRACT_TYPES,
+  UNIT_MOVEMENT_MODES,
+  WAVE_UNIT_STATES,
 });
 
 const WAVE_SYSTEM_DEPS = Object.freeze({
@@ -3929,114 +3835,7 @@ function createLaneUpcomingWaveQueue(game, lane, maxCount = 4) {
 }
 
 function _spawnWaveUnit(game, lane, waveDef, options = {}) {
-  const unitType = waveDef.unit_type;
-  const def = resolveUnitDef(unitType);
-  if (!def) return;
-  if (lane.units.length + lane.spawnQueue.length >= MAX_UNITS_PER_LANE) return;
-  const spawnValidation = validateSpawnDefinition(game, lane, waveDef, options);
-  if (!spawnValidation.ok) {
-    log.error("[SpawnAudit][ServerQueue] rejected", {
-      spawnType: spawnValidation.spawnType,
-      reason: spawnValidation.reason,
-      unitType,
-      laneIndex: lane ? lane.laneIndex : null,
-      sourceLaneIndex: waveDef && Number.isInteger(waveDef.sourceLaneIndex) ? waveDef.sourceLaneIndex : -1,
-      sourceBarracksKey: normalizeBarracksSiteId(
-        waveDef && (waveDef.sourceBarracksKey || waveDef.sourceBarracksId)
-      ),
-      sourceTeam: waveDef && waveDef.sourceTeam ? waveDef.sourceTeam : null,
-      requestedSpawnIndex: waveDef && waveDef.spawnIndex,
-    });
-    return;
-  }
-  const effectiveSpeedMult = getEffectiveWaveEntrySpeedMult(game, lane, waveDef);
-  const hp  = Math.ceil(def.hp    * Number(waveDef.hp_mult    || 1));
-  const dmg =           def.dmg   * Number(waveDef.dmg_mult   || 1);
-  const spd =           getBaseCombatPathSpeed(unitType) * effectiveSpeedMult;
-  log.info("[SpawnAudit][ServerQueue] queued", {
-    spawnType: spawnValidation.spawnType,
-    unitType,
-    laneIndex: lane.laneIndex,
-    team: lane.team || null,
-    sourceLaneIndex: spawnValidation.sourceLaneIndex,
-    sourceTeam: spawnValidation.sourceTeam,
-    sourceBarracksKey: spawnValidation.sourceBarracksKey,
-    requestedSpawnKey: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-      ? `lane:${lane.laneIndex}:wave_origin`
-      : `lane:${spawnValidation.sourceLaneIndex}:barracks:${spawnValidation.sourceBarracksKey}`,
-    resolvedMarkerName: `server_queue_${spawnValidation.spawnType}`,
-    resolvedLogicalPosition: spawnValidation.logicalPos,
-    requestedSpawnIndex: spawnValidation.requestedSpawnIndex,
-    resolvedSpawnIndex: spawnValidation.resolvedSpawnIndex,
-    fallbackUsed: false,
-    authoring: "server",
-  });
-  const ownerLaneIndex = spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-    ? -1
-    : spawnValidation.sourceLaneIndex;
-  const sourceLane = getSourceLane(game, spawnValidation.sourceLaneIndex);
-  const objectiveLaneIndex = spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-    ? lane.laneIndex
-    : getLaneCommandRouteObjectiveLaneIndex(game, sourceLane);
-  const queuedUnit = {
-    id: `wu${game.nextUnitId++}`,
-    unitId: null,
-    targetLaneIndex: lane.laneIndex,
-    ownerLaneIndex,
-    ownerLane: ownerLaneIndex,
-    objectiveLaneIndex,
-    sourceLaneIndex: spawnValidation.sourceLaneIndex,
-    sourceTeam: spawnValidation.sourceTeam,
-    sourceBarracksKey: spawnValidation.sourceBarracksKey,
-    sourceBarracksId: spawnValidation.sourceBarracksKey,
-    barracksId: spawnValidation.sourceBarracksKey,
-    spawnSourceType: spawnValidation.spawnType,
-    allegianceKey: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-      ? ALLEGIANCE_KEYS.DUNGEON
-      : resolveLaneAllegianceKey(getSourceLane(game, spawnValidation.sourceLaneIndex)),
-    type: unitType,
-    unitTypeKey: unitType,
-    archetypeKey: waveDef.archetypeKey || (isFortArchetypeKey(unitType) ? unitType : null),
-    presentationKey: waveDef.presentationKey || null,
-    catalogUnitKey: resolveGameplayCatalogUnitKey(unitType, waveDef.presentationKey || DEFAULT_FORT_PRESENTATION_KEY),
-    skinKey: waveDef.skinKey || null,
-    isHero: !!waveDef.isHero,
-    heroKey: waveDef.heroKey || null,
-    heroVisualStyleKey: waveDef.heroVisualStyleKey || null,
-    rosterKey: waveDef.rosterKey || null,
-    role: waveDef.role || null,
-    combatRole: waveDef.combatRole || null,
-    pathIdx: 0,
-    hp,
-    maxHp: hp,
-    baseDmg: dmg,
-    baseSpeed: spd,
-    atkCd: 0,
-    atkCdTicks: def.atkCdTicks,
-    armorType: def.armorType || "MEDIUM",
-    damageReductionPct: def.damageReductionPct || 0,
-    abilities: buildAbilitiesForUnitType(unitType),
-    bounty: def.bounty || 1,
-    stance: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE ? UNIT_STANCES.ATTACK : null,
-    pathContractType: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE
-      ? PATH_CONTRACT_TYPES.WAVE_LANE
-      : null,
-    isWaveUnit: spawnValidation.spawnType === SPAWN_SOURCE_TYPES.DUNGEON_WAVE,
-    isDefender: false,
-    combatTarget: null,
-    combatTargetId: null,
-    combatTargetLockedUntilTick: 0,
-    currentTargetId: null,
-    regroupUntilTick: 0,
-    combatState: WAVE_UNIT_STATES.IDLE,
-    state: WAVE_UNIT_STATES.IDLE,
-    movementMode: UNIT_MOVEMENT_MODES.LANE_TRAVEL,
-    hasBreachedTownCore: false,
-    spawnIndex: spawnValidation.resolvedSpawnIndex,  // position in the authored wave spawn rectangle
-    spawnLogicalPos: spawnValidation.logicalPos,
-  };
-  applyCanonicalUnitMirrors(game, lane, queuedUnit);
-  lane.spawnQueue.push(queuedUnit);
+  return spawnSystem.spawnWaveUnit(game, lane, waveDef, options, SPAWN_SYSTEM_DEPS);
 }
 
 function finalizeCompletedWave(game) {
