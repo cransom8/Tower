@@ -2423,15 +2423,7 @@ function summarizeBarracksSiteRosterEntries(rosterEntries) {
 }
 
 function logBarracksRosterState(lane, reason) {
-  if (!lane) return;
-  const summary = BARRACKS_SITE_DEFS
-    .map((siteDef) => {
-      const siteCounts = lane.barracksSiteRosterCounts && lane.barracksSiteRosterCounts[siteDef.barracksId];
-      return `${siteDef.barracksId}=${summarizeBarracksSiteCounts(siteCounts)}`;
-    })
-    .join(" ");
-  console.log(
-    `[BarracksTrace][ServerRoster] lane=${lane.laneIndex} reason='${reason}' ${summary}`);
+  return barracksSystem.logBarracksRosterState(lane, reason);
 }
 
 function getBarracksSiteCounts(lane, barracksId) {
@@ -2483,148 +2475,35 @@ function ensureBarracksSiteStates(lane, game) {
 }
 
 function getBarracksSiteState(lane, barracksId, game) {
-  if (!lane) return null;
-  const normalizedId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedId) return null;
-
-  const states = ensureBarracksSiteStates(lane, game);
-  return states[normalizedId] || null;
+  return barracksSystem.getBarracksSiteState(lane, barracksId, game);
 }
 
 function describeBarracksSite(game, lane, barracksId) {
-  const normalizedId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedId) return null;
-
-  const siteDef = getBarracksSiteDef(normalizedId);
-  const siteState = getBarracksSiteState(lane, normalizedId, game);
-  if (!siteDef || !siteState) return null;
-
-  const built = !!siteState.isBuilt;
-  const level = built ? normalizeBarracksSiteLevel(siteState.level) : 0;
-  const maxLevel = getBarracksSiteMaxLevel();
-  const nextLevel = built ? Math.min(maxLevel, level + 1) : 1;
-  const townCoreTier = getTownCoreTier(lane);
-  const requiredTownCoreTier = getFortressRequiredTownCoreTier("barracks", nextLevel);
-  const canBuild = !built && townCoreTier >= requiredTownCoreTier;
-  const canUpgrade = built && level < maxLevel && townCoreTier >= requiredTownCoreTier;
-
-  let buildState = FORTRESS_BUILD_STATES.locked;
-  if (!built) {
-    buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
-  } else if (level >= maxLevel) {
-    buildState = FORTRESS_BUILD_STATES.maxTier;
-  } else if (canUpgrade) {
-    buildState = FORTRESS_BUILD_STATES.upgradeAvailable;
-  } else {
-    buildState = FORTRESS_BUILD_STATES.built;
-  }
-
-  let lockedReason = null;
-  if (!built && !canBuild) {
-    lockedReason = `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
-  } else if (built && level < maxLevel && !canUpgrade) {
-    lockedReason = `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
-  }
-
-  const sendIntervalTicks = built ? getBarracksSiteSendIntervalTicks(level) : getBarracksSiteSendIntervalTicks(1);
-  if (built && (!Number.isInteger(siteState.nextSendTick) || siteState.nextSendTick <= 0)) {
-    const baseTick = game ? Math.floor(Number(game.tick) || 0) : 0;
-    siteState.nextSendTick = baseTick + sendIntervalTicks;
-  }
-
-  const sendTimerTicksRemaining = built && game
-    ? Math.max(0, Math.floor(Number(siteState.nextSendTick) || 0) - Math.floor(Number(game.tick) || 0))
-    : 0;
-  const nextDef = built && level < maxLevel ? getBarracksUpgradeDef(nextLevel) : null;
-  const upgradeCost = built && level < maxLevel
-    ? Math.max(
-        0,
-        Math.floor(
-          Number(nextDef && nextDef.upgradeCost) || getFortressUpgradeCost("barracks", nextLevel) || 0
-        )
-      )
-    : 0;
-
-  return {
-    siteDef,
-    siteState,
-    isBuilt: built,
-    level,
-    maxLevel,
-    buildState,
-    canBuild,
-    canUpgrade,
-    buildCost: getBarracksSiteBuildCost(siteDef),
-    upgradeCost,
-    requiredTownCoreTier,
-    lockedReason,
-    sendIntervalTicks,
-    sendTimerTicksRemaining,
-    sendTimerTotalTicks: built ? sendIntervalTicks : 0,
-  };
+  return barracksSystem.describeBarracksSite(game, lane, barracksId);
 }
 
 function getBarracksSiteLockedReason(siteDef) {
-  return siteDef ? `${siteDef.displayName} is not available yet.` : "Barracks unavailable";
+  return barracksSystem.getBarracksSiteLockedReason(siteDef);
 }
 
 function isBarracksSiteAvailable(lane, barracksId) {
-  const descriptor = describeBarracksSite(null, lane, barracksId);
-  return !!(descriptor && descriptor.isBuilt);
+  return barracksSystem.isBarracksSiteAvailable(lane, barracksId);
 }
 
 function getBarracksRosterLockedReason(rosterDef) {
-  if (!rosterDef) return "Locked";
-  const buildingDef = FORTRESS_BUILDING_DEFS[rosterDef.unlockBuildingType];
-  const buildingName = buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType;
-  const tierName = getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier);
-  if (String(buildingName || "").trim().toLowerCase() === String(tierName || "").trim().toLowerCase())
-    return `${buildingName} required`;
-  return `${buildingName}: ${tierName}`;
+  return barracksSystem.getBarracksRosterLockedReason(rosterDef);
 }
 
 function getBuiltBarracksSiteTier(lane, barracksId) {
-  const descriptor = describeBarracksSite(null, lane, barracksId);
-  if (!descriptor || !descriptor.isBuilt)
-    return 0;
-
-  return Math.max(1, Math.floor(Number(descriptor.level) || 1));
+  return barracksSystem.getBuiltBarracksSiteTier(lane, barracksId);
 }
 
 function getHighestBuiltBarracksSiteTier(lane) {
-  let highestTier = 0;
-  for (const siteDef of BARRACKS_SITE_DEFS)
-    highestTier = Math.max(highestTier, getBuiltBarracksSiteTier(lane, siteDef.barracksId));
-
-  return highestTier;
+  return barracksSystem.getHighestBuiltBarracksSiteTier(lane);
 }
 
 function resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId = null) {
-  const requiredBuildingTier = Math.max(1, Math.floor(Number(rosterDef && rosterDef.requiredBuildingTier) || 1));
-  const unlockBuildingType = String((rosterDef && rosterDef.unlockBuildingType) || "").trim().toLowerCase();
-
-  if (unlockBuildingType === "barracks") {
-    const unlockTier = barracksId
-      ? getBuiltBarracksSiteTier(lane, barracksId)
-      : getHighestBuiltBarracksSiteTier(lane);
-    return {
-      unlockPad: null,
-      unlockPadId: null,
-      unlockTier,
-      unlocked: unlockTier >= requiredBuildingTier,
-      buildingDef: FORTRESS_BUILDING_DEFS.barracks || null,
-    };
-  }
-
-  const unlockPad = getFortressPadByBuildingType(lane, rosterDef && rosterDef.unlockBuildingType);
-  const unlockTier = getHighestBuiltFortressPadTier(lane, rosterDef && rosterDef.unlockBuildingType);
-  return {
-    unlockPad,
-    unlockPadId: unlockPad ? unlockPad.padId : null,
-    unlockTier,
-    unlocked: unlockTier >= requiredBuildingTier,
-    buildingDef: FORTRESS_BUILDING_DEFS[rosterDef && rosterDef.unlockBuildingType] || null,
-  };
+  return barracksSystem.resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId);
 }
 
 function getHeroRosterDefinition(heroKey) {
@@ -2632,12 +2511,7 @@ function getHeroRosterDefinition(heroKey) {
 }
 
 function getHeroRosterLockedReason(heroDef) {
-  if (!heroDef) return "Hero locked";
-  const buildingDef = FORTRESS_BUILDING_DEFS[heroDef.unlockBuildingType];
-  const tierName = getBuildingTierDisplayName(heroDef.unlockBuildingType, heroDef.requiredBuildingTier);
-  if (buildingDef && heroDef.requiredBuildingTier > 0)
-    return `${buildingDef.displayName}: ${tierName}`;
-  return "Castle required";
+  return barracksSystem.getHeroRosterLockedReason(heroDef);
 }
 
 function getFortressPadState(lane, padId) {
@@ -2685,6 +2559,23 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
   },
 });
 
+const BARRACKS_SYSTEM_DEPS = Object.freeze({
+  log,
+  resolveFortPresentationConfig,
+  getUnitType,
+  resolveTowerDef,
+  resolveUnitDef,
+  resolveLaneAllegianceKey,
+  getBarracksSiteWorldPosition,
+  resolveTargetLaneForBarracksSend,
+  normalizeCombatRole,
+  resolveUnitCombatRole,
+  spawnWaveUnit: _spawnWaveUnit,
+  gridWidth: GRID_W,
+  defaultHeroCombatRole: UNIT_COMBAT_ROLES.SWORD,
+  spawnSourceTypes: SPAWN_SOURCE_TYPES,
+});
+
 function buildTownCoreStateSummary(game) {
   return fortressSystem.buildTownCoreStateSummary(game, FORTRESS_SYSTEM_DEPS);
 }
@@ -2694,31 +2585,7 @@ function getFortressPadCombatTarget(lane, padState, positionOverride = null) {
 }
 
 function getBarracksSiteCombatTarget(lane, barracksId) {
-  const descriptor = describeBarracksSite(null, lane, barracksId);
-  if (!descriptor || !descriptor.isBuilt || !descriptor.siteState)
-    return null;
-
-  const hp = Math.max(0, Math.floor(Number(descriptor.siteState.hp) || 0));
-  if (hp <= 0)
-    return null;
-
-  const pos = getBarracksSiteWorldPosition(lane.laneIndex, barracksId);
-  if (!pos)
-    return null;
-  return {
-    id: `barracks_site:${descriptor.siteState.barracksId}`,
-    unitId: `barracks_site:${descriptor.siteState.barracksId}`,
-    laneIndex: lane.laneIndex,
-    kind: "fortress_pad",
-    padId: `barracks_site:${descriptor.siteState.barracksId}`,
-    barracksId: descriptor.siteState.barracksId,
-    buildingType: "barracks_site",
-    type: "barracks",
-    posX: pos.x,
-    posY: pos.y,
-    hp,
-    maxHp: Math.max(1, Math.floor(Number(descriptor.siteState.maxHp) || 1)),
-  };
+  return barracksSystem.getBarracksSiteCombatTarget(lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function getLaneTownCoreCombatTarget(lane) {
@@ -2738,157 +2605,27 @@ function getBuildingDisplayName(buildingType) {
 }
 
 function isHeroUnlockedForLane(lane, heroDef) {
-  if (!lane || !heroDef)
-    return false;
-
-  const unlockTier = getHighestBuiltFortressPadTier(lane, heroDef.unlockBuildingType);
-  return unlockTier >= Math.max(1, Math.floor(Number(heroDef.requiredBuildingTier) || 1));
+  return barracksSystem.isHeroUnlockedForLane(lane, heroDef);
 }
 
 function getHeroDisabledReason(game, lane, heroDef) {
-  if (!lane || !heroDef)
-    return "Hero unavailable";
-
-  if (!isHeroUnlockedForLane(lane, heroDef))
-    return getHeroRosterLockedReason(heroDef);
-
-  if (countBuiltBarracksSites(lane) <= 0)
-    return "Buy a Barracks to summon heroes";
-
-  const cooldownReadyTick = getHeroCooldownReadyTick(lane, heroDef.heroKey);
-  const currentTick = Math.floor(Number(game && game.tick) || 0);
-  if (cooldownReadyTick > currentTick) {
-    const secondsRemaining = Math.max(0, Math.ceil((cooldownReadyTick - currentTick) / Math.max(1, TICK_HZ)));
-    return `Cooldown ${secondsRemaining}s`;
-  }
-
-  const activeLimit = Math.max(0, Math.floor(Number(heroDef.activeLimit) || 0));
-  const activeCount = countActiveHeroDeployments(game, lane.laneIndex, heroDef.heroKey);
-  if (activeLimit > 0 && activeCount >= activeLimit)
-    return `${heroDef.displayName} is already deployed`;
-
-  if (!Number.isInteger(resolveTargetLaneForBarracksSend(game, lane.laneIndex, "center")))
-    return "Lane command target unavailable";
-
-  return null;
+  return barracksSystem.getHeroDisabledReason(game, lane, heroDef, BARRACKS_SYSTEM_DEPS);
 }
 
 function createHeroRosterSnapshot(game, lane) {
-  const currentTick = Math.floor(Number(game && game.tick) || 0);
-  const builtBarracksCount = countBuiltBarracksSites(lane);
-
-  return HERO_ROSTER_DEFS
-    .slice()
-    .sort((a, b) => (a.sortIndex || 0) - (b.sortIndex || 0))
-    .map((heroDef) => {
-      const presentation = resolveFortPresentationConfig(
-        heroDef.archetypeKey,
-        heroDef.presentationKey,
-        heroDef.displayName,
-      );
-      const unlocked = isHeroUnlockedForLane(lane, heroDef);
-      const cooldownReadyTick = getHeroCooldownReadyTick(lane, heroDef.heroKey);
-      const cooldownTicksRemaining = Math.max(0, cooldownReadyTick - currentTick);
-      const activeLimit = Math.max(0, Math.floor(Number(heroDef.activeLimit) || 0));
-      const activeCount = countActiveHeroDeployments(game, lane && lane.laneIndex, heroDef.heroKey);
-      const summonSourceBuildingName = getBuildingDisplayName(heroDef.summonSourceBuildingType);
-      const disabledReason = getHeroDisabledReason(game, lane, heroDef);
-
-      let state = "disabled";
-      if (!unlocked) {
-        state = "locked";
-      } else if (activeLimit > 0 && activeCount >= activeLimit) {
-        state = "active";
-      } else if (cooldownTicksRemaining > 0) {
-        state = "cooldown";
-      } else if (!disabledReason) {
-        state = "ready";
-      }
-
-      return {
-        heroKey: heroDef.heroKey,
-        displayName: heroDef.displayName,
-        role: heroDef.role,
-        roleLabel: heroDef.roleLabel || "Hero",
-        sortIndex: heroDef.sortIndex || 0,
-        archetypeKey: heroDef.archetypeKey,
-        presentationKey: presentation.presentationKey,
-        unitTypeKey: presentation.catalogUnitKey,
-        catalogUnitKey: presentation.catalogUnitKey,
-        skinKey: presentation.skinKey || null,
-        portraitKey: presentation.portraitKey || null,
-        branchKey: heroDef.branchKey || "heroes",
-        branchLabel: heroDef.branchLabel || "Heroes",
-        isHero: true,
-        unlocked,
-        unlockBuildingType: heroDef.unlockBuildingType,
-        unlockBuildingName: getBuildingDisplayName(heroDef.unlockBuildingType),
-        unlockBuildingTierName: getBuildingTierDisplayName(heroDef.unlockBuildingType, heroDef.requiredBuildingTier),
-        requiredBuildingTier: heroDef.requiredBuildingTier,
-        summonSourceBuildingType: heroDef.summonSourceBuildingType,
-        summonSourceBuildingName,
-        summonCost: Math.max(0, Math.floor(Number(heroDef.summonCost) || 0)),
-        cooldownTicks: Math.max(0, Math.floor(Number(heroDef.cooldownTicks) || 0)),
-        cooldownReadyTick,
-        cooldownTicksRemaining,
-        activeLimit,
-        activeCount,
-        builtBarracksCount,
-        state,
-        canSummon: !disabledReason,
-        heroVisualStyleKey: heroDef.heroVisualStyleKey || null,
-        lockedReason: unlocked ? null : getHeroRosterLockedReason(heroDef),
-        disabledReason,
-      };
-    });
+  return barracksSystem.createHeroRosterSnapshot(game, lane, BARRACKS_SYSTEM_DEPS);
 }
 
 function getHeroCooldownReadyTick(lane, heroKey) {
-  if (!lane || !lane.heroCooldownReadyTicks || typeof lane.heroCooldownReadyTicks !== "object")
-    return 0;
-  return Math.max(0, Math.floor(Number(lane.heroCooldownReadyTicks[heroKey]) || 0));
+  return barracksSystem.getHeroCooldownReadyTick(lane, heroKey);
 }
 
 function countActiveHeroDeployments(game, sourceLaneIndex, heroKey) {
-  if (!game || !Array.isArray(game.lanes) || !heroKey)
-    return 0;
-
-  let total = 0;
-  for (const lane of game.lanes) {
-    if (!lane)
-      continue;
-
-    const collections = [lane.units, lane.spawnQueue];
-    for (const collection of collections) {
-      if (!Array.isArray(collection))
-        continue;
-
-      for (const unit of collection) {
-        if (!unit || unit.hp <= 0 || !unit.isHero)
-          continue;
-        if (unit.sourceLaneIndex !== sourceLaneIndex)
-          continue;
-        if (unit.heroKey !== heroKey)
-          continue;
-        total += 1;
-      }
-    }
-  }
-
-  return total;
+  return barracksSystem.countActiveHeroDeployments(game, sourceLaneIndex, heroKey);
 }
 
 function countBuiltBarracksSites(lane) {
-  if (!lane || !lane.barracksSiteStates || typeof lane.barracksSiteStates !== "object")
-    return 0;
-
-  let built = 0;
-  for (const siteDef of BARRACKS_SITE_DEFS) {
-    const state = lane.barracksSiteStates[siteDef.barracksId];
-    if (state && state.isBuilt)
-      built += 1;
-  }
-  return built;
+  return barracksSystem.countBuiltBarracksSites(lane);
 }
 
 function markLaneDefeated(game, lane, defeatContext = null) {
@@ -2936,27 +2673,11 @@ function getBarracksRosterDefinition(rosterKey) {
 }
 
 function getBarracksRosterBuyCost(rosterDef) {
-  if (!rosterDef) return 0;
-  const presentation = resolveFortPresentationConfig(
-    rosterDef.archetypeKey,
-    rosterDef.presentationKey,
-    rosterDef.displayName,
-  );
-  const unitType = getUnitType(presentation.catalogUnitKey);
-  const buildCost = Math.floor(Number(unitType && unitType.build_cost) || 0);
-  if (buildCost > 0) return buildCost;
-  const towerDef = resolveTowerDef(rosterDef.archetypeKey);
-  if (towerDef && Number.isFinite(towerDef.cost) && towerDef.cost > 0)
-    return Math.floor(towerDef.cost);
-  const unitDef = resolveUnitDef(rosterDef.archetypeKey);
-  const sendCost = Math.max(1, Math.floor(Number(unitDef && unitDef.cost) || 1));
-  return Math.max(5, sendCost * 5);
+  return barracksSystem.getBarracksRosterBuyCost(rosterDef, BARRACKS_SYSTEM_DEPS);
 }
 
 function getBarracksRosterSellRefund(rosterDef) {
-  const buyCost = getBarracksRosterBuyCost(rosterDef);
-  if (buyCost <= 0) return 0;
-  return Math.max(1, Math.floor(buyCost * BARRACKS_ROSTER_REFUND_PCT / 100));
+  return barracksSystem.getBarracksRosterSellRefund(rosterDef, BARRACKS_SYSTEM_DEPS);
 }
 
 function getBarracksRoleSortIndex(role) {
@@ -2968,165 +2689,15 @@ function getBarracksSpawnQueueRoleSortIndex(role) {
 }
 
 function createBarracksSiteRosterSnapshot(game, lane, barracksId) {
-  const normalizedId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedId) return [];
-  const descriptor = describeBarracksSite(game, lane, normalizedId);
-  if (!descriptor) return [];
-
-  const siteCounts = getBarracksSiteCounts(lane, normalizedId) || {};
-  const siteBuilt = !!descriptor.isBuilt;
-
-  return BARRACKS_ROSTER_DEFS
-    .slice()
-    .sort((a, b) => {
-      const roleA = getBarracksRoleSortIndex(a.role);
-      const roleB = getBarracksRoleSortIndex(b.role);
-      if (roleA !== roleB) return roleA - roleB;
-      return (a.sortIndex || 0) - (b.sortIndex || 0);
-    })
-    .map((rosterDef) => {
-      const presentation = resolveFortPresentationConfig(
-        rosterDef.archetypeKey,
-        rosterDef.presentationKey,
-        rosterDef.displayName,
-      );
-      const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef, normalizedId);
-      const unlocked = siteBuilt && unlockContext.unlocked;
-      const buildingDef = unlockContext.buildingDef;
-      const buyCost = getBarracksRosterBuyCost(rosterDef);
-      const sellRefund = getBarracksRosterSellRefund(rosterDef);
-      const ownedCount = Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
-      return {
-        rosterKey: rosterDef.rosterKey,
-        displayName: rosterDef.displayName,
-        role: rosterDef.role,
-        roleLabel: rosterDef.role.charAt(0).toUpperCase() + rosterDef.role.slice(1),
-        sortIndex: rosterDef.sortIndex || 0,
-        archetypeKey: rosterDef.archetypeKey,
-        presentationKey: presentation.presentationKey,
-        unitTypeKey: presentation.catalogUnitKey,
-        catalogUnitKey: presentation.catalogUnitKey,
-        skinKey: presentation.skinKey || null,
-        portraitKey: presentation.portraitKey || null,
-        branchKey: rosterDef.branchKey || "",
-        branchLabel: rosterDef.branchLabel || getBuildingBranchLabel(rosterDef.productionBuildingType),
-        productionBuildingType: rosterDef.productionBuildingType,
-        productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
-        tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
-        ownedCount,
-        buyCost,
-        sellRefund,
-        unlocked,
-        unlockBuildingType: rosterDef.unlockBuildingType,
-        unlockBuildingName: buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType,
-        unlockBuildingTierName: getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier),
-        requiredBuildingTier: rosterDef.requiredBuildingTier,
-        unlockPadId: unlockContext.unlockPadId,
-        barracksId: normalizedId,
-        lockedReason: unlocked
-          ? null
-          : !siteBuilt
-            ? descriptor.lockedReason || "Buy Building first"
-            : getBarracksRosterLockedReason(rosterDef),
-      };
-    });
+  return barracksSystem.createBarracksSiteRosterSnapshot(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function createBarracksSiteSnapshot(game, lane, barracksId) {
-  const normalizedId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedId) return null;
-  const descriptor = describeBarracksSite(game, lane, normalizedId);
-  if (!descriptor) return null;
-  const siteState = descriptor.siteState;
-  const hp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.hp) || 0)) : 0;
-  const maxHp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.maxHp) || 0)) : 0;
-
-  return {
-    barracksId: normalizedId,
-    allegianceKey: resolveLaneAllegianceKey(lane),
-    ownerLaneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
-    displayName: descriptor.siteDef.displayName,
-    slot: descriptor.siteDef.slot,
-    sortIndex: descriptor.siteDef.sortIndex,
-    requiredBarracksTier: getBarracksSiteTierRequirement(descriptor.siteDef),
-    available: descriptor.isBuilt,
-    isBuilt: descriptor.isBuilt,
-    level: descriptor.level,
-    maxLevel: descriptor.maxLevel,
-    buildState: descriptor.buildState,
-    canBuild: descriptor.canBuild,
-    canUpgrade: descriptor.canUpgrade,
-    buildCost: descriptor.buildCost,
-    upgradeCost: descriptor.upgradeCost,
-    requiredTownCoreTier: descriptor.requiredTownCoreTier,
-    requiredTownCoreTierName: getBuildingTierDisplayName("town_core", descriptor.requiredTownCoreTier),
-    sendIntervalTicks: descriptor.sendIntervalTicks,
-    sendTimerTicksRemaining: descriptor.sendTimerTicksRemaining,
-    sendTimerTotalTicks: descriptor.sendTimerTotalTicks,
-    lockedReason: descriptor.lockedReason,
-    hp,
-    maxHp,
-    roster: createBarracksSiteRosterSnapshot(game, lane, normalizedId),
-  };
+  return barracksSystem.createBarracksSiteSnapshot(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function createBarracksRosterSnapshot(game, lane) {
-  return BARRACKS_ROSTER_DEFS
-    .slice()
-    .sort((a, b) => {
-      const roleA = getBarracksRoleSortIndex(a.role);
-      const roleB = getBarracksRoleSortIndex(b.role);
-      if (roleA !== roleB) return roleA - roleB;
-      return (a.sortIndex || 0) - (b.sortIndex || 0);
-    })
-    .map((rosterDef) => {
-      const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef);
-      const unlocked = unlockContext.unlocked;
-      const buildingDef = unlockContext.buildingDef;
-      const buyCost = getBarracksRosterBuyCost(rosterDef);
-      const sellRefund = getBarracksRosterSellRefund(rosterDef);
-      let ownedCount = 0;
-      for (const siteDef of BARRACKS_SITE_DEFS) {
-        const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId) || {};
-        ownedCount += Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
-      }
-      const presentation = resolveFortPresentationConfig(
-        rosterDef.archetypeKey,
-        rosterDef.presentationKey,
-        rosterDef.displayName,
-      );
-
-      return {
-        rosterKey: rosterDef.rosterKey,
-        displayName: rosterDef.displayName,
-        role: rosterDef.role,
-        roleLabel: rosterDef.role.charAt(0).toUpperCase() + rosterDef.role.slice(1),
-        sortIndex: rosterDef.sortIndex || 0,
-        archetypeKey: rosterDef.archetypeKey,
-        presentationKey: presentation.presentationKey,
-        unitTypeKey: presentation.catalogUnitKey,
-        catalogUnitKey: presentation.catalogUnitKey,
-        skinKey: presentation.skinKey || null,
-        portraitKey: presentation.portraitKey || null,
-        branchKey: rosterDef.branchKey || "",
-        branchLabel: rosterDef.branchLabel || getBuildingBranchLabel(rosterDef.productionBuildingType),
-        productionBuildingType: rosterDef.productionBuildingType,
-        productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
-        tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
-        ownedCount,
-        buyCost,
-        sellRefund,
-        unlocked,
-        unlockBuildingType: rosterDef.unlockBuildingType,
-        unlockBuildingName: buildingDef ? buildingDef.displayName : rosterDef.unlockBuildingType,
-        unlockBuildingTierName: getBuildingTierDisplayName(rosterDef.unlockBuildingType, rosterDef.requiredBuildingTier),
-        requiredBuildingTier: rosterDef.requiredBuildingTier,
-        unlockPadId: unlockContext.unlockPadId,
-        lockedReason: unlocked
-          ? null
-          : getBarracksRosterLockedReason(rosterDef),
-      };
-    });
+  return barracksSystem.createBarracksRosterSnapshot(game, lane, BARRACKS_SYSTEM_DEPS);
 }
 
 function createFortressPadSnapshot(game, lane, padState) {
@@ -3134,205 +2705,25 @@ function createFortressPadSnapshot(game, lane, padState) {
 }
 
 function buildBarracksRosterSpawnEntries(game, lane, barracksId = null) {
-  if (!game || !lane) return [];
-
-  const spawnEntries = [];
-  const siteDefs = barracksId
-    ? [getBarracksSiteDef(barracksId)].filter(Boolean)
-    : BARRACKS_SITE_DEFS;
-  for (const siteDef of siteDefs) {
-    const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
-    if (!descriptor || !descriptor.isBuilt)
-      continue;
-
-    const rosterEntries = createBarracksSiteRosterSnapshot(game, lane, siteDef.barracksId)
-      .filter((entry) => entry.unlocked && entry.ownedCount > 0)
-      .sort((a, b) => {
-        const roleA = getBarracksSpawnQueueRoleSortIndex(a.role);
-        const roleB = getBarracksSpawnQueueRoleSortIndex(b.role);
-        if (roleA !== roleB) return roleA - roleB;
-        return (a.sortIndex || 0) - (b.sortIndex || 0);
-      });
-
-    for (const entry of rosterEntries) {
-      const rosterDef = getBarracksRosterDefinition(entry.rosterKey);
-      const presentation = resolveFortPresentationConfig(
-        rosterDef && rosterDef.archetypeKey,
-        rosterDef && rosterDef.presentationKey,
-        entry.displayName,
-      );
-      for (let ownedIndex = 0; ownedIndex < entry.ownedCount; ownedIndex++) {
-        spawnEntries.push({
-          unitType: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : entry.unitTypeKey,
-          count: 1,
-          source: "barracks_roster",
-          barracksId: siteDef.barracksId,
-          rosterKey: entry.rosterKey,
-          archetypeKey: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : null,
-          presentationKey: presentation.presentationKey,
-          role: entry.role,
-          sortIndex: entry.sortIndex || 0,
-          sourceLaneIndex: lane.laneIndex,
-          sourceTeam: lane.team || null,
-          skinKey: presentation.skinKey || null,
-        });
-      }
-    }
-  }
-
-  return spawnEntries;
+  return barracksSystem.buildBarracksRosterSpawnEntries(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function spawnScheduledBarracksRoster(game, lane, barracksId = null) {
-  if (!game || !lane || lane.eliminated) return 0;
-  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedBarracksId) {
-    log.error("[BarracksTrace][ServerSpawn] rejected", {
-      reason: "Missing or invalid barracksId",
-      sourceLaneIndex: lane.laneIndex,
-      requestedBarracksId: barracksId || null,
-    });
-    return 0;
-  }
-
-  const targetLaneIdx = resolveTargetLaneForBarracksSend(game, lane.laneIndex, normalizedBarracksId);
-  if (targetLaneIdx === null) {
-    log.error("[BarracksTrace][ServerSpawn] rejected", {
-      reason: "Unable to resolve target lane for barracks send",
-      sourceLaneIndex: lane.laneIndex,
-      barracksId: normalizedBarracksId,
-    });
-    return 0;
-  }
-
-  const targetLane = game.lanes[targetLaneIdx];
-  if (!targetLane) {
-    log.error("[BarracksTrace][ServerSpawn] rejected", {
-      reason: "Resolved target lane is missing",
-      sourceLaneIndex: lane.laneIndex,
-      targetLaneIndex: targetLaneIdx,
-      barracksId: normalizedBarracksId,
-    });
-    return 0;
-  }
-
-  const spawnEntries = buildBarracksRosterSpawnEntries(game, lane, normalizedBarracksId);
-  if (spawnEntries.length === 0) return 0;
-
-  spawnBarracksRosterLayout(game, targetLane, spawnEntries);
-  lane.totalSendCount += spawnEntries.length;
-  lane.sendCountThisRound += spawnEntries.length;
-  return spawnEntries.length;
+  return barracksSystem.spawnScheduledBarracksRoster(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function getBarracksSpawnColumns(role, unitCount) {
-  const safeCount = Math.max(0, Math.floor(Number(unitCount) || 0));
-  if (safeCount <= 1) return 1;
-  if (safeCount === 2) return 2;
-  if (safeCount === 3) return 3;
-
-  switch (role) {
-    case "melee":
-      return Math.min(4, safeCount);
-    case "support":
-    case "ranged":
-      return Math.min(3, safeCount);
-    default:
-      return Math.min(2, safeCount);
-  }
+  return barracksSystem.getBarracksSpawnColumns(role, unitCount);
 }
 
 function spawnBarracksRosterLayout(game, lane, pendingEntries, options = null) {
-  if (!game || !lane || !Array.isArray(pendingEntries) || pendingEntries.length === 0) return;
-  const safeOptions = options && typeof options === "object" ? options : null;
-
-  const entriesByRole = new Map();
-  for (const role of BARRACKS_SPAWN_ROLE_ORDER) entriesByRole.set(role, []);
-  for (const entry of pendingEntries) {
-    if (!entry) continue;
-    const roleEntries = entriesByRole.get(entry.role) || [];
-    roleEntries.push(entry);
-    entriesByRole.set(entry.role, roleEntries);
-  }
-
-  let nextRoleRow = Math.ceil(lane.spawnQueue.length / GRID_W);
-  for (const role of BARRACKS_SPAWN_ROLE_ORDER) {
-    const roleEntries = (entriesByRole.get(role) || [])
-      .slice()
-      .sort((a, b) => {
-        const sortA = Math.floor(Number(a.sortIndex) || 0);
-        const sortB = Math.floor(Number(b.sortIndex) || 0);
-        if (sortA !== sortB) return sortA - sortB;
-        return String(a.rosterKey || "").localeCompare(String(b.rosterKey || ""));
-      });
-    if (roleEntries.length === 0) continue;
-
-    const columns = getBarracksSpawnColumns(role, roleEntries.length);
-    const startCol = Math.max(0, Math.floor((GRID_W - columns) / 2));
-
-    for (let i = 0; i < roleEntries.length; i++) {
-      const rowOffset = Math.floor(i / columns);
-      const columnOffset = i % columns;
-      const spawnIndex = ((nextRoleRow + rowOffset) * GRID_W) + startCol + columnOffset;
-      const entry = roleEntries[i];
-      const combatRole = normalizeCombatRole(entry.combatRole || entry.role) || resolveUnitCombatRole(entry);
-      _spawnWaveUnit(game, lane, {
-        unit_type: entry.unitType,
-        spawn_qty: 1,
-        hp_mult: 1,
-        dmg_mult: 1,
-        speed_mult: 1,
-        sourceLaneIndex: entry.sourceLaneIndex,
-        sourceTeam: entry.sourceTeam,
-        sourceBarracksId: entry.barracksId,
-        rosterKey: entry.rosterKey || null,
-        role: entry.role || null,
-        combatRole,
-        skinKey: entry.skinKey || null,
-        spawnIndex,
-      }, safeOptions || undefined);
-    }
-
-    nextRoleRow += Math.ceil(roleEntries.length / columns);
-  }
+  return barracksSystem.spawnBarracksRosterLayout(game, lane, pendingEntries, options, BARRACKS_SYSTEM_DEPS);
 }
 
 // ── Tower stat helpers ─────────────────────────────────────────────────────────
 
 function seedStartingCombatTestMilitia(game, lane, count) {
-  const safeCount = Math.max(0, Math.floor(Number(count) || 0));
-  if (!game || !lane || safeCount <= 0)
-    return 0;
-
-  const rosterDef = getBarracksRosterDefinition(STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY);
-  if (!rosterDef)
-    return 0;
-
-  const presentation = resolveFortPresentationConfig(
-    rosterDef.archetypeKey,
-    rosterDef.presentationKey,
-    rosterDef.displayName,
-  );
-  const pendingEntries = [];
-  for (let i = 0; i < safeCount; i += 1) {
-    pendingEntries.push({
-      unitType: rosterDef.archetypeKey || presentation.catalogUnitKey,
-      count: 1,
-      source: SPAWN_SOURCE_TYPES.BARRACKS_ROSTER,
-      barracksId: STARTING_COMBAT_TEST_BARRACKS_ID,
-      rosterKey: rosterDef.rosterKey,
-      archetypeKey: rosterDef.archetypeKey,
-      presentationKey: presentation.presentationKey,
-      role: rosterDef.role,
-      sortIndex: rosterDef.sortIndex || 0,
-      sourceLaneIndex: lane.laneIndex,
-      sourceTeam: lane.team || null,
-      skinKey: presentation.skinKey || null,
-    });
-  }
-
-  spawnBarracksRosterLayout(game, lane, pendingEntries, { allowUnbuiltBarracks: true });
-  return pendingEntries.length;
+  return barracksSystem.seedStartingCombatTestMilitia(game, lane, count, BARRACKS_SYSTEM_DEPS);
 }
 
 function getTowerUpgradeCost(type, nextLevel) {
@@ -3757,58 +3148,11 @@ function applyFortressBuildOnPad(game, lane, padId) {
 }
 
 function applyBarracksSiteBuildAction(game, lane, barracksId) {
-  const descriptor = describeBarracksSite(game, lane, barracksId);
-  if (!descriptor) return { ok: false, reason: "Unknown barracks" };
-  if (!descriptor.canBuild)
-    return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
-  if (lane.gold < descriptor.buildCost)
-    return { ok: false, reason: "Not enough gold" };
-
-  const siteState = descriptor.siteState;
-  const nextLevel = 1;
-  const interval = getBarracksSiteSendIntervalTicks(nextLevel);
-  const maxHp = getBarracksSiteBaseMaxHp();
-
-  lane.gold -= descriptor.buildCost;
-  lane.totalBuildSpend += descriptor.buildCost;
-  lane.buildSpendThisRound += descriptor.buildCost;
-  siteState.isBuilt = true;
-  siteState.level = nextLevel;
-  siteState.maxHp = maxHp;
-  siteState.hp = maxHp;
-  siteState.nextSendTick = Math.floor(Number(game && game.tick) || 0) + interval;
-  if (!Array.isArray(siteState.costHistory)) siteState.costHistory = [];
-  siteState.costHistory.push({ cost: descriptor.buildCost });
-  syncLegacyBarracksAggregate(lane);
-  return { ok: true };
+  return barracksSystem.applyBarracksSiteBuildAction(game, lane, barracksId);
 }
 
 function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
-  const descriptor = describeBarracksSite(game, lane, barracksId);
-  if (!descriptor) return { ok: false, reason: "Unknown barracks" };
-  if (!descriptor.isBuilt) return { ok: false, reason: "Buy Building first" };
-  if (!descriptor.canUpgrade)
-    return { ok: false, reason: descriptor.lockedReason || "Barracks upgrade unavailable" };
-  if (lane.gold < descriptor.upgradeCost)
-    return { ok: false, reason: "Not enough gold" };
-
-  const siteState = descriptor.siteState;
-  const currentTick = Math.floor(Number(game && game.tick) || 0);
-  const currentRemaining = Math.max(0, Math.floor(Number(siteState.nextSendTick) || 0) - currentTick);
-  const nextLevel = normalizeBarracksSiteLevel(descriptor.level + 1);
-  const nextInterval = getBarracksSiteSendIntervalTicks(nextLevel);
-
-  lane.gold -= descriptor.upgradeCost;
-  lane.totalBuildSpend += descriptor.upgradeCost;
-  lane.buildSpendThisRound += descriptor.upgradeCost;
-  siteState.level = nextLevel;
-  siteState.maxHp = Math.max(getBarracksSiteBaseMaxHp(), Math.floor(Number(siteState.maxHp) || 0));
-  siteState.hp = siteState.maxHp;
-  siteState.nextSendTick = currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval));
-  if (!Array.isArray(siteState.costHistory)) siteState.costHistory = [];
-  siteState.costHistory.push({ cost: descriptor.upgradeCost });
-  syncLegacyBarracksAggregate(lane);
-  return { ok: true };
+  return barracksSystem.applyBarracksSiteUpgradeAction(game, lane, barracksId);
 }
 
 function applyFortressUpgrade(game, lane, padId) {
@@ -3816,71 +3160,7 @@ function applyFortressUpgrade(game, lane, padId) {
 }
 
 function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
-  const heroDef = getHeroRosterDefinition(heroKey);
-  if (!heroDef)
-    return { ok: false, reason: "Unknown hero" };
-
-  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
-  if (!normalizedBarracksId)
-    return { ok: false, reason: "Missing or invalid barracksId" };
-
-  const siteDescriptor = describeBarracksSite(game, lane, normalizedBarracksId);
-  if (!siteDescriptor)
-    return { ok: false, reason: "Unknown barracks" };
-  if (!siteDescriptor.isBuilt)
-    return { ok: false, reason: siteDescriptor.lockedReason || "Buy Building first" };
-
-  if (!isHeroUnlockedForLane(lane, heroDef))
-    return { ok: false, reason: getHeroRosterLockedReason(heroDef) };
-
-  const disabledReason = getHeroDisabledReason(game, lane, heroDef);
-  if (disabledReason)
-    return { ok: false, reason: disabledReason };
-
-  const summonCost = Math.max(0, Math.floor(Number(heroDef.summonCost) || 0));
-  if (lane.gold < summonCost)
-    return { ok: false, reason: "Not enough gold" };
-
-  const targetLaneIdx = resolveTargetLaneForBarracksSend(game, laneIndex, normalizedBarracksId);
-  if (targetLaneIdx === null)
-    return { ok: false, reason: "Lane command target unavailable" };
-
-  const targetLane = game.lanes[targetLaneIdx];
-  if (!targetLane)
-    return { ok: false, reason: "Lane command target unavailable" };
-
-  lane.gold -= summonCost;
-  lane.totalSendSpend += summonCost;
-  lane.sendSpendThisRound += summonCost;
-  lane.totalSendCount += 1;
-  lane.sendCountThisRound += 1;
-  lane.heroCooldownReadyTicks[heroDef.heroKey] = Math.floor(Number(game && game.tick) || 0)
-    + Math.max(0, Math.floor(Number(heroDef.cooldownTicks) || 0));
-  const presentation = resolveFortPresentationConfig(
-    heroDef.archetypeKey,
-    heroDef.presentationKey,
-    heroDef.displayName,
-  );
-
-  _spawnWaveUnit(game, targetLane, {
-    unit_type: heroDef.archetypeKey,
-    hp_mult: 1,
-    dmg_mult: 1,
-    speed_mult: 1,
-    sourceLaneIndex: laneIndex,
-    sourceTeam: lane.team || null,
-    sourceBarracksId: normalizedBarracksId,
-    archetypeKey: heroDef.archetypeKey,
-    presentationKey: presentation.presentationKey,
-    skinKey: presentation.skinKey || null,
-    isHero: true,
-    heroKey: heroDef.heroKey,
-    heroVisualStyleKey: heroDef.heroVisualStyleKey || null,
-    role: heroDef.role || null,
-    combatRole: normalizeCombatRole(heroDef.spawnRole || heroDef.role) || UNIT_COMBAT_ROLES.SWORD,
-  });
-
-  return { ok: true };
+  return barracksSystem.deployBarracksHero(game, laneIndex, lane, heroKey, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function resolveRequestedLaneAnchorProgress(game, lane, data, fallbackProgress) {
@@ -4004,61 +3284,27 @@ function applyMLAction(game, laneIndex, action) {
     const requestedBarracksId = String((data && data.barracksId) || "").trim();
     const requestedCount = Math.max(1, Math.floor(Number((data && data.count) || 1) || 1));
     const count = Math.min(25, requestedCount);
-    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
-    console.log(
-      `[BarracksTrace][ServerBuy] action='buy_barracks_unit' lane=${laneIndex} ` +
-      `requestedBarracksId='${requestedBarracksId}' resolvedBarracksId='${barracksId}' rosterKey='${rosterKey}' count=${count}`);
-    const rosterDef = getBarracksRosterDefinition(rosterKey);
-    if (!rosterDef) return { ok: false, reason: "Unknown barracks unit" };
-    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
-
-    const siteSnapshot = createBarracksSiteSnapshot(game, lane, barracksId);
-    if (!siteSnapshot) return { ok: false, reason: "Unknown barracks" };
-    if (!siteSnapshot.isBuilt) return { ok: false, reason: siteSnapshot.lockedReason || "Buy Building first" };
-
-    const rosterEntry = Array.isArray(siteSnapshot.roster)
-      ? siteSnapshot.roster.find((entry) => entry.rosterKey === rosterKey)
-      : null;
-    if (!rosterEntry) return { ok: false, reason: "Unknown barracks unit" };
-    if (!rosterEntry.unlocked) return { ok: false, reason: rosterEntry.lockedReason || "Unit is locked" };
-    const totalCost = Math.max(0, rosterEntry.buyCost * count);
-    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold" };
-
-    lane.gold -= totalCost;
-    lane.totalBuildSpend += totalCost;
-    lane.buildSpendThisRound += totalCost;
-    const siteCounts = getBarracksSiteCounts(lane, barracksId);
-    if (!siteCounts) return { ok: false, reason: "Missing or invalid barracksId" };
-    siteCounts[rosterKey] = Math.max(0, Math.floor(Number(siteCounts[rosterKey]) || 0) + count);
-    console.log(
-      `[BarracksTrace][ServerBuy] lane=${laneIndex} barracksId='${barracksId}' rosterKey='${rosterKey}' ` +
-      `ownedCount=${siteCounts[rosterKey]} totalCost=${totalCost}`);
-    logBarracksRosterState(lane, `after_buy:${barracksId}:${rosterKey}`);
-    return { ok: true };
+    return barracksSystem.buyBarracksUnit(
+      game,
+      laneIndex,
+      lane,
+      rosterKey,
+      requestedBarracksId,
+      count,
+      BARRACKS_SYSTEM_DEPS
+    );
   }
 
   if (type === "sell_barracks_unit") {
     const rosterKey = String((data && data.rosterKey) || "").trim();
     const requestedBarracksId = String((data && data.barracksId) || "").trim();
-    const barracksId = normalizeBarracksSiteId(requestedBarracksId);
-    console.log(
-      `[BarracksTrace][ServerBuy] action='sell_barracks_unit' lane=${laneIndex} ` +
-      `requestedBarracksId='${requestedBarracksId}' resolvedBarracksId='${barracksId}' rosterKey='${rosterKey}'`);
-    const rosterDef = getBarracksRosterDefinition(rosterKey);
-    if (!rosterDef) return { ok: false, reason: "Unknown barracks unit" };
-    if (!barracksId) return { ok: false, reason: "Missing or invalid barracksId" };
-    const siteCounts = getBarracksSiteCounts(lane, barracksId);
-    if (!siteCounts) return { ok: false, reason: "Missing or invalid barracksId" };
-    const currentOwned = Math.max(0, Math.floor(Number(siteCounts[rosterKey]) || 0));
-    if (currentOwned <= 0) return { ok: false, reason: "No owned units to sell" };
-
-    siteCounts[rosterKey] = currentOwned - 1;
-    lane.gold += getBarracksRosterSellRefund(rosterDef);
-    console.log(
-      `[BarracksTrace][ServerBuy] lane=${laneIndex} barracksId='${barracksId}' rosterKey='${rosterKey}' ` +
-      `ownedCount=${siteCounts[rosterKey]}`);
-    logBarracksRosterState(lane, `after_sell:${barracksId}:${rosterKey}`);
-    return { ok: true };
+    return barracksSystem.sellBarracksUnit(
+      laneIndex,
+      lane,
+      rosterKey,
+      requestedBarracksId,
+      BARRACKS_SYSTEM_DEPS
+    );
   }
 
   if (type === "deploy_barracks_hero") {
