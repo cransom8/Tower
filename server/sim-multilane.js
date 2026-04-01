@@ -17,13 +17,10 @@
  */
 
 const {
-  computeDamage: coreComputeDamage,
   fireProjectile,
   resolveProjectile,
   resolveAbilityHook,
-  applyAuras,
   resolveStatuses,
-  applySeparation,
   mulberry32,
 } = require("./sim-core");
 const gameConfig = require("./gameConfig");
@@ -48,18 +45,13 @@ const spawnSystem = require("./game/multilane/spawnSystem");
 const waveSystem = require("./game/multilane/waveSystem");
 const combatSystem = require("./game/multilane/combatSystem");
 const tickSystem = require("./game/multilane/tickSystem");
-const routeGraph = require("./game/multilane/routeGraph");
-const {
-  getCurrentBarracksMult,
-  getBarracksUpgradeDef,
-} = require("./barracksLevels");
+const { getBarracksUpgradeDef } = require("./barracksLevels");
 const {
   createMLSnapshot: buildMLSnapshot,
   createMLPublicConfig: buildMLPublicConfig,
 } = require("./sim-multilane-serialization");
 const {
   FRONT_GATE_COMBAT_OFFSET,
-  FORTRESS_BUILD_STATES,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,
 } = fortressSystem;
@@ -69,9 +61,6 @@ const {
   BARRACKS_COST_BASE,
   BARRACKS_REQ_INCOME_BASE,
   BARRACKS_ROSTER_REFUND_PCT,
-  STARTING_COMBAT_TEST_BARRACKS_ID,
-  STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY,
-  BARRACKS_SPAWN_ROLE_ORDER,
   BARRACKS_SITE_DEFS,
   BARRACKS_ROSTER_DEFS,
   HERO_ROSTER_DEFS,
@@ -79,11 +68,8 @@ const {
 } = barracksSystem;
 const {
   ROUTE_TYPES,
-  LANE_NODE_IDS,
-  RouteMineNode,
-  ROUTE_GRAPH_NODE_POSITIONS,
   ROUTE_SEGMENT_POLYLINES,
-} = routeGraph;
+} = require("./game/multilane/routeGraph");
 
 const TICK_HZ = 20;
 const TICK_MS = Math.floor(1000 / TICK_HZ);
@@ -317,50 +303,41 @@ const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   set_autosend: "CMD autosend was removed. Units must come from Barracks.",
 });
 
+function bindSystemMethod(system, methodName) {
+  return (...args) => system[methodName](...args);
+}
+
+function bindSystemMethodWithDeps(system, methodName, getDeps) {
+  return (...args) => system[methodName](...args, getDeps());
+}
+
 // Shared route runtime now lives in server/game/multilane/routeRuntimeSystem.js.
-function normalize2D(vec) {
-  return routeRuntimeSystem.normalize2D(vec);
-}
-
-function perpendicular2D(vec) {
-  return routeRuntimeSystem.perpendicular2D(vec);
-}
-
-function getLaneNodeId(laneIndex) {
-  return routeRuntimeSystem.getLaneNodeId(laneIndex);
-}
-
-function getWaveSpawnNodeId(laneIndex) {
-  return routeRuntimeSystem.getWaveSpawnNodeId(laneIndex);
-}
-
-function getLaneCombatAxes(laneIndex) {
-  return routeRuntimeSystem.getLaneCombatAxes(laneIndex);
-}
-
-function getBarracksRouteStartNodeId(laneIndex, barracksId) {
-  return routeRuntimeSystem.getBarracksRouteStartNodeId(laneIndex, barracksId);
-}
-
-function getLaneCoreNodeIdForRouteNode(nodeId) {
-  return routeRuntimeSystem.getLaneCoreNodeIdForRouteNode(nodeId);
-}
-
-function isBarracksRouteStartNode(nodeId) {
-  return routeRuntimeSystem.isBarracksRouteStartNode(nodeId);
-}
-
-function getWaveSpawnWorldPosition(laneIndex) {
-  return routeRuntimeSystem.getWaveSpawnWorldPosition(laneIndex);
-}
-
-function getPadWorldPosition(laneIndex, gridX, gridY) {
-  return routeRuntimeSystem.getPadWorldPosition(laneIndex, gridX, gridY);
-}
-
-function getBarracksSiteWorldPosition(laneIndex, barracksId) {
-  return routeRuntimeSystem.getBarracksSiteWorldPosition(laneIndex, barracksId);
-}
+const normalize2D = bindSystemMethod(routeRuntimeSystem, "normalize2D");
+const perpendicular2D = bindSystemMethod(routeRuntimeSystem, "perpendicular2D");
+const getLaneNodeId = bindSystemMethod(routeRuntimeSystem, "getLaneNodeId");
+const getWaveSpawnNodeId = bindSystemMethod(routeRuntimeSystem, "getWaveSpawnNodeId");
+const getLaneCombatAxes = bindSystemMethod(routeRuntimeSystem, "getLaneCombatAxes");
+const getBarracksRouteStartNodeId = bindSystemMethod(
+  routeRuntimeSystem,
+  "getBarracksRouteStartNodeId"
+);
+const getLaneCoreNodeIdForRouteNode = bindSystemMethod(
+  routeRuntimeSystem,
+  "getLaneCoreNodeIdForRouteNode"
+);
+const isBarracksRouteStartNode = bindSystemMethod(
+  routeRuntimeSystem,
+  "isBarracksRouteStartNode"
+);
+const getWaveSpawnWorldPosition = bindSystemMethod(
+  routeRuntimeSystem,
+  "getWaveSpawnWorldPosition"
+);
+const getPadWorldPosition = bindSystemMethod(routeRuntimeSystem, "getPadWorldPosition");
+const getBarracksSiteWorldPosition = bindSystemMethod(
+  routeRuntimeSystem,
+  "getBarracksSiteWorldPosition"
+);
 
 function resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex) {
   return laneCommandSystem.resolveOuterLoopTargetLaneIndex
@@ -374,13 +351,16 @@ function resolveCenterCrossTargetLaneIndex(game, sourceLaneIndex) {
     : resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex);
 }
 
-function normalizeLaneCommandState(value) {
-  return laneCommandSystem.normalizeLaneCommandState(value, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function isLaneCombatEnabledCommandState(commandState) {
-  return laneCommandSystem.isLaneCombatEnabledCommandState(commandState, LANE_COMMAND_SYSTEM_DEPS);
-}
+const normalizeLaneCommandState = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "normalizeLaneCommandState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const isLaneCombatEnabledCommandState = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "isLaneCombatEnabledCommandState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
 
 function getDefaultLaneObjectiveLaneIndex(game, sourceLaneIndex) {
   return laneCommandSystem.getDefaultLaneObjectiveLaneIndex
@@ -388,242 +368,254 @@ function getDefaultLaneObjectiveLaneIndex(game, sourceLaneIndex) {
     : sourceLaneIndex;
 }
 
-function getLaneCommandState(lane) {
-  return laneCommandSystem.getLaneCommandState(lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandObjectiveLaneIndex(game, laneOrLaneIndex) {
-  return laneCommandSystem.getLaneCommandObjectiveLaneIndex(game, laneOrLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandRouteObjectiveLaneIndex(game, laneOrLaneIndex) {
-  return laneCommandSystem.getLaneCommandRouteObjectiveLaneIndex(game, laneOrLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandEngagementRadius(lane) {
-  return laneCommandSystem.getLaneCommandEngagementRadius(lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandAnchorProgress(lane) {
-  return laneCommandSystem.getLaneCommandAnchorProgress(lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLaneCommandContainerLaneIndex(game, lane) {
-  return laneCommandSystem.resolveLaneCommandContainerLaneIndex(game, lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveRouteNodeLaneIndex(nodeId) {
-  return laneCommandSystem.resolveRouteNodeLaneIndex(nodeId, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLaneControlledUnitCurrentSegmentLaneIndex(unit) {
-  return laneCommandSystem.resolveLaneControlledUnitCurrentSegmentLaneIndex(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit) {
-  return laneCommandSystem.resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildLaneCommandCoreRouteSegments(sourceLaneIndex, objectiveLaneIndex) {
-  return laneCommandSystem.buildLaneCommandCoreRouteSegments(sourceLaneIndex, objectiveLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksId, objectiveLaneIndex) {
-  return laneCommandSystem.buildLaneCommandRouteSegments(sourceLaneIndex, sourceBarracksId, objectiveLaneIndex, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildLaneCommandAnchorSet(game, lane) {
-  return laneCommandSystem.buildLaneCommandAnchorSet(game, lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function sampleLaneCommandAnchor(game, lane) {
-  return laneCommandSystem.sampleLaneCommandAnchor(game, lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function normalizeLegacyDefenderUnit(game, fallbackLane, unit) {
-  return laneCommandSystem.normalizeLegacyDefenderUnit(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function normalizeLegacyDefenderUnits(game) {
-  return laneCommandSystem.normalizeLegacyDefenderUnits(game, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function isLaneControlledUnit(unit) {
-  return laneCommandSystem.isLaneControlledUnit(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandOwnerLane(game, unit) {
-  return laneCommandSystem.getLaneCommandOwnerLane(game, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function getLaneCommandStateForUnit(game, unit) {
-  return laneCommandSystem.getLaneCommandStateForUnit(game, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function isLaneCommandCombatEnabledForUnit(game, unit) {
-  return laneCommandSystem.isLaneCommandCombatEnabledForUnit(game, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId) {
-  return laneCommandSystem.resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
-  return routeRuntimeSystem.buildRouteSegments(routeType, sourceNodeId, targetNodeId);
-}
-
-function parseRouteSegmentId(segmentId) {
-  return routeRuntimeSystem.parseRouteSegmentId(segmentId);
-}
-
-function getRouteLength(routeSegments) {
-  return routeRuntimeSystem.getRouteLength(routeSegments);
-}
-
-function sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset = 0) {
-  return routeRuntimeSystem.sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset);
-}
-
-function advanceRouteState(unit, deltaDistance) {
-  return routeRuntimeSystem.advanceRouteState(unit, deltaDistance);
-}
-
-function relaxUnitRouteOffsets(unit, speed) {
-  return routeRuntimeSystem.relaxUnitRouteOffsets(unit, speed, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function setUnitRouteSnapshotState(unit) {
-  return routeRuntimeSystem.setUnitRouteSnapshotState(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function computeUnitRoutePathIndex(unit) {
-  return routeRuntimeSystem.computeUnitRoutePathIndex(unit);
-}
-
-function sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset = 0, lateralOffset = 0) {
-  return routeRuntimeSystem.sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset, lateralOffset);
-}
-
-function resolveSpawnOriginForUnit(unit, targetLane) {
-  return routeRuntimeSystem.resolveSpawnOriginForUnit(unit, targetLane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveRouteContractForUnit(game, targetLane, unit) {
-  return routeRuntimeSystem.resolveRouteContractForUnit(game, targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveRedirectRouteContractForExistingLaneControlledUnit(game, currentLane, targetLane, unit) {
-  return routeRuntimeSystem.resolveRedirectRouteContractForExistingLaneControlledUnit(
-    game,
-    currentLane,
-    targetLane,
-    unit,
-    LANE_COMMAND_SYSTEM_DEPS
-  );
-}
-
-function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos) {
-  return routeRuntimeSystem.initializeMovingUnitRouteState(
-    game,
-    targetLane,
-    unit,
-    spawnLogicalPos,
-    LANE_COMMAND_SYSTEM_DEPS
-  );
-}
-
-function applyRouteContractToExistingUnit(unit, routeContract, currentPosition = null) {
-  return routeRuntimeSystem.applyRouteContractToExistingUnit(
-    unit,
-    routeContract,
-    currentPosition,
-    LANE_COMMAND_SYSTEM_DEPS
-  );
-}
-
-function getUnitForwardDirection(unit) {
-  return routeRuntimeSystem.getUnitForwardDirection(unit);
-}
-
-function buildSampledPathFromSegments(routeSegments, sampleCount = 28) {
-  return routeRuntimeSystem.buildSampledPathFromSegments(routeSegments, sampleCount);
-}
-
-function sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset = 0) {
-  return routeRuntimeSystem.sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset);
-}
-
-function projectPointOntoPolyline(points, targetPoint) {
-  return routeRuntimeSystem.projectPointOntoPolyline(points, targetPoint);
-}
-
-function projectPointOntoRouteSegments(routeSegments, targetPoint) {
-  return routeRuntimeSystem.projectPointOntoRouteSegments(routeSegments, targetPoint);
-}
-
-function syncUnitRouteStateToWorldPosition(unit, worldPosition = null) {
-  return routeRuntimeSystem.syncUnitRouteStateToWorldPosition(unit, worldPosition, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function syncMovedUnitPathState(unit) {
-  return routeRuntimeSystem.syncMovedUnitPathState(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLaneAnchorColumns(unitCount) {
-  return laneCommandSystem.resolveLaneAnchorColumns(unitCount, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveCenteredSlotOffset(columnIndex, columns) {
-  return laneCommandSystem.resolveCenteredSlotOffset(columnIndex, columns, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLaneControlledUnitSortKey(unit) {
-  return laneCommandSystem.resolveLaneControlledUnitSortKey(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function normalizeCombatRole(value) {
-  return laneCommandSystem.normalizeCombatRole(value, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitCombatRole(unit) {
-  return laneCommandSystem.resolveUnitCombatRole(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveAnchorHoldDepthBias(combatRole) {
-  return laneCommandSystem.resolveAnchorHoldDepthBias(combatRole, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildLaneAnchorSlot(anchorState, unit, slotIndex, unitCount) {
-  return laneCommandSystem.buildLaneAnchorSlot(anchorState, unit, slotIndex, unitCount, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function computeLaneAnchorHoldRadius(anchorState, anchorSlots) {
-  return laneCommandSystem.computeLaneAnchorHoldRadius(anchorState, anchorSlots, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitAnchorLeashRadius(unit, anchorHoldRadius) {
-  return laneCommandSystem.resolveUnitAnchorLeashRadius(unit, anchorHoldRadius, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildAnchorWaypointTarget(anchorState) {
-  return laneCommandSystem.buildAnchorWaypointTarget(anchorState, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function shouldKeepUnitAfterLaneDefeat(lane, unit) {
-  return laneCommandSystem.shouldKeepUnitAfterLaneDefeat(lane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function laneHasOccupyingForces(lane) {
-  return laneCommandSystem.laneHasOccupyingForces(lane, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function requeueLaneControlledUnit(targetLane, unit) {
-  return laneCommandSystem.requeueLaneControlledUnit(targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function syncLaneCommandAssignments(game) {
-  return laneCommandSystem.syncLaneCommandAssignments(game, LANE_COMMAND_SYSTEM_DEPS);
-}
+const getLaneCommandState = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandObjectiveLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandObjectiveLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandRouteObjectiveLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandRouteObjectiveLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandEngagementRadius = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandEngagementRadius",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandAnchorProgress = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandAnchorProgress",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneCommandContainerLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneCommandContainerLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveRouteNodeLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveRouteNodeLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneControlledUnitCurrentSegmentLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneControlledUnitCurrentSegmentLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneControlledUnitContainerLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneControlledUnitContainerLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildLaneCommandCoreRouteSegments = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "buildLaneCommandCoreRouteSegments",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildLaneCommandRouteSegments = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "buildLaneCommandRouteSegments",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildLaneCommandAnchorSet = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "buildLaneCommandAnchorSet",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const sampleLaneCommandAnchor = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "sampleLaneCommandAnchor",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const normalizeLegacyDefenderUnit = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "normalizeLegacyDefenderUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const normalizeLegacyDefenderUnits = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "normalizeLegacyDefenderUnits",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const isLaneControlledUnit = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "isLaneControlledUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandOwnerLane = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandOwnerLane",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getLaneCommandStateForUnit = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "getLaneCommandStateForUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const isLaneCommandCombatEnabledForUnit = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "isLaneCommandCombatEnabledForUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveTargetLaneForBarracksSend = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveTargetLaneForBarracksSend",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildRouteSegments = bindSystemMethod(routeRuntimeSystem, "buildRouteSegments");
+const parseRouteSegmentId = bindSystemMethod(routeRuntimeSystem, "parseRouteSegmentId");
+const getRouteLength = bindSystemMethod(routeRuntimeSystem, "getRouteLength");
+const sampleRoutePosition = bindSystemMethod(routeRuntimeSystem, "sampleRoutePosition");
+const advanceRouteState = bindSystemMethod(routeRuntimeSystem, "advanceRouteState");
+const relaxUnitRouteOffsets = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "relaxUnitRouteOffsets",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const setUnitRouteSnapshotState = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "setUnitRouteSnapshotState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const computeUnitRoutePathIndex = bindSystemMethod(
+  routeRuntimeSystem,
+  "computeUnitRoutePathIndex"
+);
+const sampleContinuousRoutePosition = bindSystemMethod(
+  routeRuntimeSystem,
+  "sampleContinuousRoutePosition"
+);
+const resolveSpawnOriginForUnit = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "resolveSpawnOriginForUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveRouteContractForUnit = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "resolveRouteContractForUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveRedirectRouteContractForExistingLaneControlledUnit = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "resolveRedirectRouteContractForExistingLaneControlledUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const initializeMovingUnitRouteState = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "initializeMovingUnitRouteState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const applyRouteContractToExistingUnit = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "applyRouteContractToExistingUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const getUnitForwardDirection = bindSystemMethod(
+  routeRuntimeSystem,
+  "getUnitForwardDirection"
+);
+const buildSampledPathFromSegments = bindSystemMethod(
+  routeRuntimeSystem,
+  "buildSampledPathFromSegments"
+);
+const sampleRouteByDistanceNorm = bindSystemMethod(
+  routeRuntimeSystem,
+  "sampleRouteByDistanceNorm"
+);
+const projectPointOntoPolyline = bindSystemMethod(
+  routeRuntimeSystem,
+  "projectPointOntoPolyline"
+);
+const projectPointOntoRouteSegments = bindSystemMethod(
+  routeRuntimeSystem,
+  "projectPointOntoRouteSegments"
+);
+const syncUnitRouteStateToWorldPosition = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "syncUnitRouteStateToWorldPosition",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const syncMovedUnitPathState = bindSystemMethodWithDeps(
+  routeRuntimeSystem,
+  "syncMovedUnitPathState",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneAnchorColumns = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneAnchorColumns",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveCenteredSlotOffset = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveCenteredSlotOffset",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneControlledUnitSortKey = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneControlledUnitSortKey",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const normalizeCombatRole = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "normalizeCombatRole",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitCombatRole = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitCombatRole",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveAnchorHoldDepthBias = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveAnchorHoldDepthBias",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildLaneAnchorSlot = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "buildLaneAnchorSlot",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const computeLaneAnchorHoldRadius = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "computeLaneAnchorHoldRadius",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitAnchorLeashRadius = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitAnchorLeashRadius",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildAnchorWaypointTarget = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "buildAnchorWaypointTarget",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const shouldKeepUnitAfterLaneDefeat = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "shouldKeepUnitAfterLaneDefeat",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const laneHasOccupyingForces = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "laneHasOccupyingForces",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const requeueLaneControlledUnit = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "requeueLaneControlledUnit",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const syncLaneCommandAssignments = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "syncLaneCommandAssignments",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
 
 // Unit and tower definitions are DB-driven via unitTypes.js.
 // These empty objects are kept for backward-compat exports only.
@@ -652,9 +644,11 @@ function resolveGameplayCatalogUnitKey(unitKey, presentationKey = DEFAULT_FORT_P
  * _executeAbility. Converts named params (e.g. slow_pct, dps) to
  * internal names (speedMult, dmgPerTick).
  */
-function translateAbilityParams(abilityKey, rawParams) {
-  return catalogSystem.translateAbilityParams(abilityKey, rawParams, CATALOG_SYSTEM_DEPS);
-}
+const translateAbilityParams = bindSystemMethodWithDeps(
+  catalogSystem,
+  "translateAbilityParams",
+  () => CATALOG_SYSTEM_DEPS
+);
 
 /**
  * Build the abilities array for a unit/tower type from the DB-loaded unitType.
@@ -662,9 +656,11 @@ function translateAbilityParams(abilityKey, rawParams) {
  * @param {string} unitTypeKey
  * @returns {object[]} abilities in sim-core format
  */
-function buildAbilitiesForUnitType(unitTypeKey) {
-  return catalogSystem.buildAbilitiesForUnitType(unitTypeKey, CATALOG_SYSTEM_DEPS);
-}
+const buildAbilitiesForUnitType = bindSystemMethodWithDeps(
+  catalogSystem,
+  "buildAbilitiesForUnitType",
+  () => CATALOG_SYSTEM_DEPS
+);
 
 // ── DB-first unit/tower resolution ────────────────────────────────────────────
 
@@ -672,35 +668,35 @@ function buildAbilitiesForUnitType(unitTypeKey) {
  * Resolve a unit definition from the DB (authoritative).
  * Returns null if the unit type is unknown or fixed-only.
  */
-function resolveUnitDef(key) {
-  return catalogSystem.resolveUnitDef(key, CATALOG_SYSTEM_DEPS);
-}
-
-function resolveUnitSupportProfile(unit) {
-  return catalogSystem.resolveUnitSupportProfile(unit, CATALOG_SYSTEM_DEPS);
-}
+const resolveUnitDef = bindSystemMethodWithDeps(
+  catalogSystem,
+  "resolveUnitDef",
+  () => CATALOG_SYSTEM_DEPS
+);
+const resolveUnitSupportProfile = bindSystemMethodWithDeps(
+  catalogSystem,
+  "resolveUnitSupportProfile",
+  () => CATALOG_SYSTEM_DEPS
+);
 
 /**
  * Resolve a tower definition from the DB (authoritative).
  * DB range is stored normalised to [0,1] × GRID_W.
  */
-function resolveTowerDef(key) {
-  return catalogSystem.resolveTowerDef(key, CATALOG_SYSTEM_DEPS);
-}
+const resolveTowerDef = bindSystemMethodWithDeps(
+  catalogSystem,
+  "resolveTowerDef",
+  () => CATALOG_SYSTEM_DEPS
+);
 
 // ── Barracks helpers ───────────────────────────────────────────────────────────
 
-function getBarracksLevelDef(level) {
-  return barracksSystem.getBarracksLevelDef(level);
-}
-
-function getBarracksSpeedMultForLevel(level) {
-  return barracksSystem.getBarracksSpeedMultForLevel(level);
-}
-
-function getBarracksSpeedMult(_br) {
-  return barracksSystem.getBarracksSpeedMult(_br);
-}
+const getBarracksLevelDef = bindSystemMethod(barracksSystem, "getBarracksLevelDef");
+const getBarracksSpeedMultForLevel = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSpeedMultForLevel"
+);
+const getBarracksSpeedMult = bindSystemMethod(barracksSystem, "getBarracksSpeedMult");
 
 function getBaseCombatPathSpeed(_unitTypeKey) {
   return BASE_COMBAT_PATH_SPEED;
@@ -773,81 +769,92 @@ function getSourceLane(game, sourceLaneIndex) {
   return game.lanes[sourceLaneIndex] || null;
 }
 
-function resolveSpawnSourceTypeFromWaveDef(waveDef) {
-  return spawnSystem.resolveSpawnSourceTypeFromWaveDef(waveDef, SPAWN_SYSTEM_DEPS);
-}
-
-function resolveSpawnSourceTypeFromUnit(unit) {
-  return spawnSystem.resolveSpawnSourceTypeFromUnit(unit, SPAWN_SYSTEM_DEPS);
-}
-
-function isScheduledWaveUnit(unit) {
-  return spawnSystem.isScheduledWaveUnit(unit, SPAWN_SYSTEM_DEPS);
-}
-
-function resolveUnitSourceBarracksId(unit) {
-  return laneCommandSystem.resolveUnitSourceBarracksId(unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitTargetLaneIndex(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitTargetLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitObjectiveLaneIndex(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitObjectiveLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitOwnerLaneIndex(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitOwnerLaneIndex(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitStance(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitStance(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function mapRouteTypeToPathContractType(routeType, barracksId) {
-  return laneCommandSystem.mapRouteTypeToPathContractType(routeType, barracksId, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitPathContractType(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitPathContractType(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveUnitAllegianceKey(game, fallbackLane, unit) {
-  return laneCommandSystem.resolveUnitAllegianceKey(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function resolveLegacySourceTeamFromAllegianceKey(allegianceKey) {
-  return laneCommandSystem.resolveLegacySourceTeamFromAllegianceKey(allegianceKey, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
-  return laneCommandSystem.applyCanonicalUnitMirrors(game, fallbackLane, unit, LANE_COMMAND_SYSTEM_DEPS);
-}
-
-function buildRoutePathId(routeSegments) {
-  return routeRuntimeSystem.buildRoutePathId(routeSegments);
-}
-
-function resolveUnitNextWaypoint(unit) {
-  return routeRuntimeSystem.resolveUnitNextWaypoint(unit);
-}
-
-function dot2D(a, b) {
-  return routeRuntimeSystem.dot2D(a, b);
-}
-
-function resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex) {
-  return spawnSystem.resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex, SPAWN_SYSTEM_DEPS);
-}
-
-function validateSpawnDefinition(game, targetLane, waveDef, options = {}) {
-  return spawnSystem.validateSpawnDefinition(game, targetLane, waveDef, options, SPAWN_SYSTEM_DEPS);
-}
-
-function getEffectiveWaveEntrySpeedMult(game, lane, waveDef) {
-  return spawnSystem.getEffectiveWaveEntrySpeedMult(game, lane, waveDef, SPAWN_SYSTEM_DEPS);
-}
+const resolveSpawnSourceTypeFromWaveDef = bindSystemMethodWithDeps(
+  spawnSystem,
+  "resolveSpawnSourceTypeFromWaveDef",
+  () => SPAWN_SYSTEM_DEPS
+);
+const resolveSpawnSourceTypeFromUnit = bindSystemMethodWithDeps(
+  spawnSystem,
+  "resolveSpawnSourceTypeFromUnit",
+  () => SPAWN_SYSTEM_DEPS
+);
+const isScheduledWaveUnit = bindSystemMethodWithDeps(
+  spawnSystem,
+  "isScheduledWaveUnit",
+  () => SPAWN_SYSTEM_DEPS
+);
+const resolveUnitSourceBarracksId = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitSourceBarracksId",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitTargetLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitTargetLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitObjectiveLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitObjectiveLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitOwnerLaneIndex = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitOwnerLaneIndex",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitStance = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitStance",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const mapRouteTypeToPathContractType = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "mapRouteTypeToPathContractType",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitPathContractType = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitPathContractType",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveUnitAllegianceKey = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveUnitAllegianceKey",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLegacySourceTeamFromAllegianceKey = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLegacySourceTeamFromAllegianceKey",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const applyCanonicalUnitMirrors = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "applyCanonicalUnitMirrors",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const buildRoutePathId = bindSystemMethod(routeRuntimeSystem, "buildRoutePathId");
+const resolveUnitNextWaypoint = bindSystemMethod(
+  routeRuntimeSystem,
+  "resolveUnitNextWaypoint"
+);
+const dot2D = bindSystemMethod(routeRuntimeSystem, "dot2D");
+const resolveSpawnLogicalPosition = bindSystemMethodWithDeps(
+  spawnSystem,
+  "resolveSpawnLogicalPosition",
+  () => SPAWN_SYSTEM_DEPS
+);
+const validateSpawnDefinition = bindSystemMethodWithDeps(
+  spawnSystem,
+  "validateSpawnDefinition",
+  () => SPAWN_SYSTEM_DEPS
+);
+const getEffectiveWaveEntrySpeedMult = bindSystemMethodWithDeps(
+  spawnSystem,
+  "getEffectiveWaveEntrySpeedMult",
+  () => SPAWN_SYSTEM_DEPS
+);
 
 function getBarracksUnitCostMult(br) {
   if (!br || typeof br !== "object") return 1;
@@ -863,157 +870,137 @@ function getBarracksUnitIncomeMult(br) {
   return 1;
 }
 
-function getFortressMaxTier(buildingType) {
-  return fortressSystem.getFortressMaxTier(buildingType);
-}
-
-function createFortressPadStates(teamHpStart) {
-  return fortressSystem.createFortressPadStates(teamHpStart);
-}
-
-function createBarracksRosterCounts() {
-  return barracksSystem.createBarracksRosterCounts();
-}
-
-function createBarracksSiteRosterCounts() {
-  return barracksSystem.createBarracksSiteRosterCounts();
-}
-
-function getBarracksSiteDef(barracksId) {
-  return barracksSystem.getBarracksSiteDef(barracksId);
-}
-
-function normalizeBarracksSiteId(value) {
-  return barracksSystem.normalizeBarracksSiteId(value);
-}
-
-function summarizeBarracksSiteCounts(siteCounts) {
-  return barracksSystem.summarizeBarracksSiteCounts(siteCounts);
-}
-
-function summarizeBarracksSiteRosterEntries(rosterEntries) {
-  return barracksSystem.summarizeBarracksSiteRosterEntries(rosterEntries);
-}
-
-function logBarracksRosterState(lane, reason) {
-  return barracksSystem.logBarracksRosterState(lane, reason);
-}
-
-function getBarracksSiteCounts(lane, barracksId) {
-  return barracksSystem.getBarracksSiteCounts(lane, barracksId);
-}
-
-function hasOwnedBarracksUnits(lane, barracksId) {
-  return barracksSystem.hasOwnedBarracksUnits(lane, barracksId);
-}
-
-function getBarracksSiteTierRequirement(siteDef) {
-  return barracksSystem.getBarracksSiteTierRequirement(siteDef);
-}
-
-function getBarracksSiteBuildCost(siteDef) {
-  return barracksSystem.getBarracksSiteBuildCost(siteDef);
-}
-
-function getBarracksSiteMaxLevel() {
-  return barracksSystem.getBarracksSiteMaxLevel();
-}
-
-function normalizeBarracksSiteLevel(level) {
-  return barracksSystem.normalizeBarracksSiteLevel(level);
-}
-
-function getBarracksSiteBaseMaxHp() {
-  return barracksSystem.getBarracksSiteBaseMaxHp();
-}
-
-function getBarracksSiteSendIntervalTicks(level) {
-  return barracksSystem.getBarracksSiteSendIntervalTicks(level);
-}
-
-function createBarracksSiteState(siteDef, options = {}) {
-  return barracksSystem.createBarracksSiteState(siteDef, options);
-}
-
-function createBarracksSiteStates(_teamHpStart, legacyBarracksLevel = 1) {
-  return barracksSystem.createBarracksSiteStates(_teamHpStart, legacyBarracksLevel);
-}
-
-function syncLegacyBarracksAggregate(lane) {
-  return barracksSystem.syncLegacyBarracksAggregate(lane);
-}
-
-function ensureBarracksSiteStates(lane, game) {
-  return barracksSystem.ensureBarracksSiteStates(lane, game);
-}
-
-function getBarracksSiteState(lane, barracksId, game) {
-  return barracksSystem.getBarracksSiteState(lane, barracksId, game);
-}
-
-function describeBarracksSite(game, lane, barracksId) {
-  return barracksSystem.describeBarracksSite(game, lane, barracksId);
-}
-
-function getBarracksSiteLockedReason(siteDef) {
-  return barracksSystem.getBarracksSiteLockedReason(siteDef);
-}
-
-function isBarracksSiteAvailable(lane, barracksId) {
-  return barracksSystem.isBarracksSiteAvailable(lane, barracksId);
-}
-
-function getBarracksRosterLockedReason(rosterDef) {
-  return barracksSystem.getBarracksRosterLockedReason(rosterDef);
-}
-
-function getBuiltBarracksSiteTier(lane, barracksId) {
-  return barracksSystem.getBuiltBarracksSiteTier(lane, barracksId);
-}
-
-function getHighestBuiltBarracksSiteTier(lane) {
-  return barracksSystem.getHighestBuiltBarracksSiteTier(lane);
-}
-
-function resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId = null) {
-  return barracksSystem.resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId);
-}
-
-function getHeroRosterDefinition(heroKey) {
-  return barracksSystem.getHeroRosterDefinition(heroKey);
-}
-
-function getHeroRosterLockedReason(heroDef) {
-  return barracksSystem.getHeroRosterLockedReason(heroDef);
-}
-
-function getFortressPadState(lane, padId) {
-  return fortressSystem.getFortressPadState(lane, padId);
-}
-
-function getFortressPadByBuildingType(lane, buildingType) {
-  return fortressSystem.getFortressPadByBuildingType(lane, buildingType);
-}
-
-function getHighestBuiltFortressPadTier(lane, buildingType) {
-  return fortressSystem.getHighestBuiltFortressPadTier(lane, buildingType);
-}
-
-function getTownCoreTier(lane) {
-  return fortressSystem.getTownCoreTier(lane);
-}
-
-function getLaneTownCorePad(lane) {
-  return fortressSystem.getLaneTownCorePad(lane);
-}
-
-function getLaneTownCoreHp(lane) {
-  return fortressSystem.getLaneTownCoreHp(lane);
-}
-
-function getLaneTownCoreMaxHp(lane) {
-  return fortressSystem.getLaneTownCoreMaxHp(lane);
-}
+const getFortressMaxTier = bindSystemMethod(fortressSystem, "getFortressMaxTier");
+const createFortressPadStates = bindSystemMethod(
+  fortressSystem,
+  "createFortressPadStates"
+);
+const createBarracksRosterCounts = bindSystemMethod(
+  barracksSystem,
+  "createBarracksRosterCounts"
+);
+const createBarracksSiteRosterCounts = bindSystemMethod(
+  barracksSystem,
+  "createBarracksSiteRosterCounts"
+);
+const getBarracksSiteDef = bindSystemMethod(barracksSystem, "getBarracksSiteDef");
+const normalizeBarracksSiteId = bindSystemMethod(
+  barracksSystem,
+  "normalizeBarracksSiteId"
+);
+const summarizeBarracksSiteCounts = bindSystemMethod(
+  barracksSystem,
+  "summarizeBarracksSiteCounts"
+);
+const summarizeBarracksSiteRosterEntries = bindSystemMethod(
+  barracksSystem,
+  "summarizeBarracksSiteRosterEntries"
+);
+const logBarracksRosterState = bindSystemMethod(
+  barracksSystem,
+  "logBarracksRosterState"
+);
+const getBarracksSiteCounts = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteCounts"
+);
+const hasOwnedBarracksUnits = bindSystemMethod(
+  barracksSystem,
+  "hasOwnedBarracksUnits"
+);
+const getBarracksSiteTierRequirement = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteTierRequirement"
+);
+const getBarracksSiteBuildCost = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteBuildCost"
+);
+const getBarracksSiteMaxLevel = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteMaxLevel"
+);
+const normalizeBarracksSiteLevel = bindSystemMethod(
+  barracksSystem,
+  "normalizeBarracksSiteLevel"
+);
+const getBarracksSiteBaseMaxHp = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteBaseMaxHp"
+);
+const getBarracksSiteSendIntervalTicks = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteSendIntervalTicks"
+);
+const createBarracksSiteState = bindSystemMethod(
+  barracksSystem,
+  "createBarracksSiteState"
+);
+const createBarracksSiteStates = bindSystemMethod(
+  barracksSystem,
+  "createBarracksSiteStates"
+);
+const syncLegacyBarracksAggregate = bindSystemMethod(
+  barracksSystem,
+  "syncLegacyBarracksAggregate"
+);
+const ensureBarracksSiteStates = bindSystemMethod(
+  barracksSystem,
+  "ensureBarracksSiteStates"
+);
+const getBarracksSiteState = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteState"
+);
+const describeBarracksSite = bindSystemMethod(barracksSystem, "describeBarracksSite");
+const getBarracksSiteLockedReason = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteLockedReason"
+);
+const isBarracksSiteAvailable = bindSystemMethod(
+  barracksSystem,
+  "isBarracksSiteAvailable"
+);
+const getBarracksRosterLockedReason = bindSystemMethod(
+  barracksSystem,
+  "getBarracksRosterLockedReason"
+);
+const getBuiltBarracksSiteTier = bindSystemMethod(
+  barracksSystem,
+  "getBuiltBarracksSiteTier"
+);
+const getHighestBuiltBarracksSiteTier = bindSystemMethod(
+  barracksSystem,
+  "getHighestBuiltBarracksSiteTier"
+);
+const resolveBarracksRosterUnlockContext = bindSystemMethod(
+  barracksSystem,
+  "resolveBarracksRosterUnlockContext"
+);
+const getHeroRosterDefinition = bindSystemMethod(
+  barracksSystem,
+  "getHeroRosterDefinition"
+);
+const getHeroRosterLockedReason = bindSystemMethod(
+  barracksSystem,
+  "getHeroRosterLockedReason"
+);
+const getFortressPadState = bindSystemMethod(fortressSystem, "getFortressPadState");
+const getFortressPadByBuildingType = bindSystemMethod(
+  fortressSystem,
+  "getFortressPadByBuildingType"
+);
+const getHighestBuiltFortressPadTier = bindSystemMethod(
+  fortressSystem,
+  "getHighestBuiltFortressPadTier"
+);
+const getTownCoreTier = bindSystemMethod(fortressSystem, "getTownCoreTier");
+const getLaneTownCorePad = bindSystemMethod(fortressSystem, "getLaneTownCorePad");
+const getLaneTownCoreHp = bindSystemMethod(fortressSystem, "getLaneTownCoreHp");
+const getLaneTownCoreMaxHp = bindSystemMethod(
+  fortressSystem,
+  "getLaneTownCoreMaxHp"
+);
 
 const FORTRESS_SYSTEM_DEPS = Object.freeze({
   getLaneCombatAxes,
@@ -2322,7 +2309,6 @@ function _doAttack(game, lane, attacker, target) {
 }
 
 // ── Wave defense helpers ──────────────────────────────────────────────────────
-
 function resolveWaveForRound(game, roundNumber) {
   return waveSystem.resolveWaveForRound(game, roundNumber, WAVE_SYSTEM_DEPS);
 }
@@ -2383,114 +2369,110 @@ function mlTick(game) {
   return tickSystem.mlTick(game, TICK_SYSTEM_DEPS);
 }
 
-function createMLSnapshot(game) {
-  return buildMLSnapshot(game, {
-    WAVE_TIMER_TICKS,
-    TEAM_HP_START,
-    GRID_W,
-    GRID_H,
-    SPAWN_X,
-    SPAWN_YG,
-    SHARED_SUFFIX_LENGTH,
-    BARRACKS_SITE_DEFS,
-    ensureBarracksSiteStates,
-    getBarracksSiteSendIntervalTicks,
-    normalizeBarracksSiteId,
-    describeBarracksSite,
-    isScheduledWaveUnit,
-    resolveSpawnSourceTypeFromUnit,
-    buildRoutePathId,
-    resolveUnitNextWaypoint,
-    syncLegacyBarracksAggregate,
-    getUnitTilePos,
-    createFortressPadSnapshot,
-    createBarracksSiteSnapshot,
-    createLaneUpcomingWavePreview,
-    createLaneUpcomingWaveQueue,
-    createBarracksRosterSnapshot,
-    createHeroRosterSnapshot,
-    resolveLaneAllegianceKey,
-    resolveUnitAllegianceKey,
-    resolveUnitOwnerLaneIndex,
-    resolveUnitTargetLaneIndex,
-    resolveUnitPathContractType,
-    resolveUnitSourceBarracksId,
-    resolveUnitStance,
-    LANE_COMMAND_STATES,
-    UNIT_MOVEMENT_MODES,
-    LANE_ANCHOR_ARRIVAL_DEAD_ZONE,
-    CONTACT_SLOT_TOLERANCE,
-    resolveWaveCombatTarget,
-    getWaveUnitTargetDistance,
-    getUnitStopDistance,
-    isUnitInCombatContact,
-  });
-}
+const getMovingUnitDefMap = bindSystemMethodWithDeps(
+  catalogSystem,
+  "getMovingUnitDefMap",
+  () => CATALOG_SYSTEM_DEPS
+);
+const getFixedUnitDefMap = bindSystemMethodWithDeps(
+  catalogSystem,
+  "getFixedUnitDefMap",
+  () => CATALOG_SYSTEM_DEPS
+);
 
-function createMLPublicConfig(options) {
-  return buildMLPublicConfig(options, {
-    TICK_HZ,
-    INCOME_INTERVAL_TICKS,
-    GRID_W,
-    GRID_H,
-    TOWER_MAX_LEVEL,
-    TEAM_HP_START,
-    BARRACKS_COST_BASE,
-    BARRACKS_REQ_INCOME_BASE,
-    BARRACKS_ROSTER_REFUND_PCT,
-    BARRACKS_SEND_TIMER_TICKS,
-    WAVE_TIMER_TICKS,
-    ESCALATION_PER_EXTRA_ROUND,
-    BASE_COMBAT_PATH_SPEED,
-    BARRACKS_LEVEL_ONE_SPEED_MULT,
-    SPEED_UPGRADE_STEP,
-    FORTRESS_BUILDING_DEFS,
-    FORTRESS_PAD_DEFS,
-    BARRACKS_SITE_DEFS,
-    BARRACKS_ROSTER_DEFS,
-    HERO_ROSTER_DEFS,
-    MARKET_ROSTER_DEFS,
-    normalizeGameOptions,
-    getMlRuntimeSettings,
-    getAllUnitTypes,
-    getMovingUnitDefMap,
-    getFixedUnitDefMap,
-    getBuildingBranchLabel,
-    getFortressMaxTier,
-    getFortressBuildCost,
-    getBarracksRosterBuyCost,
-    getBarracksRosterSellRefund,
-    getBuildingDisplayName,
-    getBuildingTierDisplayName,
-    getBarracksRosterLockedReason,
-    getHeroRosterLockedReason,
-    getBarracksSiteTierRequirement,
-    getBarracksSiteBuildCost,
-    getBarracksSiteMaxLevel,
-    resolveFortPresentationConfig,
-    ROUTE_SEGMENT_POLYLINES,
-    getLaneNodeId,
-    getWaveSpawnNodeId,
-    getBarracksRouteStartNodeId,
-    getDefaultSlotDefinitions,
-    defaultEnvironmentPlayerCount: FIXED_SLOT_LAYOUT.length,
-    normalizeAllegianceKey,
-  });
-}
+const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
+  WAVE_TIMER_TICKS,
+  TEAM_HP_START,
+  GRID_W,
+  GRID_H,
+  SPAWN_X,
+  SPAWN_YG,
+  SHARED_SUFFIX_LENGTH,
+  BARRACKS_SITE_DEFS,
+  ensureBarracksSiteStates,
+  getBarracksSiteSendIntervalTicks,
+  normalizeBarracksSiteId,
+  describeBarracksSite,
+  isScheduledWaveUnit,
+  resolveSpawnSourceTypeFromUnit,
+  buildRoutePathId,
+  resolveUnitNextWaypoint,
+  syncLegacyBarracksAggregate,
+  getUnitTilePos,
+  createFortressPadSnapshot,
+  createBarracksSiteSnapshot,
+  createLaneUpcomingWavePreview,
+  createLaneUpcomingWaveQueue,
+  createBarracksRosterSnapshot,
+  createHeroRosterSnapshot,
+  resolveLaneAllegianceKey,
+  resolveUnitAllegianceKey,
+  resolveUnitOwnerLaneIndex,
+  resolveUnitTargetLaneIndex,
+  resolveUnitPathContractType,
+  resolveUnitSourceBarracksId,
+  resolveUnitStance,
+  LANE_COMMAND_STATES,
+  UNIT_MOVEMENT_MODES,
+  LANE_ANCHOR_ARRIVAL_DEAD_ZONE,
+  CONTACT_SLOT_TOLERANCE,
+  resolveWaveCombatTarget,
+  getWaveUnitTargetDistance,
+  getUnitStopDistance,
+  isUnitInCombatContact,
+});
 
-/**
- * Returns a key→unitDef map for all sendable (moving/both-mode) units from the DB.
- */
-function getMovingUnitDefMap() {
-  return catalogSystem.getMovingUnitDefMap(CATALOG_SYSTEM_DEPS);
-}
+const PUBLIC_CONFIG_SERIALIZATION_DEPS = Object.freeze({
+  TICK_HZ,
+  INCOME_INTERVAL_TICKS,
+  GRID_W,
+  GRID_H,
+  TOWER_MAX_LEVEL,
+  TEAM_HP_START,
+  BARRACKS_COST_BASE,
+  BARRACKS_REQ_INCOME_BASE,
+  BARRACKS_ROSTER_REFUND_PCT,
+  BARRACKS_SEND_TIMER_TICKS,
+  WAVE_TIMER_TICKS,
+  ESCALATION_PER_EXTRA_ROUND,
+  BASE_COMBAT_PATH_SPEED,
+  BARRACKS_LEVEL_ONE_SPEED_MULT,
+  SPEED_UPGRADE_STEP,
+  FORTRESS_BUILDING_DEFS,
+  FORTRESS_PAD_DEFS,
+  BARRACKS_SITE_DEFS,
+  BARRACKS_ROSTER_DEFS,
+  HERO_ROSTER_DEFS,
+  MARKET_ROSTER_DEFS,
+  normalizeGameOptions,
+  getMlRuntimeSettings,
+  getAllUnitTypes,
+  getMovingUnitDefMap,
+  getFixedUnitDefMap,
+  getBuildingBranchLabel,
+  getFortressMaxTier,
+  getFortressBuildCost,
+  getBarracksRosterBuyCost,
+  getBarracksRosterSellRefund,
+  getBuildingDisplayName,
+  getBuildingTierDisplayName,
+  getBarracksRosterLockedReason,
+  getHeroRosterLockedReason,
+  getBarracksSiteTierRequirement,
+  getBarracksSiteBuildCost,
+  getBarracksSiteMaxLevel,
+  resolveFortPresentationConfig,
+  ROUTE_SEGMENT_POLYLINES,
+  getLaneNodeId,
+  getWaveSpawnNodeId,
+  getBarracksRouteStartNodeId,
+  getDefaultSlotDefinitions,
+  defaultEnvironmentPlayerCount: FIXED_SLOT_LAYOUT.length,
+  normalizeAllegianceKey,
+});
 
-/**
- * Returns a key→towerDef map for all placeable (fixed/both-mode) units from the DB.
- */
-function getFixedUnitDefMap() {
-  return catalogSystem.getFixedUnitDefMap(CATALOG_SYSTEM_DEPS);
-}
+const createMLSnapshot = (game) => buildMLSnapshot(game, SNAPSHOT_SERIALIZATION_DEPS);
+const createMLPublicConfig = (options) => buildMLPublicConfig(options, PUBLIC_CONFIG_SERIALIZATION_DEPS);
 
 module.exports = {
   TICK_HZ,
