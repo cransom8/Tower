@@ -120,6 +120,7 @@ namespace CastleDefender.UI
         Coroutine _lobbyWarmupRoutine;
         RectTransform _canvasRect;
         RectTransform _settingsPanelRoot;
+        RectTransform _settingsOverlayPanelRoot;
         RectTransform _progressionButtonRoot;
         RectTransform _progressionOverlayRoot;
         RectTransform _premiumTypeStack;
@@ -136,6 +137,10 @@ namespace CastleDefender.UI
         TMP_Text _txtSettingsRotationValue;
         TMP_Text _txtSettingsEngagementValue;
         TMP_Text _txtSettingsHealthBarsValue;
+        TMP_Text _txtSettingsTooltipsValue;
+        GameObject _settingsOverlay;
+        Button _settingsMenuButton;
+        TMP_Text _settingsMenuButtonLabel;
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -239,6 +244,7 @@ namespace CastleDefender.UI
                 RefreshQueueDisplay(null);
             }
 
+            RefreshSettingsPanelLayout();
             RefreshSettingsPanelValues();
         }
 
@@ -1762,31 +1768,42 @@ namespace CastleDefender.UI
             if (_canvasRect == null)
                 return;
 
-            const int settingRowCount = 5;
-            const float quitButtonHeight = 42f;
-            float rowsHeight = ResolveSettingsRowsHeight(settingRowCount);
-            float panelHeight = ResolveSettingsPanelHeight(rowsHeight, quitButtonHeight);
-
-            var root = new GameObject("LobbySettingsPanel", typeof(RectTransform), typeof(FloatingSettingsPanel));
+            var root = new GameObject("LobbySettingsPanel", typeof(RectTransform));
             root.transform.SetParent(_canvasRect, false);
-            var rect = root.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(1f, 1f);
-            rect.anchorMax = new Vector2(1f, 1f);
-            rect.pivot = new Vector2(1f, 1f);
-            rect.sizeDelta = new Vector2(settingsPanelSize.x + settingsButtonSize + settingsPanelGap, Mathf.Max(panelHeight, settingsButtonSize));
-            rect.anchoredPosition = new Vector2(-settingsRightInset, -settingsTopInset);
-            _settingsPanelRoot = rect;
+            root.transform.SetAsLastSibling();
+            var rootRect = root.GetComponent<RectTransform>();
+            rootRect.anchorMin = Vector2.zero;
+            rootRect.anchorMax = Vector2.one;
+            rootRect.offsetMin = Vector2.zero;
+            rootRect.offsetMax = Vector2.zero;
 
-            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(CanvasGroup), typeof(VerticalLayoutGroup));
-            panel.transform.SetParent(root.transform, false);
+            var overlay = new GameObject("Overlay", typeof(RectTransform), typeof(Image), typeof(Button));
+            overlay.transform.SetParent(root.transform, false);
+            var overlayRect = overlay.GetComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+            overlay.GetComponent<Image>().color = new Color(0.02f, 0.04f, 0.07f, 0.86f);
+            var overlayButton = overlay.GetComponent<Button>();
+            overlayButton.transition = Selectable.Transition.None;
+            overlayButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
+            _settingsOverlay = overlay;
+
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
+            panel.transform.SetParent(overlay.transform, false);
             var panelRect = panel.GetComponent<RectTransform>();
-            panelRect.anchorMin = new Vector2(1f, 1f);
-            panelRect.anchorMax = new Vector2(1f, 1f);
-            panelRect.pivot = new Vector2(1f, 1f);
-            panelRect.sizeDelta = new Vector2(settingsPanelSize.x, panelHeight);
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            float panelHorizontalInset = Mathf.Max(18f, settingsPanelGap + 12f);
+            float panelVerticalInset = Mathf.Max(18f, settingsPanelGap + 8f);
+            panelRect.offsetMin = new Vector2(panelHorizontalInset, panelVerticalInset);
+            panelRect.offsetMax = new Vector2(-panelHorizontalInset, -panelVerticalInset);
+            _settingsOverlayPanelRoot = panelRect;
 
             var panelImage = panel.GetComponent<Image>();
-            panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.96f);
+            panelImage.color = new Color(0.06f, 0.10f, 0.14f, 0.98f);
+            StyleSettingsSurface(panel, panelImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
 
             var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
             panelLayout.childAlignment = TextAnchor.UpperCenter;
@@ -1794,19 +1811,23 @@ namespace CastleDefender.UI
             panelLayout.childControlHeight = false;
             panelLayout.childForceExpandWidth = true;
             panelLayout.childForceExpandHeight = false;
-            panelLayout.spacing = 6f;
-            panelLayout.padding = new RectOffset(10, 10, 10, 10);
+            panelLayout.spacing = 12f;
+            panelLayout.padding = new RectOffset(18, 18, 18, 18);
 
-            var title = CreateSettingsText(panel.transform, "Title", "Settings", 12, new Color(0.90f, 0.93f, 0.97f, 0.94f));
-            title.fontStyle = FontStyles.SmallCaps;
-            var titleLayout = title.gameObject.AddComponent<LayoutElement>();
-            titleLayout.preferredHeight = 16f;
+            var eyebrow = CreateSettingsText(panel.transform, "Eyebrow", "COMMAND MENU", 11f, new Color(0.95f, 0.79f, 0.42f, 0.98f));
+            eyebrow.fontStyle = FontStyles.SmallCaps;
+            eyebrow.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
+
+            var title = CreateSettingsText(panel.transform, "Title", "Settings", 24f, Color.white);
+            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 30f;
+
+            var subtitle = CreateSettingsText(panel.transform, "Subtitle", "Tap each selector to cycle its saved option.", 12f, new Color(0.84f, 0.89f, 0.95f, 0.96f));
+            subtitle.textWrappingMode = TextWrappingModes.Normal;
+            subtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = 34f;
 
             var rows = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
             rows.transform.SetParent(panel.transform, false);
-            var rowsLayoutElement = rows.GetComponent<LayoutElement>();
-            rowsLayoutElement.preferredHeight = rowsHeight;
-            rowsLayoutElement.flexibleHeight = 1f;
+            rows.GetComponent<LayoutElement>().flexibleHeight = 1f;
 
             var rowsLayout = rows.GetComponent<VerticalLayoutGroup>();
             rowsLayout.childAlignment = TextAnchor.UpperCenter;
@@ -1814,74 +1835,28 @@ namespace CastleDefender.UI
             rowsLayout.childControlHeight = false;
             rowsLayout.childForceExpandWidth = true;
             rowsLayout.childForceExpandHeight = false;
-            rowsLayout.spacing = settingsButtonSpacing;
+            rowsLayout.spacing = 10f;
 
-            CreateSettingsActionRow(
-                rows.transform,
-                "TiltRow",
-                "TiltUp",
-                "Tilt +",
-                new Color(0.16f, 0.24f, 0.32f, 0.98f),
-                out var tiltUpButton,
-                out _txtSettingsTiltValue,
-                "TiltDown",
-                "Tilt -",
-                new Color(0.16f, 0.24f, 0.32f, 0.98f),
-                out var tiltDownButton);
+            var tiltButton = CreateSettingsSelectorRow(rows.transform, "TiltRow", "Camera Tilt", "Cycle the battlefield viewing angle.", new Color(0.16f, 0.24f, 0.32f, 0.98f), out _txtSettingsTiltValue);
+            var zoomButton = CreateSettingsSelectorRow(rows.transform, "ZoomRow", "Camera Zoom", "Cycle how close your command view sits.", new Color(0.18f, 0.28f, 0.22f, 0.98f), out _txtSettingsZoomValue);
+            var rotationButton = CreateSettingsSelectorRow(rows.transform, "RotateRow", "Camera Rotation", "Cycle your battlefield facing.", new Color(0.28f, 0.20f, 0.16f, 0.98f), out _txtSettingsRotationValue);
+            var engagementButton = CreateSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
+            var healthBarsButton = CreateSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
+            var tooltipsButton = CreateSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
 
-            CreateSettingsActionRow(
-                rows.transform,
-                "ZoomRow",
-                "ZoomIn",
-                "Zoom +",
-                new Color(0.18f, 0.28f, 0.22f, 0.98f),
-                out var zoomInButton,
-                out _txtSettingsZoomValue,
-                "ZoomOut",
-                "Zoom -",
-                new Color(0.18f, 0.28f, 0.22f, 0.98f),
-                out var zoomOutButton);
+            var footer = new GameObject("Footer", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            footer.transform.SetParent(panel.transform, false);
+            footer.GetComponent<LayoutElement>().preferredHeight = 46f;
+            var footerLayout = footer.GetComponent<HorizontalLayoutGroup>();
+            footerLayout.childAlignment = TextAnchor.MiddleCenter;
+            footerLayout.childControlWidth = true;
+            footerLayout.childControlHeight = true;
+            footerLayout.childForceExpandWidth = true;
+            footerLayout.childForceExpandHeight = false;
+            footerLayout.spacing = 12f;
 
-            CreateSettingsActionRow(
-                rows.transform,
-                "RotateRow",
-                "RotateLeft",
-                "Rot L",
-                new Color(0.28f, 0.20f, 0.16f, 0.98f),
-                out var rotateLeftButton,
-                out _txtSettingsRotationValue,
-                "RotateRight",
-                "Rot R",
-                new Color(0.28f, 0.20f, 0.16f, 0.98f),
-                out var rotateRightButton);
-
-            CreateSettingsActionRow(
-                rows.transform,
-                "EngagementRow",
-                "EngagementOff",
-                "Ring Off",
-                new Color(0.24f, 0.18f, 0.32f, 0.98f),
-                out var engagementOffButton,
-                out _txtSettingsEngagementValue,
-                "EngagementOn",
-                "Ring On",
-                new Color(0.24f, 0.18f, 0.32f, 0.98f),
-                out var engagementOnButton);
-
-            CreateSettingsActionRow(
-                rows.transform,
-                "HealthBarsRow",
-                "HealthBarsOff",
-                "HP Off",
-                new Color(0.23f, 0.26f, 0.16f, 0.98f),
-                out var healthBarsOffButton,
-                out _txtSettingsHealthBarsValue,
-                "HealthBarsOn",
-                "HP On",
-                new Color(0.23f, 0.26f, 0.16f, 0.98f),
-                out var healthBarsOnButton);
-
-            var quitButton = CreateSettingsButton(rows.transform, "QuitButton", "Quit Game", new Color(0.42f, 0.17f, 0.17f, 0.98f), 42f);
+            var closeButton = CreateSettingsButton(footer.transform, "CloseButton", "Close", new Color(0.18f, 0.24f, 0.30f, 0.98f), 46f);
+            var quitButton = CreateSettingsButton(footer.transform, "QuitButton", "Quit Game", new Color(0.42f, 0.17f, 0.17f, 0.98f), 46f);
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
@@ -1889,65 +1864,51 @@ namespace CastleDefender.UI
             gearRect.anchorMin = new Vector2(1f, 1f);
             gearRect.anchorMax = new Vector2(1f, 1f);
             gearRect.pivot = new Vector2(1f, 1f);
-            gearRect.sizeDelta = new Vector2(settingsButtonSize, settingsButtonSize);
-            gearRect.anchoredPosition = Vector2.zero;
+            gearRect.sizeDelta = new Vector2(Mathf.Max(settingsButtonSize + 28f, 74f), settingsButtonSize);
+            gearRect.anchoredPosition = new Vector2(-settingsRightInset, -settingsTopInset);
+            _settingsPanelRoot = gearRect;
+            _settingsMenuButton = gear.GetComponent<Button>();
 
             var gearImage = gear.GetComponent<Image>();
             gearImage.color = new Color(0.11f, 0.15f, 0.19f, 0.98f);
+            StyleSettingsSurface(gear, gearImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
 
-            var gearLabel = CreateSettingsText(gear.transform, "Label", "Menu", 16, new Color(0.96f, 0.97f, 0.99f, 1f));
-            gearLabel.rectTransform.anchorMin = Vector2.zero;
-            gearLabel.rectTransform.anchorMax = Vector2.one;
-            gearLabel.rectTransform.offsetMin = Vector2.zero;
-            gearLabel.rectTransform.offsetMax = Vector2.zero;
+            _settingsMenuButtonLabel = CreateSettingsText(gear.transform, "Label", "Menu", 14f, new Color(0.96f, 0.97f, 0.99f, 1f));
+            _settingsMenuButtonLabel.rectTransform.anchorMin = Vector2.zero;
+            _settingsMenuButtonLabel.rectTransform.anchorMax = Vector2.one;
+            _settingsMenuButtonLabel.rectTransform.offsetMin = Vector2.zero;
+            _settingsMenuButtonLabel.rectTransform.offsetMax = Vector2.zero;
 
-            var settingsPanel = root.GetComponent<FloatingSettingsPanel>();
-            Vector2 expandedPosition = new Vector2(-settingsButtonSize - settingsPanelGap, 0f);
-            Vector2 collapsedPosition = expandedPosition + new Vector2(18f, 0f);
-            settingsPanel.Configure(
-                rect,
-                panelRect,
-                panel.GetComponent<CanvasGroup>(),
-                gear.GetComponent<Button>(),
-                false,
-                "lobby.settings_panel",
-                true,
-                expandedPosition,
-                collapsedPosition);
-
-            tiltUpButton.onClick.AddListener(() => AdjustCameraTilt(settingsTiltStep));
-            tiltDownButton.onClick.AddListener(() => AdjustCameraTilt(-settingsTiltStep));
-            zoomInButton.onClick.AddListener(() => AdjustCameraZoom(-settingsZoomStep));
-            zoomOutButton.onClick.AddListener(() => AdjustCameraZoom(settingsZoomStep));
-            rotateLeftButton.onClick.AddListener(() => AdjustCameraRotation(-settingsRotateStep));
-            rotateRightButton.onClick.AddListener(() => AdjustCameraRotation(settingsRotateStep));
-            engagementOffButton.onClick.AddListener(() => UserPreferencesManager.SetEngagementCirclesVisible(false));
-            engagementOnButton.onClick.AddListener(() => UserPreferencesManager.SetEngagementCirclesVisible(true));
-            healthBarsOffButton.onClick.AddListener(() => UserPreferencesManager.SetHealthBarsVisible(false));
-            healthBarsOnButton.onClick.AddListener(() => UserPreferencesManager.SetHealthBarsVisible(true));
+            _settingsMenuButton.onClick.AddListener(ToggleSettingsOverlay);
+            tiltButton.onClick.AddListener(CycleCameraTiltSetting);
+            zoomButton.onClick.AddListener(CycleCameraZoomSetting);
+            rotationButton.onClick.AddListener(CycleCameraRotationSetting);
+            engagementButton.onClick.AddListener(ToggleEngagementCirclesSetting);
+            healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
+            tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
+            closeButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
             quitButton.onClick.AddListener(OnQuitPressed);
 
             RefreshSettingsPanelValues();
+            SetSettingsOverlayVisible(false, immediate: true);
         }
 
-        void CreateSettingsActionRow(
+        Button CreateSettingsSelectorRow(
             Transform parent,
             string name,
-            string leftButtonName,
-            string leftLabel,
-            Color leftButtonColor,
-            out Button leftButton,
-            out TMP_Text valueLabel,
-            string rightButtonName,
-            string rightLabel,
-            Color rightButtonColor,
-            out Button rightButton)
+            string labelText,
+            string detailText,
+            Color selectorColor,
+            out TMP_Text valueLabel)
         {
-            var row = new GameObject(name, typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            var row = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             row.transform.SetParent(parent, false);
+            var rowImage = row.GetComponent<Image>();
+            rowImage.color = new Color(0.09f, 0.14f, 0.18f, 0.98f);
+            StyleSettingsSurface(row, rowImage.color, selectorColor);
 
             var rowLayoutElement = row.GetComponent<LayoutElement>();
-            rowLayoutElement.preferredHeight = 42f;
+            rowLayoutElement.preferredHeight = 66f;
             rowLayoutElement.flexibleWidth = 1f;
 
             var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
@@ -1956,11 +1917,33 @@ namespace CastleDefender.UI
             rowLayout.childControlHeight = true;
             rowLayout.childForceExpandWidth = false;
             rowLayout.childForceExpandHeight = false;
-            rowLayout.spacing = settingsButtonSpacing * 0.5f;
+            rowLayout.spacing = 12f;
+            rowLayout.padding = new RectOffset(14, 14, 10, 10);
 
-            leftButton = CreateSettingsButton(row.transform, leftButtonName, leftLabel, leftButtonColor);
-            valueLabel = CreateSettingsValueDisplay(row.transform, "Value");
-            rightButton = CreateSettingsButton(row.transform, rightButtonName, rightLabel, rightButtonColor);
+            var copy = new GameObject("Copy", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            copy.transform.SetParent(row.transform, false);
+            copy.GetComponent<LayoutElement>().flexibleWidth = 1f;
+
+            var copyLayout = copy.GetComponent<VerticalLayoutGroup>();
+            copyLayout.childAlignment = TextAnchor.UpperLeft;
+            copyLayout.childControlWidth = true;
+            copyLayout.childControlHeight = false;
+            copyLayout.childForceExpandWidth = true;
+            copyLayout.childForceExpandHeight = false;
+            copyLayout.spacing = 2f;
+
+            var title = CreateSettingsText(copy.transform, "Title", labelText, 13f, Color.white);
+            title.fontStyle = FontStyles.SmallCaps;
+            title.textWrappingMode = TextWrappingModes.NoWrap;
+            title.overflowMode = TextOverflowModes.Ellipsis;
+            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
+
+            var detail = CreateSettingsText(copy.transform, "Detail", detailText, 10f, new Color(0.78f, 0.85f, 0.92f, 0.94f));
+            detail.textWrappingMode = TextWrappingModes.Normal;
+            detail.overflowMode = TextOverflowModes.Ellipsis;
+            detail.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
+
+            return CreateSettingsSelectorButton(row.transform, "Selector", selectorColor, out valueLabel);
         }
 
         Button CreateSettingsButton(Transform parent, string name, string label, Color backgroundColor, float preferredHeight = 0f)
@@ -1985,25 +1968,28 @@ namespace CastleDefender.UI
             return buttonGo.GetComponent<Button>();
         }
 
-        TMP_Text CreateSettingsValueDisplay(Transform parent, string name)
+        Button CreateSettingsSelectorButton(Transform parent, string name, Color backgroundColor, out TMP_Text valueLabel)
         {
-            var valueGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            valueGo.transform.SetParent(parent, false);
-            valueGo.GetComponent<Image>().color = new Color(0.10f, 0.14f, 0.18f, 0.98f);
+            var button = CreateSettingsButton(parent, name, "--", backgroundColor, 42f);
+            var layout = button.GetComponent<LayoutElement>();
+            if (layout != null)
+            {
+                float selectorMinWidth = Mathf.Max(118f, settingsValueWidth * 4f);
+                float selectorPreferredWidth = Mathf.Max(132f, settingsValueWidth * 4.4f);
+                layout.minWidth = selectorMinWidth;
+                layout.preferredWidth = selectorPreferredWidth;
+                layout.flexibleWidth = 0f;
+            }
 
-            var layout = valueGo.GetComponent<LayoutElement>();
-            layout.minWidth = settingsValueWidth;
-            layout.preferredWidth = settingsValueWidth;
-            layout.flexibleWidth = 0f;
-            layout.flexibleHeight = 1f;
+            StyleSettingsSurface(button.gameObject, backgroundColor, new Color(0.94f, 0.96f, 0.99f, 0.42f));
+            valueLabel = button.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
+            if (valueLabel != null)
+            {
+                valueLabel.fontSize = 12f;
+                valueLabel.fontStyle = FontStyles.Bold;
+            }
 
-            var valueText = CreateSettingsText(valueGo.transform, "Label", "--", 11, new Color(0.96f, 0.97f, 0.99f, 0.96f));
-            valueText.rectTransform.anchorMin = Vector2.zero;
-            valueText.rectTransform.anchorMax = Vector2.one;
-            valueText.rectTransform.offsetMin = new Vector2(2f, 2f);
-            valueText.rectTransform.offsetMax = new Vector2(-2f, -2f);
-            valueText.alignment = TextAlignmentOptions.Center;
-            return valueText;
+            return button;
         }
 
         TMP_Text CreateSettingsText(Transform parent, string name, string value, float fontSize, Color color)
@@ -2020,25 +2006,178 @@ namespace CastleDefender.UI
             return text;
         }
 
-        void AdjustCameraTilt(float delta)
+        void StyleSettingsSurface(GameObject target, Color backgroundColor, Color accentColor)
         {
-            var controller = FindFirstObjectByType<global::CameraController>();
-            if (controller != null)
-                controller.AdjustTilt(delta);
+            if (target == null)
+                return;
+
+            var outline = target.GetComponent<Outline>();
+            if (outline == null)
+                outline = target.AddComponent<Outline>();
+            outline.effectDistance = new Vector2(1.2f, -1.2f);
+            outline.effectColor = accentColor;
+            outline.useGraphicAlpha = true;
+
+            var shadow = target.GetComponent<Shadow>();
+            if (shadow == null)
+                shadow = target.AddComponent<Shadow>();
+            shadow.effectDistance = new Vector2(2f, -2f);
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.30f);
+            shadow.useGraphicAlpha = true;
+
+            var image = target.GetComponent<Image>();
+            if (image != null)
+                image.color = backgroundColor;
         }
 
-        void AdjustCameraZoom(float delta)
+        void ToggleSettingsOverlay()
         {
-            var controller = FindFirstObjectByType<global::CameraController>();
-            if (controller != null)
-                controller.AdjustZoom(delta);
+            bool visible = _settingsOverlay != null && _settingsOverlay.activeSelf;
+            SetSettingsOverlayVisible(!visible);
         }
 
-        void AdjustCameraRotation(float delta)
+        void SetSettingsOverlayVisible(bool visible)
+        {
+            SetSettingsOverlayVisible(visible, immediate: false);
+        }
+
+        void SetSettingsOverlayVisible(bool visible, bool immediate)
+        {
+            bool wasVisible = _settingsOverlay != null && _settingsOverlay.activeSelf;
+            if (_settingsOverlay != null)
+                _settingsOverlay.SetActive(visible);
+
+            if (visible && _settingsOverlay != null && _settingsOverlay.transform.parent != null)
+                _settingsOverlay.transform.parent.SetAsLastSibling();
+
+            if (!immediate && wasVisible != visible)
+                Play(AudioManager.SFX.ButtonClick);
+
+            UpdateSettingsMenuButtonState();
+        }
+
+        void UpdateSettingsMenuButtonState()
+        {
+            if (_settingsMenuButtonLabel != null)
+                _settingsMenuButtonLabel.text = _settingsOverlay != null && _settingsOverlay.activeSelf ? "Back" : "Menu";
+        }
+
+        void RefreshSettingsPanelLayout()
+        {
+            if (_settingsPanelRoot != null)
+                _settingsPanelRoot.anchoredPosition = new Vector2(-settingsRightInset, -settingsTopInset);
+
+            if (_settingsOverlayPanelRoot != null)
+            {
+                float panelHorizontalInset = Mathf.Max(18f, settingsPanelGap + 12f);
+                float panelVerticalInset = Mathf.Max(18f, settingsPanelGap + 8f);
+                _settingsOverlayPanelRoot.offsetMin = new Vector2(panelHorizontalInset, panelVerticalInset);
+                _settingsOverlayPanelRoot.offsetMax = new Vector2(-panelHorizontalInset, -panelVerticalInset);
+            }
+        }
+
+        void CycleCameraTiltSetting()
         {
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
-                controller.AdjustRotation(delta);
+            {
+                controller.SetTilt(GetWrappedSelectorValue(controller.CurrentTilt, controller.TiltMin, controller.TiltMax, settingsTiltStep));
+                return;
+            }
+
+            ResolveCurrentCameraValues(out _, out float zoom, out float rotation);
+            float nextTilt = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.tilt ?? 28f, 0f, 52f, settingsTiltStep);
+            UserPreferencesManager.NotifyCameraPreferencesChanged(nextTilt, zoom, rotation);
+        }
+
+        void CycleCameraZoomSetting()
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+            {
+                controller.SetZoom(GetWrappedSelectorValue(controller.CurrentZoom, controller.OrthoSizeMin, controller.OrthoSizeMax, settingsZoomStep));
+                return;
+            }
+
+            ResolveCurrentCameraValues(out float tilt, out _, out float rotation);
+            float nextZoom = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.zoom ?? 24f, 4f, 80f, settingsZoomStep);
+            UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, nextZoom, rotation);
+        }
+
+        void CycleCameraRotationSetting()
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+            {
+                controller.SetRotation(GetWrappedSelectorValue(controller.CurrentRotation, -180f, 180f, settingsRotateStep));
+                return;
+            }
+
+            ResolveCurrentCameraValues(out float tilt, out float zoom, out _);
+            float nextRotation = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.rotation ?? 0f, -180f, 180f, settingsRotateStep);
+            UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, zoom, nextRotation);
+        }
+
+        void ToggleEngagementCirclesSetting()
+        {
+            UserPreferencesManager.SetEngagementCirclesVisible(!UserPreferencesManager.ShowEngagementCircles);
+        }
+
+        void ToggleHealthBarsSetting()
+        {
+            UserPreferencesManager.SetHealthBarsVisible(!UserPreferencesManager.ShowHealthBars);
+        }
+
+        void ToggleTooltipsSetting()
+        {
+            UserPreferencesManager.SetTooltipsVisible(!UserPreferencesManager.ShowTooltips);
+        }
+
+        void ResolveCurrentCameraValues(out float tilt, out float zoom, out float rotation)
+        {
+            var controller = FindFirstObjectByType<global::CameraController>();
+            if (controller != null)
+            {
+                tilt = controller.CurrentTilt;
+                zoom = controller.CurrentZoom;
+                rotation = controller.CurrentRotation;
+                return;
+            }
+
+            var preferences = UserPreferencesManager.CurrentPreferenceView.camera;
+            tilt = preferences.tilt ?? 28f;
+            zoom = preferences.zoom ?? 24f;
+            rotation = preferences.rotation ?? 0f;
+        }
+
+        static float GetWrappedSelectorValue(float current, float min, float max, float step)
+        {
+            if (max <= min + 0.001f)
+                return min;
+
+            step = Mathf.Max(0.01f, step);
+            float clampedCurrent = Mathf.Clamp(current, min, max);
+            var options = new List<float>();
+
+            for (float value = min; value < max - 0.001f; value += step)
+                options.Add(Mathf.Clamp(value, min, max));
+
+            if (options.Count == 0 || !Mathf.Approximately(options[options.Count - 1], max))
+                options.Add(max);
+
+            int closestIndex = 0;
+            float closestDelta = float.MaxValue;
+            for (int i = 0; i < options.Count; i++)
+            {
+                float delta = Mathf.Abs(options[i] - clampedCurrent);
+                if (delta < closestDelta)
+                {
+                    closestDelta = delta;
+                    closestIndex = i;
+                }
+            }
+
+            return options[(closestIndex + 1) % options.Count];
         }
 
         void RefreshSettingsPanelValues()
@@ -2047,7 +2186,8 @@ namespace CastleDefender.UI
                 && _txtSettingsZoomValue == null
                 && _txtSettingsRotationValue == null
                 && _txtSettingsEngagementValue == null
-                && _txtSettingsHealthBarsValue == null)
+                && _txtSettingsHealthBarsValue == null
+                && _txtSettingsTooltipsValue == null)
             {
                 return;
             }
@@ -2069,6 +2209,8 @@ namespace CastleDefender.UI
 
             SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
             SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
+            SetSettingsValue(_txtSettingsTooltipsValue, FormatToggleValue(preferences.visuals.showTooltips));
+            UpdateSettingsMenuButtonState();
         }
 
         void OnQuitPressed()

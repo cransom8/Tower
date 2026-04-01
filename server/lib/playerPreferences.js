@@ -14,6 +14,7 @@ const DEFAULT_PLAYER_PREFERENCES = Object.freeze({
   visuals: Object.freeze({
     showEngagementCircles: true,
     showHealthBars: true,
+    showTooltips: true,
   }),
   audio: Object.freeze({
     masterVolume: 1,
@@ -70,6 +71,9 @@ function normalizeVisualPreferences(raw) {
     showHealthBars: typeof source.showHealthBars === 'boolean'
       ? source.showHealthBars
       : DEFAULT_PLAYER_PREFERENCES.visuals.showHealthBars,
+    showTooltips: typeof source.showTooltips === 'boolean'
+      ? source.showTooltips
+      : DEFAULT_PLAYER_PREFERENCES.visuals.showTooltips,
   };
 }
 

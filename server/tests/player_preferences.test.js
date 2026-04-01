@@ -18,6 +18,7 @@ test('createDefaultPlayerPreferences returns the expected defaults', () => {
     visuals: {
       showEngagementCircles: true,
       showHealthBars: true,
+      showTooltips: true,
     },
     audio: {
       masterVolume: 1,
@@ -51,6 +52,7 @@ test('normalizePlayerPreferences clamps numeric fields and fills defaults', () =
     visuals: {
       showEngagementCircles: false,
       showHealthBars: true,
+      showTooltips: true,
     },
     audio: {
       masterVolume: 1,

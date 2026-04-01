@@ -15,6 +15,7 @@ namespace CastleDefender.Game
         const string PromptRootName = "CenterBarracksOnboardingPrompt";
         const string ArrowRootName = "CenterBarracksOnboardingArrow";
         const string UiArrowRootName = "CenterBarracksOnboardingUiArrow";
+        const string TooltipButtonRootName = "CenterBarracksOnboardingTooltipButton";
         const float PromptMinWidth = 420f;
         const float PromptMaxWidth = 620f;
         const float PromptRegularHeight = 160f;
@@ -34,6 +35,12 @@ namespace CastleDefender.Game
         TMP_Text _detailLabel;
         Button _focusButton;
         TMP_Text _focusButtonLabel;
+        Button _promptHideButton;
+        TMP_Text _promptHideButtonLabel;
+        Toggle _promptTooltipToggle;
+        RectTransform _tooltipButtonRoot;
+        Button _tooltipButton;
+        TMP_Text _tooltipButtonLabel;
 
         Transform _worldArrowRoot;
         RectTransform _worldArrowRect;
@@ -54,10 +61,12 @@ namespace CastleDefender.Game
         bool _snapshotSubscribed;
         bool _matchReadySubscribed;
         bool _actionAppliedSubscribed;
+        bool _tooltipExpanded = true;
         int _laneIndex = -1;
         string _laneSlotColor;
         BarracksSiteView _centerBarracksView;
         BarracksPanel _barracksPanel;
+        CenterBarracksStage _lastVisibleStage;
 
         void OnEnable()
         {
@@ -70,6 +79,7 @@ namespace CastleDefender.Game
         {
             Unsubscribe();
             SetPromptVisible(false);
+            SetTooltipButtonVisible(false);
             SetWorldArrowVisible(false);
             SetUiArrowVisible(false);
         }
@@ -81,8 +91,18 @@ namespace CastleDefender.Game
             if (!_flowResolved || _flowCompleted || _stage == CenterBarracksStage.None)
                 return;
 
+            if (!UserPreferencesManager.ShowTooltips)
+            {
+                SetPromptVisible(false);
+                SetTooltipButtonVisible(false);
+                HideIndicators();
+                return;
+            }
+
             EnsureUi();
+            SetPromptVisible(_tooltipExpanded);
             UpdateIndicators();
+            UpdateTooltipButtonVisual();
         }
 
         void EnsureSubscriptions()
@@ -192,7 +212,10 @@ namespace CastleDefender.Game
             _laneIndex = -1;
             _laneSlotColor = null;
             _centerBarracksView = null;
+            _tooltipExpanded = true;
+            _lastVisibleStage = CenterBarracksStage.None;
             SetPromptVisible(false);
+            SetTooltipButtonVisible(false);
             SetWorldArrowVisible(false);
             SetUiArrowVisible(false);
         }
@@ -245,6 +268,12 @@ namespace CastleDefender.Game
                 _stage = ResolveCurrentStage(site);
             }
 
+            if (_stage != _lastVisibleStage)
+            {
+                _lastVisibleStage = _stage;
+                _tooltipExpanded = true;
+            }
+
             if (_stage == CenterBarracksStage.None)
             {
                 CompleteOnboarding();
@@ -255,8 +284,17 @@ namespace CastleDefender.Game
 
             EnsureUi();
             UpdatePrompt(lane, site);
-            SetPromptVisible(true);
+            if (!UserPreferencesManager.ShowTooltips)
+            {
+                SetPromptVisible(false);
+                SetTooltipButtonVisible(false);
+                HideIndicators();
+                return;
+            }
+
+            SetPromptVisible(_tooltipExpanded);
             UpdateIndicators();
+            UpdateTooltipButtonVisual();
         }
 
         void CompleteOnboarding()
@@ -264,7 +302,10 @@ namespace CastleDefender.Game
             _stage = CenterBarracksStage.None;
             _flowCompleted = true;
             _centerBarracksView = null;
+            _tooltipExpanded = true;
+            _lastVisibleStage = CenterBarracksStage.None;
             SetPromptVisible(false);
+            SetTooltipButtonVisible(false);
             HideIndicators();
         }
 
@@ -342,6 +383,7 @@ namespace CastleDefender.Game
                 return;
 
             EnsurePromptRoot();
+            EnsureTooltipButtonRoot();
             EnsureUiArrowRoot();
         }
 
@@ -421,7 +463,7 @@ namespace CastleDefender.Game
                 _headlineLabel,
                 "Headline",
                 new Vector2(0.06f, 0.68f),
-                new Vector2(0.94f, 0.90f),
+                new Vector2(compactLayout ? 0.70f : 0.72f, 0.90f),
                 compactLayout ? 24f : 28f,
                 FontStyles.Bold,
                 new Color(0.97f, 0.98f, 1f, 1f),
@@ -458,6 +500,39 @@ namespace CastleDefender.Game
             _focusButtonLabel.enableAutoSizing = true;
             _focusButtonLabel.fontSizeMin = 16f;
             _focusButtonLabel.fontSizeMax = compactLayout ? 20f : 22f;
+
+            _promptHideButton = EnsurePromptButton(
+                _promptHideButton,
+                "HideButton",
+                new Vector2(compactLayout ? 0.72f : 0.76f, 0.36f),
+                new Vector2(0.94f, 0.54f),
+                out _promptHideButtonLabel);
+            _promptHideButton.onClick.RemoveListener(HandlePromptHidePressed);
+            _promptHideButton.onClick.AddListener(HandlePromptHidePressed);
+            if (_promptHideButtonLabel != null)
+            {
+                _promptHideButtonLabel.enableAutoSizing = true;
+                _promptHideButtonLabel.fontSizeMin = 12f;
+                _promptHideButtonLabel.fontSizeMax = compactLayout ? 15f : 16f;
+                _promptHideButtonLabel.text = "HIDE";
+            }
+
+            var hideButtonImage = _promptHideButton != null ? _promptHideButton.GetComponent<Image>() : null;
+            if (hideButtonImage != null)
+                hideButtonImage.color = new Color(0.10f, 0.24f, 0.34f, 0.98f);
+
+            _promptTooltipToggle = EnsurePromptTooltipToggle(
+                _promptTooltipToggle,
+                "TooltipToggle",
+                new Vector2(compactLayout ? 0.58f : 0.62f, 0.74f),
+                new Vector2(0.94f, 0.92f),
+                "Display tooltips");
+            if (_promptTooltipToggle != null)
+            {
+                _promptTooltipToggle.onValueChanged.RemoveListener(HandleTooltipPreferenceChanged);
+                _promptTooltipToggle.onValueChanged.AddListener(HandleTooltipPreferenceChanged);
+                _promptTooltipToggle.SetIsOnWithoutNotify(UserPreferencesManager.ShowTooltips);
+            }
         }
 
         TMP_Text EnsurePromptText(
@@ -575,6 +650,174 @@ namespace CastleDefender.Game
             labelOutline.effectColor = new Color(0.03f, 0.12f, 0.06f, 0.96f);
             labelOutline.useGraphicAlpha = true;
             return button;
+        }
+
+        Toggle EnsurePromptTooltipToggle(
+            Toggle toggle,
+            string name,
+            Vector2 anchorMin,
+            Vector2 anchorMax,
+            string labelText)
+        {
+            if (_promptRoot == null)
+                return toggle;
+
+            Transform existing = toggle != null ? toggle.transform : _promptRoot.Find(name);
+            if (existing == null)
+            {
+                var go = new GameObject(name, typeof(RectTransform), typeof(Toggle));
+                go.transform.SetParent(_promptRoot, false);
+                toggle = go.GetComponent<Toggle>();
+                existing = go.transform;
+            }
+            else
+            {
+                toggle = existing.GetComponent<Toggle>();
+            }
+
+            var rect = existing as RectTransform;
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            Transform labelTransform = existing.Find("Label");
+            if (labelTransform == null)
+            {
+                var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+                labelGo.transform.SetParent(existing, false);
+                labelTransform = labelGo.transform;
+            }
+
+            var label = labelTransform.GetComponent<TextMeshProUGUI>();
+            var labelRect = label.rectTransform;
+            labelRect.anchorMin = new Vector2(0f, 0f);
+            labelRect.anchorMax = new Vector2(1f, 1f);
+            labelRect.offsetMin = new Vector2(0f, 0f);
+            labelRect.offsetMax = new Vector2(-34f, 0f);
+            label.font = TMP_Settings.defaultFontAsset;
+            label.fontSize = 15f;
+            label.fontStyle = FontStyles.Bold;
+            label.alignment = TextAlignmentOptions.Right;
+            label.color = new Color(0.96f, 0.97f, 0.90f, 0.98f);
+            label.text = labelText;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+            label.raycastTarget = false;
+
+            Transform checkboxTransform = existing.Find("Checkbox");
+            if (checkboxTransform == null)
+            {
+                var checkboxGo = new GameObject("Checkbox", typeof(RectTransform), typeof(Image));
+                checkboxGo.transform.SetParent(existing, false);
+                checkboxTransform = checkboxGo.transform;
+            }
+
+            var checkboxRect = checkboxTransform as RectTransform;
+            checkboxRect.anchorMin = new Vector2(1f, 0.5f);
+            checkboxRect.anchorMax = new Vector2(1f, 0.5f);
+            checkboxRect.pivot = new Vector2(1f, 0.5f);
+            checkboxRect.sizeDelta = new Vector2(24f, 24f);
+            checkboxRect.anchoredPosition = Vector2.zero;
+
+            var checkboxImage = checkboxTransform.GetComponent<Image>();
+            checkboxImage.color = new Color(0.15f, 0.22f, 0.28f, 1f);
+
+            Transform checkmarkTransform = checkboxTransform.Find("Checkmark");
+            if (checkmarkTransform == null)
+            {
+                var checkmarkGo = new GameObject("Checkmark", typeof(RectTransform), typeof(Image));
+                checkmarkGo.transform.SetParent(checkboxTransform, false);
+                checkmarkTransform = checkmarkGo.transform;
+            }
+
+            var checkmarkRect = checkmarkTransform as RectTransform;
+            checkmarkRect.anchorMin = new Vector2(0.5f, 0.5f);
+            checkmarkRect.anchorMax = new Vector2(0.5f, 0.5f);
+            checkmarkRect.pivot = new Vector2(0.5f, 0.5f);
+            checkmarkRect.sizeDelta = new Vector2(14f, 14f);
+            checkmarkRect.anchoredPosition = Vector2.zero;
+
+            var checkmarkImage = checkmarkTransform.GetComponent<Image>();
+            checkmarkImage.color = new Color(0.96f, 0.84f, 0.44f, 1f);
+
+            toggle.transition = Selectable.Transition.None;
+            toggle.targetGraphic = checkboxImage;
+            toggle.graphic = checkmarkImage;
+            toggle.isOn = UserPreferencesManager.ShowTooltips;
+            return toggle;
+        }
+
+        void EnsureTooltipButtonRoot()
+        {
+            if (_mainCanvas == null)
+                return;
+
+            if (_tooltipButtonRoot == null)
+            {
+                Transform existing = _mainCanvas.transform.Find(TooltipButtonRootName);
+                if (existing != null)
+                {
+                    _tooltipButtonRoot = existing as RectTransform;
+                }
+                else
+                {
+                    var root = new GameObject(TooltipButtonRootName, typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+                    root.transform.SetParent(_mainCanvas.transform, false);
+                    _tooltipButtonRoot = root.GetComponent<RectTransform>();
+                }
+            }
+            else if (_tooltipButtonRoot.parent != _mainCanvas.transform)
+            {
+                _tooltipButtonRoot.SetParent(_mainCanvas.transform, false);
+            }
+
+            if (_tooltipButtonRoot == null)
+                return;
+
+            _tooltipButtonRoot.anchorMin = new Vector2(0.5f, 0.5f);
+            _tooltipButtonRoot.anchorMax = new Vector2(0.5f, 0.5f);
+            _tooltipButtonRoot.pivot = new Vector2(0.5f, 0.5f);
+            _tooltipButtonRoot.sizeDelta = new Vector2(84f, 34f);
+            _tooltipButtonRoot.SetAsLastSibling();
+
+            _tooltipButton = _tooltipButtonRoot.GetComponent<Button>();
+            var image = _tooltipButtonRoot.GetComponent<Image>();
+            image.raycastTarget = true;
+
+            var outline = _tooltipButtonRoot.GetComponent<Outline>();
+            outline.effectDistance = new Vector2(1.4f, -1.4f);
+            outline.effectColor = new Color(0.34f, 0.82f, 1f, 0.50f);
+            outline.useGraphicAlpha = true;
+
+            _tooltipButton.onClick.RemoveListener(HandleTooltipButtonPressed);
+            _tooltipButton.onClick.AddListener(HandleTooltipButtonPressed);
+
+            Transform labelTransform = _tooltipButtonRoot.Find("Label");
+            if (labelTransform == null)
+            {
+                var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+                labelGo.transform.SetParent(_tooltipButtonRoot, false);
+                labelTransform = labelGo.transform;
+            }
+
+            _tooltipButtonLabel = labelTransform.GetComponent<TextMeshProUGUI>();
+            var labelRect = _tooltipButtonLabel.rectTransform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(6f, 4f);
+            labelRect.offsetMax = new Vector2(-6f, -4f);
+            _tooltipButtonLabel.font = TMP_Settings.defaultFontAsset;
+            _tooltipButtonLabel.fontSize = 14f;
+            _tooltipButtonLabel.fontStyle = FontStyles.Bold;
+            _tooltipButtonLabel.alignment = TextAlignmentOptions.Center;
+            _tooltipButtonLabel.color = new Color(0.96f, 0.99f, 1f, 1f);
+            _tooltipButtonLabel.textWrappingMode = TextWrappingModes.NoWrap;
+            _tooltipButtonLabel.overflowMode = TextOverflowModes.Ellipsis;
+            _tooltipButtonLabel.raycastTarget = false;
+
+            UpdateTooltipButtonStateVisual();
+            SetTooltipButtonVisible(false);
         }
 
         void EnsureWorldArrowRoot()
@@ -884,6 +1127,25 @@ namespace CastleDefender.Game
             caption = null;
             pointDownFromAbove = false;
 
+            if (!TryResolveInteractiveTarget(out target, out pointDownFromAbove))
+                return false;
+
+            caption = _stage switch
+            {
+                CenterBarracksStage.Purchase => "BUY",
+                CenterBarracksStage.Upgrade => "UPGRADE",
+                CenterBarracksStage.BuyMilitia => "BUY x10",
+                _ => null,
+            };
+
+            return target != null && !string.IsNullOrWhiteSpace(caption);
+        }
+
+        bool TryResolveInteractiveTarget(out RectTransform target, out bool pointDownFromAbove)
+        {
+            target = null;
+            pointDownFromAbove = false;
+
             var panel = ResolveBarracksPanel();
             if (panel == null || !panel.IsShowingFocusedBarracks(CenterBarracksId))
                 return false;
@@ -898,19 +1160,26 @@ namespace CastleDefender.Game
                             return false;
 
                         target = button.GetComponent<RectTransform>();
-                        caption = _stage == CenterBarracksStage.Purchase ? "BUY" : "UPGRADE";
                         pointDownFromAbove = false;
                         return target != null;
                     }
 
                 case CenterBarracksStage.BuyMilitia:
                     {
+                        var buyButton = panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey, MilitiaTargetCount)
+                            ?? panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey);
+                        if (buyButton != null && buyButton.gameObject.activeInHierarchy)
+                        {
+                            target = buyButton.GetComponent<RectTransform>();
+                            pointDownFromAbove = true;
+                            return target != null;
+                        }
+
                         var card = panel.GetFocusedBarracksUnitCard(MilitiaRosterKey);
                         if (card == null || !card.gameObject.activeInHierarchy)
                             return false;
 
                         target = card;
-                        caption = "BUY x10";
                         pointDownFromAbove = true;
                         return target != null;
                     }
@@ -993,6 +1262,146 @@ namespace CastleDefender.Game
             SetUiArrowVisible(true);
         }
 
+        void UpdateTooltipButtonVisual()
+        {
+            if (_mainCanvas == null || !UserPreferencesManager.ShowTooltips)
+            {
+                SetTooltipButtonVisible(false);
+                return;
+            }
+
+            if (_tooltipButtonRoot == null)
+                EnsureTooltipButtonRoot();
+            if (_tooltipButtonRoot == null)
+                return;
+
+            RectTransform canvasRect = _mainCanvas.transform as RectTransform;
+            if (canvasRect == null)
+            {
+                SetTooltipButtonVisible(false);
+                return;
+            }
+
+            Vector2 localPoint;
+            if (!TryResolveTooltipAnchor(out localPoint))
+            {
+                if (_promptRoot == null)
+                {
+                    SetTooltipButtonVisible(false);
+                    return;
+                }
+
+                localPoint = _promptRoot.anchoredPosition + new Vector2(0f, -_promptRoot.sizeDelta.y * 0.5f - 36f);
+            }
+
+            float pulse = 1f + Mathf.Sin(Time.unscaledTime * 4.6f) * 0.04f;
+            float halfWidth = canvasRect.rect.width * 0.5f;
+            float halfHeight = canvasRect.rect.height * 0.5f;
+            localPoint.x = Mathf.Clamp(localPoint.x, -halfWidth + 54f, halfWidth - 54f);
+            localPoint.y = Mathf.Clamp(localPoint.y, -halfHeight + 26f, halfHeight - 26f);
+
+            _tooltipButtonRoot.anchoredPosition = localPoint;
+            _tooltipButtonRoot.localScale = Vector3.one * pulse;
+            _tooltipButtonRoot.SetAsLastSibling();
+            UpdateTooltipButtonStateVisual();
+            SetTooltipButtonVisible(!_tooltipExpanded);
+        }
+
+        bool TryResolveTooltipAnchor(out Vector2 localPoint)
+        {
+            localPoint = Vector2.zero;
+            if (_mainCanvas == null)
+                return false;
+
+            if (TryResolveInteractiveTarget(out var target, out bool pointDownFromAbove)
+                && TryProjectTargetToCanvasPoint(target, pointDownFromAbove, out localPoint))
+            {
+                localPoint += pointDownFromAbove ? new Vector2(0f, 102f) : new Vector2(0f, -102f);
+                return true;
+            }
+
+            if (_centerBarracksView == null || !_centerBarracksView.isActiveAndEnabled)
+                _centerBarracksView = BarracksSiteView.FindSite(CenterBarracksId, _laneSlotColor, _laneIndex);
+
+            if (_centerBarracksView == null)
+                return false;
+
+            if (!TryProjectWorldToCanvasPoint(ResolveArrowWorldPosition(_centerBarracksView), out localPoint))
+                return false;
+
+            localPoint += new Vector2(0f, 122f);
+            return true;
+        }
+
+        bool TryProjectTargetToCanvasPoint(RectTransform target, bool pointDownFromAbove, out Vector2 localPoint)
+        {
+            localPoint = Vector2.zero;
+            if (_mainCanvas == null || target == null)
+                return false;
+
+            RectTransform canvasRect = _mainCanvas.transform as RectTransform;
+            if (canvasRect == null)
+                return false;
+
+            var camera = ResolveCanvasEventCamera();
+            Vector3[] corners = new Vector3[4];
+            target.GetWorldCorners(corners);
+            Vector3 anchorPoint = pointDownFromAbove
+                ? (corners[1] + corners[2]) * 0.5f
+                : (corners[0] + corners[3]) * 0.5f;
+            Vector2 screenPoint = RectTransformUtility.WorldToScreenPoint(camera, anchorPoint);
+            return RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPoint, camera, out localPoint);
+        }
+
+        bool TryProjectWorldToCanvasPoint(Vector3 worldPosition, out Vector2 localPoint)
+        {
+            localPoint = Vector2.zero;
+            if (_mainCanvas == null)
+                return false;
+
+            RectTransform canvasRect = _mainCanvas.transform as RectTransform;
+            if (canvasRect == null)
+                return false;
+
+            var worldCamera = _mainCanvas.renderMode == RenderMode.ScreenSpaceOverlay
+                ? Camera.main
+                : (_mainCanvas.worldCamera != null ? _mainCanvas.worldCamera : Camera.main);
+            var screenPoint = RectTransformUtility.WorldToScreenPoint(worldCamera, worldPosition);
+            return RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPoint, ResolveCanvasEventCamera(), out localPoint);
+        }
+
+        Camera ResolveCanvasEventCamera()
+        {
+            return _mainCanvas != null && _mainCanvas.renderMode != RenderMode.ScreenSpaceOverlay
+                ? _mainCanvas.worldCamera
+                : null;
+        }
+
+        void HandleTooltipButtonPressed()
+        {
+            if (!UserPreferencesManager.ShowTooltips)
+                return;
+
+            _tooltipExpanded = true;
+            UpdateTooltipButtonStateVisual();
+            SetPromptVisible(_tooltipExpanded);
+        }
+
+        void UpdateTooltipButtonStateVisual()
+        {
+            if (_tooltipButton == null)
+                return;
+
+            var image = _tooltipButton.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = new Color(0.10f, 0.22f, 0.30f, 0.96f);
+            }
+
+            if (_tooltipButtonLabel != null)
+                _tooltipButtonLabel.text = "TIP";
+        }
+
         static Quaternion ResolveFacingRotation(Vector3 worldPosition)
         {
             var camera = Camera.main;
@@ -1070,10 +1479,43 @@ namespace CastleDefender.Game
             FortressSelectionController.OpenBarracksSite(laneIndex, CenterBarracksId);
         }
 
+        void HandlePromptHidePressed()
+        {
+            _tooltipExpanded = false;
+            UpdateTooltipButtonStateVisual();
+            SetPromptVisible(false);
+            UpdateTooltipButtonVisual();
+        }
+
+        void HandleTooltipPreferenceChanged(bool enabled)
+        {
+            UserPreferencesManager.SetTooltipsVisible(enabled);
+            if (!enabled)
+            {
+                _tooltipExpanded = false;
+                SetPromptVisible(false);
+                SetTooltipButtonVisible(false);
+                HideIndicators();
+                return;
+            }
+
+            _tooltipExpanded = true;
+            SetPromptVisible(true);
+            UpdateIndicators();
+            UpdateTooltipButtonVisual();
+        }
+
         void SetPromptVisible(bool visible)
         {
+            _promptTooltipToggle?.SetIsOnWithoutNotify(UserPreferencesManager.ShowTooltips);
             if (_promptRoot != null)
                 _promptRoot.gameObject.SetActive(visible);
+        }
+
+        void SetTooltipButtonVisible(bool visible)
+        {
+            if (_tooltipButtonRoot != null)
+                _tooltipButtonRoot.gameObject.SetActive(visible);
         }
 
         void SetWorldArrowVisible(bool visible)

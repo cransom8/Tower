@@ -41,6 +41,10 @@ namespace CastleDefender.Net
             ? Instance._current.visuals.showEngagementCircles
             : DefaultPreferences.visuals.showEngagementCircles;
 
+        public static bool ShowTooltips => Instance != null
+            ? Instance._current.visuals.showTooltips
+            : DefaultPreferences.visuals.showTooltips;
+
         public static UserPreferencesData CurrentPreferences => Instance != null
             ? Instance._current.Clone()
             : DefaultPreferences.Clone();
@@ -86,6 +90,11 @@ namespace CastleDefender.Net
         public static void SetHealthBarsVisible(bool enabled)
         {
             EnsureInstance().SetHealthBarsVisibleInternal(enabled);
+        }
+
+        public static void SetTooltipsVisible(bool enabled)
+        {
+            EnsureInstance().SetTooltipsVisibleInternal(enabled);
         }
 
         public static void NotifyMasterVolumeChanged(float linear)
@@ -287,6 +296,15 @@ namespace CastleDefender.Net
                 return;
 
             _current.visuals.showHealthBars = enabled;
+            SetCurrent(_current, markDirty: true, applyToRuntime: false, broadcast: true);
+        }
+
+        void SetTooltipsVisibleInternal(bool enabled)
+        {
+            if (_current.visuals.showTooltips == enabled)
+                return;
+
+            _current.visuals.showTooltips = enabled;
             SetCurrent(_current, markDirty: true, applyToRuntime: false, broadcast: true);
         }
 
@@ -502,6 +520,7 @@ namespace CastleDefender.Net
             {
                 normalized.visuals.showEngagementCircles = preferences.visuals.showEngagementCircles;
                 normalized.visuals.showHealthBars = preferences.visuals.showHealthBars;
+                normalized.visuals.showTooltips = preferences.visuals.showTooltips;
             }
 
             if (preferences.audio != null)
@@ -616,6 +635,7 @@ namespace CastleDefender.Net
     {
         public bool showEngagementCircles = true;
         public bool showHealthBars = true;
+        public bool showTooltips = true;
 
         public static UserVisualPreferences CreateDefault()
         {
@@ -628,6 +648,7 @@ namespace CastleDefender.Net
             {
                 showEngagementCircles = showEngagementCircles,
                 showHealthBars = showHealthBars,
+                showTooltips = showTooltips,
             };
         }
     }
