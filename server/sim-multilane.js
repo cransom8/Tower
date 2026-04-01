@@ -41,6 +41,7 @@ const {
 const fortressSystem = require("./game/multilane/fortressSystem");
 const barracksSystem = require("./game/multilane/barracksSystem");
 const laneCommandSystem = require("./game/multilane/laneCommandSystem");
+const routeRuntimeSystem = require("./game/multilane/routeRuntimeSystem");
 const spawnSystem = require("./game/multilane/spawnSystem");
 const waveSystem = require("./game/multilane/waveSystem");
 const combatSystem = require("./game/multilane/combatSystem");
@@ -314,49 +315,49 @@ const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   set_autosend: "CMD autosend was removed. Units must come from Barracks.",
 });
 
-// Route topology and reusable route math now live in server/game/multilane/routeGraph.js.
+// Shared route runtime now lives in server/game/multilane/routeRuntimeSystem.js.
 function normalize2D(vec) {
-  return routeGraph.normalize2D(vec);
+  return routeRuntimeSystem.normalize2D(vec);
 }
 
 function perpendicular2D(vec) {
-  return routeGraph.perpendicular2D(vec);
+  return routeRuntimeSystem.perpendicular2D(vec);
 }
 
 function getLaneNodeId(laneIndex) {
-  return routeGraph.getLaneNodeId(laneIndex);
+  return routeRuntimeSystem.getLaneNodeId(laneIndex);
 }
 
 function getWaveSpawnNodeId(laneIndex) {
-  return routeGraph.getWaveSpawnNodeId(laneIndex);
+  return routeRuntimeSystem.getWaveSpawnNodeId(laneIndex);
 }
 
 function getLaneCombatAxes(laneIndex) {
-  return routeGraph.getLaneCombatAxes(laneIndex);
+  return routeRuntimeSystem.getLaneCombatAxes(laneIndex);
 }
 
 function getBarracksRouteStartNodeId(laneIndex, barracksId) {
-  return routeGraph.getBarracksRouteStartNodeId(laneIndex, barracksId);
+  return routeRuntimeSystem.getBarracksRouteStartNodeId(laneIndex, barracksId);
 }
 
 function getLaneCoreNodeIdForRouteNode(nodeId) {
-  return routeGraph.getLaneCoreNodeIdForRouteNode(nodeId);
+  return routeRuntimeSystem.getLaneCoreNodeIdForRouteNode(nodeId);
 }
 
 function isBarracksRouteStartNode(nodeId) {
-  return routeGraph.isBarracksRouteStartNode(nodeId);
+  return routeRuntimeSystem.isBarracksRouteStartNode(nodeId);
 }
 
 function getWaveSpawnWorldPosition(laneIndex) {
-  return routeGraph.getWaveSpawnWorldPosition(laneIndex);
+  return routeRuntimeSystem.getWaveSpawnWorldPosition(laneIndex);
 }
 
 function getPadWorldPosition(laneIndex, gridX, gridY) {
-  return routeGraph.getPadWorldPosition(laneIndex, gridX, gridY);
+  return routeRuntimeSystem.getPadWorldPosition(laneIndex, gridX, gridY);
 }
 
 function getBarracksSiteWorldPosition(laneIndex, barracksId) {
-  return routeGraph.getBarracksSiteWorldPosition(laneIndex, barracksId);
+  return routeRuntimeSystem.getBarracksSiteWorldPosition(laneIndex, barracksId);
 }
 
 function resolveOuterLoopTargetLaneIndex(game, sourceLaneIndex) {
@@ -466,70 +467,51 @@ function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, barracksId) {
 }
 
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
-  return routeGraph.buildRouteSegments(routeType, sourceNodeId, targetNodeId);
+  return routeRuntimeSystem.buildRouteSegments(routeType, sourceNodeId, targetNodeId);
 }
 
 function parseRouteSegmentId(segmentId) {
-  return routeGraph.parseRouteSegmentId(segmentId);
+  return routeRuntimeSystem.parseRouteSegmentId(segmentId);
 }
 
 function getRouteLength(routeSegments) {
-  return routeGraph.getRouteLength(routeSegments);
+  return routeRuntimeSystem.getRouteLength(routeSegments);
 }
 
 function sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset = 0) {
-  return routeGraph.sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset);
+  return routeRuntimeSystem.sampleRoutePosition(routeSegments, segmentIndex, segmentProgress, lateralOffset);
 }
 
 function advanceRouteState(unit, deltaDistance) {
-  return routeGraph.advanceRouteState(unit, deltaDistance);
-}
-
-function moveScalarToward(value, target, maxDelta) {
-  const numericValue = Number(value);
-  const numericTarget = Number(target);
-  const safeDelta = Math.max(0, Number(maxDelta) || 0);
-  if (!Number.isFinite(numericValue))
-    return Number.isFinite(numericTarget) ? numericTarget : 0;
-  if (!Number.isFinite(numericTarget))
-    return numericValue;
-  if (safeDelta <= 0)
-    return numericValue;
-
-  const delta = numericTarget - numericValue;
-  if (Math.abs(delta) <= safeDelta)
-    return numericTarget;
-  return numericValue + (Math.sign(delta) * safeDelta);
+  return routeRuntimeSystem.advanceRouteState(unit, deltaDistance);
 }
 
 function relaxUnitRouteOffsets(unit, speed) {
-  return laneCommandSystem.relaxUnitRouteOffsets(unit, speed, LANE_COMMAND_SYSTEM_DEPS);
+  return routeRuntimeSystem.relaxUnitRouteOffsets(unit, speed, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function setUnitRouteSnapshotState(unit) {
-  return laneCommandSystem.setUnitRouteSnapshotState(unit, LANE_COMMAND_SYSTEM_DEPS);
+  return routeRuntimeSystem.setUnitRouteSnapshotState(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function computeUnitRoutePathIndex(unit) {
-  return routeGraph.computeUnitRoutePathIndex(unit);
+  return routeRuntimeSystem.computeUnitRoutePathIndex(unit);
 }
 
 function sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset = 0, lateralOffset = 0) {
-  return routeGraph.sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset, lateralOffset);
+  return routeRuntimeSystem.sampleContinuousRoutePosition(routeSegments, routeProgress, longitudinalOffset, lateralOffset);
 }
 
 function resolveSpawnOriginForUnit(unit, targetLane) {
-  return laneCommandSystem.resolveSpawnOriginForUnit
-    ? laneCommandSystem.resolveSpawnOriginForUnit(unit, targetLane, LANE_COMMAND_SYSTEM_DEPS)
-    : null;
+  return routeRuntimeSystem.resolveSpawnOriginForUnit(unit, targetLane, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveRouteContractForUnit(game, targetLane, unit) {
-  return laneCommandSystem.resolveRouteContractForUnit(game, targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
+  return routeRuntimeSystem.resolveRouteContractForUnit(game, targetLane, unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveRedirectRouteContractForExistingLaneControlledUnit(game, currentLane, targetLane, unit) {
-  return laneCommandSystem.resolveRedirectRouteContractForExistingLaneControlledUnit(
+  return routeRuntimeSystem.resolveRedirectRouteContractForExistingLaneControlledUnit(
     game,
     currentLane,
     targetLane,
@@ -538,20 +520,8 @@ function resolveRedirectRouteContractForExistingLaneControlledUnit(game, current
   );
 }
 
-function isSameLaneHoldRouteContract(routeContract, sourceLaneIndex, targetLaneIndex) {
-  if (!routeContract)
-    return false;
-  if (!Number.isInteger(sourceLaneIndex) || !Number.isInteger(targetLaneIndex))
-    return false;
-  if (sourceLaneIndex !== targetLaneIndex)
-    return false;
-
-  const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeContract.sourceNodeId);
-  return !!sourceCoreNodeId && routeContract.targetNodeId === sourceCoreNodeId;
-}
-
 function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos) {
-  return laneCommandSystem.initializeMovingUnitRouteState(
+  return routeRuntimeSystem.initializeMovingUnitRouteState(
     game,
     targetLane,
     unit,
@@ -561,7 +531,7 @@ function initializeMovingUnitRouteState(game, targetLane, unit, spawnLogicalPos)
 }
 
 function applyRouteContractToExistingUnit(unit, routeContract, currentPosition = null) {
-  return laneCommandSystem.applyRouteContractToExistingUnit(
+  return routeRuntimeSystem.applyRouteContractToExistingUnit(
     unit,
     routeContract,
     currentPosition,
@@ -570,39 +540,31 @@ function applyRouteContractToExistingUnit(unit, routeContract, currentPosition =
 }
 
 function getUnitForwardDirection(unit) {
-  if (!unit || !Array.isArray(unit.routeSegments) || unit.routeSegments.length === 0)
-    return { x: 0, y: 1 };
-  const sample = sampleContinuousRoutePosition(
-    unit.routeSegments,
-    computeUnitRoutePathIndex(unit),
-    0,
-    0
-  );
-  return sample ? sample.tangent : { x: 0, y: 1 };
+  return routeRuntimeSystem.getUnitForwardDirection(unit);
 }
 
 function buildSampledPathFromSegments(routeSegments, sampleCount = 28) {
-  return routeGraph.buildSampledPathFromSegments(routeSegments, sampleCount);
+  return routeRuntimeSystem.buildSampledPathFromSegments(routeSegments, sampleCount);
 }
 
 function sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset = 0) {
-  return routeGraph.sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset);
+  return routeRuntimeSystem.sampleRouteByDistanceNorm(routeSegments, routeProgress, lateralOffset);
 }
 
 function projectPointOntoPolyline(points, targetPoint) {
-  return routeGraph.projectPointOntoPolyline(points, targetPoint);
+  return routeRuntimeSystem.projectPointOntoPolyline(points, targetPoint);
 }
 
 function projectPointOntoRouteSegments(routeSegments, targetPoint) {
-  return routeGraph.projectPointOntoRouteSegments(routeSegments, targetPoint);
+  return routeRuntimeSystem.projectPointOntoRouteSegments(routeSegments, targetPoint);
 }
 
 function syncUnitRouteStateToWorldPosition(unit, worldPosition = null) {
-  return laneCommandSystem.syncUnitRouteStateToWorldPosition(unit, worldPosition, LANE_COMMAND_SYSTEM_DEPS);
+  return routeRuntimeSystem.syncUnitRouteStateToWorldPosition(unit, worldPosition, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function syncMovedUnitPathState(unit) {
-  return laneCommandSystem.syncMovedUnitPathState(unit, LANE_COMMAND_SYSTEM_DEPS);
+  return routeRuntimeSystem.syncMovedUnitPathState(unit, LANE_COMMAND_SYSTEM_DEPS);
 }
 
 function resolveLaneAnchorColumns(unitCount) {
@@ -1031,15 +993,15 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit) {
 }
 
 function buildRoutePathId(routeSegments) {
-  return routeGraph.buildRoutePathId(routeSegments);
+  return routeRuntimeSystem.buildRoutePathId(routeSegments);
 }
 
 function resolveUnitNextWaypoint(unit) {
-  return routeGraph.resolveUnitNextWaypoint(unit);
+  return routeRuntimeSystem.resolveUnitNextWaypoint(unit);
 }
 
 function dot2D(a, b) {
-  return routeGraph.dot2D(a, b);
+  return routeRuntimeSystem.dot2D(a, b);
 }
 
 function resolveSpawnLogicalPosition(spawnType, resolvedSpawnIndex) {
