@@ -1,6 +1,10 @@
 'use strict';
 const log = require('../logger');
 
+function getQueryRunner(db, options = {}) {
+  return options.client || db;
+}
+
 // ── Season Service ─────────────────────────────────────────────────────────────
 //
 // Manages season lifecycle and per-player peak rating tracking.
@@ -9,10 +13,11 @@ const log = require('../logger');
 /**
  * Get the currently active season, or null.
  */
-async function getActiveSeason(db) {
-  if (!db) return null;
+async function getActiveSeason(db, options = {}) {
+  const runner = getQueryRunner(db, options);
+  if (!runner) return null;
   try {
-    const res = await db.query(
+    const res = await runner.query(
       `SELECT id, name, start_date FROM seasons WHERE is_active = true LIMIT 1`
     );
     return res.rows[0] || null;
@@ -26,10 +31,11 @@ async function getActiveSeason(db) {
  * Upsert season_ratings: bump peak_rating if newRating exceeds current stored peak.
  * Fire-and-forget — never throws.
  */
-async function updatePeakRating(db, seasonId, playerId, mode, newRating) {
-  if (!db || !seasonId || !playerId) return;
+async function updatePeakRating(db, seasonId, playerId, mode, newRating, options = {}) {
+  const runner = getQueryRunner(db, options);
+  if (!runner || !seasonId || !playerId) return;
   try {
-    await db.query(
+    await runner.query(
       `INSERT INTO season_ratings (season_id, player_id, mode, peak_rating)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (season_id, player_id, mode) DO UPDATE

@@ -39,10 +39,8 @@ function createMultilaneRuntime({
   logMatchStart,
   mlRoomsByCode,
   normalizeMatchSettings,
-  ratingService,
   resolveLoadout,
   sanitizeDisplayName,
-  seasonService,
   sessionBySocketId,
   simMl,
   socketByPlayerId,
@@ -1159,57 +1157,28 @@ function createMultilaneRuntime({
           result: hasWinnerLane && player.laneIndex === winnerLane ? "win" : "loss",
         }));
 
-        const endPromise = logMatchEnd(entry.matchIdPromise, winnerLane, snapshots);
-        if (db && entry.combatEvents && entry.combatEvents.length > 0) {
-          Promise.resolve(entry.matchIdPromise).then(matchId => {
-            if (matchId) db.query(
-              'UPDATE matches SET combat_log=$1 WHERE id=$2',
-              [JSON.stringify(entry.combatEvents), matchId]
-            ).catch(() => {});
-          });
-        }
-        if (db && entry.game.roundSnapshots && entry.game.roundSnapshots.length > 0) {
-          Promise.resolve(entry.matchIdPromise).then(matchId => {
-            if (matchId) db.query(
-              'UPDATE matches SET wave_stats=$1 WHERE id=$2',
-              [JSON.stringify(entry.game.roundSnapshots), matchId]
-            ).catch(() => {});
-          });
-        }
-        if (ratingService && db && entry.dbMode && entry.dbMode.endsWith("_ranked")) {
-          Promise.all([endPromise, entry.matchIdPromise])
-            .then(([, matchId]) =>
-              ratingService.updateRatings(db, matchId, entry.dbMode, snapshots, entry.partyASize)
-            )
-            .then((updates) => {
-              for (const update of updates) {
-                const sid = socketByPlayerId.get(update.playerId);
-                if (!sid) continue;
-                const totalMatches = (update.wins || 0) + (update.losses || 0);
-                const isPlacement = totalMatches < 10;
-                io.to(sid).emit("rating_update", {
-                  mode: entry.dbMode,
-                  newRating: Math.round(update.newRating),
-                  delta: Math.round(update.delta),
-                  isPlacement,
-                  placementProgress: isPlacement ? `${totalMatches}/10` : null,
-                });
-              }
-
-              if (seasonService && updates.length > 0) {
-                seasonService
-                  .getActiveSeason(db)
-                  .then((season) => {
-                    if (!season) return;
-                    for (const update of updates) {
-                      seasonService.updatePeakRating(db, season.id, update.playerId, entry.dbMode, update.newRating);
-                    }
-                  })
-                  .catch(() => {});
-              }
-            })
-            .catch((err) => log.error("[rating] error:", { err: err.message }));
-        }
+        logMatchEnd(entry.matchIdPromise, winnerLane, snapshots, {
+          mode: entry.dbMode,
+          partyASize: entry.partyASize,
+          combatLog: entry.combatEvents,
+          waveStats: entry.game.roundSnapshots,
+        })
+          .then(({ ratingUpdates }) => {
+            for (const update of ratingUpdates || []) {
+              const sid = socketByPlayerId.get(update.playerId);
+              if (!sid) continue;
+              const totalMatches = (update.wins || 0) + (update.losses || 0);
+              const isPlacement = totalMatches < 10;
+              io.to(sid).emit("rating_update", {
+                mode: entry.dbMode,
+                newRating: Math.round(update.newRating),
+                delta: Math.round(update.delta),
+                isPlacement,
+                placementProgress: isPlacement ? `${totalMatches}/10` : null,
+              });
+            }
+          })
+          .catch((err) => log.error("[match] finalization error:", { err: err.message }));
 
         stopMLGame(roomId, code);
       }

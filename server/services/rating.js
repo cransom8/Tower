@@ -1,5 +1,7 @@
 'use strict';
 
+const log = require('../logger');
+
 // ── Glicko-2 Rating Service ───────────────────────────────────────────────────
 //
 // For a 2v2 match, team assignment follows laneIndex:
@@ -17,6 +19,10 @@ const SCALE = 173.7178;
 const TAU   = 0.5;       // system constant (limits volatility change per period)
 const EPSILON = 1e-6;    // convergence tolerance for Illinois algorithm
 const DEFAULT_VOLATILITY = 0.06;   // fixed per-match volatility (not stored in DB)
+
+function getReadRunner(db, options = {}) {
+  return options.client || db;
+}
 
 // ── Glicko-2 math ─────────────────────────────────────────────────────────────
 
@@ -116,19 +122,41 @@ function _teamComposite(internalPlayers) {
  */
 const RANKED_MODES = new Set(['2v2_ranked', '1v1_ranked', 'ffa_ranked']);
 
-async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
+async function updateRatings(db, matchId, mode, snapshots, partyASize = 1, options = {}) {
   if (!RANKED_MODES.has(mode)) return [];
   if (!db) return [];
+  const readRunner = getReadRunner(db, options);
 
   // Only process authenticated players with a decisive result
   const players = snapshots.filter(s => s.playerId && (s.result === 'win' || s.result === 'loss' || s.result === 'draw'));
   if (players.length < 2) return [];
 
+  if (matchId) {
+    try {
+      const existing = await readRunner.query(
+        `SELECT 1
+           FROM rating_history
+          WHERE match_id = $1
+            AND mode = $2
+          LIMIT 1`,
+        [matchId, mode]
+      );
+      if (existing.rows.length > 0) {
+        log.warn('[rating] skipping duplicate rating finalization', { matchId, mode });
+        return [];
+      }
+    } catch (err) {
+      log.error('[rating] duplicate-check failed:', { err: err.message, matchId, mode });
+      if (options.client) throw err;
+      return [];
+    }
+  }
+
   // Fetch current ratings for all players
   const allIds = players.map(p => p.playerId);
   let rows;
   try {
-    const res = await db.query(
+    const res = await readRunner.query(
       `SELECT player_id, mu, sigma, wins, losses FROM ratings WHERE player_id = ANY($1) AND mode = $2`,
       [allIds, mode]
     );
@@ -229,9 +257,11 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
   } // end else (team-based)
 
   // Write to DB in a single transaction
-  const client = await db.getClient();
+  const externalClient = options.client || null;
+  const client = externalClient || await db.getClient();
   try {
-    await client.query('BEGIN');
+    if (!externalClient)
+      await client.query('BEGIN');
     for (const u of updates) {
       const winInc  = u.result === 'win'  ? 1 : 0;
       const lossInc = u.result === 'loss' ? 1 : 0;
@@ -254,13 +284,18 @@ async function updateRatings(db, matchId, mode, snapshots, partyASize = 1) {
         [u.playerId, matchId, mode, u.old_mu, u.old_sigma, u.new_mu, u.new_sigma, u.delta]
       );
     }
-    await client.query('COMMIT');
+    if (!externalClient)
+      await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK');
-    log.error('[rating] transaction failed:', { err: err.message });
-    return [];
+    if (!externalClient) {
+      await client.query('ROLLBACK');
+      log.error('[rating] transaction failed:', { err: err.message });
+      return [];
+    }
+    throw err;
   } finally {
-    client.release();
+    if (!externalClient)
+      client.release();
   }
 
   log.info(`[rating] updated ${updates.length} player(s) for match ${matchId} mode=${mode}`);

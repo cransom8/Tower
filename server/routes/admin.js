@@ -11,6 +11,7 @@ const path     = require('path');
 const log      = require('../logger');
 const branding = require('../branding');
 const unitTypes = require('../unitTypes');
+const { FLAG_DEFAULTS } = require('../services/featureFlagCache');
 const { getLockedWavePlan, getTTOnboarding, getWavePreview } = require('../waveDefenseSpec');
 const { VALID_UNIT_USAGE_SCOPES, normalizeUnitUsageScope, canUseInWaves } = require('../unitUsage');
 
@@ -1236,12 +1237,22 @@ router.post('/seasons/:id/close', requireAdmin, requirePermission('season.write'
 
 // ── Feature flags ─────────────────────────────────────────────────────────────
 
-const DEFAULT_FLAGS = [
-  { name: 'maintenance_mode',        enabled: false, notes: 'Block new connections' },
-  { name: 'ranked_queue_enabled',    enabled: true,  notes: 'Enable ranked queue' },
-  { name: 'new_player_registration', enabled: true,  notes: 'Allow new registrations' },
-  { name: 'casual_queue_enabled',    enabled: true,  notes: 'Enable casual queue' },
-];
+const FLAG_NOTES = {
+  maintenance_mode: 'Block new connections',
+  ranked_queue_enabled: 'Enable ranked queue',
+  new_player_registration: 'Allow new registrations',
+  casual_queue_enabled: 'Enable casual queue',
+  survival_public_enabled: 'Allow public survival queue',
+  public_ffa_enabled: 'Allow public FFA matchmaking',
+  private_match_enabled: 'Allow private lobby creation',
+  '1v1_ranked_enabled': 'Enable ranked 1v1',
+};
+
+const DEFAULT_FLAGS = Object.keys(FLAG_NOTES).map((name) => ({
+  name,
+  enabled: Object.prototype.hasOwnProperty.call(FLAG_DEFAULTS, name) ? FLAG_DEFAULTS[name] : false,
+  notes: FLAG_NOTES[name],
+}));
 
 router.get('/flags', requireAdmin, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.json({ flags: DEFAULT_FLAGS });

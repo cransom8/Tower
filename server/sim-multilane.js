@@ -630,11 +630,15 @@ const resolveSpawnLogicalPosition = bindSystemMethodWithDeps(
   "resolveSpawnLogicalPosition",
   () => SPAWN_SYSTEM_DEPS
 );
-const validateSpawnDefinition = bindSystemMethodWithDeps(
-  spawnSystem,
-  "validateSpawnDefinition",
-  () => SPAWN_SYSTEM_DEPS
-);
+function validateSpawnDefinition(game, targetLane, waveDef, options = {}) {
+  return spawnSystem.validateSpawnDefinition(
+    game,
+    targetLane,
+    waveDef,
+    options,
+    SPAWN_SYSTEM_DEPS
+  );
+}
 const getEffectiveWaveEntrySpeedMult = bindSystemMethodWithDeps(
   spawnSystem,
   "getEffectiveWaveEntrySpeedMult",

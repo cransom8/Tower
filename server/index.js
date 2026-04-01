@@ -25,6 +25,7 @@ const { createLoadoutHelpers } = require("./game/loadoutHelpers");
 const { createMatchPersistence } = require("./game/matchPersistence");
 const { createMultilaneRuntime } = require("./game/multilaneRuntime");
 const {
+  authenticateSocketToken,
   createCodeGenerator,
   createRateLimiters,
   createReconnectTokenHelpers,
@@ -501,13 +502,14 @@ const io = new Server(server, {
 });
 
 app.locals.io = io;
+app.locals.featureFlagCache = featureFlagCache;
 
 const runtimeState = createRuntimeState(app);
 const generateCode = createCodeGenerator();
 const { checkLobbyRateLimit, checkActionRateLimit } = createRateLimiters(runtimeState);
 const { issueReconnectToken, verifyReconnectToken } = createReconnectTokenHelpers(process.env.JWT_SECRET);
 const { resolveLoadout, validateLoadoutSelection, hasValidInlineLoadoutIds } = createLoadoutHelpers({ db, unitTypes, log });
-const { logMatchStart, logMatchEnd } = createMatchPersistence({ db, log });
+const { logMatchStart, logMatchEnd } = createMatchPersistence({ db, log, ratingService, seasonService });
 
 installSocketAuth(io, {
   authService,
@@ -530,10 +532,8 @@ const multilaneRuntime = createMultilaneRuntime({
   logMatchStart,
   mlRoomsByCode: runtimeState.mlRoomsByCode,
   normalizeMatchSettings,
-  ratingService,
   resolveLoadout,
   sanitizeDisplayName,
-  seasonService,
   sessionBySocketId: runtimeState.sessionBySocketId,
   simMl,
   socketByPlayerId: runtimeState.socketByPlayerId,
@@ -542,7 +542,6 @@ const multilaneRuntime = createMultilaneRuntime({
 });
 
 const { onMatchFound } = registerSocketHandlers({
-  authService,
   checkActionRateLimit,
   checkLobbyRateLimit,
   createMLRoom: multilaneRuntime.createMLRoom,
@@ -577,6 +576,12 @@ const { onMatchFound } = registerSocketHandlers({
   validateMlTeamSetup: multilaneRuntime.validateMlTeamSetup,
   verifyReconnectToken,
   applyMultilaneAction: multilaneRuntime.applyMultilaneAction,
+  authenticateSocketToken: (socket, token) => authenticateSocketToken(socket, token, {
+    authService,
+    db,
+    playerBanCache: runtimeState.playerBanCache,
+    PLAYER_BAN_CACHE_TTL_MS: runtimeState.PLAYER_BAN_CACHE_TTL_MS,
+  }),
   RECONNECT_GRACE_MS: runtimeState.RECONNECT_GRACE_MS,
   isEnabled: featureFlagCache.isEnabled,
 });
@@ -652,7 +657,7 @@ async function startServer() {
     log.warn("JWT_SECRET is not set - authentication will not work securely");
   }
   if (process.env.NODE_ENV === "production" && !process.env.ALLOWED_ORIGIN) {
-    log.warn("ALLOWED_ORIGIN not set in production - CORS allows all origins");
+    log.warn("ALLOWED_ORIGIN not set in production - CORS will default to http://localhost:3000");
   }
 
   if (process.env.DATABASE_URL) {
@@ -674,13 +679,14 @@ async function startServer() {
         stdout: stdout || null,
         stack: err?.stack || null,
       });
+      throw err;
     }
   }
 
   if (db) {
     unitTypes.loadUnitTypes(db).catch((err) => log.warn("unit types load failed", { err: err && (err.stack || err.message || String(err)) }));
     barracksLevels.loadBarracksLevels(db).catch((err) => log.warn("barracks levels load failed", { err: err && (err.stack || err.message || String(err)) }));
-    featureFlagCache.start();
+    await featureFlagCache.start();
   }
 
   matchmaker.startMatchmakingLoop(io, runtimeState.partiesById, runtimeState.socketByPlayerId, onMatchFound);
@@ -737,4 +743,9 @@ function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
-startServer();
+startServer().catch((err) => {
+  log.error("server startup failed", {
+    err: err && (err.stack || err.message || String(err)),
+  });
+  process.exit(1);
+});

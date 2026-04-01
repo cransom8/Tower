@@ -125,6 +125,10 @@ router.post('/google', async (req, res) => {
 // Returns: { accessToken, refreshToken, player }
 router.post('/register', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'Database not configured' });
+  const featureFlagCache = req.app?.locals?.featureFlagCache || null;
+  if (featureFlagCache && !featureFlagCache.isEnabled('new_player_registration')) {
+    return res.status(503).json({ error: 'Registration is currently disabled' });
+  }
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
   if (!checkAuthRateLimit(ip)) {
     return res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });

@@ -19,34 +19,71 @@ function parseCookies(cookieStr) {
   return out;
 }
 
+async function resolvePlayerSuspensionState(playerId, { db, playerBanCache, PLAYER_BAN_CACHE_TTL_MS }) {
+  if (!db || !playerId) return false;
+
+  const cached = playerBanCache.get(playerId);
+  if (cached && Date.now() - cached.cachedAt < PLAYER_BAN_CACHE_TTL_MS)
+    return !!cached.suspended;
+
+  const result = await db.query("SELECT status FROM players WHERE id = $1", [playerId]);
+  const suspended = result.rows[0]?.status === "suspended";
+  playerBanCache.set(playerId, { suspended, cachedAt: Date.now() });
+  return suspended;
+}
+
+async function authenticateSocketToken(socket, token, {
+  authService,
+  db,
+  playerBanCache,
+  PLAYER_BAN_CACHE_TTL_MS,
+}) {
+  if (!token || typeof token !== "string") {
+    return { ok: false, code: "missing_token", message: "Sign in required." };
+  }
+
+  let payload;
+  try {
+    payload = authService.verifyAccessToken(token);
+  } catch {
+    return { ok: false, code: "invalid_token", message: "Invalid or expired token" };
+  }
+
+  try {
+    const suspended = await resolvePlayerSuspensionState(payload.sub, {
+      db,
+      playerBanCache,
+      PLAYER_BAN_CACHE_TTL_MS,
+    });
+    if (suspended) {
+      socket.playerBanned = true;
+      return { ok: false, code: "suspended", message: "Your account has been suspended." };
+    }
+  } catch {
+    return { ok: false, code: "auth_unavailable", message: "Authentication unavailable. Please try again." };
+  }
+
+  socket.playerId = payload.sub;
+  socket.playerDisplayName = payload.displayName;
+  socket.playerBanned = false;
+  return {
+    ok: true,
+    playerId: payload.sub,
+    displayName: payload.displayName,
+  };
+}
+
 function installSocketAuth(io, { authService, db, playerBanCache, PLAYER_BAN_CACHE_TTL_MS }) {
   io.use(async (socket, next) => {
     const cookies = parseCookies(socket.handshake.headers?.cookie);
     const token = socket.handshake.auth?.token || cookies.cd_access || null;
-    if (token) {
-      try {
-        const payload = authService.verifyAccessToken(token);
-        socket.playerId = payload.sub;
-        socket.playerDisplayName = payload.displayName;
-        if (db) {
-          try {
-            const cached = playerBanCache.get(payload.sub);
-            if (cached && Date.now() - cached.cachedAt < PLAYER_BAN_CACHE_TTL_MS) {
-              if (cached.suspended) socket.playerBanned = true;
-            } else {
-              const result = await db.query("SELECT status FROM players WHERE id = $1", [payload.sub]);
-              const suspended = result.rows[0]?.status === "suspended";
-              playerBanCache.set(payload.sub, { suspended, cachedAt: Date.now() });
-              if (suspended) socket.playerBanned = true;
-            }
-          } catch {
-            // Ignore ban-cache lookup failures and continue as authenticated.
-          }
-        }
-      } catch {
-        // Invalid/expired token falls through to guest behavior.
-      }
-    }
+    if (token)
+      await authenticateSocketToken(socket, token, {
+        authService,
+        db,
+        playerBanCache,
+        PLAYER_BAN_CACHE_TTL_MS,
+      });
     next();
   });
 }
@@ -207,18 +244,19 @@ function normalizeMatchSettings(settings) {
 }
 
 function requireAuthSocket(socket, cb) {
-  if (!socket.playerId) {
-    socket.emit("error_message", { message: "Sign in required." });
-    return false;
-  }
   if (socket.playerBanned) {
     socket.emit("error_message", { message: "Your account has been suspended." });
+    return false;
+  }
+  if (!socket.playerId) {
+    socket.emit("error_message", { message: "Sign in required." });
     return false;
   }
   return cb();
 }
 
 module.exports = {
+  authenticateSocketToken,
   createCodeGenerator,
   createRateLimiters,
   createReconnectTokenHelpers,

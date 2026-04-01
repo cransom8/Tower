@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+const log = require("../logger");
 const router = express.Router();
 
 // GET /matches/history?playerId=<uuid>&page=<int>

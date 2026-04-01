@@ -10,7 +10,6 @@ const {
 
 function registerSocketHandlers({
   attachTakeoverBot,
-  authService,
   buildAvailableUnits,
   buildRematchStatus,
   checkActionRateLimit,
@@ -46,6 +45,7 @@ function registerSocketHandlers({
   validateMlTeamSetup,
   verifyReconnectToken,
   applyMultilaneAction,
+  authenticateSocketToken,
   RECONNECT_GRACE_MS,
   isEnabled,
 }) {
@@ -387,36 +387,35 @@ function registerSocketHandlers({
       }
     }
 
-    socket.on("authenticate", ({ token } = {}) => {
+    socket.on("authenticate", async ({ token } = {}) => {
       if (!checkLobbyRateLimit(socket.id, socket.handshake.address)) return;
       if (!token) return;
-      try {
-        const payload = authService.verifyAccessToken(token);
-        socket.playerId = payload.sub;
-        socket.playerDisplayName = payload.displayName;
-        socketByPlayerId.set(socket.playerId, socket.id);
-        socket.emit("authenticated", { playerId: socket.playerId, displayName: socket.playerDisplayName });
-        if (db) {
-          getFriendsList(socket.playerId)
-            .then((friends) => {
-              socket.emit("friends_list", friends);
-              for (const friend of friends) {
-                if (friend.status !== "accepted") continue;
-                const sid = socketByPlayerId.get(friend.playerId);
-                if (!sid) continue;
-                const friendSock = io.sockets.sockets.get(sid);
-                if (friendSock) {
-                  friendSock.emit("friend_online", {
-                    playerId: socket.playerId,
-                    displayName: socket.playerDisplayName,
-                  });
-                }
+      const authResult = await authenticateSocketToken(socket, token);
+      if (!authResult.ok) {
+        socket.emit("auth_error", { message: authResult.message });
+        return;
+      }
+
+      socketByPlayerId.set(socket.playerId, socket.id);
+      socket.emit("authenticated", { playerId: socket.playerId, displayName: socket.playerDisplayName });
+      if (db) {
+        getFriendsList(socket.playerId)
+          .then((friends) => {
+            socket.emit("friends_list", friends);
+            for (const friend of friends) {
+              if (friend.status !== "accepted") continue;
+              const sid = socketByPlayerId.get(friend.playerId);
+              if (!sid) continue;
+              const friendSock = io.sockets.sockets.get(sid);
+              if (friendSock) {
+                friendSock.emit("friend_online", {
+                  playerId: socket.playerId,
+                  displayName: socket.playerDisplayName,
+                });
               }
-            })
-            .catch(() => {});
-        }
-      } catch {
-        socket.emit("auth_error", { message: "Invalid or expired token" });
+            }
+          })
+          .catch(() => {});
       }
     });
 

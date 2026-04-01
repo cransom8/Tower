@@ -3,34 +3,65 @@
 /**
  * featureFlagCache.js
  * Loads feature_flags from the DB on startup and refreshes every 60s.
- * isEnabled(name) returns true if the flag is enabled, unknown, or DB is unavailable.
+ * Unknown or not-yet-loaded flags fail closed so operational controls stay safe.
  */
+
+const FLAG_DEFAULTS = Object.freeze({
+  maintenance_mode: true,
+  ranked_queue_enabled: false,
+  casual_queue_enabled: false,
+  new_player_registration: false,
+  survival_public_enabled: false,
+  public_ffa_enabled: false,
+  private_match_enabled: false,
+  "1v1_ranked_enabled": false,
+});
 
 function createFeatureFlagCache(db) {
   const flags = new Map();
+  let hasLoaded = false;
   let intervalHandle = null;
 
-  async function loadFlags() {
-    if (!db) return;
+  function getDefaultFlagValue(name) {
+    return Object.prototype.hasOwnProperty.call(FLAG_DEFAULTS, name)
+      ? FLAG_DEFAULTS[name]
+      : false;
+  }
+
+  async function loadFlags({ throwOnError = false } = {}) {
+    if (!db) {
+      hasLoaded = true;
+      flags.clear();
+      return;
+    }
+
     try {
       const result = await db.query("SELECT name, enabled FROM feature_flags");
-      for (const row of result.rows) {
+      flags.clear();
+      for (const row of result.rows)
         flags.set(row.name, !!row.enabled);
-      }
-    } catch {
-      // Non-fatal — retain previously loaded values (or defaults on first load).
+      hasLoaded = true;
+    } catch (err) {
+      if (!hasLoaded)
+        flags.clear();
+      if (throwOnError)
+        throw err;
     }
   }
 
   function isEnabled(name) {
-    if (!db) return true;
+    if (!hasLoaded)
+      return getDefaultFlagValue(name);
+
     const val = flags.get(name);
-    return val === undefined ? true : val;
+    return val === undefined ? getDefaultFlagValue(name) : val;
   }
 
-  function start() {
-    loadFlags();
-    intervalHandle = setInterval(loadFlags, 60_000);
+  async function start() {
+    await loadFlags({ throwOnError: true });
+    intervalHandle = setInterval(() => {
+      loadFlags().catch(() => {});
+    }, 60_000);
     if (intervalHandle.unref) intervalHandle.unref();
   }
 
@@ -44,4 +75,4 @@ function createFeatureFlagCache(db) {
   return { isEnabled, start, stop };
 }
 
-module.exports = { createFeatureFlagCache };
+module.exports = { FLAG_DEFAULTS, createFeatureFlagCache };
