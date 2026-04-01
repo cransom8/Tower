@@ -4779,7 +4779,10 @@ namespace CastleDefender.UI
         {
             if (!TryResolvePreviewVoice(_selectedUnit, out var label))
             {
-                SetDetailsPreviewStatus("Voice lines are still pending for this unit.");
+                SetDetailsPreviewStatus(
+                    IsSiegeDisplayOnlyUnit(_selectedUnit)
+                        ? "This siege entry uses mechanical SFX only."
+                        : "Voice lines are still pending for this unit.");
                 return;
             }
 
@@ -4818,7 +4821,7 @@ namespace CastleDefender.UI
                 _btnDetailsPreviewVoice,
                 _txtDetailsPreviewVoice,
                 hasVoice,
-                hasVoice ? $"Play {voiceLabel}" : "Voices Pending",
+                hasVoice ? $"Play {voiceLabel}" : IsSiegeDisplayOnlyUnit(unit) ? "SFX Only" : "Voices Pending",
                 new Color(0.30f, 0.24f, 0.41f, 1f),
                 new Color(0.15f, 0.18f, 0.24f, 0.92f));
 
@@ -5806,6 +5809,15 @@ namespace CastleDefender.UI
             return string.Equals(unit?.LaneId, "stable_horses", StringComparison.OrdinalIgnoreCase);
         }
 
+        static bool IsSiegeDisplayOnlyUnit(RaceProgressionUnitDefinition unit)
+        {
+            string unitId = NormalizeTechTreeKey(unit?.Id);
+            string laneId = NormalizeTechTreeKey(unit?.LaneId);
+            return (unitId != null && unitId.EndsWith("_siege", StringComparison.Ordinal))
+                || laneId == "siege_tier1"
+                || laneId == "siege_tier2";
+        }
+
         static string BuildEconomyLapText(RaceProgressionUnitDefinition unit)
         {
             return NormalizeTechTreeKey(unit?.Id) switch
@@ -6328,7 +6340,9 @@ namespace CastleDefender.UI
                 : "[SFX] No dedicated preview clip is wired for this entry yet.");
             builder.Append(hasVoice
                 ? $"[Voice] {voiceLabel} is ready to preview."
-                : "[Voice] No voice lines are wired for this unit in the current project.");
+                : IsSiegeDisplayOnlyUnit(unit)
+                    ? "[Voice] Siege entries use mechanical SFX only."
+                    : "[Voice] No voice lines are wired for this unit in the current project.");
             return builder.ToString();
         }
 
@@ -6388,14 +6402,14 @@ namespace CastleDefender.UI
             string laneId = NormalizeTechTreeKey(unit.LaneId);
             string catalogKey = NormalizeTechTreeKey(ResolveTechTreeCatalogKey(unit) ?? unit.PortraitKey);
 
-            if (unitId == "ballista")
+            if (unitId == "ballista" || unitId == "ballista_siege")
             {
                 sfx = AudioManager.SFX.BallistaShoot;
                 label = "Siege Bolt";
                 return true;
             }
 
-            if (unitId == "cannon")
+            if (unitId == "cannon" || unitId == "cannon_siege")
             {
                 sfx = AudioManager.SFX.CannonShoot;
                 label = "Siege Cannon";

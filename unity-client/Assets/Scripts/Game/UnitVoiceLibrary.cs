@@ -20,6 +20,12 @@ namespace CastleDefender.Game
         static readonly Dictionary<string, AudioClip[]> ClipsByFolder = new(StringComparer.OrdinalIgnoreCase);
         static readonly HashSet<string> MissingFolders = new(StringComparer.OrdinalIgnoreCase);
 
+        public static void ResetCache()
+        {
+            ClipsByFolder.Clear();
+            MissingFolders.Clear();
+        }
+
         public static bool HasVoiceProfile(MLUnit unit)
         {
             return TryResolveProfileKey(unit, out _);
@@ -55,13 +61,16 @@ namespace CastleDefender.Game
 
         static bool TryGetClips(string folder, out AudioClip[] clips)
         {
-            if (ClipsByFolder.TryGetValue(folder, out clips))
-                return clips != null && clips.Length > 0;
+            if (ClipsByFolder.TryGetValue(folder, out clips) && clips != null && clips.Length > 0)
+                return true;
 
             clips = Resources.LoadAll<AudioClip>(folder) ?? Array.Empty<AudioClip>();
             ClipsByFolder[folder] = clips;
             if (clips.Length > 0)
+            {
+                MissingFolders.Remove(folder);
                 return true;
+            }
 
             if (MissingFolders.Add(folder))
             {
