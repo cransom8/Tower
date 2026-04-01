@@ -286,6 +286,61 @@ test("priests heal wounded allies before trying to damage enemies", () => {
   assert.ok((priest.attackPulse || 0) > 0, "healer should emit an attack/support pulse when the heal lands");
 });
 
+test("priests clear stale support targets when no ally needs healing", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+  const priest = createBarracksUnit("tt_priest", {
+    id: "priest",
+    posX: 4,
+    posY: 24,
+    atkCd: 0,
+    combatTarget: {
+      unitId: "ally",
+      kind: "unit",
+      laneIndex: lane.laneIndex,
+    },
+    combatTargetId: "ally",
+    currentTargetId: "ally",
+  });
+  const ally = createBarracksUnit("tt_heavy_infantry", {
+    id: "ally",
+    hp: 130,
+    maxHp: 130,
+    posX: 4.4,
+    posY: 23.7,
+    atkCd: 999,
+  });
+
+  lane.units.push(priest, ally);
+  tick(game, 1);
+
+  assert.equal(priest.combatTarget, null);
+  assert.equal(priest.combatTargetId, null);
+  assert.equal(priest.currentTargetId, null);
+});
+
+test("priests honor their explicit lane combat leash when seeking heal targets", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+  const priest = createBarracksUnit("tt_priest", { id: "priest", posX: 4, posY: 24, atkCd: 0 });
+  const ally = createBarracksUnit("tt_heavy_infantry", {
+    id: "ally",
+    hp: 100,
+    maxHp: 130,
+    posX: 10.2,
+    posY: 24,
+    atkCd: 999,
+  });
+  priest.anchorLeashRadius = 12.0;
+  priest.combatLeashRadius = 12.0;
+
+  lane.units.push(priest, ally);
+  tick(game, 1);
+
+  assert.equal(priest.combatTargetId, ally.id, "healer should honor its own leash radius instead of falling back to the default");
+  assert.equal(ally.hp, 100, "ally should be selected first and only healed after the priest closes the remaining distance");
+});
+
 test("higher priest tiers heal more per cast", () => {
   const clericHeal = measureSingleHeal("tt_mounted_priest");
   const priestHeal = measureSingleHeal("tt_priest");
