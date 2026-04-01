@@ -40,6 +40,7 @@ const {
 } = require("./game/fortUnitCatalog");
 const fortressSystem = require("./game/multilane/fortressSystem");
 const barracksSystem = require("./game/multilane/barracksSystem");
+const catalogSystem = require("./game/multilane/catalogSystem");
 const laneCommandSystem = require("./game/multilane/laneCommandSystem");
 const gameRuntimeSystem = require("./game/multilane/gameRuntimeSystem");
 const routeRuntimeSystem = require("./game/multilane/routeRuntimeSystem");
@@ -634,26 +635,16 @@ const TOWER_DEFS = {};
 // ── Phase G: Ability system helpers ───────────────────────────────────────────
 
 function resolveFortPresentationConfig(archetypeKey, presentationKey = DEFAULT_FORT_PRESENTATION_KEY, fallbackDisplayName = null) {
-  const resolvedPresentationKey = presentationKey || DEFAULT_FORT_PRESENTATION_KEY;
-  const catalogUnitKey = resolveFortCatalogUnitKey(archetypeKey, resolvedPresentationKey);
-  const skinKey = resolveFortSkinKey(archetypeKey, resolvedPresentationKey);
-  const portraitKey = resolveFortPortraitKey(archetypeKey, resolvedPresentationKey);
-  const displayName = resolveFortDisplayName(archetypeKey, resolvedPresentationKey, fallbackDisplayName);
-  return {
+  return catalogSystem.resolveFortPresentationConfig(
     archetypeKey,
-    presentationKey: resolvedPresentationKey,
-    catalogUnitKey,
-    skinKey,
-    portraitKey,
-    displayName,
-  };
+    presentationKey,
+    fallbackDisplayName,
+    CATALOG_SYSTEM_DEPS
+  );
 }
 
 function resolveGameplayCatalogUnitKey(unitKey, presentationKey = DEFAULT_FORT_PRESENTATION_KEY) {
-  if (!isFortArchetypeKey(unitKey))
-    return unitKey;
-
-  return resolveFortCatalogUnitKey(unitKey, presentationKey) || unitKey;
+  return catalogSystem.resolveGameplayCatalogUnitKey(unitKey, presentationKey, CATALOG_SYSTEM_DEPS);
 }
 
 // Maps ability_key → hook category
@@ -689,59 +680,7 @@ const ABILITY_AURA_TYPES = {
  * internal names (speedMult, dmgPerTick).
  */
 function translateAbilityParams(abilityKey, rawParams) {
-  switch (abilityKey) {
-    case "slow":
-      return {
-        speedMult:     1 - (rawParams.slow_pct || 25) / 100,
-        durationTicks: Math.round((rawParams.duration || 2) * TICK_HZ),
-      };
-    case "freeze":
-      return {
-        durationTicks: Math.round((rawParams.duration || 1) * TICK_HZ),
-        procChance:    rawParams.proc_chance || 20,
-      };
-    case "poison":
-      return {
-        dmgPerTick:    (rawParams.dps || 5) / TICK_HZ,
-        durationTicks: Math.round((rawParams.duration || 4) * TICK_HZ),
-      };
-    case "burn":
-      return {
-        dmgPerTick:    (rawParams.dps || 8) / TICK_HZ,
-        durationTicks: Math.round((rawParams.duration || 3) * TICK_HZ),
-      };
-    case "armor_reduction":
-      return {
-        reductionPct:  rawParams.reduction_pct || 20,
-        durationTicks: Math.round((rawParams.duration || 5) * TICK_HZ),
-      };
-    case "knockback":
-      return {
-        tiles:      Math.max(1, Math.round((rawParams.distance || 0.05) * GRID_H)),
-        procChance: rawParams.proc_chance || 15,
-      };
-    case "teleport_back":
-      return {
-        procChance: rawParams.proc_chance || 10,
-      };
-    case "chain_lightning":
-      return {
-        maxJumps:   rawParams.chains     || 3,
-        jumpRange:  2.0,
-        dmgFalloff: 1 - (rawParams.decay_pct || 25) / 100,
-      };
-    case "pierce_targets":
-      return {
-        maxTargets:   rawParams.max_targets || 3,
-        pierceRadius: 1.0,
-      };
-    case "splash_damage":
-      return {
-        radius: (rawParams.radius || 0.05) * GRID_W,
-      };
-    default:
-      return rawParams;
-  }
+  return catalogSystem.translateAbilityParams(abilityKey, rawParams, CATALOG_SYSTEM_DEPS);
 }
 
 /**
@@ -751,27 +690,7 @@ function translateAbilityParams(abilityKey, rawParams) {
  * @returns {object[]} abilities in sim-core format
  */
 function buildAbilitiesForUnitType(unitTypeKey) {
-  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(unitTypeKey);
-  const ut = getUnitType(resolvedUnitTypeKey);
-  if (!ut || !Array.isArray(ut.abilities) || ut.abilities.length === 0) return [];
-  return ut.abilities.map((a, idx) => {
-    const abilityKey = a.ability_key;
-    const rawParams  = (a.params && typeof a.params === "object") ? a.params : {};
-    const hook       = ABILITY_HOOKS[abilityKey] || "onTick";
-    const isAura     = hook === "onSpawn";
-    const params     = isAura
-      ? { auraType: ABILITY_AURA_TYPES[abilityKey] || "dmg_bonus",
-          value:    rawParams.boost_pct || rawParams.value || 0,
-          ...rawParams }
-      : translateAbilityParams(abilityKey, rawParams);
-    return {
-      type:      isAura ? "aura" : abilityKey,
-      hook,
-      params,
-      priority:  idx,
-      abilityId: idx,
-    };
-  });
+  return catalogSystem.buildAbilitiesForUnitType(unitTypeKey, CATALOG_SYSTEM_DEPS);
 }
 
 // ── DB-first unit/tower resolution ────────────────────────────────────────────
@@ -781,51 +700,11 @@ function buildAbilitiesForUnitType(unitTypeKey) {
  * Returns null if the unit type is unknown or fixed-only.
  */
 function resolveUnitDef(key) {
-  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(key);
-  const ut = getUnitType(resolvedUnitTypeKey);
-  if (!ut) return null;
-  if (Number(ut.send_cost) <= 0) return null;
-  const sp = (ut.special_props && typeof ut.special_props === "object") ? ut.special_props : {};
-  const attackSpeed = Math.max(0.01, Number(ut.attack_speed) || 0.01);
-  return {
-    cost:               Number(ut.send_cost),
-    income:             Number(ut.income),
-    hp:                 Number(ut.hp),
-    dmg:                Number(ut.attack_damage),
-    atkCdTicks:         Math.max(1, Math.round(TICK_HZ / attackSpeed)),
-    pathSpeed:          Number(ut.path_speed),
-    bounty:             Number(ut.bounty) || 1,
-    range:              Number(ut.range),
-    ranged:             Number(ut.range) > 0,
-    armorType:          ut.armor_type   || "MEDIUM",
-    damageType:         ut.damage_type  || "NORMAL",
-    damageReductionPct: Number(ut.damage_reduction_pct) || 0,
-    warlockDebuff:      sp.warlockDebuff != null ? !!sp.warlockDebuff : false,
-    structBonus:        sp.structBonus   != null ?  +sp.structBonus   : 0,
-    barracks_scales_hp:  ut.barracks_scales_hp  === true,
-    barracks_scales_dmg: ut.barracks_scales_dmg === true,
-  };
+  return catalogSystem.resolveUnitDef(key, CATALOG_SYSTEM_DEPS);
 }
 
 function resolveUnitSupportProfile(unit) {
-  const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(
-    unit && (unit.type || unit.unitTypeKey || unit.key)
-  );
-  const ut = getUnitType(resolvedUnitTypeKey);
-  const sp = (ut && ut.special_props && typeof ut.special_props === "object")
-    ? ut.special_props
-    : {};
-  const supportRoleRaw = sp.supportRole != null ? sp.supportRole : sp.support_role;
-  const supportRole = typeof supportRoleRaw === "string"
-    ? supportRoleRaw.trim().toLowerCase()
-    : null;
-  const isHealer = supportRole === "healer";
-  const healAmountRaw = sp.healAmount != null ? sp.healAmount : sp.heal_amount;
-  return {
-    role: supportRole,
-    isHealer,
-    healAmount: isHealer ? Math.max(1, Number(healAmountRaw) || 1) : 0,
-  };
+  return catalogSystem.resolveUnitSupportProfile(unit, CATALOG_SYSTEM_DEPS);
 }
 
 /**
@@ -833,6 +712,7 @@ function resolveUnitSupportProfile(unit) {
  * DB range is stored normalised to [0,1] × GRID_W.
  */
 function resolveTowerDef(key) {
+  return catalogSystem.resolveTowerDef(key, CATALOG_SYSTEM_DEPS);
   const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(key);
   const ut = getUnitType(resolvedUnitTypeKey);
   if (!ut) return null;
@@ -1198,6 +1078,21 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
     const fallback = getBarracksLevelDef(nextTier);
     return Math.max(0, Math.floor(Number(fallback.cost) || 0));
   },
+});
+
+const CATALOG_SYSTEM_DEPS = Object.freeze({
+  DEFAULT_FORT_PRESENTATION_KEY,
+  resolveFortCatalogUnitKey,
+  resolveFortDisplayName,
+  resolveFortPortraitKey,
+  resolveFortSkinKey,
+  isFortArchetypeKey,
+  getUnitType,
+  getAllUnitTypes,
+  TICK_HZ,
+  GRID_W,
+  GRID_H,
+  SPLASH_RADIUS_TILES,
 });
 
 const BARRACKS_SYSTEM_DEPS = Object.freeze({
@@ -3238,28 +3133,14 @@ function createMLPublicConfig(options) {
  * Returns a key→unitDef map for all sendable (moving/both-mode) units from the DB.
  */
 function getMovingUnitDefMap() {
-  const map = {};
-  for (const ut of getAllUnitTypes()) {
-    if (!ut.enabled) continue;
-    if (Number(ut.send_cost) <= 0) continue;
-    const def = resolveUnitDef(ut.key);
-    if (def) map[ut.key] = def;
-  }
-  return map;
+  return catalogSystem.getMovingUnitDefMap(CATALOG_SYSTEM_DEPS);
 }
 
 /**
  * Returns a key→towerDef map for all placeable (fixed/both-mode) units from the DB.
  */
 function getFixedUnitDefMap() {
-  const map = {};
-  for (const ut of getAllUnitTypes()) {
-    if (!ut.enabled) continue;
-    if (Number(ut.build_cost) <= 0) continue;
-    const def = resolveTowerDef(ut.key);
-    if (def) map[ut.key] = def;
-  }
-  return map;
+  return catalogSystem.getFixedUnitDefMap(CATALOG_SYSTEM_DEPS);
 }
 
 module.exports = {
