@@ -157,7 +157,8 @@ namespace CastleDefender.UI
         TMP_Text _introTitleText;
         TMP_Text _introTaglineText;
         Image _introStampFlash;
-        Image _introTitleFrame;
+        Vector2 _introTitleBasePosition;
+        Vector2 _introTaglineBasePosition;
         RawImage _cinematicBackgroundImage;
         AspectRatioFitter _cinematicBackgroundAspect;
         VideoPlayer _cinematicVideoPlayer;
@@ -165,6 +166,66 @@ namespace CastleDefender.UI
         Coroutine _introTitleRoutine;
         Coroutine _loginRevealRoutine;
         Coroutine _loginBackgroundFreezeRoutine;
+
+        public bool IsReadyForFinalRuntimeScreenshot
+        {
+            get
+            {
+                bool backgroundReady =
+                    !_backgroundLoopActive ||
+                    !HoldLoginBackgroundOnFinalFrame ||
+                    string.IsNullOrWhiteSpace(_loopVideoPath) ||
+                    _loginBackgroundFrozen;
+                bool loginReady = _loginPresentationGroup == null || _loginPresentationGroup.alpha >= 0.99f;
+                bool shadeReady = _loginReadabilityShadeGroup == null || _loginReadabilityShadeGroup.alpha >= 0.99f;
+                bool titleReady = _introTitleGroup == null || _introTitleGroup.alpha >= 0.99f;
+                bool titleTextReady = _introTitleCanvasGroup == null || _introTitleCanvasGroup.alpha >= 0.99f;
+                bool taglineReady = _introTaglineCanvasGroup == null || _introTaglineCanvasGroup.alpha >= 0.99f;
+
+                return
+                    !_introSequenceActive &&
+                    _loginPresentationVisible &&
+                    backgroundReady &&
+                    loginReady &&
+                    shadeReady &&
+                    titleReady &&
+                    titleTextReady &&
+                    taglineReady;
+            }
+        }
+
+        public string FinalRuntimeScreenshotState
+        {
+            get
+            {
+                float loginAlpha = _loginPresentationGroup != null ? _loginPresentationGroup.alpha : 1f;
+                float shadeAlpha = _loginReadabilityShadeGroup != null ? _loginReadabilityShadeGroup.alpha : 1f;
+                float titleAlpha = _introTitleGroup != null ? _introTitleGroup.alpha : 1f;
+                float titleTextAlpha = _introTitleCanvasGroup != null ? _introTitleCanvasGroup.alpha : 1f;
+                float taglineAlpha = _introTaglineCanvasGroup != null ? _introTaglineCanvasGroup.alpha : 1f;
+                string activeClip = string.IsNullOrWhiteSpace(_activeVideoPath) ? "(none)" : Path.GetFileName(_activeVideoPath);
+
+                return
+                    $"clip={activeClip}, " +
+                    $"introSequence={_introSequenceActive}, " +
+                    $"loginVisible={_loginPresentationVisible}, " +
+                    $"backgroundFrozen={_loginBackgroundFrozen}, " +
+                    $"backgroundLoop={_backgroundLoopActive}, " +
+                    $"loginAlpha={loginAlpha:0.00}, " +
+                    $"shadeAlpha={shadeAlpha:0.00}, " +
+                    $"titleAlpha={titleAlpha:0.00}, " +
+                    $"titleTextAlpha={titleTextAlpha:0.00}, " +
+                    $"taglineAlpha={taglineAlpha:0.00}";
+            }
+        }
+
+        public void SkipIntroForAutomation()
+        {
+            if (_loginPresentationVisible)
+                return;
+
+            SkipLoginIntro();
+        }
 
         // ── WebGL jslib imports ───────────────────────────────────────────────
 #if UNITY_WEBGL && !UNITY_EDITOR
@@ -393,16 +454,16 @@ namespace CastleDefender.UI
             _cinematicBackgroundAspect.aspectRatio = 16f / 9f;
             Stretch(videoGo.GetComponent<RectTransform>());
 
-            var tint = CreatePlainImage("BaseTint", backdrop, new Color(0.02f, 0.04f, 0.07f, 0.34f));
+            var tint = CreatePlainImage("BaseTint", backdrop, new Color(0f, 0f, 0f, 0.18f));
             Stretch(tint.rectTransform);
 
-            var vignette = CreatePlainImage("Vignette", backdrop, new Color(0f, 0f, 0f, 0.22f));
+            var vignette = CreatePlainImage("Vignette", backdrop, new Color(0f, 0f, 0f, 0.10f));
             Stretch(vignette.rectTransform);
 
             var readabilityShade = CreatePlainImage(
                 "ReadabilityShade",
                 backdrop,
-                compact ? new Color(0.01f, 0.03f, 0.05f, 0.46f) : new Color(0.01f, 0.03f, 0.05f, 0.34f));
+                compact ? new Color(0f, 0f, 0f, 0.20f) : new Color(0f, 0f, 0f, 0.14f));
             _loginReadabilityShadeGroup = readabilityShade.gameObject.AddComponent<CanvasGroup>();
             _loginReadabilityShadeGroup.alpha = 0f;
             readabilityShade.rectTransform.anchorMin = Vector2.zero;
@@ -426,11 +487,11 @@ namespace CastleDefender.UI
         RectTransform BuildModernLoginShell(RectTransform parent, bool compact)
         {
             var shell = CreateUiRect("LoginShell", parent);
-            shell.anchorMin = new Vector2(0.5f, 0.5f);
-            shell.anchorMax = new Vector2(0.5f, 0.5f);
-            shell.pivot = new Vector2(0.5f, 0f);
-            shell.anchoredPosition = compact ? new Vector2(0f, -108f) : new Vector2(0f, -138f);
-            shell.sizeDelta = compact ? new Vector2(320f, 0f) : new Vector2(430f, 0f);
+            shell.anchorMin = new Vector2(0.5f, 1f);
+            shell.anchorMax = new Vector2(0.5f, 1f);
+            shell.pivot = new Vector2(0.5f, 1f);
+            shell.anchoredPosition = compact ? new Vector2(0f, -528f) : new Vector2(0f, -364f);
+            shell.sizeDelta = compact ? new Vector2(360f, 0f) : new Vector2(480f, 0f);
 
             var fitter = shell.gameObject.AddComponent<ContentSizeFitter>();
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
@@ -441,7 +502,7 @@ namespace CastleDefender.UI
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = compact ? 6f : 8f;
+            layout.spacing = compact ? 10f : 12f;
             layout.padding = compact ? new RectOffset(10, 10, 0, 0) : new RectOffset(12, 12, 0, 0);
 
             return shell;
@@ -460,14 +521,14 @@ namespace CastleDefender.UI
             if (rowTabs != null)
             {
                 rowTabs.SetParent(content, false);
-                PrepareForLayout(rowTabs, compact ? 28f : 30f);
+                PrepareForLayout(rowTabs, compact ? 24f : 26f);
                 var tabsLayout = rowTabs.GetComponent<HorizontalLayoutGroup>() ?? rowTabs.gameObject.AddComponent<HorizontalLayoutGroup>();
                 tabsLayout.childAlignment = TextAnchor.MiddleCenter;
                 tabsLayout.childControlWidth = false;
                 tabsLayout.childControlHeight = true;
                 tabsLayout.childForceExpandWidth = false;
                 tabsLayout.childForceExpandHeight = true;
-                tabsLayout.spacing = 18f;
+                tabsLayout.spacing = compact ? 22f : 28f;
                 tabsLayout.padding = new RectOffset(0, 0, 0, 0);
             }
 
@@ -481,12 +542,14 @@ namespace CastleDefender.UI
             if (Btn_Submit != null)
             {
                 Btn_Submit.transform.SetParent(content, false);
-                PrepareButton(Btn_Submit, compact ? 32f : 34f, compact ? 0f : 190f);
+                PrepareButton(Btn_Submit, compact ? 44f : 48f, compact ? 340f : 460f);
+                if (TxtSubmitBtn != null)
+                    TxtSubmitBtn.fontSize = compact ? 15f : 17f;
                 ApplyModernButtonStyle(
                     Btn_Submit,
-                    new Color(0.03f, 0.05f, 0.08f, 0.40f),
-                    new Color(0.05f, 0.08f, 0.11f, 0.48f),
-                    new Color(0.02f, 0.03f, 0.05f, 0.58f),
+                    new Color(0.03f, 0.04f, 0.05f, 0.54f),
+                    new Color(0.05f, 0.06f, 0.08f, 0.62f),
+                    new Color(0.02f, 0.03f, 0.04f, 0.72f),
                     Color.white,
                     TxtSubmitBtn);
             }
@@ -494,37 +557,29 @@ namespace CastleDefender.UI
             if (Btn_Browser != null)
             {
                 Btn_Browser.transform.SetParent(content, false);
-                PrepareButton(Btn_Browser, 20f, compact ? 0f : 220f);
-                ApplyMinimalLinkButtonStyle(Btn_Browser, new Color(0.86f, 0.89f, 0.95f, 0.94f));
+                PrepareButton(Btn_Browser, compact ? 20f : 22f, compact ? 340f : 460f);
+                ApplyMinimalLinkButtonStyle(Btn_Browser, new Color(0.90f, 0.92f, 0.95f, 0.96f));
             }
 
             if (Obj_Divider != null)
-            {
-                var dividerRect = Obj_Divider.transform as RectTransform;
-                if (dividerRect != null)
-                {
-                    dividerRect.SetParent(content, false);
-                    PrepareForLayout(dividerRect, 10f);
-                }
-
-                var dividerText = Obj_Divider.GetComponentInChildren<TMP_Text>(true);
-                if (dividerText != null)
-                    ApplyModernTextStyle(dividerText, 11f, new Color(0.70f, 0.74f, 0.81f, 0.72f), FontStyles.Normal, TextAlignmentOptions.Center);
-            }
+                Obj_Divider.SetActive(false);
 
             if (Btn_Google != null)
             {
                 Btn_Google.transform.SetParent(content, false);
-                PrepareButton(Btn_Google, compact ? 36f : 40f, compact ? 0f : 240f);
+                PrepareButton(Btn_Google, compact ? 42f : 46f, compact ? 340f : 460f);
                 ApplyModernButtonStyle(
                     Btn_Google,
-                    new Color(0.03f, 0.05f, 0.08f, 0.42f),
-                    new Color(0.05f, 0.08f, 0.11f, 0.50f),
-                    new Color(0.02f, 0.03f, 0.05f, 0.60f),
+                    new Color(0.03f, 0.04f, 0.05f, 0.46f),
+                    new Color(0.05f, 0.06f, 0.08f, 0.56f),
+                    new Color(0.02f, 0.03f, 0.04f, 0.68f),
                     new Color(0.96f, 0.97f, 0.99f, 0.98f));
                 var googleText = Btn_Google.GetComponentInChildren<TMP_Text>(true);
                 if (googleText != null)
+                {
+                    googleText.fontSize = compact ? 14f : 16f;
                     googleText.text = "Sign in with Google";
+                }
             }
 
             if (Txt_Error != null)
@@ -550,46 +605,21 @@ namespace CastleDefender.UI
             Stretch(overlay);
 
             var titleGroupRoot = CreateUiRect("TitleGroup", overlay);
-            titleGroupRoot.anchorMin = new Vector2(0.5f, 1f);
-            titleGroupRoot.anchorMax = new Vector2(0.5f, 1f);
-            titleGroupRoot.pivot = new Vector2(0.5f, 1f);
-            titleGroupRoot.anchorMin = new Vector2(0.5f, 0.5f);
-            titleGroupRoot.anchorMax = new Vector2(0.5f, 0.5f);
-            titleGroupRoot.pivot = new Vector2(0.5f, 0.5f);
-            titleGroupRoot.anchoredPosition = compact ? new Vector2(0f, -24f) : new Vector2(0f, -36f);
-            titleGroupRoot.sizeDelta = compact ? new Vector2(620f, 132f) : new Vector2(900f, 168f);
+            Stretch(titleGroupRoot);
             _introTitleGroup = titleGroupRoot.gameObject.AddComponent<CanvasGroup>();
             _introTitleGroup.alpha = 0f;
-
-            var titleLayout = titleGroupRoot.gameObject.AddComponent<VerticalLayoutGroup>();
-            titleLayout.childAlignment = TextAnchor.UpperCenter;
-            titleLayout.childControlWidth = true;
-            titleLayout.childControlHeight = false;
-            titleLayout.childForceExpandWidth = true;
-            titleLayout.childForceExpandHeight = false;
-            titleLayout.spacing = compact ? 4f : 6f;
-            titleLayout.padding = compact ? new RectOffset(18, 18, 6, 6) : new RectOffset(24, 24, 8, 8);
-
-            _introTitleFrame = CreateUiImage("IntroTitleFrame", titleGroupRoot, ClassicRpgPanelSkin.TitleLong, new Color(1f, 1f, 1f, 0.52f), false);
-            _introTitleFrame.transform.SetAsFirstSibling();
-            var titleFrameRect = _introTitleFrame.rectTransform;
-            Stretch(
-                titleFrameRect,
-                compact ? new Vector2(-64f, 6f) : new Vector2(-90f, 10f),
-                compact ? new Vector2(64f, -42f) : new Vector2(90f, -56f));
-            var titleFrameLayout = _introTitleFrame.gameObject.AddComponent<LayoutElement>();
-            titleFrameLayout.ignoreLayout = true;
 
             _introTitleText = CreateModernText(
                 "IntroTitle",
                 titleGroupRoot,
                 "RansomForge",
-                compact ? 58f : 80f,
+                compact ? 62f : 90f,
                 new Color(0.98f, 0.97f, 0.95f, 1f),
                 FontStyles.Bold,
                 TextAlignmentOptions.Center);
             _introTitleText.overflowMode = TextOverflowModes.Overflow;
-            PrepareForLayout(_introTitleText.rectTransform, compact ? 66f : 90f);
+            _introTitleBasePosition = compact ? new Vector2(0f, -138f) : new Vector2(0f, -96f);
+            ConfigureOverlayTextRect(_introTitleText.rectTransform, _introTitleBasePosition, compact ? new Vector2(900f, 84f) : new Vector2(1500f, 112f));
             _introTitleCanvasGroup = _introTitleText.gameObject.AddComponent<CanvasGroup>();
             ApplyIntroTitleTreatment(_introTitleText);
 
@@ -597,19 +627,20 @@ namespace CastleDefender.UI
             _introStampFlash.transform.SetAsFirstSibling();
             Stretch(
                 _introStampFlash.rectTransform,
-                compact ? new Vector2(-140f, 18f) : new Vector2(-180f, 24f),
-                compact ? new Vector2(140f, -18f) : new Vector2(180f, -24f));
+                compact ? new Vector2(-160f, 20f) : new Vector2(-240f, 28f),
+                compact ? new Vector2(160f, -20f) : new Vector2(240f, -28f));
 
             _introTaglineText = CreateModernText(
                 "IntroTagline",
                 titleGroupRoot,
                 "Forged for War",
-                compact ? 18f : 22f,
+                compact ? 20f : 24f,
                 new Color(0.86f, 0.89f, 0.94f, 0.98f),
                 FontStyles.Bold,
                 TextAlignmentOptions.Center);
             _introTaglineText.overflowMode = TextOverflowModes.Overflow;
-            PrepareForLayout(_introTaglineText.rectTransform, compact ? 24f : 28f);
+            _introTaglineBasePosition = compact ? new Vector2(0f, -214f) : new Vector2(0f, -194f);
+            ConfigureOverlayTextRect(_introTaglineText.rectTransform, _introTaglineBasePosition, compact ? new Vector2(720f, 28f) : new Vector2(960f, 32f));
             _introTaglineCanvasGroup = _introTaglineText.gameObject.AddComponent<CanvasGroup>();
             ApplyIntroTaglineTreatment(_introTaglineText);
 
@@ -762,9 +793,9 @@ namespace CastleDefender.UI
             ResetIntroOverlayVisualState();
             _introTitleGroup.alpha = 1f;
             yield return new WaitForSecondsRealtime(Mathf.Max(0f, EndTitleRevealDelay));
-            yield return StampIntroElement(_introTitleCanvasGroup, _introTitleText.rectTransform, new Vector2(0f, -22f), 1.22f, 0.93f);
+            yield return StampIntroElement(_introTitleCanvasGroup, _introTitleText.rectTransform, _introTitleBasePosition, new Vector2(0f, -22f), 1.22f, 0.93f);
             yield return new WaitForSecondsRealtime(Mathf.Max(0f, IntroTaglineDelay));
-            yield return StampIntroElement(_introTaglineCanvasGroup, _introTaglineText.rectTransform, new Vector2(0f, -10f), 1.14f, 0.96f);
+            yield return StampIntroElement(_introTaglineCanvasGroup, _introTaglineText.rectTransform, _introTaglineBasePosition, new Vector2(0f, -10f), 1.14f, 0.96f);
             yield return new WaitForSecondsRealtime(IntroTitleHoldDuration);
         }
 
@@ -840,12 +871,11 @@ namespace CastleDefender.UI
             group.alpha = targetAlpha;
         }
 
-        IEnumerator StampIntroElement(CanvasGroup group, RectTransform rect, Vector2 impactOffset, float startScale, float impactScale)
+        IEnumerator StampIntroElement(CanvasGroup group, RectTransform rect, Vector2 settledPosition, Vector2 impactOffset, float startScale, float impactScale)
         {
             if (group == null || rect == null)
                 yield break;
 
-            Vector2 settledPosition = Vector2.zero;
             Vector2 startPosition = settledPosition + impactOffset;
             Vector2 impactPosition = settledPosition + new Vector2(0f, 3f);
             Vector3 startVector = Vector3.one * startScale;
@@ -1497,55 +1527,52 @@ namespace CastleDefender.UI
             if (parent == null || field == null)
                 return;
 
+            float fieldWidth = compact ? 340f : 460f;
+            float fieldHeight = compact ? 38f : 42f;
+            float groupHeight = compact ? 62f : 70f;
+
             var row = CreateUiRect($"{field.name}_Row", parent);
             var rowLayoutElement = row.gameObject.AddComponent<LayoutElement>();
-            rowLayoutElement.preferredWidth = compact ? 320f : 410f;
-            rowLayoutElement.minWidth = compact ? 320f : 410f;
-            rowLayoutElement.preferredHeight = compact ? 28f : 30f;
+            rowLayoutElement.preferredWidth = fieldWidth;
+            rowLayoutElement.minWidth = fieldWidth;
+            rowLayoutElement.preferredHeight = groupHeight;
             rowLayoutElement.flexibleWidth = 0f;
 
-            var rowLayout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
-            rowLayout.childAlignment = TextAnchor.MiddleCenter;
-            rowLayout.childControlWidth = false;
+            var rowLayout = row.gameObject.AddComponent<VerticalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.UpperCenter;
+            rowLayout.childControlWidth = true;
             rowLayout.childControlHeight = false;
-            rowLayout.childForceExpandWidth = false;
+            rowLayout.childForceExpandWidth = true;
             rowLayout.childForceExpandHeight = false;
-            rowLayout.spacing = compact ? 8f : 12f;
+            rowLayout.spacing = compact ? 6f : 8f;
             rowLayout.padding = new RectOffset(0, 0, 0, 0);
 
             var labelText = CreateModernText(
                 $"{field.name}_Label",
                 row,
                 label,
-                compact ? 12f : 14f,
+                compact ? 13f : 15f,
                 new Color(0.92f, 0.94f, 0.97f, 0.96f),
                 FontStyles.Bold,
-                TextAlignmentOptions.MidlineRight);
-            labelText.characterSpacing = 0.2f;
+                TextAlignmentOptions.MidlineLeft);
+            labelText.characterSpacing = 0.8f;
+            PrepareForLayout(labelText.rectTransform, compact ? 18f : 20f);
             var labelLayout = labelText.gameObject.AddComponent<LayoutElement>();
-            labelLayout.preferredWidth = compact ? 88f : 108f;
-            labelLayout.minWidth = compact ? 88f : 108f;
-            labelLayout.preferredHeight = compact ? 28f : 30f;
-            labelLayout.flexibleWidth = 0f;
+            labelLayout.preferredHeight = compact ? 18f : 20f;
+            labelLayout.flexibleWidth = 1f;
 
             var fieldRect = field.transform as RectTransform;
             if (fieldRect == null)
                 return;
 
             fieldRect.SetParent(row, false);
-            fieldRect.anchorMin = new Vector2(0.5f, 0.5f);
-            fieldRect.anchorMax = new Vector2(0.5f, 0.5f);
-            fieldRect.pivot = new Vector2(0.5f, 0.5f);
+            fieldRect.anchorMin = new Vector2(0f, 1f);
+            fieldRect.anchorMax = new Vector2(1f, 1f);
+            fieldRect.pivot = new Vector2(0.5f, 1f);
             fieldRect.anchoredPosition = Vector2.zero;
-            fieldRect.sizeDelta = new Vector2(compact ? 224f : 290f, compact ? 20f : 22f);
+            fieldRect.sizeDelta = new Vector2(0f, fieldHeight);
 
-            var fieldLayout = fieldRect.GetComponent<LayoutElement>() ?? fieldRect.gameObject.AddComponent<LayoutElement>();
-            fieldLayout.preferredWidth = compact ? 224f : 290f;
-            fieldLayout.minWidth = compact ? 224f : 290f;
-            fieldLayout.preferredHeight = compact ? 20f : 22f;
-            fieldLayout.flexibleWidth = 0f;
-
-            ApplyModernInputFieldStyle(field, string.Empty);
+            PrepareField(field, fieldHeight, string.Empty, fieldWidth);
         }
 
         void PrepareButton(Button button, float preferredHeight, float preferredWidth)
@@ -1725,6 +1752,18 @@ namespace CastleDefender.UI
             return image;
         }
 
+        static void ConfigureOverlayTextRect(RectTransform rect, Vector2 anchoredPosition, Vector2 size)
+        {
+            if (rect == null)
+                return;
+
+            rect.anchorMin = new Vector2(0.5f, 1f);
+            rect.anchorMax = new Vector2(0.5f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = size;
+        }
+
         void ResetIntroOverlayVisualState()
         {
             if (_introTitleGroup != null)
@@ -1738,13 +1777,13 @@ namespace CastleDefender.UI
 
             if (_introTitleText != null)
             {
-                _introTitleText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTitleText.rectTransform.anchoredPosition = _introTitleBasePosition;
                 _introTitleText.rectTransform.localScale = Vector3.one;
             }
 
             if (_introTaglineText != null)
             {
-                _introTaglineText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTaglineText.rectTransform.anchoredPosition = _introTaglineBasePosition;
                 _introTaglineText.rectTransform.localScale = Vector3.one;
             }
 
@@ -1759,13 +1798,13 @@ namespace CastleDefender.UI
 
             if (_introTitleText != null)
             {
-                _introTitleText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTitleText.rectTransform.anchoredPosition = _introTitleBasePosition;
                 _introTitleText.rectTransform.localScale = Vector3.one;
             }
 
             if (_introTaglineText != null)
             {
-                _introTaglineText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTaglineText.rectTransform.anchoredPosition = _introTaglineBasePosition;
                 _introTaglineText.rectTransform.localScale = Vector3.one;
             }
 
@@ -1792,16 +1831,16 @@ namespace CastleDefender.UI
             text.characterSpacing = 1.1f;
             text.enableVertexGradient = true;
             text.colorGradient = new VertexGradient(
-                new Color(0.99f, 0.97f, 0.91f, 1f),
-                new Color(0.95f, 0.93f, 0.87f, 1f),
-                new Color(0.45f, 0.48f, 0.56f, 1f),
-                new Color(0.56f, 0.60f, 0.68f, 1f));
-            text.outlineColor = new Color(0.10f, 0.08f, 0.05f, 0.96f);
-            text.outlineWidth = 0.18f;
+                new Color(1.00f, 0.98f, 0.92f, 1f),
+                new Color(0.96f, 0.94f, 0.88f, 1f),
+                new Color(0.56f, 0.60f, 0.68f, 1f),
+                new Color(0.34f, 0.37f, 0.44f, 1f));
+            text.outlineColor = new Color(0.06f, 0.05f, 0.04f, 0.98f);
+            text.outlineWidth = 0.24f;
 
             var shadow = text.GetComponent<Shadow>() ?? text.gameObject.AddComponent<Shadow>();
-            shadow.effectColor = new Color(0.84f, 0.38f, 0.08f, 0.20f);
-            shadow.effectDistance = new Vector2(0f, -5f);
+            shadow.effectColor = new Color(0.92f, 0.46f, 0.12f, 0.26f);
+            shadow.effectDistance = new Vector2(0f, -6f);
         }
 
         static void ApplyIntroTaglineTreatment(TMP_Text text)
@@ -1809,7 +1848,7 @@ namespace CastleDefender.UI
             if (text == null)
                 return;
 
-            text.characterSpacing = 5.5f;
+            text.characterSpacing = 4.2f;
             text.enableVertexGradient = true;
             text.colorGradient = new VertexGradient(
                 new Color(0.94f, 0.96f, 0.99f, 1f),
@@ -1887,14 +1926,15 @@ namespace CastleDefender.UI
             image.type = Image.Type.Simple;
             image.color = baseColor;
             image.raycastTarget = true;
+            ClearLegacyGraphics(button.transform, image);
 
             var outline = button.GetComponent<Outline>() ?? button.gameObject.AddComponent<Outline>();
-            outline.effectColor = new Color(0.78f, 0.82f, 0.88f, 0.34f);
+            outline.effectColor = new Color(0.92f, 0.94f, 0.98f, 0.14f);
             outline.effectDistance = new Vector2(1f, -1f);
 
             var shadow = button.GetComponent<Shadow>() ?? button.gameObject.AddComponent<Shadow>();
-            shadow.effectColor = new Color(0f, 0f, 0f, 0.14f);
-            shadow.effectDistance = new Vector2(0f, -2f);
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.16f);
+            shadow.effectDistance = new Vector2(0f, -1f);
 
             button.targetGraphic = image;
             button.transition = Selectable.Transition.ColorTint;
@@ -1911,8 +1951,9 @@ namespace CastleDefender.UI
             var label = labelOverride ?? button.GetComponentInChildren<TMP_Text>(true);
             if (label != null)
             {
-                var fontSize = label.fontSize > 0f ? label.fontSize : 13f;
+                var fontSize = Mathf.Max(label.fontSize, 15f);
                 ApplyModernTextStyle(label, fontSize, textColor, FontStyles.Bold, TextAlignmentOptions.Center);
+                label.characterSpacing = 0.7f;
             }
         }
 
@@ -1926,6 +1967,7 @@ namespace CastleDefender.UI
             image.type = Image.Type.Simple;
             image.color = new Color(0f, 0f, 0f, 0f);
             image.raycastTarget = true;
+            ClearLegacyGraphics(button.transform, image);
 
             var outline = button.GetComponent<Outline>();
             if (outline != null)
@@ -1957,7 +1999,7 @@ namespace CastleDefender.UI
             if (label != null)
             {
                 ApplyModernTextStyle(label, 14f, textColor, FontStyles.Normal, TextAlignmentOptions.Center);
-                label.fontStyle = FontStyles.Underline;
+                label.characterSpacing = 0.4f;
             }
         }
 
@@ -1969,17 +2011,17 @@ namespace CastleDefender.UI
             var background = field.GetComponent<Image>() ?? field.gameObject.AddComponent<Image>();
             background.sprite = null;
             background.type = Image.Type.Simple;
-            background.color = new Color(0.03f, 0.05f, 0.08f, 0.54f);
+            background.color = new Color(0.02f, 0.03f, 0.04f, 0.42f);
             background.raycastTarget = true;
             field.targetGraphic = background;
 
             var outline = field.GetComponent<Outline>() ?? field.gameObject.AddComponent<Outline>();
-            outline.effectColor = new Color(0.78f, 0.82f, 0.88f, 0.26f);
+            outline.effectColor = new Color(0.94f, 0.96f, 0.98f, 0.14f);
             outline.effectDistance = new Vector2(1f, -1f);
 
             var shadow = field.GetComponent<Shadow>() ?? field.gameObject.AddComponent<Shadow>();
             shadow.effectColor = new Color(0f, 0f, 0f, 0.10f);
-            shadow.effectDistance = new Vector2(0f, -2f);
+            shadow.effectDistance = new Vector2(0f, -1f);
 
             field.customCaretColor = true;
             field.caretColor = new Color(0.96f, 0.96f, 0.96f, 1f);
@@ -1987,29 +2029,54 @@ namespace CastleDefender.UI
 
             if (field.textComponent != null)
             {
-                ApplyModernTextStyle(field.textComponent, 12f, new Color(0.98f, 0.98f, 0.98f, 1f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
-                field.textComponent.margin = new Vector4(10f, 0f, 10f, 2f);
+                ApplyModernTextStyle(field.textComponent, 13f, new Color(0.98f, 0.98f, 0.98f, 1f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+                field.textComponent.margin = new Vector4(14f, 0f, 14f, 2f);
             }
 
             if (field.placeholder is TMP_Text placeholderText)
             {
                 placeholderText.text = placeholder;
-                ApplyModernTextStyle(placeholderText, 12f, new Color(0.86f, 0.89f, 0.93f, 0.88f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
-                placeholderText.margin = new Vector4(10f, 0f, 10f, 2f);
+                ApplyModernTextStyle(placeholderText, 13f, new Color(0.86f, 0.89f, 0.93f, 0.84f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+                placeholderText.margin = new Vector4(14f, 0f, 14f, 2f);
             }
 
             var underline = field.transform.Find("Underline") as RectTransform;
             if (underline == null)
             {
-                var underlineImage = CreatePlainImage("Underline", field.transform, new Color(0.06f, 0.06f, 0.06f, 0.92f));
+                var underlineImage = CreatePlainImage("Underline", field.transform, new Color(1f, 1f, 1f, 0.16f));
                 underline = underlineImage.rectTransform;
             }
+
+            var underlineGraphic = underline.GetComponent<Graphic>();
+            ClearLegacyGraphics(field.transform, background, underlineGraphic);
 
             underline.anchorMin = new Vector2(0f, 0f);
             underline.anchorMax = new Vector2(1f, 0f);
             underline.pivot = new Vector2(0.5f, 0f);
             underline.anchoredPosition = Vector2.zero;
             underline.sizeDelta = new Vector2(-6f, 1f);
+        }
+
+        static void ClearLegacyGraphics(Transform root, params Graphic[] keepGraphics)
+        {
+            if (root == null)
+                return;
+
+            var keep = new HashSet<Graphic>(keepGraphics);
+            foreach (var graphic in root.GetComponentsInChildren<Graphic>(true))
+            {
+                if (graphic == null || keep.Contains(graphic) || graphic is TMP_Text)
+                    continue;
+
+                if (graphic is Image image)
+                {
+                    image.sprite = null;
+                    image.type = Image.Type.Simple;
+                }
+
+                graphic.color = Color.clear;
+                graphic.raycastTarget = false;
+            }
         }
 
         static Transform FindDescendant(Transform parent, string name)

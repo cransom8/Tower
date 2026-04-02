@@ -23,6 +23,7 @@ namespace CastleDefender.Editor
             WaitingForTechTreeSetup = 3,
             WaitingForFileWrite = 4,
             WaitingForPlayModeExit = 5,
+            WaitingForLoginFinalPresentation = 6,
         }
 
         enum CaptureSetup
@@ -30,6 +31,7 @@ namespace CastleDefender.Editor
             None = 0,
             LoadoutRaceSelection = 1,
             LoadoutTechTree = 2,
+            LoginFinalPresentation = 3,
         }
 
         [Serializable]
@@ -44,6 +46,8 @@ namespace CastleDefender.Editor
             public string OutputRoot;
             public string PendingScreenshotPath;
             public bool IncludeMobile;
+            public bool LoginOnly;
+            public bool TriggeredLoginSkip;
         }
 
         readonly struct CaptureRequest
@@ -83,7 +87,7 @@ namespace CastleDefender.Editor
 
         static readonly CaptureRequest[] DesktopRequests =
         {
-            new("login-desktop", "Assets/Scenes/Login.unity", 1920, 1080, CaptureSetup.None, null, 90, 20),
+            new("login-desktop", "Assets/Scenes/Login.unity", 1920, 1080, CaptureSetup.LoginFinalPresentation, null, 24, 6),
             new("lobby-desktop", "Assets/Scenes/Lobby.unity", 1920, 1080, CaptureSetup.None, null, 90, 20),
             new("loadout-desktop", "Assets/Scenes/Loadout.unity", 1920, 1080, CaptureSetup.LoadoutRaceSelection, RaceProgressionCatalog.DefaultRaceId, 110, 24),
             new("tech-tree-desktop", "Assets/Scenes/Loadout.unity", 1920, 1080, CaptureSetup.LoadoutTechTree, RaceProgressionCatalog.DefaultRaceId, 110, 40, "king"),
@@ -91,10 +95,10 @@ namespace CastleDefender.Editor
 
         static readonly CaptureRequest[] MobileRequests =
         {
-            new("login-mobile", "Assets/Scenes/Login.unity", 1080, 1920, CaptureSetup.None, null, 90, 20),
-            new("lobby-mobile", "Assets/Scenes/Lobby.unity", 1080, 1920, CaptureSetup.None, null, 90, 20),
-            new("loadout-mobile", "Assets/Scenes/Loadout.unity", 1080, 1920, CaptureSetup.LoadoutRaceSelection, RaceProgressionCatalog.DefaultRaceId, 110, 24),
-            new("tech-tree-mobile", "Assets/Scenes/Loadout.unity", 1080, 1920, CaptureSetup.LoadoutTechTree, RaceProgressionCatalog.DefaultRaceId, 110, 40, "king"),
+            new("login-mobile", "Assets/Scenes/Login.unity", 2400, 1080, CaptureSetup.LoginFinalPresentation, null, 24, 6),
+            new("lobby-mobile", "Assets/Scenes/Lobby.unity", 2400, 1080, CaptureSetup.None, null, 90, 20),
+            new("loadout-mobile", "Assets/Scenes/Loadout.unity", 2400, 1080, CaptureSetup.LoadoutRaceSelection, RaceProgressionCatalog.DefaultRaceId, 110, 24),
+            new("tech-tree-mobile", "Assets/Scenes/Loadout.unity", 2400, 1080, CaptureSetup.LoadoutTechTree, RaceProgressionCatalog.DefaultRaceId, 110, 40, "king"),
         };
 
         static CaptureState _state;
@@ -117,13 +121,25 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/UI/Capture Priority Screenshots/Desktop Only")]
         public static void CaptureDesktopOnly()
         {
-            StartCapture(includeMobile: false);
+            StartCapture(includeMobile: false, loginOnly: false);
         }
 
         [MenuItem("Castle Defender/UI/Capture Priority Screenshots/Desktop + Mobile")]
         public static void CaptureDesktopAndMobile()
         {
-            StartCapture(includeMobile: true);
+            StartCapture(includeMobile: true, loginOnly: false);
+        }
+
+        [MenuItem("Castle Defender/UI/Capture Login Screenshots/Desktop Only")]
+        public static void CaptureLoginDesktopOnly()
+        {
+            StartCapture(includeMobile: false, loginOnly: true);
+        }
+
+        [MenuItem("Castle Defender/UI/Capture Login Screenshots/Desktop + Mobile")]
+        public static void CaptureLoginDesktopAndMobile()
+        {
+            StartCapture(includeMobile: true, loginOnly: true);
         }
 
         [MenuItem("Castle Defender/UI/Open Last Screenshot Folder")]
@@ -147,7 +163,7 @@ namespace CastleDefender.Editor
             Debug.Log("[ClassicRpgUiScreenshots] Cleared screenshot capture state.");
         }
 
-        static void StartCapture(bool includeMobile)
+        static void StartCapture(bool includeMobile, bool loginOnly)
         {
             LoadState();
             if (_state.Running)
@@ -182,6 +198,8 @@ namespace CastleDefender.Editor
                 OutputRoot = BuildOutputRoot(),
                 PendingScreenshotPath = string.Empty,
                 IncludeMobile = includeMobile,
+                LoginOnly = loginOnly,
+                TriggeredLoginSkip = false,
             };
 
             Directory.CreateDirectory(_state.OutputRoot);
@@ -240,6 +258,15 @@ namespace CastleDefender.Editor
                         return;
                     }
 
+                    if (request.Setup == CaptureSetup.LoginFinalPresentation)
+                    {
+                        _state.Stage = (int)CaptureStage.WaitingForLoginFinalPresentation;
+                        _state.RemainingTicks = -1;
+                        _state.CaptureTimeoutTicks = 1800;
+                        SaveState();
+                        return;
+                    }
+
                     CaptureCurrentRequest(request);
                     break;
 
@@ -256,6 +283,57 @@ namespace CastleDefender.Editor
 
                     CaptureCurrentRequest(request);
                     break;
+
+                case CaptureStage.WaitingForLoginFinalPresentation:
+                    if (!Application.isPlaying)
+                        return;
+
+                    var loginUi = UnityEngine.Object.FindFirstObjectByType<LoginUI>(FindObjectsInactive.Include);
+                    string readiness = loginUi != null ? loginUi.FinalRuntimeScreenshotState : "LoginUI not found";
+                    if (!_state.TriggeredLoginSkip && loginUi != null)
+                    {
+                        loginUi.SkipIntroForAutomation();
+                        _state.TriggeredLoginSkip = true;
+                        SaveState();
+                        return;
+                    }
+
+                    bool readyForCapture = loginUi != null && loginUi.IsReadyForFinalRuntimeScreenshot;
+
+                    if (!readyForCapture)
+                    {
+                        _state.RemainingTicks = -1;
+                        if (_state.CaptureTimeoutTicks > 0)
+                        {
+                            _state.CaptureTimeoutTicks--;
+                            if (_state.CaptureTimeoutTicks % 180 == 0)
+                                Debug.Log($"[ClassicRpgUiScreenshots] Waiting for final login frame: {readiness}");
+                            SaveState();
+                            return;
+                        }
+
+                        Debug.LogWarning($"[ClassicRpgUiScreenshots] Timed out waiting for final login frame. Capturing current state: {readiness}");
+                        CaptureCurrentRequest(request);
+                        return;
+                    }
+
+                    if (_state.RemainingTicks < 0)
+                    {
+                        _state.RemainingTicks = request.SettleTicks;
+                        SaveState();
+                        return;
+                    }
+
+                    if (_state.RemainingTicks > 0)
+                    {
+                        _state.RemainingTicks--;
+                        SaveState();
+                        return;
+                    }
+
+                    Debug.Log($"[ClassicRpgUiScreenshots] Final login frame ready: {readiness}");
+                    CaptureCurrentRequest(request);
+                    return;
 
                 case CaptureStage.WaitingForFileWrite:
                     if (File.Exists(_state.PendingScreenshotPath))
@@ -356,7 +434,7 @@ namespace CastleDefender.Editor
         static void StartNextRequest()
         {
             _state.RequestIndex++;
-            var requests = GetRequestSet(_state.IncludeMobile);
+            var requests = GetRequestSet(_state.IncludeMobile, _state.LoginOnly);
             if (_state.RequestIndex >= requests.Length)
             {
                 FinishCapture();
@@ -373,6 +451,7 @@ namespace CastleDefender.Editor
 
             _state.PendingScreenshotPath = string.Empty;
             _state.CaptureTimeoutTicks = 0;
+            _state.TriggeredLoginSkip = false;
             _state.Stage = (int)CaptureStage.WaitingForPlayMode;
             SaveState();
 
@@ -405,8 +484,16 @@ namespace CastleDefender.Editor
             return Path.Combine(outputRoot, $"{request.Label}-{request.Width}x{request.Height}.png");
         }
 
-        static CaptureRequest[] GetRequestSet(bool includeMobile)
+        static CaptureRequest[] GetRequestSet(bool includeMobile, bool loginOnly)
         {
+            if (loginOnly)
+            {
+                if (!includeMobile)
+                    return new[] { DesktopRequests[0] };
+
+                return new[] { DesktopRequests[0], MobileRequests[0] };
+            }
+
             if (!includeMobile)
                 return DesktopRequests;
 
@@ -418,7 +505,7 @@ namespace CastleDefender.Editor
 
         static CaptureRequest GetCurrentRequest()
         {
-            var requests = GetRequestSet(_state.IncludeMobile);
+            var requests = GetRequestSet(_state.IncludeMobile, _state.LoginOnly);
             if (_state.RequestIndex < 0 || _state.RequestIndex >= requests.Length)
                 return default;
             return requests[_state.RequestIndex];
