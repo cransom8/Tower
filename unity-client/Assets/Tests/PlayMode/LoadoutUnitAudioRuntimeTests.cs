@@ -10,7 +10,7 @@ using UnityEngine.TestTools;
 public class LoadoutUnitAudioRuntimeTests
 {
     const float VoiceValidationSpacingSeconds = 1.2f;
-    static readonly string[] VoiceCueNames = { "Spawn", "Attack", "Hurt", "Death" };
+    static readonly string[] VoiceCueNames = { "Attack", "Defend", "Retreat" };
     static readonly string[] AudioClipFieldNames =
     {
         "unitSpawn",

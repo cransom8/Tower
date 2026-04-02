@@ -41,6 +41,7 @@ namespace CastleDefender.Game
             public float      smoothProg;
             public bool       isSplash;
             public bool       landedFxPlayed;
+            public bool       playAudio;
             public string     projectileType;
             public string     damageType;
             public string     sourceId;
@@ -70,11 +71,12 @@ namespace CastleDefender.Game
             if (snap?.lanes == null) return;
 
             var seen = new HashSet<string>();
+            int localLaneIndex = ResolveLocalLaneIndex();
 
             foreach (var lane in snap.lanes)
             {
                 if (lane == null) continue;
-                SyncLaneProjectiles(lane, seen);
+                SyncLaneProjectiles(snap, lane, seen, localLaneIndex);
             }
 
             // Remove projectiles that disappeared (assumed hit)
@@ -94,13 +96,17 @@ namespace CastleDefender.Game
                         var fx = Instantiate(SplashFxPrefab, v.to, Quaternion.identity);
                         Destroy(fx, 1.5f);
                     }
-                    AudioManager.I?.Play(AudioManager.SFX.CannonSplash);
+                    if (v.playAudio)
+                        AudioManager.I?.Play(AudioManager.SFX.CannonSplash);
                 }
                 else if (!v.isSplash && v.go != null)
                 {
                     var hitEffect = HitEffectPool.Get();
                     if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType, v.damageType));
-                    TryPlayProjectileCombatSfx(v.id, v.projectileType, v.damageType, UnitCombatSfxCue.Impact, 0.22f, HitSFXFor(v.projectileType, v.damageType));
+                    if (v.playAudio)
+                    {
+                        TryPlayProjectileCombatSfx(v.id, v.projectileType, v.damageType, UnitCombatSfxCue.Impact, 0.22f, HitSFXFor(v.projectileType, v.damageType));
+                    }
                 }
 
                 if (v.go != null) Destroy(v.go);
@@ -108,13 +114,14 @@ namespace CastleDefender.Game
             }
         }
 
-        void SyncLaneProjectiles(MLLaneSnap lane, HashSet<string> seen)
+        void SyncLaneProjectiles(MLSnapshot snap, MLLaneSnap lane, HashSet<string> seen, int localLaneIndex)
         {
             if (lane.projectiles == null) return;
 
             foreach (var p in lane.projectiles)
             {
                 seen.Add(p.id);
+                bool playAudio = ShouldPlayProjectileAudio(snap, p, localLaneIndex);
 
                 if (!TryResolveProjectileEndpointWorldPosition(p, lane, resolveSource: true, out Vector3 fromWorld, out string sourceFailure))
                 {
@@ -131,7 +138,7 @@ namespace CastleDefender.Game
                 }
 
                 if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
-                    view = CreateProjectile(p, fromWorld, toWorld);
+                    view = CreateProjectile(p, fromWorld, toWorld, playAudio);
 
                 if (view == null || view.go == null)
                     continue;
@@ -140,12 +147,13 @@ namespace CastleDefender.Game
                 view.to       = toWorld;
                 view.progress = p.progress;
                 view.isSplash = p.isSplash;
+                view.playAudio = playAudio;
                 view.sourceId = p.sourceId;
                 view.targetId = p.targetId;
             }
         }
 
-        ProjView CreateProjectile(MLProjectile p, Vector3 from, Vector3 to)
+        ProjView CreateProjectile(MLProjectile p, Vector3 from, Vector3 to, bool playAudio)
         {
             bool isCannon = p.projectileType == "cannon";
             var  prefab   = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
@@ -188,6 +196,7 @@ namespace CastleDefender.Game
                 smoothProg     = p.progress,
                 isSplash       = p.isSplash,
                 landedFxPlayed = false,
+                playAudio      = playAudio,
                 projectileType = p.projectileType,
                 damageType     = p.damageType,
                 sourceId       = p.sourceId,
@@ -195,7 +204,10 @@ namespace CastleDefender.Game
             };
             _projs[p.id] = view;
 
-            TryPlayProjectileCombatSfx(p.id, p.projectileType, p.damageType, UnitCombatSfxCue.Attack, 0.24f, ShootSFXFor(p.projectileType, p.damageType));
+            if (playAudio)
+            {
+                TryPlayProjectileCombatSfx(p.id, p.projectileType, p.damageType, UnitCombatSfxCue.Attack, 0.24f, ShootSFXFor(p.projectileType, p.damageType));
+            }
             return view;
         }
 
@@ -244,6 +256,15 @@ namespace CastleDefender.Game
             _subscribed = true;
 
             if (sa.LatestML != null) OnSnapshot(sa.LatestML);
+        }
+
+        int ResolveLocalLaneIndex()
+        {
+            if (_boundSnapshotApplier != null)
+                return _boundSnapshotApplier.MyLaneIndex;
+            if (SnapshotApplier.Instance != null)
+                return SnapshotApplier.Instance.MyLaneIndex;
+            return NetworkManager.Instance != null ? NetworkManager.Instance.MyLaneIndex : -1;
         }
 
         void DestroyAll()
@@ -332,6 +353,99 @@ namespace CastleDefender.Game
                 Destroy(view.go);
 
             _projs.Remove(projectileId);
+        }
+
+        static bool ShouldPlayProjectileAudio(MLSnapshot snap, MLProjectile projectile, int localLaneIndex)
+        {
+            if (projectile == null || localLaneIndex < 0)
+                return false;
+
+            if (string.Equals(projectile.sourceKind, "unit", System.StringComparison.OrdinalIgnoreCase)
+                && TryFindSnapshotUnit(snap, projectile.sourceId, out MLUnit sourceUnit))
+            {
+                return ShouldPlayUnitAudioForLocalLane(sourceUnit, localLaneIndex);
+            }
+
+            return projectile.ownerLane == localLaneIndex;
+        }
+
+        static bool TryFindSnapshotUnit(MLSnapshot snap, string unitId, out MLUnit unit)
+        {
+            unit = null;
+            if (snap?.lanes == null || string.IsNullOrWhiteSpace(unitId))
+                return false;
+
+            for (int laneIndex = 0; laneIndex < snap.lanes.Length; laneIndex++)
+            {
+                MLLaneSnap lane = snap.lanes[laneIndex];
+                if (lane?.units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                {
+                    MLUnit candidate = lane.units[unitIndex];
+                    if (candidate != null && string.Equals(candidate.id, unitId, System.StringComparison.Ordinal))
+                    {
+                        unit = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        static bool ShouldPlayUnitAudioForLocalLane(MLUnit unit, int localLaneIndex)
+        {
+            if (unit == null || localLaneIndex < 0)
+                return false;
+
+            if (IsDungeonWaveUnit(unit))
+                return ResolveDungeonAudioLaneIndex(unit) == localLaneIndex;
+
+            return ResolveOwnedAudioLaneIndex(unit) == localLaneIndex;
+        }
+
+        static bool IsDungeonWaveUnit(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+            if (unit.isWaveUnit)
+                return true;
+
+            string explicitAllegiance = unit.allegianceKey != null
+                ? unit.allegianceKey.Trim().ToLowerInvariant()
+                : null;
+            if (string.Equals(explicitAllegiance, "dungeon", System.StringComparison.Ordinal))
+                return true;
+
+            string spawnSourceType = unit.spawnSourceType != null
+                ? unit.spawnSourceType.Trim().ToLowerInvariant()
+                : null;
+            return string.Equals(spawnSourceType, "scheduled_wave", System.StringComparison.Ordinal)
+                || string.Equals(spawnSourceType, "dungeon_wave", System.StringComparison.Ordinal);
+        }
+
+        static int ResolveOwnedAudioLaneIndex(MLUnit unit)
+        {
+            if (unit == null)
+                return -1;
+            if (unit.ownerLaneIndex >= 0)
+                return unit.ownerLaneIndex;
+            if (unit.ownerLane >= 0)
+                return unit.ownerLane;
+            return unit.sourceLaneIndex >= 0 ? unit.sourceLaneIndex : -1;
+        }
+
+        static int ResolveDungeonAudioLaneIndex(MLUnit unit)
+        {
+            if (unit == null)
+                return -1;
+            if (unit.targetLaneIndex >= 0)
+                return unit.targetLaneIndex;
+            if (unit.laneId >= 0)
+                return unit.laneId;
+            return unit.objectiveLaneIndex >= 0 ? unit.objectiveLaneIndex : -1;
         }
 
         static void TryPlayProjectileCombatSfx(

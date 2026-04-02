@@ -703,6 +703,8 @@ namespace CastleDefender.UI
 
         void StartLoginCinematicSequence()
         {
+            EnsureCinematicAudioSources();
+            StartCinematicAudioPreload();
             ResolveLoginCinematicPaths();
 
             if (!EnableLoginCinematics || (_resolvedIntroVideoPaths.Count == 0 && string.IsNullOrWhiteSpace(_loopVideoPath)))
@@ -1040,6 +1042,7 @@ namespace CastleDefender.UI
             }
 
             source.Play();
+            HandlePreparedCinematicAudio();
 
             if (_freezeLoginBackgroundOnPrepare)
                 _loginBackgroundFreezeRoutine = StartCoroutine(HoldVideoOnFinalFrame(source));

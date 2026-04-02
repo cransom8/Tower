@@ -246,9 +246,9 @@ MonoBehaviour:
   victory: {fileID: 8300000, guid: 59cfe0361c181eb4dbdadc7a79d89a06, type: 2}
   rematch: {fileID: 8300000, guid: 5210bfb92eb2ad54dbf9d6209dfbbb02, type: 2}
   error: {fileID: 8300000, guid: a2b41bfa5cb5593469885f8e5a9f52f3, type: 2}
-  menuMusicLoop: {fileID: 0}
-  gameplayMusicLoop: {fileID: 0}
-  ambientLoop: {fileID: 0}
+  menuMusicLoop: {fileID: 8300000, guid: 61f3e9ce7e5140f88b8bf9f795c4b974, type: 3}
+  gameplayMusicLoop: {fileID: 8300000, guid: 61f3e9ce7e5140f88b8bf9f795c4b974, type: 3}
+  ambientLoop: {fileID: 8300000, guid: 61f3e9ce7e5140f88b8bf9f795c4b974, type: 3}
 --- !u!1 &1644891131
 GameObject:
   m_ObjectHideFlags: 0

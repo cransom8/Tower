@@ -66,6 +66,12 @@ namespace CastleDefender.Game
         const float CombatFacingTurnSharpness = 20f;
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
+        static readonly UnitVoiceCue[] SpawnVoiceCuePool =
+        {
+            UnitVoiceCue.Attack,
+            UnitVoiceCue.Defend,
+            UnitVoiceCue.Retreat,
+        };
         static readonly bool EnableVerboseSpawnAuditLogs = false;
         static readonly int VelocityXParameterHash = Animator.StringToHash("Velocity X");
         static readonly int VelocityZParameterHash = Animator.StringToHash("Velocity Z");
@@ -700,7 +706,9 @@ namespace CastleDefender.Game
                 animator.Update(0f);
             }
             SetVisualState(view, UnitAnimationResolver.ResolveRuntimeIntent(unit, moving: false, attacking: false));
-            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Spawn, Time.time, 0.25f, AudioManager.SFX.UnitSpawn);
+            float spawnAudioNow = Time.time;
+            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Spawn, spawnAudioNow, 0.25f, AudioManager.SFX.UnitSpawn);
+            TryPlayBarracksSpawnVoice(unit, spawnAudioNow);
             LogVerboseSpawnAudit(
                 $"[SpawnAudit][ClientInstantiate] unitId='{unit.id}' unitType='{unit.type}' " +
                 $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
@@ -3396,6 +3404,9 @@ namespace CastleDefender.Game
             float volumeScale,
             AudioManager.SFX? legacyFallback = null)
         {
+            if (!ShouldPlayUnitAudio(unit))
+                return;
+
             UnitCombatSfxLibrary.ResolvedProfile profile = view != null
                 ? view.combatSfxProfile
                 : UnitCombatSfxLibrary.ResolveForUnit(null, unit);
@@ -3452,9 +3463,18 @@ namespace CastleDefender.Game
             _lastImpactFxAtByTarget.Remove(targetId);
         }
 
+        void TryPlayBarracksSpawnVoice(MLUnit unit, float now)
+        {
+            if (!ShouldPlayBarracksSpawnVoice(unit) || SpawnVoiceCuePool.Length == 0)
+                return;
+
+            UnitVoiceCue cue = SpawnVoiceCuePool[UnityEngine.Random.Range(0, SpawnVoiceCuePool.Length)];
+            TryPlayUnitVoice(unit, cue, now, 0.88f, bypassChance: true);
+        }
+
         void TryPlayUnitVoice(MLUnit unit, UnitVoiceCue cue, float now, float volumeScale, bool bypassChance = false)
         {
-            if (unit == null || !UnitVoiceLibrary.HasVoiceProfile(unit))
+            if (unit == null || !ShouldPlayUnitAudio(unit) || !UnitVoiceLibrary.HasVoiceProfile(unit))
                 return;
 
             string speakerId = ResolveVoiceSpeakerId(unit);
@@ -3539,6 +3559,44 @@ namespace CastleDefender.Game
             UnitVoiceCue.Retreat => RetreatVoiceCueCooldownSeconds,
             _ => AttackVoiceCueCooldownSeconds,
         };
+
+        bool ShouldPlayUnitAudio(MLUnit unit)
+        {
+            return ShouldPlayUnitAudio(unit, ResolveLocalLaneIndex());
+        }
+
+        static bool ShouldPlayUnitAudio(MLUnit unit, int localLaneIndex)
+        {
+            if (unit == null || localLaneIndex < 0)
+                return false;
+
+            if (IsDungeonWaveUnit(unit))
+                return ResolveDungeonAudioLaneIndex(unit) == localLaneIndex;
+
+            return ResolveOwnedAudioLaneIndex(unit) == localLaneIndex;
+        }
+
+        static int ResolveOwnedAudioLaneIndex(MLUnit unit)
+        {
+            if (unit == null)
+                return -1;
+            if (unit.ownerLaneIndex >= 0)
+                return unit.ownerLaneIndex;
+            if (unit.ownerLane >= 0)
+                return unit.ownerLane;
+            return unit.sourceLaneIndex >= 0 ? unit.sourceLaneIndex : -1;
+        }
+
+        static int ResolveDungeonAudioLaneIndex(MLUnit unit)
+        {
+            if (unit == null)
+                return -1;
+            if (unit.targetLaneIndex >= 0)
+                return unit.targetLaneIndex;
+            if (unit.laneId >= 0)
+                return unit.laneId;
+            return unit.objectiveLaneIndex >= 0 ? unit.objectiveLaneIndex : -1;
+        }
 
         int ResolveLocalLaneIndex()
         {
@@ -3653,6 +3711,18 @@ namespace CastleDefender.Game
                 return unit.type.Trim();
 
             return null;
+        }
+
+        static bool ShouldPlayBarracksSpawnVoice(MLUnit unit)
+        {
+            if (unit == null || unit.isWaveUnit || !UnitVoiceLibrary.HasVoiceProfile(unit))
+                return false;
+
+            string spawnSourceType = string.IsNullOrWhiteSpace(unit.spawnSourceType)
+                ? null
+                : unit.spawnSourceType.Trim();
+            return string.Equals(spawnSourceType, "barracks_roster", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(spawnSourceType, "barracks_hero", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
