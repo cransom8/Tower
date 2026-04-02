@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Audio;
+using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Singleton audio manager.
@@ -53,12 +54,14 @@ public class AudioManager : MonoBehaviour
     public AudioClip rematch;           // short confirm chime
     public AudioClip error;             // short buzz
 
-    [Header("Ambient")]
-    public AudioClip ambientLoop;       // medieval ambient wind/crowd loop
+    [Header("Loop Music")]
+    public AudioClip menuMusicLoop;     // login / lobby / loadout / postgame loop
+    public AudioClip gameplayMusicLoop; // live match loop
+    public AudioClip ambientLoop;       // legacy fallback loop
 
     // ── Sources ───────────────────────────────────────────────────────────────
     AudioSource _sfxSource;
-    AudioSource _ambientSource;
+    AudioSource _loopSource;
     bool _applyingUserPreferences;
 
     public float CurrentMasterVolume { get; private set; } = 1f;
@@ -73,15 +76,16 @@ public class AudioManager : MonoBehaviour
         I = this;
         DontDestroyOnLoad(gameObject);
 
-        _sfxSource     = AddSource("SFX",     "SFXVol");
-        _ambientSource = AddSource("Ambient",  "AmbientVol");
+        _sfxSource = AddSource("SFX", "SFXVol");
+        _loopSource = AddSource("Ambient", "AmbientVol");
+        SceneManager.activeSceneChanged += HandleActiveSceneChanged;
 
         LoadVolumes();
     }
 
     void Start()
     {
-        StartCoroutine(BeginAmbientWhenReady());
+        StartCoroutine(BeginLoopWhenReady());
     }
 
     void OnDestroy()
@@ -89,8 +93,9 @@ public class AudioManager : MonoBehaviour
         if (I == this)
             I = null;
 
+        SceneManager.activeSceneChanged -= HandleActiveSceneChanged;
         _sfxSource = null;
-        _ambientSource = null;
+        _loopSource = null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -142,6 +147,11 @@ public class AudioManager : MonoBehaviour
             NotifyManagedAudioPreferenceChange("NotifySfxVolumeChanged", linear);
     }
 
+    public void SetMusicVolume(float linear)
+    {
+        SetAmbientVolume(linear);
+    }
+
     public void SetAmbientVolume(float linear)
     {
         linear = Mathf.Clamp01(linear);
@@ -183,16 +193,7 @@ public class AudioManager : MonoBehaviour
         return src;
     }
 
-    void PlayAmbient()
-    {
-        if (ambientLoop == null) return;
-        _ambientSource.clip = ambientLoop;
-        _ambientSource.loop = true;
-        _ambientSource.volume = 0.35f;
-        _ambientSource.Play();
-    }
-
-    System.Collections.IEnumerator BeginAmbientWhenReady()
+    System.Collections.IEnumerator BeginLoopWhenReady()
     {
         const float timeoutSeconds = 2f;
         float elapsed = 0f;
@@ -205,11 +206,11 @@ public class AudioManager : MonoBehaviour
 
         if (!HasActiveAudioListener())
         {
-            Debug.LogWarning("[AudioManager] Ambient playback skipped because no active AudioListener was found.");
+            Debug.LogWarning("[AudioManager] Loop music playback skipped because no active AudioListener was found.");
             yield break;
         }
 
-        PlayAmbient();
+        RefreshLoopPlayback();
     }
 
     static bool HasActiveAudioListener()
@@ -234,6 +235,54 @@ public class AudioManager : MonoBehaviour
         }
 
         ApplyUserPreferenceVolumes(CurrentMasterVolume, CurrentSfxVolume, CurrentAmbientVolume);
+    }
+
+    void HandleActiveSceneChanged(Scene _, Scene __)
+    {
+        RefreshLoopPlayback();
+    }
+
+    void RefreshLoopPlayback()
+    {
+        if (_loopSource == null)
+            return;
+
+        AudioClip nextClip = ResolveLoopClipForScene(SceneManager.GetActiveScene());
+        if (nextClip == null)
+        {
+            if (_loopSource.isPlaying)
+                _loopSource.Stop();
+            _loopSource.clip = null;
+            return;
+        }
+
+        bool clipChanged = _loopSource.clip != nextClip;
+        if (clipChanged)
+        {
+            _loopSource.Stop();
+            _loopSource.clip = nextClip;
+        }
+
+        _loopSource.loop = true;
+        _loopSource.volume = 1f;
+
+        if (HasActiveAudioListener() && (!_loopSource.isPlaying || clipChanged))
+            _loopSource.Play();
+    }
+
+    AudioClip ResolveLoopClipForScene(Scene scene)
+    {
+        if (IsGameplayScene(scene))
+            return gameplayMusicLoop != null ? gameplayMusicLoop : ambientLoop;
+
+        return menuMusicLoop != null ? menuMusicLoop : ambientLoop;
+    }
+
+    static bool IsGameplayScene(Scene scene)
+    {
+        string sceneName = scene.name ?? string.Empty;
+        return sceneName.StartsWith("Game_", System.StringComparison.OrdinalIgnoreCase)
+            || string.Equals(sceneName, "Game", System.StringComparison.OrdinalIgnoreCase);
     }
 
     void SetMixerVolume(string param, float linear)

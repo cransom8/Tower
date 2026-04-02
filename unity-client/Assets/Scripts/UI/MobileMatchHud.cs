@@ -163,6 +163,8 @@ namespace CastleDefender.UI
         TMP_Text _txtSettingsTiltValue;
         TMP_Text _txtSettingsZoomValue;
         TMP_Text _txtSettingsRotationValue;
+        TMP_Text _txtSettingsSfxValue;
+        TMP_Text _txtSettingsMusicValue;
         TMP_Text _txtSettingsEngagementValue;
         TMP_Text _txtSettingsHealthBarsValue;
         TMP_Text _txtSettingsTooltipsValue;
@@ -2390,6 +2392,8 @@ namespace CastleDefender.UI
             var tiltButton = CreateSettingsSelectorRow(rows.transform, "TiltRow", "Camera Tilt", "Cycle the battlefield viewing angle.", new Color(0.16f, 0.24f, 0.32f, 0.98f), out _txtSettingsTiltValue);
             var zoomButton = CreateSettingsSelectorRow(rows.transform, "ZoomRow", "Camera Zoom", "Cycle how close your command view sits.", new Color(0.18f, 0.28f, 0.22f, 0.98f), out _txtSettingsZoomValue);
             var rotationButton = CreateSettingsSelectorRow(rows.transform, "RotateRow", "Camera Rotation", "Cycle your battlefield facing.", new Color(0.28f, 0.20f, 0.16f, 0.98f), out _txtSettingsRotationValue);
+            var sfxButton = CreateSettingsSelectorRow(rows.transform, "SfxRow", "Sound Effects", "Cycle combat, build, and UI volume.", new Color(0.20f, 0.22f, 0.34f, 0.98f), out _txtSettingsSfxValue);
+            var musicButton = CreateSettingsSelectorRow(rows.transform, "MusicRow", "Music Loop", "Cycle the background soundtrack level.", new Color(0.16f, 0.26f, 0.30f, 0.98f), out _txtSettingsMusicValue);
             var engagementButton = CreateSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
             var healthBarsButton = CreateSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
             var tooltipsButton = CreateSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
@@ -2440,6 +2444,8 @@ namespace CastleDefender.UI
             tiltButton.onClick.AddListener(CycleCameraTiltSetting);
             zoomButton.onClick.AddListener(CycleCameraZoomSetting);
             rotationButton.onClick.AddListener(CycleCameraRotationSetting);
+            sfxButton.onClick.AddListener(CycleSfxVolumeSetting);
+            musicButton.onClick.AddListener(CycleMusicVolumeSetting);
             engagementButton.onClick.AddListener(ToggleEngagementCirclesSetting);
             healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
             tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
@@ -2531,7 +2537,7 @@ namespace CastleDefender.UI
             ApplyPanelFrame(row, rowImage.color, selectorColor);
 
             var rowLayoutElement = row.GetComponent<LayoutElement>();
-            rowLayoutElement.preferredHeight = 66f;
+            rowLayoutElement.preferredHeight = 54f;
             rowLayoutElement.flexibleWidth = 1f;
 
             var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
@@ -2541,7 +2547,7 @@ namespace CastleDefender.UI
             rowLayout.childForceExpandWidth = false;
             rowLayout.childForceExpandHeight = false;
             rowLayout.spacing = 12f;
-            rowLayout.padding = new RectOffset(14, 14, 10, 10);
+            rowLayout.padding = new RectOffset(14, 14, 8, 8);
 
             var copy = new GameObject("Copy", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
             copy.transform.SetParent(row.transform, false);
@@ -2559,12 +2565,12 @@ namespace CastleDefender.UI
             title.fontStyle = FontStyles.SmallCaps;
             title.textWrappingMode = TextWrappingModes.NoWrap;
             title.overflowMode = TextOverflowModes.Ellipsis;
-            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
+            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 16f;
 
             var detail = CreateText(copy.transform, "Detail", detailText, 10, TextAlignmentOptions.Left, new Color(0.78f, 0.85f, 0.92f, 0.94f));
             detail.textWrappingMode = TextWrappingModes.Normal;
             detail.overflowMode = TextOverflowModes.Ellipsis;
-            detail.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
+            detail.gameObject.AddComponent<LayoutElement>().preferredHeight = 20f;
 
             return CreateSettingsSelectorButton(row.transform, "Selector", selectorColor, out valueLabel);
         }
@@ -2720,6 +2726,24 @@ namespace CastleDefender.UI
             UserPreferencesManager.SetTooltipsVisible(!UserPreferencesManager.ShowTooltips);
         }
 
+        void CycleSfxVolumeSetting()
+        {
+            float nextVolume = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.audio.sfxVolume, 0f, 1f, 0.25f);
+            if (AudioManager.I != null)
+                AudioManager.I.SetSFXVolume(nextVolume);
+            else
+                UserPreferencesManager.NotifySfxVolumeChanged(nextVolume);
+        }
+
+        void CycleMusicVolumeSetting()
+        {
+            float nextVolume = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.audio.ambientVolume, 0f, 1f, 0.25f);
+            if (AudioManager.I != null)
+                AudioManager.I.SetMusicVolume(nextVolume);
+            else
+                UserPreferencesManager.NotifyAmbientVolumeChanged(nextVolume);
+        }
+
         void ResolveCurrentCameraValues(out float tilt, out float zoom, out float rotation)
         {
             var controller = FindFirstObjectByType<global::CameraController>();
@@ -2772,6 +2796,8 @@ namespace CastleDefender.UI
             if (_txtSettingsTiltValue == null
                 && _txtSettingsZoomValue == null
                 && _txtSettingsRotationValue == null
+                && _txtSettingsSfxValue == null
+                && _txtSettingsMusicValue == null
                 && _txtSettingsEngagementValue == null
                 && _txtSettingsHealthBarsValue == null
                 && _txtSettingsTooltipsValue == null)
@@ -2794,6 +2820,8 @@ namespace CastleDefender.UI
                 SetSettingsValue(_txtSettingsRotationValue, FormatSettingsValue(controller.CurrentRotation));
             }
 
+            SetSettingsValue(_txtSettingsSfxValue, FormatVolumeValue(preferences.audio.sfxVolume));
+            SetSettingsValue(_txtSettingsMusicValue, FormatVolumeValue(preferences.audio.ambientVolume));
             SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
             SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
             SetSettingsValue(_txtSettingsTooltipsValue, FormatToggleValue(preferences.visuals.showTooltips));
@@ -2835,6 +2863,14 @@ namespace CastleDefender.UI
         static string FormatToggleValue(bool enabled)
         {
             return enabled ? "On" : "Off";
+        }
+
+        static string FormatVolumeValue(float linear)
+        {
+            if (linear <= 0.01f)
+                return "Off";
+
+            return $"{Mathf.RoundToInt(Mathf.Clamp01(linear) * 100f)}%";
         }
 
         void OnQuitPressed()
@@ -3808,32 +3844,7 @@ namespace CastleDefender.UI
             }
 
             var hud = FindFirstObjectByType<MobileMatchHud>(FindObjectsInactive.Include);
-            var existing = SceneEventSystemUtility.FindBest(hud);
-
-            if (existing == null)
-            {
-                var go = new GameObject("GameplayEventSystem");
-                existing = go.AddComponent<EventSystem>();
-                go.AddComponent<StandaloneInputModule>();
-                go.AddComponent<SingleEventSystem>();
-                Debug.Log("[MobileMatchHud] Created fallback EventSystem for TECH input.");
-                return;
-            }
-
-            if (!existing.gameObject.activeSelf)
-            {
-                existing.gameObject.SetActive(true);
-                Debug.Log("[MobileMatchHud] Reactivated the gameplay EventSystem for TECH input.");
-            }
-
-            if (existing.GetComponent<BaseInputModule>() == null)
-            {
-                existing.gameObject.AddComponent<StandaloneInputModule>();
-                Debug.Log("[MobileMatchHud] Added missing StandaloneInputModule to the gameplay EventSystem.");
-            }
-
-            if (existing.GetComponent<SingleEventSystem>() == null)
-                existing.gameObject.AddComponent<SingleEventSystem>();
+            SceneEventSystemUtility.EnsureSceneLocal(hud, "GameplayEventSystem", "MobileMatchHud");
         }
 
         void RefreshPreviewHud()
