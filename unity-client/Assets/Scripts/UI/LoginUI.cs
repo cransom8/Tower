@@ -21,6 +21,8 @@
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
@@ -29,6 +31,7 @@ using UnityEngine.Networking;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.Scripting;
+using UnityEngine.Video;
 using TMPro;
 using Newtonsoft.Json;
 using CastleDefender.Net;
@@ -98,8 +101,30 @@ namespace CastleDefender.UI
         public Button     Btn_DeviceCancel;
 
         [Header("Tab Colors")]
-        public Color ColorTabActive   = new Color(0.9f, 0.75f, 0.2f);
-        public Color ColorTabInactive = new Color(0.5f, 0.5f, 0.5f);
+        public Color ColorTabActive   = new Color(0.41f, 0.64f, 0.94f, 1f);
+        public Color ColorTabInactive = new Color(0.58f, 0.66f, 0.76f, 1f);
+
+        [Header("Cinematics")]
+        public bool EnableLoginCinematics = true;
+        public string LoginCinematicFolder = "LoginCinematics";
+        public string[] IntroClipFileNames =
+        {
+            "motion2Fast_Dark_medieval_forge_interior_No_people_visibleA_si_0.mp4",
+            "motion2Fast_Topdown_view_of_a_medieval_fortress_courtyard_at_n_0.mp4",
+        };
+        public string LoginLoopClipFileName = "motion2Fast_Topdown_view_at_the_top_of_medieval_fortress_battl_0.mp4";
+        public bool AllowIntroSkip = true;
+        public float IntroTitleFadeInDuration = 0.55f;
+        public float IntroTitleHoldDuration = 1.35f;
+        public float IntroTitleFadeOutDuration = 0.65f;
+        public float LoginRevealDuration = 0.45f;
+        public bool HoldLoginBackgroundOnFinalFrame = true;
+        public float LoginBackgroundFreezePaddingSeconds = 0.12f;
+        public int LoginBackgroundFreezeFramePadding = 2;
+        public float EndTitleRevealDelay = 0.12f;
+        public float IntroTaglineDelay = 0.32f;
+        public float IntroStampDuration = 0.16f;
+        public float IntroStampSettleDuration = 0.20f;
 
         // ── State ─────────────────────────────────────────────────────────────
         bool   _isRegisterTab   = false;
@@ -111,6 +136,35 @@ namespace CastleDefender.UI
         bool   _completingLogin = false;
         bool   _retryingCriticalContent = false;
         bool   _showingPreloadRetry = false;
+        bool   _loginPresentationVisible = true;
+        bool   _introSequenceActive = false;
+        bool   _allowTapToSkipIntro = false;
+        bool   _backgroundLoopActive = false;
+        bool   _cinematicAssetsResolved = false;
+        bool   _freezeLoginBackgroundOnPrepare = false;
+        bool   _loginBackgroundFrozen = false;
+        string _activeVideoPath = "";
+        string _loopVideoPath = "";
+        readonly Queue<string> _pendingIntroVideoPaths = new();
+        readonly List<string> _resolvedIntroVideoPaths = new();
+
+        CanvasGroup _loginPresentationGroup;
+        CanvasGroup _introTitleGroup;
+        CanvasGroup _introTitleCanvasGroup;
+        CanvasGroup _introTaglineCanvasGroup;
+        CanvasGroup _loginReadabilityShadeGroup;
+        Button _skipIntroButton;
+        TMP_Text _introTitleText;
+        TMP_Text _introTaglineText;
+        Image _introStampFlash;
+        Image _introTitleFrame;
+        RawImage _cinematicBackgroundImage;
+        AspectRatioFitter _cinematicBackgroundAspect;
+        VideoPlayer _cinematicVideoPlayer;
+        RenderTexture _cinematicVideoTexture;
+        Coroutine _introTitleRoutine;
+        Coroutine _loginRevealRoutine;
+        Coroutine _loginBackgroundFreezeRoutine;
 
         // ── WebGL jslib imports ───────────────────────────────────────────────
 #if UNITY_WEBGL && !UNITY_EDITOR
@@ -151,9 +205,48 @@ namespace CastleDefender.UI
 
             if (AuthManager.IsAuthenticated)
             {
+                ShowLoginPresentation(true);
                 SetStatus("Preparing your game session...");
                 StartCoroutine(CompleteLoginAndEnterLobby(0f));
             }
+            else
+            {
+                StartLoginCinematicSequence();
+            }
+        }
+
+        void Update()
+        {
+            if (!_allowTapToSkipIntro || _loginPresentationVisible)
+                return;
+
+            if (Input.GetMouseButtonDown(0) || Input.touchCount > 0 || Input.anyKeyDown)
+                SkipLoginIntro();
+        }
+
+        void OnDestroy()
+        {
+            if (_cinematicVideoPlayer != null)
+            {
+                _cinematicVideoPlayer.prepareCompleted -= HandleCinematicVideoPrepared;
+                _cinematicVideoPlayer.loopPointReached -= HandleCinematicVideoLoopPointReached;
+                _cinematicVideoPlayer.errorReceived -= HandleCinematicVideoError;
+                _cinematicVideoPlayer.Stop();
+            }
+
+            if (_loginBackgroundFreezeRoutine != null)
+                StopCoroutine(_loginBackgroundFreezeRoutine);
+
+            if (_cinematicVideoTexture != null)
+            {
+                if (_cinematicVideoTexture.IsCreated())
+                    _cinematicVideoTexture.Release();
+                Destroy(_cinematicVideoTexture);
+                _cinematicVideoTexture = null;
+            }
+
+            if (_runtimeAudioListener != null)
+                Destroy(_runtimeAudioListener);
         }
 
         // ── Config fetch ──────────────────────────────────────────────────────
@@ -193,8 +286,9 @@ namespace CastleDefender.UI
                 {
                     if (Btn_TabSignIn   != null) Btn_TabSignIn.gameObject.SetActive(false);
                     if (Btn_TabRegister != null) Btn_TabRegister.gameObject.SetActive(false);
-                    if (Input_Email     != null) Input_Email.gameObject.SetActive(false);
-                    if (Input_Password  != null) Input_Password.gameObject.SetActive(false);
+                    if (Input_Email     != null) SetFieldContainerActive(Input_Email, false);
+                    if (Input_Password  != null) SetFieldContainerActive(Input_Password, false);
+                    if (Input_DisplayName != null) SetFieldContainerActive(Input_DisplayName, false);
                     if (Btn_Submit      != null) Btn_Submit.gameObject.SetActive(false);
                     ShowContentRetryAction(false);
                     SetStatus("Use Google to sign in.");
@@ -217,7 +311,7 @@ namespace CastleDefender.UI
             _isRegisterTab = register;
 
             if (Input_DisplayName != null)
-                Input_DisplayName.gameObject.SetActive(register);
+                SetFieldContainerActive(Input_DisplayName, register);
 
             if (TxtSubmitBtn != null)
                 TxtSubmitBtn.text = register ? "Register" : "Sign In";
@@ -249,16 +343,18 @@ namespace CastleDefender.UI
             var rootImage = PanelLogin.GetComponent<Image>();
             if (rootImage != null)
             {
-                rootImage.color = ClassicRpgUiRuntime.BackdropColor;
-                ClassicRpgUiRuntime.ApplyPanel(rootImage, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.24f));
+                rootImage.sprite = null;
+                rootImage.type = Image.Type.Simple;
+                rootImage.color = new Color(0.02f, 0.03f, 0.05f, 1f);
             }
 
             DestroyGeneratedChild(root, "PremiumLoginBackdrop");
             DestroyGeneratedChild(root, "PremiumLoginSafeArea");
             DestroyGeneratedChild(root, "PremiumLoginStage");
+            DestroyGeneratedChild(root, "PremiumLoginIntroOverlay");
             DisableLegacyCard(root);
 
-            BuildPremiumBackdrop(root, compact);
+            BuildCinematicBackdrop(root, compact);
 
             var safeArea = CreateUiRect("PremiumLoginSafeArea", root);
             ClassicRpgUiRuntime.ApplySafeArea(
@@ -270,22 +366,731 @@ namespace CastleDefender.UI
 
             var stage = CreateUiRect("PremiumLoginStage", safeArea);
             ClassicRpgUiRuntime.Stretch(stage);
-
-            RectTransform brandColumn;
-            RectTransform cardColumn;
-            if (compact)
-                BuildCompactLoginStage(stage, out brandColumn, out cardColumn);
-            else
-                BuildWideLoginStage(stage, out brandColumn, out cardColumn);
-
-            var brandGroup = brandColumn.gameObject.AddComponent<CanvasGroup>();
-            var cardGroup = cardColumn.gameObject.AddComponent<CanvasGroup>();
-            BuildBrandColumn(brandColumn, compact);
-            var cardContent = BuildLoginCardShell(cardColumn, compact);
-            PopulateLoginCard(cardContent, compact);
+            var cardColumn = BuildModernLoginStage(stage, compact);
+            var cardContent = BuildModernLoginShell(cardColumn, compact);
+            PopulateModernLoginCard(cardContent, compact);
             StyleDevicePanel(root, canvasRect, compact);
+            BuildIntroOverlay(root, compact);
+            ShowLoginPresentation(false, true);
+        }
 
-            StartCoroutine(AnimatePremiumPresentation(brandGroup, brandColumn, cardGroup, cardColumn));
+        void BuildCinematicBackdrop(RectTransform root, bool compact)
+        {
+            var backdrop = CreateUiRect("PremiumLoginBackdrop", root);
+            Stretch(backdrop);
+            backdrop.SetSiblingIndex(0);
+
+            var videoRoot = CreateUiRect("VideoRoot", backdrop);
+            Stretch(videoRoot);
+
+            var videoGo = new GameObject("BackgroundVideo", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
+            videoGo.transform.SetParent(videoRoot, false);
+            _cinematicBackgroundImage = videoGo.GetComponent<RawImage>();
+            _cinematicBackgroundImage.raycastTarget = false;
+            _cinematicBackgroundImage.color = Color.white;
+            _cinematicBackgroundAspect = videoGo.GetComponent<AspectRatioFitter>();
+            _cinematicBackgroundAspect.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+            _cinematicBackgroundAspect.aspectRatio = 16f / 9f;
+            Stretch(videoGo.GetComponent<RectTransform>());
+
+            var tint = CreatePlainImage("BaseTint", backdrop, new Color(0.02f, 0.04f, 0.07f, 0.34f));
+            Stretch(tint.rectTransform);
+
+            var vignette = CreatePlainImage("Vignette", backdrop, new Color(0f, 0f, 0f, 0.22f));
+            Stretch(vignette.rectTransform);
+
+            var readabilityShade = CreatePlainImage(
+                "ReadabilityShade",
+                backdrop,
+                compact ? new Color(0.01f, 0.03f, 0.05f, 0.46f) : new Color(0.01f, 0.03f, 0.05f, 0.34f));
+            _loginReadabilityShadeGroup = readabilityShade.gameObject.AddComponent<CanvasGroup>();
+            _loginReadabilityShadeGroup.alpha = 0f;
+            readabilityShade.rectTransform.anchorMin = Vector2.zero;
+            readabilityShade.rectTransform.anchorMax = Vector2.one;
+            readabilityShade.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            readabilityShade.rectTransform.offsetMin = Vector2.zero;
+            readabilityShade.rectTransform.offsetMax = Vector2.zero;
+
+            EnsureCinematicVideoPlayer(backdrop);
+        }
+
+        RectTransform BuildModernLoginStage(RectTransform stage, bool compact)
+        {
+            var cardColumn = CreateUiRect("CardColumn", stage);
+            Stretch(cardColumn);
+            _loginPresentationGroup = cardColumn.gameObject.AddComponent<CanvasGroup>();
+
+            return cardColumn;
+        }
+
+        RectTransform BuildModernLoginShell(RectTransform parent, bool compact)
+        {
+            var shell = CreateUiRect("LoginShell", parent);
+            shell.anchorMin = new Vector2(0.5f, 0.5f);
+            shell.anchorMax = new Vector2(0.5f, 0.5f);
+            shell.pivot = new Vector2(0.5f, 0f);
+            shell.anchoredPosition = compact ? new Vector2(0f, -108f) : new Vector2(0f, -138f);
+            shell.sizeDelta = compact ? new Vector2(320f, 0f) : new Vector2(430f, 0f);
+
+            var fitter = shell.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var layout = shell.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = compact ? 6f : 8f;
+            layout.padding = compact ? new RectOffset(10, 10, 0, 0) : new RectOffset(12, 12, 0, 0);
+
+            return shell;
+        }
+
+        void PopulateModernLoginCard(RectTransform content, bool compact)
+        {
+            var title = FindDescendant(PanelLogin.transform, "Txt_Title") as RectTransform;
+            var rowTabs = FindDescendant(PanelLogin.transform, "Row_Tabs") as RectTransform;
+
+            if (title != null)
+            {
+                title.gameObject.SetActive(false);
+            }
+
+            if (rowTabs != null)
+            {
+                rowTabs.SetParent(content, false);
+                PrepareForLayout(rowTabs, compact ? 28f : 30f);
+                var tabsLayout = rowTabs.GetComponent<HorizontalLayoutGroup>() ?? rowTabs.gameObject.AddComponent<HorizontalLayoutGroup>();
+                tabsLayout.childAlignment = TextAnchor.MiddleCenter;
+                tabsLayout.childControlWidth = false;
+                tabsLayout.childControlHeight = true;
+                tabsLayout.childForceExpandWidth = false;
+                tabsLayout.childForceExpandHeight = true;
+                tabsLayout.spacing = 18f;
+                tabsLayout.padding = new RectOffset(0, 0, 0, 0);
+            }
+
+            StyleTabButton(Btn_TabSignIn, compact ? 0f : 96f);
+            StyleTabButton(Btn_TabRegister, compact ? 0f : 96f);
+
+            CreateLabeledFieldRow(content, "Email", Input_Email, compact);
+            CreateLabeledFieldRow(content, "Display Name", Input_DisplayName, compact);
+            CreateLabeledFieldRow(content, "Password", Input_Password, compact);
+
+            if (Btn_Submit != null)
+            {
+                Btn_Submit.transform.SetParent(content, false);
+                PrepareButton(Btn_Submit, compact ? 32f : 34f, compact ? 0f : 190f);
+                ApplyModernButtonStyle(
+                    Btn_Submit,
+                    new Color(0.03f, 0.05f, 0.08f, 0.40f),
+                    new Color(0.05f, 0.08f, 0.11f, 0.48f),
+                    new Color(0.02f, 0.03f, 0.05f, 0.58f),
+                    Color.white,
+                    TxtSubmitBtn);
+            }
+
+            if (Btn_Browser != null)
+            {
+                Btn_Browser.transform.SetParent(content, false);
+                PrepareButton(Btn_Browser, 20f, compact ? 0f : 220f);
+                ApplyMinimalLinkButtonStyle(Btn_Browser, new Color(0.86f, 0.89f, 0.95f, 0.94f));
+            }
+
+            if (Obj_Divider != null)
+            {
+                var dividerRect = Obj_Divider.transform as RectTransform;
+                if (dividerRect != null)
+                {
+                    dividerRect.SetParent(content, false);
+                    PrepareForLayout(dividerRect, 10f);
+                }
+
+                var dividerText = Obj_Divider.GetComponentInChildren<TMP_Text>(true);
+                if (dividerText != null)
+                    ApplyModernTextStyle(dividerText, 11f, new Color(0.70f, 0.74f, 0.81f, 0.72f), FontStyles.Normal, TextAlignmentOptions.Center);
+            }
+
+            if (Btn_Google != null)
+            {
+                Btn_Google.transform.SetParent(content, false);
+                PrepareButton(Btn_Google, compact ? 36f : 40f, compact ? 0f : 240f);
+                ApplyModernButtonStyle(
+                    Btn_Google,
+                    new Color(0.03f, 0.05f, 0.08f, 0.42f),
+                    new Color(0.05f, 0.08f, 0.11f, 0.50f),
+                    new Color(0.02f, 0.03f, 0.05f, 0.60f),
+                    new Color(0.96f, 0.97f, 0.99f, 0.98f));
+                var googleText = Btn_Google.GetComponentInChildren<TMP_Text>(true);
+                if (googleText != null)
+                    googleText.text = "Sign in with Google";
+            }
+
+            if (Txt_Error != null)
+            {
+                Txt_Error.transform.SetParent(content, false);
+                PrepareForLayout(Txt_Error.rectTransform, 32f);
+                Txt_Error.textWrappingMode = TextWrappingModes.Normal;
+                ApplyModernTextStyle(Txt_Error, 12f, new Color(0.92f, 0.43f, 0.40f, 1f), FontStyles.Bold, TextAlignmentOptions.Center);
+            }
+
+            if (Txt_Status != null)
+            {
+                Txt_Status.transform.SetParent(content, false);
+                PrepareForLayout(Txt_Status.rectTransform, 34f);
+                Txt_Status.textWrappingMode = TextWrappingModes.Normal;
+                ApplyModernTextStyle(Txt_Status, 12f, new Color(0.68f, 0.77f, 0.86f, 0.94f), FontStyles.Normal, TextAlignmentOptions.Center);
+            }
+        }
+
+        void BuildIntroOverlay(RectTransform root, bool compact)
+        {
+            var overlay = CreateUiRect("PremiumLoginIntroOverlay", root);
+            Stretch(overlay);
+
+            var titleGroupRoot = CreateUiRect("TitleGroup", overlay);
+            titleGroupRoot.anchorMin = new Vector2(0.5f, 1f);
+            titleGroupRoot.anchorMax = new Vector2(0.5f, 1f);
+            titleGroupRoot.pivot = new Vector2(0.5f, 1f);
+            titleGroupRoot.anchorMin = new Vector2(0.5f, 0.5f);
+            titleGroupRoot.anchorMax = new Vector2(0.5f, 0.5f);
+            titleGroupRoot.pivot = new Vector2(0.5f, 0.5f);
+            titleGroupRoot.anchoredPosition = compact ? new Vector2(0f, -24f) : new Vector2(0f, -36f);
+            titleGroupRoot.sizeDelta = compact ? new Vector2(620f, 132f) : new Vector2(900f, 168f);
+            _introTitleGroup = titleGroupRoot.gameObject.AddComponent<CanvasGroup>();
+            _introTitleGroup.alpha = 0f;
+
+            var titleLayout = titleGroupRoot.gameObject.AddComponent<VerticalLayoutGroup>();
+            titleLayout.childAlignment = TextAnchor.UpperCenter;
+            titleLayout.childControlWidth = true;
+            titleLayout.childControlHeight = false;
+            titleLayout.childForceExpandWidth = true;
+            titleLayout.childForceExpandHeight = false;
+            titleLayout.spacing = compact ? 4f : 6f;
+            titleLayout.padding = compact ? new RectOffset(18, 18, 6, 6) : new RectOffset(24, 24, 8, 8);
+
+            _introTitleFrame = CreateUiImage("IntroTitleFrame", titleGroupRoot, ClassicRpgPanelSkin.TitleLong, new Color(1f, 1f, 1f, 0.52f), false);
+            _introTitleFrame.transform.SetAsFirstSibling();
+            var titleFrameRect = _introTitleFrame.rectTransform;
+            Stretch(
+                titleFrameRect,
+                compact ? new Vector2(-64f, 6f) : new Vector2(-90f, 10f),
+                compact ? new Vector2(64f, -42f) : new Vector2(90f, -56f));
+            var titleFrameLayout = _introTitleFrame.gameObject.AddComponent<LayoutElement>();
+            titleFrameLayout.ignoreLayout = true;
+
+            _introTitleText = CreateModernText(
+                "IntroTitle",
+                titleGroupRoot,
+                "RansomForge",
+                compact ? 58f : 80f,
+                new Color(0.98f, 0.97f, 0.95f, 1f),
+                FontStyles.Bold,
+                TextAlignmentOptions.Center);
+            _introTitleText.overflowMode = TextOverflowModes.Overflow;
+            PrepareForLayout(_introTitleText.rectTransform, compact ? 66f : 90f);
+            _introTitleCanvasGroup = _introTitleText.gameObject.AddComponent<CanvasGroup>();
+            ApplyIntroTitleTreatment(_introTitleText);
+
+            _introStampFlash = CreatePlainImage("StampFlash", _introTitleText.transform, new Color(1f, 0.66f, 0.24f, 0f));
+            _introStampFlash.transform.SetAsFirstSibling();
+            Stretch(
+                _introStampFlash.rectTransform,
+                compact ? new Vector2(-140f, 18f) : new Vector2(-180f, 24f),
+                compact ? new Vector2(140f, -18f) : new Vector2(180f, -24f));
+
+            _introTaglineText = CreateModernText(
+                "IntroTagline",
+                titleGroupRoot,
+                "Forged for War",
+                compact ? 18f : 22f,
+                new Color(0.86f, 0.89f, 0.94f, 0.98f),
+                FontStyles.Bold,
+                TextAlignmentOptions.Center);
+            _introTaglineText.overflowMode = TextOverflowModes.Overflow;
+            PrepareForLayout(_introTaglineText.rectTransform, compact ? 24f : 28f);
+            _introTaglineCanvasGroup = _introTaglineText.gameObject.AddComponent<CanvasGroup>();
+            ApplyIntroTaglineTreatment(_introTaglineText);
+
+            ResetIntroOverlayVisualState();
+
+            if (AllowIntroSkip)
+            {
+                _skipIntroButton = CreateModernButton("SkipIntro", overlay, "Skip");
+                var skipRect = _skipIntroButton.transform as RectTransform;
+                if (skipRect != null)
+                {
+                    skipRect.anchorMin = new Vector2(1f, 1f);
+                    skipRect.anchorMax = new Vector2(1f, 1f);
+                    skipRect.pivot = new Vector2(1f, 1f);
+                    skipRect.anchoredPosition = compact ? new Vector2(-12f, -12f) : new Vector2(-4f, -4f);
+                    skipRect.sizeDelta = new Vector2(120f, 38f);
+                }
+
+                ApplyModernButtonStyle(
+                    _skipIntroButton,
+                    new Color(0.04f, 0.07f, 0.11f, 0.34f),
+                    new Color(0.07f, 0.11f, 0.16f, 0.44f),
+                    new Color(0.03f, 0.05f, 0.08f, 0.32f),
+                    new Color(0.86f, 0.90f, 0.96f, 0.98f));
+                _skipIntroButton.onClick.AddListener(SkipLoginIntro);
+            }
+        }
+
+        void StartLoginCinematicSequence()
+        {
+            ResolveLoginCinematicPaths();
+
+            if (!EnableLoginCinematics || (_resolvedIntroVideoPaths.Count == 0 && string.IsNullOrWhiteSpace(_loopVideoPath)))
+            {
+                ShowPersistentBrandImmediate();
+                ShowLoginPresentation(true);
+                return;
+            }
+
+            _allowTapToSkipIntro = AllowIntroSkip;
+            _backgroundLoopActive = false;
+            _pendingIntroVideoPaths.Clear();
+            foreach (var path in _resolvedIntroVideoPaths)
+                _pendingIntroVideoPaths.Enqueue(path);
+
+            if (_pendingIntroVideoPaths.Count == 0)
+            {
+                StartLoopBackground();
+                ShowPersistentBrandImmediate();
+                ShowLoginPresentation(true);
+                return;
+            }
+
+            _introSequenceActive = true;
+            UpdateSkipIntroVisibility(true);
+            StartNextIntroClip();
+        }
+
+        void ResolveLoginCinematicPaths()
+        {
+            if (_cinematicAssetsResolved)
+                return;
+
+            _cinematicAssetsResolved = true;
+            _resolvedIntroVideoPaths.Clear();
+
+            foreach (var clipName in IntroClipFileNames)
+            {
+                string path = BuildStreamingAssetUrl(clipName);
+                if (!string.IsNullOrWhiteSpace(path))
+                    _resolvedIntroVideoPaths.Add(path);
+            }
+
+            _loopVideoPath = BuildStreamingAssetUrl(LoginLoopClipFileName);
+        }
+
+        void StartNextIntroClip()
+        {
+            if (_pendingIntroVideoPaths.Count == 0)
+            {
+                BeginLoginLoopAndReveal();
+                return;
+            }
+
+            PlayCinematicClip(_pendingIntroVideoPaths.Dequeue(), false);
+        }
+
+        void StartLoopBackground()
+        {
+            _backgroundLoopActive = !string.IsNullOrWhiteSpace(_loopVideoPath);
+            if (_backgroundLoopActive)
+                PlayCinematicClip(_loopVideoPath, !HoldLoginBackgroundOnFinalFrame);
+        }
+
+        void BeginLoginLoopAndReveal(bool skipBrandReveal = false)
+        {
+            _introSequenceActive = false;
+            StartLoopBackground();
+
+            if (_introTitleRoutine != null)
+            {
+                StopCoroutine(_introTitleRoutine);
+                _introTitleRoutine = null;
+            }
+
+            if (skipBrandReveal)
+            {
+                _allowTapToSkipIntro = false;
+                UpdateSkipIntroVisibility(false);
+                ShowPersistentBrandImmediate();
+                ShowLoginPresentation(true);
+                return;
+            }
+
+            _allowTapToSkipIntro = AllowIntroSkip;
+            UpdateSkipIntroVisibility(_allowTapToSkipIntro);
+            _introTitleRoutine = StartCoroutine(RevealBrandThenShowLogin());
+        }
+
+        void SkipLoginIntro()
+        {
+            if (_loginPresentationVisible)
+                return;
+
+            _pendingIntroVideoPaths.Clear();
+            BeginLoginLoopAndReveal(true);
+        }
+
+        void ShowLoginPresentation(bool show, bool immediate = false)
+        {
+            _loginPresentationVisible = show;
+            if (_loginRevealRoutine != null)
+                StopCoroutine(_loginRevealRoutine);
+
+            if (immediate)
+            {
+                SetCanvasGroupState(_loginPresentationGroup, show ? 1f : 0f, show);
+                SetCanvasGroupState(_loginReadabilityShadeGroup, show ? 1f : 0f, false);
+                return;
+            }
+
+            _loginRevealRoutine = StartCoroutine(AnimateLoginPresentation(show));
+        }
+
+        IEnumerator AnimateIntroTitle()
+        {
+            if (_introTitleGroup == null || _introTitleCanvasGroup == null || _introTaglineCanvasGroup == null)
+                yield break;
+
+            ResetIntroOverlayVisualState();
+            _introTitleGroup.alpha = 1f;
+            yield return new WaitForSecondsRealtime(Mathf.Max(0f, EndTitleRevealDelay));
+            yield return StampIntroElement(_introTitleCanvasGroup, _introTitleText.rectTransform, new Vector2(0f, -22f), 1.22f, 0.93f);
+            yield return new WaitForSecondsRealtime(Mathf.Max(0f, IntroTaglineDelay));
+            yield return StampIntroElement(_introTaglineCanvasGroup, _introTaglineText.rectTransform, new Vector2(0f, -10f), 1.14f, 0.96f);
+            yield return new WaitForSecondsRealtime(IntroTitleHoldDuration);
+        }
+
+        IEnumerator RevealBrandThenShowLogin()
+        {
+            if (HoldLoginBackgroundOnFinalFrame && !string.IsNullOrWhiteSpace(_loopVideoPath))
+            {
+                float elapsed = 0f;
+                while (!_loginBackgroundFrozen && elapsed < 8f)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    yield return null;
+                }
+            }
+
+            yield return AnimateIntroTitle();
+
+            _allowTapToSkipIntro = false;
+            UpdateSkipIntroVisibility(false);
+            ShowLoginPresentation(true);
+            _introTitleRoutine = null;
+        }
+
+        IEnumerator AnimateLoginPresentation(bool show)
+        {
+            float loginTarget = show ? 1f : 0f;
+            float shadeTarget = show ? 1f : 0f;
+            float loginStart = _loginPresentationGroup != null ? _loginPresentationGroup.alpha : loginTarget;
+            float shadeStart = _loginReadabilityShadeGroup != null ? _loginReadabilityShadeGroup.alpha : shadeTarget;
+
+            if (_loginPresentationGroup != null)
+            {
+                _loginPresentationGroup.interactable = show;
+                _loginPresentationGroup.blocksRaycasts = show;
+            }
+
+            float elapsed = 0f;
+            float duration = Mathf.Max(0.01f, LoginRevealDuration);
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                float eased = 1f - Mathf.Pow(1f - t, 3f);
+
+                if (_loginPresentationGroup != null)
+                    _loginPresentationGroup.alpha = Mathf.Lerp(loginStart, loginTarget, eased);
+
+                if (_loginReadabilityShadeGroup != null)
+                    _loginReadabilityShadeGroup.alpha = Mathf.Lerp(shadeStart, shadeTarget, eased);
+
+                yield return null;
+            }
+
+            SetCanvasGroupState(_loginPresentationGroup, loginTarget, show);
+            SetCanvasGroupState(_loginReadabilityShadeGroup, shadeTarget, false);
+        }
+
+        IEnumerator FadeCanvasGroup(CanvasGroup group, float targetAlpha, float duration)
+        {
+            if (group == null)
+                yield break;
+
+            float startAlpha = group.alpha;
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                group.alpha = Mathf.Lerp(startAlpha, targetAlpha, t);
+                yield return null;
+            }
+
+            group.alpha = targetAlpha;
+        }
+
+        IEnumerator StampIntroElement(CanvasGroup group, RectTransform rect, Vector2 impactOffset, float startScale, float impactScale)
+        {
+            if (group == null || rect == null)
+                yield break;
+
+            Vector2 settledPosition = Vector2.zero;
+            Vector2 startPosition = settledPosition + impactOffset;
+            Vector2 impactPosition = settledPosition + new Vector2(0f, 3f);
+            Vector3 startVector = Vector3.one * startScale;
+            Vector3 impactVector = Vector3.one * impactScale;
+
+            group.alpha = 0f;
+            rect.anchoredPosition = startPosition;
+            rect.localScale = startVector;
+
+            float elapsed = 0f;
+            float duration = Mathf.Max(0.01f, IntroStampDuration);
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                float eased = 1f - Mathf.Pow(1f - t, 4f);
+                group.alpha = eased;
+                rect.anchoredPosition = Vector2.Lerp(startPosition, impactPosition, eased);
+                rect.localScale = Vector3.Lerp(startVector, impactVector, eased);
+
+                if (_introStampFlash != null)
+                    _introStampFlash.color = new Color(1f, 0.66f, 0.24f, Mathf.Lerp(0.28f, 0f, t));
+
+                yield return null;
+            }
+
+            elapsed = 0f;
+            duration = Mathf.Max(0.01f, IntroStampSettleDuration);
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float t = Mathf.Clamp01(elapsed / duration);
+                float eased = 1f - Mathf.Pow(1f - t, 3f);
+                rect.anchoredPosition = Vector2.Lerp(impactPosition, settledPosition, eased);
+                rect.localScale = Vector3.Lerp(impactVector, Vector3.one, eased);
+
+                if (_introStampFlash != null)
+                    _introStampFlash.color = new Color(1f, 0.66f, 0.24f, Mathf.Lerp(0.12f, 0f, eased));
+
+                yield return null;
+            }
+
+            group.alpha = 1f;
+            rect.anchoredPosition = settledPosition;
+            rect.localScale = Vector3.one;
+
+            if (_introStampFlash != null)
+                _introStampFlash.color = new Color(1f, 0.66f, 0.24f, 0f);
+        }
+
+        void EnsureCinematicVideoPlayer(Transform parent)
+        {
+            if (_cinematicVideoPlayer != null)
+                return;
+
+            var videoPlayerGo = new GameObject("CinematicVideoPlayer", typeof(VideoPlayer));
+            videoPlayerGo.transform.SetParent(parent, false);
+            _cinematicVideoPlayer = videoPlayerGo.GetComponent<VideoPlayer>();
+            _cinematicVideoPlayer.source = VideoSource.Url;
+            _cinematicVideoPlayer.playOnAwake = false;
+            _cinematicVideoPlayer.waitForFirstFrame = true;
+            _cinematicVideoPlayer.skipOnDrop = true;
+            _cinematicVideoPlayer.audioOutputMode = VideoAudioOutputMode.None;
+            _cinematicVideoPlayer.renderMode = VideoRenderMode.RenderTexture;
+
+            _cinematicVideoTexture = new RenderTexture(1280, 720, 0, RenderTextureFormat.ARGB32);
+            _cinematicVideoTexture.name = "LoginCinematicVideo";
+            _cinematicVideoTexture.Create();
+            _cinematicVideoPlayer.targetTexture = _cinematicVideoTexture;
+
+            if (_cinematicBackgroundImage != null)
+                _cinematicBackgroundImage.texture = _cinematicVideoTexture;
+
+            _cinematicVideoPlayer.prepareCompleted += HandleCinematicVideoPrepared;
+            _cinematicVideoPlayer.loopPointReached += HandleCinematicVideoLoopPointReached;
+            _cinematicVideoPlayer.errorReceived += HandleCinematicVideoError;
+        }
+
+        void PlayCinematicClip(string path, bool loop)
+        {
+            if (_cinematicVideoPlayer == null || string.IsNullOrWhiteSpace(path))
+                return;
+
+            if (_loginBackgroundFreezeRoutine != null)
+            {
+                StopCoroutine(_loginBackgroundFreezeRoutine);
+                _loginBackgroundFreezeRoutine = null;
+            }
+
+            _activeVideoPath = path;
+            _freezeLoginBackgroundOnPrepare =
+                HoldLoginBackgroundOnFinalFrame &&
+                !string.IsNullOrWhiteSpace(_loopVideoPath) &&
+                string.Equals(path, _loopVideoPath, StringComparison.OrdinalIgnoreCase);
+            _loginBackgroundFrozen = false;
+            _cinematicVideoPlayer.Stop();
+            _cinematicVideoPlayer.isLooping = loop;
+            _cinematicVideoPlayer.url = path;
+            _cinematicVideoPlayer.Prepare();
+        }
+
+        void HandleCinematicVideoPrepared(VideoPlayer source)
+        {
+            if (_cinematicBackgroundAspect != null && source.width > 0 && source.height > 0)
+                _cinematicBackgroundAspect.aspectRatio = (float)source.width / source.height;
+
+            if (_cinematicBackgroundImage != null && source.targetTexture != null)
+                _cinematicBackgroundImage.texture = source.targetTexture;
+
+            source.Play();
+
+            if (_freezeLoginBackgroundOnPrepare)
+                _loginBackgroundFreezeRoutine = StartCoroutine(HoldVideoOnFinalFrame(source));
+        }
+
+        void HandleCinematicVideoLoopPointReached(VideoPlayer source)
+        {
+            if (_freezeLoginBackgroundOnPrepare &&
+                !string.IsNullOrWhiteSpace(_loopVideoPath) &&
+                string.Equals(_activeVideoPath, _loopVideoPath, StringComparison.OrdinalIgnoreCase))
+            {
+                source.Pause();
+                _loginBackgroundFrozen = true;
+                return;
+            }
+
+            if (_backgroundLoopActive && source.isLooping)
+                return;
+
+            if (_introSequenceActive)
+            {
+                StartNextIntroClip();
+                return;
+            }
+
+            if (!_loginPresentationVisible)
+                BeginLoginLoopAndReveal();
+        }
+
+        void HandleCinematicVideoError(VideoPlayer source, string message)
+        {
+            Debug.LogWarning($"[LoginUI] Cinematic video error for '{_activeVideoPath}': {message}");
+
+            if (_introSequenceActive)
+            {
+                StartNextIntroClip();
+                return;
+            }
+
+            ShowLoginPresentation(true);
+        }
+
+        IEnumerator HoldVideoOnFinalFrame(VideoPlayer source)
+        {
+            if (source == null)
+                yield break;
+
+            while (source != null && source.isPrepared)
+            {
+                if (!source.isPlaying)
+                {
+                    yield return null;
+                    continue;
+                }
+
+                bool reachedFreezeFrame = false;
+                if (source.frameCount > 0)
+                {
+                    long paddingFrames = Math.Max(1, LoginBackgroundFreezeFramePadding);
+                    long freezeFrame = Math.Max(0L, (long)source.frameCount - paddingFrames);
+                    reachedFreezeFrame = source.frame >= freezeFrame;
+                }
+
+                bool reachedFreezeTime = false;
+                if (source.length > 0d)
+                {
+                    double freezeTime = Math.Max(0d, source.length - Math.Max(0.01f, LoginBackgroundFreezePaddingSeconds));
+                    reachedFreezeTime = source.time >= freezeTime;
+                }
+
+                if (reachedFreezeFrame || reachedFreezeTime)
+                {
+                    source.Pause();
+                    _loginBackgroundFrozen = true;
+                    _loginBackgroundFreezeRoutine = null;
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            _loginBackgroundFreezeRoutine = null;
+        }
+
+        void UpdateSkipIntroVisibility(bool show)
+        {
+            if (_skipIntroButton == null)
+                return;
+
+            _skipIntroButton.gameObject.SetActive(show);
+        }
+
+        string BuildStreamingAssetUrl(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+                return string.Empty;
+
+            string basePath = Application.streamingAssetsPath?.TrimEnd('/', '\\') ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(basePath))
+                return string.Empty;
+
+            string normalizedFolder = (LoginCinematicFolder ?? string.Empty).Trim().Trim('/', '\\');
+            string normalizedFile = fileName.Trim().Trim('/', '\\');
+            if (string.IsNullOrWhiteSpace(normalizedFile))
+                return string.Empty;
+
+            if (basePath.Contains("://", StringComparison.Ordinal))
+            {
+                string url = string.IsNullOrWhiteSpace(normalizedFolder)
+                    ? $"{basePath}/{normalizedFile}"
+                    : $"{basePath}/{normalizedFolder}/{normalizedFile}";
+                return url.Replace("\\", "/");
+            }
+
+            string path = string.IsNullOrWhiteSpace(normalizedFolder)
+                ? Path.Combine(basePath, normalizedFile)
+                : Path.Combine(basePath, normalizedFolder, normalizedFile);
+
+            if (!File.Exists(path))
+            {
+                Debug.LogWarning($"[LoginUI] Login cinematic clip not found at '{path}'.");
+                return string.Empty;
+            }
+
+            return path;
+        }
+
+        static void SetCanvasGroupState(CanvasGroup group, float alpha, bool interactive)
+        {
+            if (group == null)
+                return;
+
+            group.alpha = alpha;
+            group.interactable = interactive;
+            group.blocksRaycasts = interactive;
         }
 
         void BuildWideLoginStage(RectTransform stage, out RectTransform brandColumn, out RectTransform cardColumn)
@@ -587,28 +1392,49 @@ namespace CastleDefender.UI
             panelRect.anchorMin = new Vector2(0.5f, 0.5f);
             panelRect.anchorMax = new Vector2(0.5f, 0.5f);
             panelRect.pivot = new Vector2(0.5f, 0.5f);
-            panelRect.sizeDelta = compact ? new Vector2(460f, 320f) : new Vector2(560f, 340f);
+            panelRect.sizeDelta = compact ? new Vector2(420f, 270f) : new Vector2(520f, 300f);
             panelRect.anchoredPosition = Vector2.zero;
+            panelRect.SetAsLastSibling();
 
             var panelImage = Obj_DevicePanel.GetComponent<Image>();
             if (panelImage != null)
             {
-                ClassicRpgUiRuntime.ApplyPanel(panelImage, ClassicRpgPanelSkin.Frame, true, Color.white);
+                panelImage.sprite = null;
+                panelImage.type = Image.Type.Simple;
+                panelImage.color = new Color(0.04f, 0.07f, 0.11f, 0.92f);
+                panelImage.raycastTarget = true;
             }
 
+            var outline = Obj_DevicePanel.GetComponent<Outline>() ?? Obj_DevicePanel.AddComponent<Outline>();
+            outline.effectColor = new Color(0.36f, 0.49f, 0.65f, 0.34f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var shadow = Obj_DevicePanel.GetComponent<Shadow>() ?? Obj_DevicePanel.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.38f);
+            shadow.effectDistance = new Vector2(0f, -10f);
+
             if (Txt_DeviceCode != null)
-                ClassicRpgUiRuntime.ApplyText(Txt_DeviceCode, ClassicRpgTextTone.Title, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+            {
+                Txt_DeviceCode.textWrappingMode = TextWrappingModes.NoWrap;
+                ApplyModernTextStyle(Txt_DeviceCode, compact ? 28f : 34f, new Color(0.94f, 0.97f, 1f, 1f), FontStyles.Bold, TextAlignmentOptions.Center);
+                Txt_DeviceCode.characterSpacing = 4f;
+            }
 
             if (Txt_DeviceStatus != null)
             {
                 Txt_DeviceStatus.textWrappingMode = TextWrappingModes.Normal;
-                ClassicRpgUiRuntime.ApplyText(Txt_DeviceStatus, ClassicRpgTextTone.Body, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText);
+                ApplyModernTextStyle(Txt_DeviceStatus, compact ? 14f : 15f, new Color(0.71f, 0.79f, 0.88f, 0.96f), FontStyles.Normal, TextAlignmentOptions.Center);
             }
 
             if (Btn_DeviceCancel != null)
             {
                 PrepareButton(Btn_DeviceCancel, 46f, compact ? 0f : 200f);
-                ClassicRpgUiRuntime.ApplyButton(Btn_DeviceCancel, ClassicRpgButtonSkin.MiniBrown);
+                ApplyModernButtonStyle(
+                    Btn_DeviceCancel,
+                    new Color(0.09f, 0.13f, 0.19f, 0.92f),
+                    new Color(0.12f, 0.17f, 0.24f, 0.98f),
+                    new Color(0.07f, 0.10f, 0.15f, 1f),
+                    new Color(0.88f, 0.92f, 0.98f, 0.98f));
             }
         }
 
@@ -624,9 +1450,14 @@ namespace CastleDefender.UI
                 return;
 
             var text = button.GetComponentInChildren<TMP_Text>(true);
-            ClassicRpgUiRuntime.ApplyButton(button, active ? ClassicRpgButtonSkin.MiniGold : ClassicRpgButtonSkin.MiniBrown, text);
+            ApplyMinimalLinkButtonStyle(button, active ? Color.white : new Color(0.82f, 0.85f, 0.90f, 0.72f));
+
             if (text != null)
-                text.color = active ? ColorTabActive : ClassicRpgUiRuntime.BrightText;
+            {
+                text.characterSpacing = 2.5f;
+                text.fontStyle = FontStyles.Bold;
+                text.color = active ? Color.white : new Color(0.82f, 0.85f, 0.90f, 0.72f);
+            }
         }
 
         void StyleTabButton(Button button, float preferredWidth)
@@ -635,10 +1466,13 @@ namespace CastleDefender.UI
                 return;
 
             PrepareButton(button, 44f, preferredWidth);
-            ClassicRpgUiRuntime.ApplyButton(button, ClassicRpgButtonSkin.MiniBrown);
+            var text = button.GetComponentInChildren<TMP_Text>(true);
+            ApplyMinimalLinkButtonStyle(button, new Color(0.82f, 0.85f, 0.90f, 0.72f));
+            if (text != null)
+                text.characterSpacing = 2.5f;
         }
 
-        void PrepareField(TMP_InputField field, float preferredHeight, string placeholder)
+        void PrepareField(TMP_InputField field, float preferredHeight, string placeholder, float preferredWidth = 0f)
         {
             if (field == null)
                 return;
@@ -648,7 +1482,70 @@ namespace CastleDefender.UI
                 return;
 
             PrepareForLayout(rect, preferredHeight);
-            ClassicRpgUiRuntime.StyleInputField(field, placeholder);
+            if (preferredWidth > 0f)
+            {
+                var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
+                layoutElement.preferredWidth = preferredWidth;
+                layoutElement.minWidth = preferredWidth;
+                layoutElement.flexibleWidth = 0f;
+            }
+            ApplyModernInputFieldStyle(field, placeholder);
+        }
+
+        void CreateLabeledFieldRow(RectTransform parent, string label, TMP_InputField field, bool compact)
+        {
+            if (parent == null || field == null)
+                return;
+
+            var row = CreateUiRect($"{field.name}_Row", parent);
+            var rowLayoutElement = row.gameObject.AddComponent<LayoutElement>();
+            rowLayoutElement.preferredWidth = compact ? 320f : 410f;
+            rowLayoutElement.minWidth = compact ? 320f : 410f;
+            rowLayoutElement.preferredHeight = compact ? 28f : 30f;
+            rowLayoutElement.flexibleWidth = 0f;
+
+            var rowLayout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.MiddleCenter;
+            rowLayout.childControlWidth = false;
+            rowLayout.childControlHeight = false;
+            rowLayout.childForceExpandWidth = false;
+            rowLayout.childForceExpandHeight = false;
+            rowLayout.spacing = compact ? 8f : 12f;
+            rowLayout.padding = new RectOffset(0, 0, 0, 0);
+
+            var labelText = CreateModernText(
+                $"{field.name}_Label",
+                row,
+                label,
+                compact ? 12f : 14f,
+                new Color(0.92f, 0.94f, 0.97f, 0.96f),
+                FontStyles.Bold,
+                TextAlignmentOptions.MidlineRight);
+            labelText.characterSpacing = 0.2f;
+            var labelLayout = labelText.gameObject.AddComponent<LayoutElement>();
+            labelLayout.preferredWidth = compact ? 88f : 108f;
+            labelLayout.minWidth = compact ? 88f : 108f;
+            labelLayout.preferredHeight = compact ? 28f : 30f;
+            labelLayout.flexibleWidth = 0f;
+
+            var fieldRect = field.transform as RectTransform;
+            if (fieldRect == null)
+                return;
+
+            fieldRect.SetParent(row, false);
+            fieldRect.anchorMin = new Vector2(0.5f, 0.5f);
+            fieldRect.anchorMax = new Vector2(0.5f, 0.5f);
+            fieldRect.pivot = new Vector2(0.5f, 0.5f);
+            fieldRect.anchoredPosition = Vector2.zero;
+            fieldRect.sizeDelta = new Vector2(compact ? 224f : 290f, compact ? 20f : 22f);
+
+            var fieldLayout = fieldRect.GetComponent<LayoutElement>() ?? fieldRect.gameObject.AddComponent<LayoutElement>();
+            fieldLayout.preferredWidth = compact ? 224f : 290f;
+            fieldLayout.minWidth = compact ? 224f : 290f;
+            fieldLayout.preferredHeight = compact ? 20f : 22f;
+            fieldLayout.flexibleWidth = 0f;
+
+            ApplyModernInputFieldStyle(field, string.Empty);
         }
 
         void PrepareButton(Button button, float preferredHeight, float preferredWidth)
@@ -662,8 +1559,24 @@ namespace CastleDefender.UI
 
             PrepareForLayout(rect, preferredHeight);
             var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
-            if (preferredWidth > 0f)
-                layoutElement.preferredWidth = preferredWidth;
+            layoutElement.preferredWidth = preferredWidth > 0f ? preferredWidth : -1f;
+            layoutElement.minWidth = preferredWidth > 0f ? preferredWidth : 0f;
+            layoutElement.flexibleWidth = 0f;
+        }
+
+        static void SetFieldContainerActive(TMP_InputField field, bool active)
+        {
+            if (field == null)
+                return;
+
+            Transform row = field.transform.parent;
+            if (row != null && row.name.EndsWith("_Row", StringComparison.Ordinal))
+            {
+                row.gameObject.SetActive(active);
+                return;
+            }
+
+            field.gameObject.SetActive(active);
         }
 
         static void PrepareForLayout(RectTransform rect, float preferredHeight)
@@ -798,6 +1711,305 @@ namespace CastleDefender.UI
             text.textWrappingMode = TextWrappingModes.Normal;
             ClassicRpgUiRuntime.ApplyText(text, tone, TextAlignmentOptions.Center, color);
             return text;
+        }
+
+        static Image CreatePlainImage(string name, Transform parent, Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var image = go.GetComponent<Image>();
+            image.sprite = null;
+            image.type = Image.Type.Simple;
+            image.color = color;
+            image.raycastTarget = false;
+            return image;
+        }
+
+        void ResetIntroOverlayVisualState()
+        {
+            if (_introTitleGroup != null)
+                _introTitleGroup.alpha = 0f;
+
+            if (_introTitleCanvasGroup != null)
+                _introTitleCanvasGroup.alpha = 0f;
+
+            if (_introTaglineCanvasGroup != null)
+                _introTaglineCanvasGroup.alpha = 0f;
+
+            if (_introTitleText != null)
+            {
+                _introTitleText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTitleText.rectTransform.localScale = Vector3.one;
+            }
+
+            if (_introTaglineText != null)
+            {
+                _introTaglineText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTaglineText.rectTransform.localScale = Vector3.one;
+            }
+
+            if (_introStampFlash != null)
+                _introStampFlash.color = new Color(1f, 0.66f, 0.24f, 0f);
+        }
+
+        void ShowPersistentBrandImmediate()
+        {
+            if (_introTitleGroup == null)
+                return;
+
+            if (_introTitleText != null)
+            {
+                _introTitleText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTitleText.rectTransform.localScale = Vector3.one;
+            }
+
+            if (_introTaglineText != null)
+            {
+                _introTaglineText.rectTransform.anchoredPosition = Vector2.zero;
+                _introTaglineText.rectTransform.localScale = Vector3.one;
+            }
+
+            _introTitleGroup.alpha = 1f;
+            if (_introTitleCanvasGroup != null)
+                _introTitleCanvasGroup.alpha = 1f;
+            if (_introTaglineCanvasGroup != null)
+                _introTaglineCanvasGroup.alpha = 1f;
+            if (_introStampFlash != null)
+                _introStampFlash.color = new Color(1f, 0.66f, 0.24f, 0f);
+        }
+
+        static void ApplyIntroTitleTreatment(TMP_Text text)
+        {
+            if (text == null)
+                return;
+
+            ClassicRpgUiRuntime.ApplyTextStyle(
+                text,
+                ClassicRpgTextStyle.Title,
+                TextAlignmentOptions.Center,
+                new Color(0.96f, 0.94f, 0.90f, 1f),
+                allowWrap: false);
+            text.characterSpacing = 1.1f;
+            text.enableVertexGradient = true;
+            text.colorGradient = new VertexGradient(
+                new Color(0.99f, 0.97f, 0.91f, 1f),
+                new Color(0.95f, 0.93f, 0.87f, 1f),
+                new Color(0.45f, 0.48f, 0.56f, 1f),
+                new Color(0.56f, 0.60f, 0.68f, 1f));
+            text.outlineColor = new Color(0.10f, 0.08f, 0.05f, 0.96f);
+            text.outlineWidth = 0.18f;
+
+            var shadow = text.GetComponent<Shadow>() ?? text.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0.84f, 0.38f, 0.08f, 0.20f);
+            shadow.effectDistance = new Vector2(0f, -5f);
+        }
+
+        static void ApplyIntroTaglineTreatment(TMP_Text text)
+        {
+            if (text == null)
+                return;
+
+            text.characterSpacing = 5.5f;
+            text.enableVertexGradient = true;
+            text.colorGradient = new VertexGradient(
+                new Color(0.94f, 0.96f, 0.99f, 1f),
+                new Color(0.94f, 0.96f, 0.99f, 1f),
+                new Color(0.70f, 0.76f, 0.84f, 1f),
+                new Color(0.70f, 0.76f, 0.84f, 1f));
+
+            var shadow = text.GetComponent<Shadow>() ?? text.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.30f);
+            shadow.effectDistance = new Vector2(0f, -4f);
+        }
+
+        static TMP_Text CreateModernText(string name, Transform parent, string value, float fontSize, Color color, FontStyles fontStyle, TextAlignmentOptions alignment)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+            go.transform.SetParent(parent, false);
+            var text = go.GetComponent<TextMeshProUGUI>();
+            text.text = value;
+            text.raycastTarget = false;
+            ApplyModernTextStyle(text, fontSize, color, fontStyle, alignment);
+            return text;
+        }
+
+        static Button CreateModernButton(string name, Transform parent, string label)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(parent, false);
+
+            var image = go.GetComponent<Image>();
+            image.sprite = null;
+            image.type = Image.Type.Simple;
+            image.color = new Color(0.08f, 0.12f, 0.17f, 0.88f);
+            image.raycastTarget = true;
+
+            var button = go.GetComponent<Button>();
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.ColorTint;
+
+            var labelText = CreateModernText(
+                "Label",
+                go.transform,
+                label,
+                13f,
+                new Color(0.90f, 0.94f, 0.99f, 0.98f),
+                FontStyles.Bold,
+                TextAlignmentOptions.Center);
+            Stretch(labelText.rectTransform, new Vector2(12f, 8f), new Vector2(-12f, -8f));
+
+            return button;
+        }
+
+        static void ApplyModernTextStyle(TMP_Text text, float fontSize, Color color, FontStyles fontStyle, TextAlignmentOptions alignment)
+        {
+            if (text == null)
+                return;
+
+            if (text.font == null && TMP_Settings.defaultFontAsset != null)
+                text.font = TMP_Settings.defaultFontAsset;
+
+            text.fontSize = fontSize;
+            text.fontStyle = fontStyle;
+            text.color = color;
+            text.alignment = alignment;
+            text.textWrappingMode = TextWrappingModes.Normal;
+            text.richText = true;
+        }
+
+        static void ApplyModernButtonStyle(Button button, Color baseColor, Color hoverColor, Color pressedColor, Color textColor, TMP_Text labelOverride = null)
+        {
+            if (button == null)
+                return;
+
+            var image = button.GetComponent<Image>() ?? button.gameObject.AddComponent<Image>();
+            image.sprite = null;
+            image.type = Image.Type.Simple;
+            image.color = baseColor;
+            image.raycastTarget = true;
+
+            var outline = button.GetComponent<Outline>() ?? button.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(0.78f, 0.82f, 0.88f, 0.34f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var shadow = button.GetComponent<Shadow>() ?? button.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.14f);
+            shadow.effectDistance = new Vector2(0f, -2f);
+
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.ColorTint;
+
+            var colors = button.colors;
+            colors.normalColor = baseColor;
+            colors.highlightedColor = hoverColor;
+            colors.selectedColor = hoverColor;
+            colors.pressedColor = pressedColor;
+            colors.disabledColor = new Color(baseColor.r * 0.8f, baseColor.g * 0.8f, baseColor.b * 0.8f, Mathf.Clamp01(baseColor.a * 0.6f));
+            colors.fadeDuration = 0.08f;
+            button.colors = colors;
+
+            var label = labelOverride ?? button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                var fontSize = label.fontSize > 0f ? label.fontSize : 13f;
+                ApplyModernTextStyle(label, fontSize, textColor, FontStyles.Bold, TextAlignmentOptions.Center);
+            }
+        }
+
+        static void ApplyMinimalLinkButtonStyle(Button button, Color textColor)
+        {
+            if (button == null)
+                return;
+
+            var image = button.GetComponent<Image>() ?? button.gameObject.AddComponent<Image>();
+            image.sprite = null;
+            image.type = Image.Type.Simple;
+            image.color = new Color(0f, 0f, 0f, 0f);
+            image.raycastTarget = true;
+
+            var outline = button.GetComponent<Outline>();
+            if (outline != null)
+            {
+                outline.effectColor = Color.clear;
+                outline.effectDistance = Vector2.zero;
+            }
+
+            var shadow = button.GetComponent<Shadow>();
+            if (shadow != null)
+            {
+                shadow.effectColor = Color.clear;
+                shadow.effectDistance = Vector2.zero;
+            }
+
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.ColorTint;
+
+            var colors = button.colors;
+            colors.normalColor = new Color(0f, 0f, 0f, 0f);
+            colors.highlightedColor = new Color(1f, 1f, 1f, 0.06f);
+            colors.selectedColor = new Color(1f, 1f, 1f, 0.06f);
+            colors.pressedColor = new Color(1f, 1f, 1f, 0.12f);
+            colors.disabledColor = new Color(0f, 0f, 0f, 0f);
+            colors.fadeDuration = 0.08f;
+            button.colors = colors;
+
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                ApplyModernTextStyle(label, 14f, textColor, FontStyles.Normal, TextAlignmentOptions.Center);
+                label.fontStyle = FontStyles.Underline;
+            }
+        }
+
+        static void ApplyModernInputFieldStyle(TMP_InputField field, string placeholder)
+        {
+            if (field == null)
+                return;
+
+            var background = field.GetComponent<Image>() ?? field.gameObject.AddComponent<Image>();
+            background.sprite = null;
+            background.type = Image.Type.Simple;
+            background.color = new Color(0.03f, 0.05f, 0.08f, 0.54f);
+            background.raycastTarget = true;
+            field.targetGraphic = background;
+
+            var outline = field.GetComponent<Outline>() ?? field.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(0.78f, 0.82f, 0.88f, 0.26f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var shadow = field.GetComponent<Shadow>() ?? field.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.10f);
+            shadow.effectDistance = new Vector2(0f, -2f);
+
+            field.customCaretColor = true;
+            field.caretColor = new Color(0.96f, 0.96f, 0.96f, 1f);
+            field.selectionColor = new Color(1f, 1f, 1f, 0.18f);
+
+            if (field.textComponent != null)
+            {
+                ApplyModernTextStyle(field.textComponent, 12f, new Color(0.98f, 0.98f, 0.98f, 1f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+                field.textComponent.margin = new Vector4(10f, 0f, 10f, 2f);
+            }
+
+            if (field.placeholder is TMP_Text placeholderText)
+            {
+                placeholderText.text = placeholder;
+                ApplyModernTextStyle(placeholderText, 12f, new Color(0.86f, 0.89f, 0.93f, 0.88f), FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
+                placeholderText.margin = new Vector4(10f, 0f, 10f, 2f);
+            }
+
+            var underline = field.transform.Find("Underline") as RectTransform;
+            if (underline == null)
+            {
+                var underlineImage = CreatePlainImage("Underline", field.transform, new Color(0.06f, 0.06f, 0.06f, 0.92f));
+                underline = underlineImage.rectTransform;
+            }
+
+            underline.anchorMin = new Vector2(0f, 0f);
+            underline.anchorMax = new Vector2(1f, 0f);
+            underline.pivot = new Vector2(0.5f, 0f);
+            underline.anchoredPosition = Vector2.zero;
+            underline.sizeDelta = new Vector2(-6f, 1f);
         }
 
         static Transform FindDescendant(Transform parent, string name)
@@ -1184,24 +2396,7 @@ namespace CastleDefender.UI
         static void EnsurePersistentEventSystem()
         {
             var loginUi = FindFirstObjectByType<LoginUI>(FindObjectsInactive.Include);
-            var current = SceneEventSystemUtility.FindBest(loginUi);
-
-            if (current == null)
-            {
-                var go = new GameObject("LoginEventSystem");
-                current = go.AddComponent<EventSystem>();
-                go.AddComponent<StandaloneInputModule>();
-                Debug.Log("[LoginUI] Created fallback EventSystem for login UI.");
-            }
-
-            if (!current.gameObject.activeSelf)
-                current.gameObject.SetActive(true);
-
-            if (current.GetComponent<BaseInputModule>() == null)
-                current.gameObject.AddComponent<StandaloneInputModule>();
-
-            if (current.GetComponent<SingleEventSystem>() == null)
-                current.gameObject.AddComponent<SingleEventSystem>();
+            SceneEventSystemUtility.EnsureSceneLocal(loginUi, "LoginEventSystem", "LoginUI");
         }
 
         // ── Browser / Device-code flow (Editor + Standalone) ─────────────────
