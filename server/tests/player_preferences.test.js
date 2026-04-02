@@ -24,6 +24,8 @@ test('createDefaultPlayerPreferences returns the expected defaults', () => {
       masterVolume: 1,
       sfxVolume: 1,
       ambientVolume: 0.5,
+      menuMusicVolume: 0.5,
+      gameplayMusicVolume: null,
     },
   });
 });
@@ -42,6 +44,8 @@ test('normalizePlayerPreferences clamps numeric fields and fills defaults', () =
       masterVolume: 1.4,
       sfxVolume: -3,
       ambientVolume: 0.3333,
+      menuMusicVolume: 0.8,
+      gameplayMusicVolume: 1.5,
     },
   }), {
     camera: {
@@ -58,6 +62,34 @@ test('normalizePlayerPreferences clamps numeric fields and fills defaults', () =
       masterVolume: 1,
       sfxVolume: 0,
       ambientVolume: 0.33,
+      menuMusicVolume: 0.8,
+      gameplayMusicVolume: 1,
+    },
+  });
+});
+
+test('normalizePlayerPreferences migrates legacy ambient music volume to menu music and lets gameplay follow menu until it is explicitly set', () => {
+  assert.deepEqual(normalizePlayerPreferences({
+    audio: {
+      ambientVolume: 0.25,
+    },
+  }), {
+    camera: {
+      tilt: null,
+      zoom: null,
+      rotation: null,
+    },
+    visuals: {
+      showEngagementCircles: true,
+      showHealthBars: true,
+      showTooltips: true,
+    },
+    audio: {
+      masterVolume: 1,
+      sfxVolume: 1,
+      ambientVolume: 0.25,
+      menuMusicVolume: 0.25,
+      gameplayMusicVolume: null,
     },
   });
 });

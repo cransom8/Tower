@@ -16,7 +16,6 @@ using UnityEngine.SceneManagement;
 public class AudioManager : MonoBehaviour
 {
     public static AudioManager I { get; private set; }
-    const string FallbackLoopResourcePath = "Audio/Loops/Winters_Gloom_Wars_Loom_2026-04-02T062148";
 
     // ── Mixer ─────────────────────────────────────────────────────────────────
     [Header("Mixer")]
@@ -70,6 +69,8 @@ public class AudioManager : MonoBehaviour
     public float CurrentMasterVolume { get; private set; } = 1f;
     public float CurrentSfxVolume { get; private set; } = 1f;
     public float CurrentAmbientVolume { get; private set; } = 0.5f;
+    public float CurrentMenuMusicVolume { get; private set; } = 0.5f;
+    public float CurrentGameplayMusicVolume { get; private set; } = 0.5f;
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,6 @@ public class AudioManager : MonoBehaviour
         _sfxSource = AddSource("SFX", "SFXVol");
         _loopSource = AddSource("Ambient", "AmbientVol");
         SceneManager.activeSceneChanged += HandleActiveSceneChanged;
-        EnsureLoopClipsAssigned();
 
         LoadVolumes();
     }
@@ -155,40 +155,82 @@ public class AudioManager : MonoBehaviour
 
     public void SetMusicVolume(float linear)
     {
-        SetAmbientVolume(linear);
+        if (IsGameplayScene(SceneManager.GetActiveScene()))
+            SetGameplayMusicVolume(linear);
+        else
+            SetMenuMusicVolume(linear);
     }
 
     public void SetAmbientVolume(float linear)
     {
         linear = Mathf.Clamp01(linear);
         CurrentAmbientVolume = linear;
-        SetMixerVolume("AmbientVol", linear);
+        CurrentMenuMusicVolume = linear;
+        CurrentGameplayMusicVolume = linear;
+        SetMixerVolume("AmbientVol", 1f);
         if (!_applyingUserPreferences)
+        {
             NotifyManagedAudioPreferenceChange("NotifyAmbientVolumeChanged", linear);
+            NotifyManagedAudioPreferenceChange("NotifyMenuMusicVolumeChanged", linear);
+            NotifyManagedAudioPreferenceChange("NotifyGameplayMusicVolumeChanged", linear);
+        }
+
+        RefreshLoopPlaybackForCurrentScene();
+    }
+
+    public void SetMenuMusicVolume(float linear)
+    {
+        linear = Mathf.Clamp01(linear);
+        CurrentMenuMusicVolume = linear;
+        if (!_applyingUserPreferences)
+            NotifyManagedAudioPreferenceChange("NotifyMenuMusicVolumeChanged", linear);
+
+        RefreshLoopPlaybackForCurrentScene();
+    }
+
+    public void SetGameplayMusicVolume(float linear)
+    {
+        linear = Mathf.Clamp01(linear);
+        CurrentGameplayMusicVolume = linear;
+        if (!_applyingUserPreferences)
+            NotifyManagedAudioPreferenceChange("NotifyGameplayMusicVolumeChanged", linear);
+
+        RefreshLoopPlaybackForCurrentScene();
     }
 
     public void ApplyUserPreferenceVolumes(float masterVolume, float sfxVolume, float ambientVolume)
+    {
+        CurrentAmbientVolume = Mathf.Clamp01(ambientVolume);
+        ApplyUserPreferenceVolumes(masterVolume, sfxVolume, ambientVolume, ambientVolume);
+    }
+
+    public void ApplyUserPreferenceVolumes(float masterVolume, float sfxVolume, float menuMusicVolume, float gameplayMusicVolume)
     {
         _applyingUserPreferences = true;
         try
         {
             SetMasterVolume(masterVolume);
             SetSFXVolume(sfxVolume);
-            SetAmbientVolume(ambientVolume);
+            SetMenuMusicVolume(menuMusicVolume);
+            SetGameplayMusicVolume(gameplayMusicVolume);
         }
         finally
         {
             _applyingUserPreferences = false;
         }
+
+        CurrentAmbientVolume = ResolveMusicVolumeForScene(SceneManager.GetActiveScene());
+        SetMixerVolume("AmbientVol", 1f);
+        RefreshLoopPlaybackForCurrentScene();
     }
 
     public void RefreshLoopPlaybackForCurrentScene(bool restartCurrentClip = false)
     {
-        EnsureLoopClipsAssigned();
         if (_loopSource == null)
             return;
 
-        AudioClip nextClip = ResolveLoopClipForScene(SceneManager.GetActiveScene());
+        Scene activeScene = SceneManager.GetActiveScene();
+        AudioClip nextClip = ResolveLoopClipForScene(activeScene);
         bool clipChanged = _loopSource.clip != nextClip;
 
         if (nextClip == null)
@@ -206,7 +248,8 @@ public class AudioManager : MonoBehaviour
         }
 
         _loopSource.loop = true;
-        _loopSource.volume = 1f;
+        _loopSource.volume = ResolveMusicVolumeForScene(activeScene);
+        CurrentAmbientVolume = _loopSource.volume;
 
         if (HasActiveAudioListener() && (!_loopSource.isPlaying || clipChanged || restartCurrentClip))
             _loopSource.Play();
@@ -221,6 +264,8 @@ public class AudioManager : MonoBehaviour
         var src = gameObject.AddComponent<AudioSource>();
         src.playOnAwake = false;
         src.loop = false;
+        src.spatialBlend = 0f;
+        src.dopplerLevel = 0f;
         if (mixer != null)
         {
             AudioMixerGroup[] groups = mixer.FindMatchingGroups(groupName);
@@ -274,18 +319,21 @@ public class AudioManager : MonoBehaviour
 
     void LoadVolumes()
     {
-        if (TryGetManagedAudioPreferences(out float masterVolume, out float sfxVolume, out float ambientVolume))
+        if (TryGetManagedAudioPreferences(
+                out float masterVolume,
+                out float sfxVolume,
+                out float menuMusicVolume,
+                out float gameplayMusicVolume))
         {
-            ApplyUserPreferenceVolumes(masterVolume, sfxVolume, ambientVolume);
+            ApplyUserPreferenceVolumes(masterVolume, sfxVolume, menuMusicVolume, gameplayMusicVolume);
             return;
         }
 
-        ApplyUserPreferenceVolumes(CurrentMasterVolume, CurrentSfxVolume, CurrentAmbientVolume);
+        ApplyUserPreferenceVolumes(CurrentMasterVolume, CurrentSfxVolume, CurrentMenuMusicVolume, CurrentGameplayMusicVolume);
     }
 
     void HandleActiveSceneChanged(Scene _, Scene __)
     {
-        EnsureLoopClipsAssigned();
         StartLoopPlaybackWhenReady();
     }
 
@@ -302,6 +350,13 @@ public class AudioManager : MonoBehaviour
         return menuMusicLoop != null ? menuMusicLoop : ambientLoop;
     }
 
+    float ResolveMusicVolumeForScene(Scene scene)
+    {
+        return IsGameplayScene(scene)
+            ? CurrentGameplayMusicVolume
+            : CurrentMenuMusicVolume;
+    }
+
     static bool IsGameplayScene(Scene scene)
     {
         string sceneName = scene.name ?? string.Empty;
@@ -315,22 +370,6 @@ public class AudioManager : MonoBehaviour
         // AudioMixer uses dB; map 0..1 → -80..0
         float db = linear <= 0f ? -80f : Mathf.Log10(linear) * 20f;
         mixer.SetFloat(param, db);
-    }
-
-    void EnsureLoopClipsAssigned()
-    {
-        AudioClip fallback = Resources.Load<AudioClip>(FallbackLoopResourcePath);
-        if (fallback == null)
-            return;
-
-        if (menuMusicLoop == null)
-            menuMusicLoop = fallback;
-
-        if (gameplayMusicLoop == null)
-            gameplayMusicLoop = fallback;
-
-        if (ambientLoop == null)
-            ambientLoop = fallback;
     }
 
     AudioClip ClipFor(SFX sfx) => sfx switch {
@@ -359,11 +398,16 @@ public class AudioManager : MonoBehaviour
         _                   => null
     };
 
-    static bool TryGetManagedAudioPreferences(out float masterVolume, out float sfxVolume, out float ambientVolume)
+    static bool TryGetManagedAudioPreferences(
+        out float masterVolume,
+        out float sfxVolume,
+        out float menuMusicVolume,
+        out float gameplayMusicVolume)
     {
         masterVolume = 1f;
         sfxVolume = 1f;
-        ambientVolume = 0.5f;
+        menuMusicVolume = 0.5f;
+        gameplayMusicVolume = 0.5f;
 
         System.Type managerType = FindType("CastleDefender.Net.UserPreferencesManager");
         if (managerType == null)
@@ -374,7 +418,9 @@ public class AudioManager : MonoBehaviour
 
         masterVolume = ReadStaticFloat(managerType, "SavedMasterVolume", masterVolume);
         sfxVolume = ReadStaticFloat(managerType, "SavedSfxVolume", sfxVolume);
-        ambientVolume = ReadStaticFloat(managerType, "SavedAmbientVolume", ambientVolume);
+        float legacyAmbientVolume = ReadStaticFloat(managerType, "SavedAmbientVolume", menuMusicVolume);
+        menuMusicVolume = ReadStaticFloat(managerType, "SavedMenuMusicVolume", legacyAmbientVolume);
+        gameplayMusicVolume = ReadStaticFloat(managerType, "SavedGameplayMusicVolume", gameplayMusicVolume);
         return true;
     }
 

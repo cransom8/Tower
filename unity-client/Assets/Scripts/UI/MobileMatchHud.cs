@@ -2737,11 +2737,14 @@ namespace CastleDefender.UI
 
         void CycleMusicVolumeSetting()
         {
-            float nextVolume = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.audio.ambientVolume, 0f, 1f, 0.25f);
+            float currentVolume = UserPreferencesManager.CurrentPreferenceView.audio.gameplayMusicVolume
+                ?? UserPreferencesManager.CurrentPreferenceView.audio.menuMusicVolume
+                ?? UserPreferencesManager.CurrentPreferenceView.audio.ambientVolume;
+            float nextVolume = GetWrappedSelectorValue(currentVolume, 0f, 1f, 0.25f);
             if (AudioManager.I != null)
-                AudioManager.I.SetMusicVolume(nextVolume);
+                AudioManager.I.SetGameplayMusicVolume(nextVolume);
             else
-                UserPreferencesManager.NotifyAmbientVolumeChanged(nextVolume);
+                UserPreferencesManager.NotifyGameplayMusicVolumeChanged(nextVolume);
         }
 
         void ResolveCurrentCameraValues(out float tilt, out float zoom, out float rotation)
@@ -2821,7 +2824,9 @@ namespace CastleDefender.UI
             }
 
             SetSettingsValue(_txtSettingsSfxValue, FormatVolumeValue(preferences.audio.sfxVolume));
-            SetSettingsValue(_txtSettingsMusicValue, FormatVolumeValue(preferences.audio.ambientVolume));
+            SetSettingsValue(
+                _txtSettingsMusicValue,
+                FormatVolumeValue(preferences.audio.gameplayMusicVolume ?? preferences.audio.menuMusicVolume ?? preferences.audio.ambientVolume));
             SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
             SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
             SetSettingsValue(_txtSettingsTooltipsValue, FormatToggleValue(preferences.visuals.showTooltips));

@@ -20,6 +20,8 @@ const DEFAULT_PLAYER_PREFERENCES = Object.freeze({
     masterVolume: 1,
     sfxVolume: 1,
     ambientVolume: 0.5,
+    menuMusicVolume: 0.5,
+    gameplayMusicVolume: null,
   }),
 });
 
@@ -79,10 +81,20 @@ function normalizeVisualPreferences(raw) {
 
 function normalizeAudioPreferences(raw) {
   const source = isPlainObject(raw) ? raw : {};
+  const legacyAmbientVolume = clampUnitInterval(source.ambientVolume, DEFAULT_PLAYER_PREFERENCES.audio.ambientVolume);
+  const normalizedMenuMusicVolume = clampUnitInterval(source.menuMusicVolume, legacyAmbientVolume);
+  const hasExplicitGameplayMusicVolume =
+    Object.prototype.hasOwnProperty.call(source, 'gameplayMusicVolume')
+    && source.gameplayMusicVolume !== null
+    && source.gameplayMusicVolume !== undefined;
   return {
     masterVolume: clampUnitInterval(source.masterVolume, DEFAULT_PLAYER_PREFERENCES.audio.masterVolume),
     sfxVolume: clampUnitInterval(source.sfxVolume, DEFAULT_PLAYER_PREFERENCES.audio.sfxVolume),
-    ambientVolume: clampUnitInterval(source.ambientVolume, DEFAULT_PLAYER_PREFERENCES.audio.ambientVolume),
+    ambientVolume: legacyAmbientVolume,
+    menuMusicVolume: normalizedMenuMusicVolume,
+    gameplayMusicVolume: hasExplicitGameplayMusicVolume
+      ? clampUnitInterval(source.gameplayMusicVolume, normalizedMenuMusicVolume)
+      : null,
   };
 }
 

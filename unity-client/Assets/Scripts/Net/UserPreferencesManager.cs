@@ -112,6 +112,16 @@ namespace CastleDefender.Net
             EnsureInstance().SetAudioVolumeInternal(AudioChannel.Ambient, linear, applyRuntime: false);
         }
 
+        public static void NotifyMenuMusicVolumeChanged(float linear)
+        {
+            EnsureInstance().SetAudioVolumeInternal(AudioChannel.MenuMusic, linear, applyRuntime: false);
+        }
+
+        public static void NotifyGameplayMusicVolumeChanged(float linear)
+        {
+            EnsureInstance().SetAudioVolumeInternal(AudioChannel.GameplayMusic, linear, applyRuntime: false);
+        }
+
         public static UserAudioPreferences GetCurrentAudioPreferences()
         {
             return Instance != null
@@ -130,6 +140,19 @@ namespace CastleDefender.Net
         public static float SavedAmbientVolume => Instance != null
             ? Instance._current.audio.ambientVolume
             : DefaultPreferences.audio.ambientVolume;
+
+        public static float SavedMenuMusicVolume => Instance != null
+            ? Instance._current.audio.menuMusicVolume ?? DefaultPreferences.audio.menuMusicVolume ?? DefaultPreferences.audio.ambientVolume
+            : DefaultPreferences.audio.menuMusicVolume ?? DefaultPreferences.audio.ambientVolume;
+
+        public static float SavedGameplayMusicVolume => Instance != null
+            ? Instance._current.audio.gameplayMusicVolume
+                ?? Instance._current.audio.menuMusicVolume
+                ?? DefaultPreferences.audio.menuMusicVolume
+                ?? DefaultPreferences.audio.ambientVolume
+            : DefaultPreferences.audio.gameplayMusicVolume
+                ?? DefaultPreferences.audio.menuMusicVolume
+                ?? DefaultPreferences.audio.ambientVolume;
 
         void Awake()
         {
@@ -257,6 +280,24 @@ namespace CastleDefender.Net
                 "ApplyUserPreferenceVolumes",
                 BindingFlags.Public | BindingFlags.Instance,
                 null,
+                new[] { typeof(float), typeof(float), typeof(float), typeof(float) },
+                null);
+            if (applyMethod != null)
+            {
+                applyMethod.Invoke(audioManager, new object[]
+                {
+                    _current.audio.masterVolume,
+                    _current.audio.sfxVolume,
+                    _current.audio.menuMusicVolume ?? _current.audio.ambientVolume,
+                    _current.audio.gameplayMusicVolume ?? _current.audio.menuMusicVolume ?? _current.audio.ambientVolume,
+                });
+                return;
+            }
+
+            applyMethod = audioManagerType.GetMethod(
+                "ApplyUserPreferenceVolumes",
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
                 new[] { typeof(float), typeof(float), typeof(float) },
                 null);
 
@@ -272,7 +313,7 @@ namespace CastleDefender.Net
         {
             bool changed = false;
             changed |= UpdateNullableFloat(ref _current.camera.tilt, Clamp(tilt, 0f, 52f));
-            changed |= UpdateNullableFloat(ref _current.camera.zoom, Clamp(zoom, 4f, 80f));
+            changed |= UpdateNullableFloat(ref _current.camera.zoom, Clamp(zoom, 4f, 120f));
             changed |= UpdateNullableFloat(ref _current.camera.rotation, NormalizeRotation(rotation));
 
             if (!changed)
@@ -315,7 +356,15 @@ namespace CastleDefender.Net
             {
                 AudioChannel.Master => UpdateFloat(ref _current.audio.masterVolume, linear),
                 AudioChannel.Sfx => UpdateFloat(ref _current.audio.sfxVolume, linear),
-                AudioChannel.Ambient => UpdateFloat(ref _current.audio.ambientVolume, linear),
+                AudioChannel.Ambient =>
+                    UpdateFloat(ref _current.audio.ambientVolume, linear)
+                    | UpdateNullableFloat(ref _current.audio.menuMusicVolume, linear)
+                    | UpdateNullableFloat(ref _current.audio.gameplayMusicVolume, linear),
+                AudioChannel.MenuMusic =>
+                    UpdateFloat(ref _current.audio.ambientVolume, linear)
+                    | UpdateNullableFloat(ref _current.audio.menuMusicVolume, linear),
+                AudioChannel.GameplayMusic =>
+                    UpdateNullableFloat(ref _current.audio.gameplayMusicVolume, linear),
                 _ => false,
             };
 
@@ -510,7 +559,7 @@ namespace CastleDefender.Net
             if (preferences.camera != null)
             {
                 normalized.camera.tilt = NormalizeNullableCameraValue(preferences.camera.tilt, 0f, 52f);
-                normalized.camera.zoom = NormalizeNullableCameraValue(preferences.camera.zoom, 4f, 80f);
+                normalized.camera.zoom = NormalizeNullableCameraValue(preferences.camera.zoom, 4f, 120f);
                 normalized.camera.rotation = preferences.camera.rotation.HasValue
                     ? NormalizeRotation(preferences.camera.rotation.Value)
                     : null;
@@ -528,6 +577,12 @@ namespace CastleDefender.Net
                 normalized.audio.masterVolume = Clamp(preferences.audio.masterVolume, 0f, 1f);
                 normalized.audio.sfxVolume = Clamp(preferences.audio.sfxVolume, 0f, 1f);
                 normalized.audio.ambientVolume = Clamp(preferences.audio.ambientVolume, 0f, 1f);
+                normalized.audio.menuMusicVolume = preferences.audio.menuMusicVolume.HasValue
+                    ? Clamp(preferences.audio.menuMusicVolume.Value, 0f, 1f)
+                    : normalized.audio.ambientVolume;
+                normalized.audio.gameplayMusicVolume = preferences.audio.gameplayMusicVolume.HasValue
+                    ? Clamp(preferences.audio.gameplayMusicVolume.Value, 0f, 1f)
+                    : null;
             }
 
             return normalized;
@@ -576,6 +631,8 @@ namespace CastleDefender.Net
             Master,
             Sfx,
             Ambient,
+            MenuMusic,
+            GameplayMusic,
         }
     }
 
@@ -659,6 +716,8 @@ namespace CastleDefender.Net
         public float masterVolume = 1f;
         public float sfxVolume = 1f;
         public float ambientVolume = 0.5f;
+        public float? menuMusicVolume = 0.5f;
+        public float? gameplayMusicVolume;
 
         public static UserAudioPreferences CreateDefault()
         {
@@ -672,6 +731,8 @@ namespace CastleDefender.Net
                 masterVolume = masterVolume,
                 sfxVolume = sfxVolume,
                 ambientVolume = ambientVolume,
+                menuMusicVolume = menuMusicVolume,
+                gameplayMusicVolume = gameplayMusicVolume,
             };
         }
     }

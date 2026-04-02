@@ -3402,8 +3402,8 @@ MonoBehaviour:
   Btn_DeviceCancel: {fileID: 1799952297}
   ColorTabActive: {r: 0.9, g: 0.75, b: 0.2, a: 1}
   ColorTabInactive: {r: 0.5, g: 0.5, b: 0.5, a: 1}
-  IntroTitleStampClip: {fileID: 8300000, guid: 136d30c98e29b924793ef498686e923f, type: 3}
-  IntroForgeQuenchClip: {fileID: 8300000, guid: b1e306c9afe8ffd438dca3815f93abaa, type: 3}
+  IntroTitleStampClip: {fileID: 0}
+  IntroForgeQuenchClip: {fileID: 0}
   IntroForgeQuenchDelay: 1
 --- !u!114 &1432308483
 MonoBehaviour:
