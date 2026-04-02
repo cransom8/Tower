@@ -30,9 +30,11 @@ namespace CastleDefender.Game
         static readonly List<BarracksSiteView> s_activeSites = new();
         static readonly HashSet<string> s_missingHpBarLogs = new();
         static readonly HashSet<string> s_invalidConfigLogs = new();
+        static readonly Color ConstructionLabelColor = new(1f, 0.90f, 0.50f, 0.98f);
 
         Transform _overlayRoot;
         Transform _labelRoot;
+        TMP_Text _statusLabel;
         TMP_Text _healthLabel;
         Transform _hpBarRoot;
         Transform _hpBarFill;
@@ -304,7 +306,8 @@ namespace CastleDefender.Game
         void UpdateHud(MLBarracksSite site)
         {
             bool showHud = site != null
-                && ((site.isBuilt)
+                && (site.isBuilt
+                    || site.isConstructing
                     || (!site.isBuilt && _selected));
 
             if (!showHud)
@@ -336,8 +339,38 @@ namespace CastleDefender.Game
 
             if (_healthLabel != null)
             {
+                if (_statusLabel != null)
+                {
+                    if (site.isConstructing)
+                    {
+                        _statusLabel.gameObject.SetActive(true);
+                        _statusLabel.transform.localPosition = new Vector3(0f, 0.42f, 0f);
+                        _statusLabel.text = $"{ResolveConstructionVerb(site.constructionKind)} {ResolveSecondsRemaining(site.constructionTimerTicksRemaining)}s";
+                        _statusLabel.color = ConstructionLabelColor;
+                    }
+                    else if (site.isDestroyed)
+                    {
+                        _statusLabel.gameObject.SetActive(true);
+                        _statusLabel.transform.localPosition = new Vector3(0f, 0.42f, 0f);
+                        _statusLabel.text = "Destroyed";
+                        _statusLabel.color = new Color(1f, 0.58f, 0.52f, 0.98f);
+                    }
+                    else
+                    {
+                        _statusLabel.gameObject.SetActive(false);
+                    }
+                }
+
                 _healthLabel.transform.localPosition = new Vector3(0f, 0.22f, 0f);
-                if (site.isBuilt)
+                if (site.isConstructing)
+                {
+                    _healthLabel.transform.localPosition = new Vector3(0f, 0.12f, 0f);
+                    _healthLabel.text = string.IsNullOrWhiteSpace(site.constructionTargetTierName)
+                        ? site.displayName
+                        : site.constructionTargetTierName;
+                    _healthLabel.color = new Color(0.84f, 0.96f, 0.88f, 0.98f);
+                }
+                else if (site.isBuilt)
                 {
                     _healthLabel.text = $"HP {Mathf.RoundToInt(site.hp)}/{Mathf.RoundToInt(site.maxHp)}";
                     _healthLabel.color = site.hp < site.maxHp
@@ -355,8 +388,8 @@ namespace CastleDefender.Game
 
             if (_hpBarRoot != null)
             {
-                _hpBarRoot.gameObject.SetActive(site.isBuilt);
-                if (site.isBuilt)
+                _hpBarRoot.gameObject.SetActive(site.isBuilt && !site.isConstructing);
+                if (site.isBuilt && !site.isConstructing)
                 {
                     _hpBarRoot.localPosition = new Vector3(0f, -0.12f, 0f);
                     float hp01 = Mathf.Clamp01(site.hp / Mathf.Max(1f, site.maxHp));
@@ -485,6 +518,7 @@ namespace CastleDefender.Game
             _labelRoot = new GameObject("Hud").transform;
             _labelRoot.SetParent(_overlayRoot, false);
 
+            _statusLabel = CreateWorldLabel("Status", _labelRoot, 1.15f);
             _healthLabel = CreateWorldLabel("Health", _labelRoot, 1.55f);
             EnsureHpBar();
         }
@@ -665,6 +699,21 @@ namespace CastleDefender.Game
             }
 
             return null;
+        }
+
+        static int ResolveSecondsRemaining(int ticksRemaining)
+        {
+            float tickHz = SnapshotApplier.Instance != null
+                ? Mathf.Max(1f, SnapshotApplier.Instance.GetTickHz())
+                : 20f;
+            return Mathf.Max(0, Mathf.CeilToInt(ticksRemaining / tickHz));
+        }
+
+        static string ResolveConstructionVerb(string constructionKind)
+        {
+            return string.Equals(constructionKind, "upgrade", StringComparison.OrdinalIgnoreCase)
+                ? "Upgrading"
+                : "Building";
         }
 
         static Transform FindChildRecursive(Transform root, string childName)

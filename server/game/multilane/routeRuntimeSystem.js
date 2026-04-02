@@ -31,6 +31,18 @@ function getBarracksRouteStartNodeId(laneIndex, barracksId) {
   return routeGraph.getBarracksRouteStartNodeId(laneIndex, barracksId);
 }
 
+function getMarketRouteNodeId(laneIndex) {
+  return routeGraph.getMarketRouteNodeId(laneIndex);
+}
+
+function getRearGateRouteNodeId(laneIndex) {
+  return routeGraph.getRearGateRouteNodeId(laneIndex);
+}
+
+function getTradeOutpostRouteNodeId(laneIndex) {
+  return routeGraph.getTradeOutpostRouteNodeId(laneIndex);
+}
+
 function getLaneCoreNodeIdForRouteNode(nodeId) {
   return routeGraph.getLaneCoreNodeIdForRouteNode(nodeId);
 }
@@ -49,6 +61,14 @@ function getPadWorldPosition(laneIndex, gridX, gridY) {
 
 function getBarracksSiteWorldPosition(laneIndex, barracksId) {
   return routeGraph.getBarracksSiteWorldPosition(laneIndex, barracksId);
+}
+
+function getMarketPadWorldPosition(laneIndex) {
+  return routeGraph.getMarketPadWorldPosition(laneIndex);
+}
+
+function buildMarketLoopRouteSegments(laneIndex) {
+  return routeGraph.buildMarketLoopRouteSegments(laneIndex);
 }
 
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
@@ -165,11 +185,16 @@ module.exports = {
   getWaveSpawnNodeId,
   getLaneCombatAxes,
   getBarracksRouteStartNodeId,
+  getMarketRouteNodeId,
+  getRearGateRouteNodeId,
+  getTradeOutpostRouteNodeId,
   getLaneCoreNodeIdForRouteNode,
   isBarracksRouteStartNode,
   getWaveSpawnWorldPosition,
   getPadWorldPosition,
   getBarracksSiteWorldPosition,
+  getMarketPadWorldPosition,
+  buildMarketLoopRouteSegments,
   buildRouteSegments,
   parseRouteSegmentId,
   getRouteLength,

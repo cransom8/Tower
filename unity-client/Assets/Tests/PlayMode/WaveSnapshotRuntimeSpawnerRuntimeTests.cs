@@ -18,6 +18,42 @@ public sealed class SnapshotAuthorityDriftDriver : MonoBehaviour
 
 public class WaveSnapshotRuntimeSpawnerRuntimeTests
 {
+    [Test]
+    public void BattlefieldRouteSegmentParser_Accepts_Market_Route_Nodes()
+    {
+        Type spawnerType = FindType("CastleDefender.Game.WaveSnapshotRuntimeSpawner");
+        Assert.That(spawnerType, Is.Not.Null);
+
+        MethodInfo normalizeSegmentMethod = spawnerType.GetMethod(
+            "TryNormalizeBattlefieldSegmentId",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo normalizeNodeMethod = spawnerType.GetMethod(
+            "TryNormalizeRouteNodeId",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo resolveLaneMethod = spawnerType.GetMethod(
+            "ResolveLaneIndexForRouteNode",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        Assert.That(normalizeSegmentMethod, Is.Not.Null);
+        Assert.That(normalizeNodeMethod, Is.Not.Null);
+        Assert.That(resolveLaneMethod, Is.Not.Null);
+
+        object[] normalizeSegmentArgs = { "AMKT_ARGR", null };
+        bool normalizedSegment = (bool)normalizeSegmentMethod.Invoke(null, normalizeSegmentArgs);
+        Assert.That(normalizedSegment, Is.True, "Market route segments emitted by the server should be accepted by the runtime spawner.");
+        Assert.That((string)normalizeSegmentArgs[1], Is.EqualTo("AMKT_ARGR"));
+
+        object[] normalizeNodeArgs = { "ABST", null };
+        bool normalizedNode = (bool)normalizeNodeMethod.Invoke(null, normalizeNodeArgs);
+        Assert.That(normalizedNode, Is.True, "Trade outpost route nodes should normalize successfully.");
+        Assert.That((string)normalizeNodeArgs[1], Is.EqualTo("ABST"));
+
+        int tradeOutpostLane = (int)resolveLaneMethod.Invoke(null, new object[] { "ABST" });
+        int rearGateLane = (int)resolveLaneMethod.Invoke(null, new object[] { "BRGR" });
+        Assert.That(tradeOutpostLane, Is.EqualTo(0));
+        Assert.That(rearGateLane, Is.EqualTo(1));
+    }
+
     [UnityTest]
     public System.Collections.IEnumerator WaveUnit_Materializes_From_Authoritative_BattlefieldRoute_State()
     {

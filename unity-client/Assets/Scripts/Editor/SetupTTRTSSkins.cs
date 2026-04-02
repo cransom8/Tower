@@ -142,6 +142,7 @@ public static class SetupTTRTSSkins
         EditorUtility.SetDirty(registry);
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
+        PrepareWarriorPackBundle2Profiles.ApplyTTRTSMapping();
 
         Debug.Log($"[SetupTTRTSSkins] Complete - added={added} updated={updated} warnings={warnings}. Inspect {AssetDatabase.GetAssetPath(registry)} to verify.");
     }

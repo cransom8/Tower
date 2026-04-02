@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.SceneManagement;
@@ -15,6 +16,7 @@ using UnityEngine.SceneManagement;
 public class AudioManager : MonoBehaviour
 {
     public static AudioManager I { get; private set; }
+    const string FallbackLoopResourcePath = "Audio/Loops/Winters_Gloom_Wars_Loom_2026-04-02T062148";
 
     // ── Mixer ─────────────────────────────────────────────────────────────────
     [Header("Mixer")]
@@ -63,6 +65,7 @@ public class AudioManager : MonoBehaviour
     AudioSource _sfxSource;
     AudioSource _loopSource;
     bool _applyingUserPreferences;
+    Coroutine _loopPlaybackRoutine;
 
     public float CurrentMasterVolume { get; private set; } = 1f;
     public float CurrentSfxVolume { get; private set; } = 1f;
@@ -79,13 +82,14 @@ public class AudioManager : MonoBehaviour
         _sfxSource = AddSource("SFX", "SFXVol");
         _loopSource = AddSource("Ambient", "AmbientVol");
         SceneManager.activeSceneChanged += HandleActiveSceneChanged;
+        EnsureLoopClipsAssigned();
 
         LoadVolumes();
     }
 
     void Start()
     {
-        StartCoroutine(BeginLoopWhenReady());
+        StartLoopPlaybackWhenReady();
     }
 
     void OnDestroy()
@@ -94,6 +98,8 @@ public class AudioManager : MonoBehaviour
             I = null;
 
         SceneManager.activeSceneChanged -= HandleActiveSceneChanged;
+        if (_loopPlaybackRoutine != null)
+            StopCoroutine(_loopPlaybackRoutine);
         _sfxSource = null;
         _loopSource = null;
     }
@@ -176,6 +182,36 @@ public class AudioManager : MonoBehaviour
         }
     }
 
+    public void RefreshLoopPlaybackForCurrentScene(bool restartCurrentClip = false)
+    {
+        EnsureLoopClipsAssigned();
+        if (_loopSource == null)
+            return;
+
+        AudioClip nextClip = ResolveLoopClipForScene(SceneManager.GetActiveScene());
+        bool clipChanged = _loopSource.clip != nextClip;
+
+        if (nextClip == null)
+        {
+            if (_loopSource.isPlaying)
+                _loopSource.Stop();
+            _loopSource.clip = null;
+            return;
+        }
+
+        if (clipChanged || restartCurrentClip)
+        {
+            _loopSource.Stop();
+            _loopSource.clip = nextClip;
+        }
+
+        _loopSource.loop = true;
+        _loopSource.volume = 1f;
+
+        if (HasActiveAudioListener() && (!_loopSource.isPlaying || clipChanged || restartCurrentClip))
+            _loopSource.Play();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Internal
     // ─────────────────────────────────────────────────────────────────────────
@@ -193,9 +229,17 @@ public class AudioManager : MonoBehaviour
         return src;
     }
 
+    void StartLoopPlaybackWhenReady()
+    {
+        if (_loopPlaybackRoutine != null)
+            StopCoroutine(_loopPlaybackRoutine);
+
+        _loopPlaybackRoutine = StartCoroutine(BeginLoopWhenReady());
+    }
+
     System.Collections.IEnumerator BeginLoopWhenReady()
     {
-        const float timeoutSeconds = 2f;
+        const float timeoutSeconds = 8f;
         float elapsed = 0f;
 
         while (!HasActiveAudioListener() && elapsed < timeoutSeconds)
@@ -207,10 +251,12 @@ public class AudioManager : MonoBehaviour
         if (!HasActiveAudioListener())
         {
             Debug.LogWarning("[AudioManager] Loop music playback skipped because no active AudioListener was found.");
+            _loopPlaybackRoutine = null;
             yield break;
         }
 
         RefreshLoopPlayback();
+        _loopPlaybackRoutine = null;
     }
 
     static bool HasActiveAudioListener()
@@ -239,35 +285,13 @@ public class AudioManager : MonoBehaviour
 
     void HandleActiveSceneChanged(Scene _, Scene __)
     {
-        RefreshLoopPlayback();
+        EnsureLoopClipsAssigned();
+        StartLoopPlaybackWhenReady();
     }
 
     void RefreshLoopPlayback()
     {
-        if (_loopSource == null)
-            return;
-
-        AudioClip nextClip = ResolveLoopClipForScene(SceneManager.GetActiveScene());
-        if (nextClip == null)
-        {
-            if (_loopSource.isPlaying)
-                _loopSource.Stop();
-            _loopSource.clip = null;
-            return;
-        }
-
-        bool clipChanged = _loopSource.clip != nextClip;
-        if (clipChanged)
-        {
-            _loopSource.Stop();
-            _loopSource.clip = nextClip;
-        }
-
-        _loopSource.loop = true;
-        _loopSource.volume = 1f;
-
-        if (HasActiveAudioListener() && (!_loopSource.isPlaying || clipChanged))
-            _loopSource.Play();
+        RefreshLoopPlaybackForCurrentScene(false);
     }
 
     AudioClip ResolveLoopClipForScene(Scene scene)
@@ -291,6 +315,22 @@ public class AudioManager : MonoBehaviour
         // AudioMixer uses dB; map 0..1 → -80..0
         float db = linear <= 0f ? -80f : Mathf.Log10(linear) * 20f;
         mixer.SetFloat(param, db);
+    }
+
+    void EnsureLoopClipsAssigned()
+    {
+        AudioClip fallback = Resources.Load<AudioClip>(FallbackLoopResourcePath);
+        if (fallback == null)
+            return;
+
+        if (menuMusicLoop == null)
+            menuMusicLoop = fallback;
+
+        if (gameplayMusicLoop == null)
+            gameplayMusicLoop = fallback;
+
+        if (ambientLoop == null)
+            ambientLoop = fallback;
     }
 
     AudioClip ClipFor(SFX sfx) => sfx switch {
@@ -379,5 +419,15 @@ public class AudioManager : MonoBehaviour
         }
 
         return null;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    static void EnsureFallbackInstanceExists()
+    {
+        if (I != null)
+            return;
+
+        var go = new GameObject("AudioManager");
+        go.AddComponent<AudioManager>();
     }
 }

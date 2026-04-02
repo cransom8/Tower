@@ -42,6 +42,7 @@ namespace CastleDefender.UI
         ScrollRect _scrollRect;
         GameObject _chatInputRow;
         GameObject _systemFilterRow;
+        Coroutine _eventSystemValidationRoutine;
 
         PanelTab _currentTab = PanelTab.Chat;
         bool _isExpanded;
@@ -98,13 +99,18 @@ namespace CastleDefender.UI
         {
             RuntimeDiagnosticsService.Changed += HandleDiagnosticsChanged;
             SceneManager.sceneLoaded += HandleSceneLoaded;
-            StartCoroutine(ValidateEventSystemNextFrame());
+            ScheduleEventSystemValidation();
         }
 
         void OnDisable()
         {
             RuntimeDiagnosticsService.Changed -= HandleDiagnosticsChanged;
             SceneManager.sceneLoaded -= HandleSceneLoaded;
+            if (_eventSystemValidationRoutine != null)
+            {
+                StopCoroutine(_eventSystemValidationRoutine);
+                _eventSystemValidationRoutine = null;
+            }
         }
 
         void Update()
@@ -132,7 +138,7 @@ namespace CastleDefender.UI
         void HandleSceneLoaded(Scene _, LoadSceneMode __)
         {
             _eventSystemIssueLogged = false;
-            StartCoroutine(ValidateEventSystemNextFrame());
+            ScheduleEventSystemValidation();
         }
 
         void BuildUi()
@@ -535,11 +541,23 @@ namespace CastleDefender.UI
             return Application.isMobilePlatform || shortestSide < 1000f;
         }
 
-        IEnumerator ValidateEventSystemNextFrame()
+        void ScheduleEventSystemValidation(int waitFrames = 10)
         {
-            for (int i = 0; i < 10; i++)
+            if (!isActiveAndEnabled)
+                return;
+
+            if (_eventSystemValidationRoutine != null)
+                StopCoroutine(_eventSystemValidationRoutine);
+
+            _eventSystemValidationRoutine = StartCoroutine(ValidateEventSystemNextFrame(waitFrames));
+        }
+
+        IEnumerator ValidateEventSystemNextFrame(int waitFrames)
+        {
+            for (int i = 0; i < waitFrames; i++)
                 yield return null;
 
+            _eventSystemValidationRoutine = null;
             ValidateEventSystem();
         }
 
@@ -552,6 +570,12 @@ namespace CastleDefender.UI
             int totalCount = allEventSystems != null ? allEventSystems.Length : 0;
             if (totalCount == 0)
             {
+                if (ShouldDeferEventSystemValidation())
+                {
+                    ScheduleEventSystemValidation();
+                    return;
+                }
+
                 ReportEventSystemIssue(
                     "[RuntimeChatDebugPanel] No EventSystem exists in the loaded scenes. " +
                     "The chat/debug panel will render, but interaction is disabled until the scene provides one.");
@@ -573,6 +597,12 @@ namespace CastleDefender.UI
 
             if (activeCount == 0)
             {
+                if (ShouldDeferEventSystemValidation())
+                {
+                    ScheduleEventSystemValidation();
+                    return;
+                }
+
                 ReportEventSystemIssue(
                     $"[RuntimeChatDebugPanel] Found {totalCount} EventSystem object(s), but none are active in loaded scenes. " +
                     "Panel interaction is disabled until the scene enables it.");
@@ -581,6 +611,12 @@ namespace CastleDefender.UI
 
             if (activeCount > 1)
             {
+                if (ShouldDeferEventSystemValidation())
+                {
+                    ScheduleEventSystemValidation();
+                    return;
+                }
+
                 ReportEventSystemIssue(
                     $"[RuntimeChatDebugPanel] Detected {activeCount} active EventSystem instances across loaded scenes. " +
                     "The panel will not create or replace EventSystems at runtime.");
@@ -604,6 +640,16 @@ namespace CastleDefender.UI
             _eventSystemIssueLogged = true;
             Debug.LogError(message, this);
             RuntimeDiagnosticsService.PublishSystem(RuntimeLogSeverity.Error, "RuntimeChatDebugPanel", message, gameObject.scene.name);
+        }
+
+        static bool ShouldDeferEventSystemValidation()
+        {
+            if (LoadingScreen.IsTransitionInProgress)
+                return true;
+
+            Scene activeScene = SceneManager.GetActiveScene();
+            return activeScene.IsValid()
+                && string.Equals(activeScene.name, "Bootstrap", System.StringComparison.OrdinalIgnoreCase);
         }
 
         bool TryRemoveStaleRuntimeDiagnosticsEventSystem(EventSystem[] eventSystems)

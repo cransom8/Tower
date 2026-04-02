@@ -29,6 +29,7 @@ const DEFAULT_SPAWN_SOURCE_TYPES = Object.freeze({
   SCHEDULED_WAVE: "dungeon_wave",
   BARRACKS_ROSTER: "barracks_roster",
   BARRACKS_HERO: "barracks_hero",
+  MARKET_ROSTER: "market_roster",
 });
 
 const DEFAULT_LANE_COMMAND_STATES = Object.freeze({
@@ -462,6 +463,19 @@ function normalizeLegacyDefenderUnits(game, deps = {}) {
   }
 }
 
+function isMarketWorkerLaneControlledUnit(unit, deps = {}) {
+  const spawnSourceTypes = getSpawnSourceTypes(deps);
+  if (!unit || !Number.isInteger(unit.sourceLaneIndex) || unit.sourceLaneIndex < 0)
+    return false;
+  if (unit.isDefender)
+    return false;
+
+  const spawnSourceType = typeof deps.resolveSpawnSourceTypeFromUnit === "function"
+    ? deps.resolveSpawnSourceTypeFromUnit(unit)
+    : null;
+  return spawnSourceType === spawnSourceTypes.MARKET_ROSTER;
+}
+
 function isLaneControlledUnit(unit, deps = {}) {
   const spawnSourceTypes = getSpawnSourceTypes(deps);
   if (!unit || !Number.isInteger(unit.sourceLaneIndex) || unit.sourceLaneIndex < 0)
@@ -473,7 +487,8 @@ function isLaneControlledUnit(unit, deps = {}) {
     ? deps.resolveSpawnSourceTypeFromUnit(unit)
     : null;
   return spawnSourceType === spawnSourceTypes.BARRACKS_ROSTER
-    || spawnSourceType === spawnSourceTypes.BARRACKS_HERO;
+    || spawnSourceType === spawnSourceTypes.BARRACKS_HERO
+    || spawnSourceType === spawnSourceTypes.MARKET_ROSTER;
 }
 
 function getLaneCommandOwnerLane(game, unit, deps = {}) {
@@ -489,7 +504,10 @@ function getLaneCommandStateForUnit(game, unit, deps = {}) {
 function isLaneCommandCombatEnabledForUnit(game, unit, deps = {}) {
   if (!isLaneControlledUnit(unit, deps))
     return true;
-  return isLaneCombatEnabledCommandState(getLaneCommandStateForUnit(game, unit, deps), deps);
+  const commandState = getLaneCommandStateForUnit(game, unit, deps);
+  if (isMarketWorkerLaneControlledUnit(unit, deps))
+    return commandState === getLaneCommandStates(deps).RETREAT;
+  return isLaneCombatEnabledCommandState(commandState, deps);
 }
 
 function resolveTargetLaneForBarracksSend(game, sourceLaneIndex, _barracksId, deps = {}) {
@@ -505,6 +523,8 @@ function resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit, deps
   const fallbackLaneIndex = resolveLaneCommandContainerLaneIndex(game, ownerLane, deps);
   if (!ownerLane || !isLaneControlledUnit(unit, deps))
     return fallbackLaneIndex;
+  if (isMarketWorkerLaneControlledUnit(unit, deps))
+    return ownerLane.laneIndex;
   if (deps.USE_PER_UNIT_ANCHOR_SLOTS)
     return fallbackLaneIndex;
 
@@ -593,6 +613,13 @@ function resolveSpawnOriginForUnit(unit, targetLane, deps = {}) {
       : null;
   }
 
+  if (spawnSourceType === spawnSourceTypes.MARKET_ROSTER) {
+    const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+    return typeof deps.getMarketPadWorldPosition === "function"
+      ? deps.getMarketPadWorldPosition(sourceLaneIndex)
+      : null;
+  }
+
   const sourceLaneIndex = Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
   const sourceBarracksKey = typeof deps.normalizeBarracksSiteId === "function"
     ? deps.normalizeBarracksSiteId(unit && (unit.sourceBarracksKey || unit.sourceBarracksId))
@@ -637,6 +664,36 @@ function resolveRouteContractForUnit(game, targetLane, unit, deps = {}) {
       routeSegments,
       spawnOrigin,
       pathId: buildRoutePathId(routeSegments),
+    };
+  }
+
+  if (spawnSourceType === spawnSourceTypes.MARKET_ROSTER) {
+    const sourceLaneIndex = Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1;
+    const sourceNodeId = typeof deps.getMarketRouteNodeId === "function"
+      ? deps.getMarketRouteNodeId(sourceLaneIndex)
+      : null;
+    const routeSegments = typeof deps.buildMarketLoopRouteSegments === "function"
+      ? deps.buildMarketLoopRouteSegments(sourceLaneIndex)
+      : null;
+    const spawnOrigin = resolveSpawnOriginForUnit(unit, targetLane, deps);
+    if (sourceLaneIndex < 0)
+      return { ok: false, reason: "Market worker is missing sourceLaneIndex" };
+    if (!sourceNodeId || !Array.isArray(routeSegments) || routeSegments.length <= 0)
+      return { ok: false, reason: `Market loop route is missing for lane ${sourceLaneIndex}` };
+    if (!spawnOrigin)
+      return { ok: false, reason: `Market spawn origin is missing for lane ${sourceLaneIndex}` };
+
+    return {
+      ok: true,
+      spawnSourceType,
+      routeType: ROUTE_TYPES.OUTER_LOOP,
+      sourceNodeId,
+      targetNodeId: sourceNodeId,
+      objectiveLaneIndex: sourceLaneIndex,
+      routeSegments,
+      spawnOrigin,
+      pathId: buildRoutePathId(routeSegments),
+      routeLabel: "market_loop",
     };
   }
 
@@ -1143,6 +1200,40 @@ function buildAnchorWaypointTarget(anchorState) {
     : null;
 }
 
+function buildMarketWorkerRetreatAnchorState(game, lane, anchorState, deps = {}) {
+  if (!game || !lane)
+    return anchorState;
+  const townCoreTarget = typeof deps.getLaneTownCoreCombatTarget === "function"
+    ? deps.getLaneTownCoreCombatTarget(lane)
+    : null;
+  if (!townCoreTarget)
+    return anchorState;
+
+  const facing = anchorState && anchorState.facing
+    ? anchorState.facing
+    : { x: 0, y: -1 };
+  const lateral = anchorState && anchorState.lateral
+    ? anchorState.lateral
+    : perpendicular2D(facing);
+  return {
+    commandState: anchorState ? anchorState.commandState : getLaneCommandState(lane, deps),
+    combatEnabled: true,
+    engagementRadius: anchorState ? anchorState.engagementRadius : 0,
+    objectiveLaneIndex: lane.laneIndex,
+    containerLaneIndex: lane.laneIndex,
+    anchorProgress: 0,
+    anchorKind: "town_core",
+    anchorX: Number(townCoreTarget.posX) || 0,
+    anchorY: Number(townCoreTarget.posY) || 0,
+    facing,
+    lateral,
+    insideGateAnchor: anchorState ? anchorState.insideGateAnchor : null,
+    outsideGateAnchor: anchorState ? anchorState.outsideGateAnchor : null,
+    enemyCoreAnchor: anchorState ? anchorState.enemyCoreAnchor : null,
+    baseRouteSegments: anchorState ? anchorState.baseRouteSegments : null,
+  };
+}
+
 function shouldKeepUnitAfterLaneDefeat(lane, unit, deps = {}) {
   if (!unit)
     return false;
@@ -1187,6 +1278,9 @@ function resolveUnitTargetLaneIndex(_game, fallbackLane, unit) {
 }
 
 function resolveUnitObjectiveLaneIndex(game, fallbackLane, unit, deps = {}) {
+  if (isMarketWorkerLaneControlledUnit(unit, deps))
+    return Number.isInteger(unit && unit.sourceLaneIndex) ? unit.sourceLaneIndex : resolveUnitTargetLaneIndex(game, fallbackLane, unit);
+
   if (Number.isInteger(unit && unit.objectiveLaneIndex))
     return unit.objectiveLaneIndex;
 
@@ -1289,6 +1383,13 @@ function resolveUnitPathContractType(game, fallbackLane, unit, deps = {}) {
   if (isLaneControlledUnit(unit, deps)) {
     const commandState = getLaneCommandStateForUnit(game, unit, deps);
     const combatTargetId = unit && (unit.combatTargetId || unit.combatTarget && unit.combatTarget.unitId);
+    if (isMarketWorkerLaneControlledUnit(unit, deps)) {
+      if (combatTargetId && isLaneCommandCombatEnabledForUnit(game, unit, deps))
+        return pathContractTypes.INTERCEPT;
+      if (commandState === laneCommandStates.RETREAT)
+        return pathContractTypes.RETREAT_ANCHOR;
+      return pathContractTypes.BARRACKS_LOOP;
+    }
     if (combatTargetId && isLaneCommandCombatEnabledForUnit(game, unit, deps))
       return pathContractTypes.INTERCEPT;
     if (commandState === laneCommandStates.RETREAT)
@@ -1381,6 +1482,9 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit, deps = {}) {
   const allegianceKey = resolveUnitAllegianceKey(game, fallbackLane, unit, deps);
   const pathContractType = resolveUnitPathContractType(game, fallbackLane, unit, deps);
   const sourceBarracksId = resolveUnitSourceBarracksId(unit, deps);
+  const commandState = isLaneControlledUnit(unit, deps)
+    ? getLaneCommandStateForUnit(game, unit, deps)
+    : null;
   const stance = resolveUnitStance(game, fallbackLane, unit, deps);
   const combatTargetId = unit.combatTargetId || (unit.combatTarget && unit.combatTarget.unitId) || null;
   const combatRole = resolveUnitCombatRole(unit, deps);
@@ -1406,6 +1510,7 @@ function applyCanonicalUnitMirrors(game, fallbackLane, unit, deps = {}) {
   unit.sourceBarracksKey = sourceBarracksId;
   unit.barracksId = sourceBarracksId;
   unit.heroKey = unit.heroKey || null;
+  unit.commandState = commandState;
   unit.stance = stance;
   unit.pathContractType = pathContractType;
   unit.combatRole = combatRole;
@@ -1488,7 +1593,9 @@ function syncLaneCommandAssignments(game, deps = {}) {
 
       const targetLaneIndex = resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit, deps);
       const targetLane = typeof deps.getLaneByIndex === "function" ? deps.getLaneByIndex(game, targetLaneIndex) || lane : lane;
-      const routeObjectiveLaneIndex = getLaneCommandRouteObjectiveLaneIndex(game, ownerLane, deps);
+      const routeObjectiveLaneIndex = unit.isMarketWorker
+        ? ownerLane.laneIndex
+        : getLaneCommandRouteObjectiveLaneIndex(game, ownerLane, deps);
       unit.targetLaneIndex = targetLane.laneIndex;
       unit.laneId = targetLane.laneIndex;
       unit.objectiveLaneIndex = routeObjectiveLaneIndex;
@@ -1558,11 +1665,13 @@ function syncLaneCommandAssignments(game, deps = {}) {
       if (!ownerLane)
         continue;
 
-      const targetLaneIndex = resolveLaneCommandContainerLaneIndex(game, ownerLane, deps);
+      const targetLaneIndex = resolveLaneControlledUnitContainerLaneIndex(game, ownerLane, unit, deps);
       const targetLane = typeof deps.getLaneByIndex === "function" ? deps.getLaneByIndex(game, targetLaneIndex) || lane : lane;
       unit.targetLaneIndex = targetLane.laneIndex;
       unit.laneId = targetLane.laneIndex;
-      unit.objectiveLaneIndex = getLaneCommandObjectiveLaneIndex(game, ownerLane, deps);
+      unit.objectiveLaneIndex = unit.isMarketWorker
+        ? ownerLane.laneIndex
+        : getLaneCommandObjectiveLaneIndex(game, ownerLane, deps);
 
       if (lane !== targetLane) {
         lane.spawnQueue.splice(queueIndex, 1);
@@ -1585,6 +1694,7 @@ function syncLaneCommandAssignments(game, deps = {}) {
       continue;
 
     const anchorState = sampleLaneCommandAnchor(game, ownerLane, deps);
+    const ownerCommandState = anchorState ? anchorState.commandState : getLaneCommandState(ownerLane, deps);
     ownerLane.combatEnabled = !!(anchorState && anchorState.combatEnabled);
     ownerLane.engagementRadius = anchorState ? anchorState.engagementRadius : 0;
     ownerLane.commandAnchorProgress = anchorState ? anchorState.anchorProgress : 0;
@@ -1603,16 +1713,40 @@ function syncLaneCommandAssignments(game, deps = {}) {
       : null;
 
     const orderedEntries = [];
+    const retreatingMarketEntries = [];
     for (const lane of game.lanes) {
       for (const unit of lane.units || []) {
         if (!isLaneControlledUnit(unit, deps) || unit.sourceLaneIndex !== ownerLane.laneIndex || unit.hp <= 0)
           continue;
         unit.combatRole = resolveUnitCombatRole(unit, deps);
+        if (unit.isMarketWorker) {
+          if (ownerCommandState === getLaneCommandStates(deps).RETREAT) {
+            retreatingMarketEntries.push({ lane, unit });
+          } else {
+            unit.assignedSlotIndex = null;
+            unit.anchorTargetX = null;
+            unit.anchorTargetY = null;
+            unit.anchorTargetProgress = null;
+            unit.anchorFacingX = null;
+            unit.anchorFacingY = null;
+            unit.anchorLateralX = null;
+            unit.anchorLateralY = null;
+            unit.anchorCenterX = null;
+            unit.anchorCenterY = null;
+            unit.anchorHoldRadius = 0;
+            unit.anchorLeashRadius = 0;
+            unit.currentWaypointTargetX = null;
+            unit.currentWaypointTargetY = null;
+            unit.currentWaypointTargetKind = null;
+            continue;
+          }
+        }
         orderedEntries.push({ lane, unit });
       }
     }
 
     orderedEntries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
+    retreatingMarketEntries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
 
     const currentWaypointTarget = buildAnchorWaypointTarget(anchorState);
     const commandSlots = orderedEntries.map((entry, unitIndex) => {
@@ -1629,40 +1763,87 @@ function syncLaneCommandAssignments(game, deps = {}) {
     const anchorCenterY = anchorState ? Number(anchorState.anchorY) : 0;
     const anchorFacing = anchorState ? anchorState.facing : { x: 0, y: -1 };
     const anchorLateral = anchorState ? anchorState.lateral : { x: 1, y: 0 };
+    const marketRetreatAnchorState = retreatingMarketEntries.length > 0
+      ? buildMarketWorkerRetreatAnchorState(game, ownerLane, anchorState, deps)
+      : null;
+    const marketWaypointTarget = buildAnchorWaypointTarget(marketRetreatAnchorState);
+    const marketCommandSlots = marketRetreatAnchorState
+      ? retreatingMarketEntries.map((entry, unitIndex) => {
+        const slot = buildLaneAnchorSlot(marketRetreatAnchorState, entry.unit, unitIndex, retreatingMarketEntries.length, deps);
+        return {
+          slotIndex: unitIndex,
+          x: Number(slot.x.toFixed(3)),
+          y: Number(slot.y.toFixed(3)),
+          unitId: entry.unit.id,
+        };
+      })
+      : [];
+    const marketAnchorHoldRadius = marketRetreatAnchorState
+      ? computeLaneAnchorHoldRadius(marketRetreatAnchorState, marketCommandSlots, deps)
+      : 0;
+    const marketAnchorCenterX = marketRetreatAnchorState ? Number(marketRetreatAnchorState.anchorX) : 0;
+    const marketAnchorCenterY = marketRetreatAnchorState ? Number(marketRetreatAnchorState.anchorY) : 0;
+    const marketAnchorFacing = marketRetreatAnchorState ? marketRetreatAnchorState.facing : { x: 0, y: -1 };
+    const marketAnchorLateral = marketRetreatAnchorState ? marketRetreatAnchorState.lateral : { x: 1, y: 0 };
 
-    for (let unitIndex = 0; unitIndex < orderedEntries.length; unitIndex += 1) {
-      const entry = orderedEntries[unitIndex];
-      const slot = commandSlots[unitIndex];
-      const anchorLeashRadius = resolveUnitAnchorLeashRadius(entry.unit, anchorHoldRadius, deps);
-      entry.unit.assignedSlotIndex = unitIndex;
-      entry.unit.anchorTargetX = slot.x;
-      entry.unit.anchorTargetY = slot.y;
-      entry.unit.anchorTargetProgress = anchorState ? anchorState.anchorProgress : 0;
-      entry.unit.anchorFacingX = anchorFacing.x;
-      entry.unit.anchorFacingY = anchorFacing.y;
-      entry.unit.anchorLateralX = anchorLateral.x;
-      entry.unit.anchorLateralY = anchorLateral.y;
-      entry.unit.commandState = anchorState ? anchorState.commandState : getLaneCommandState(ownerLane, deps);
-      entry.unit.anchorCenterX = anchorCenterX;
-      entry.unit.anchorCenterY = anchorCenterY;
-      entry.unit.anchorHoldRadius = anchorHoldRadius;
-      entry.unit.anchorLeashRadius = anchorLeashRadius;
-      entry.unit.currentWaypointTargetX = currentWaypointTarget ? currentWaypointTarget.x : null;
-      entry.unit.currentWaypointTargetY = currentWaypointTarget ? currentWaypointTarget.y : null;
-      entry.unit.currentWaypointTargetKind = currentWaypointTarget ? currentWaypointTarget.kind : null;
-      entry.unit.canEngage = !!(anchorState && anchorState.combatEnabled);
-      entry.unit.combatLeashRadius = anchorState
-        ? Math.max(anchorState.engagementRadius, anchorLeashRadius)
-        : anchorLeashRadius;
-      ownerLane.assignedUnits.push(entry.unit.id);
-      ownerLane.commandSlots.push({
-        slotIndex: ownerLane.commandSlots.length,
-        x: Number(slot.x.toFixed(3)),
-        y: Number(slot.y.toFixed(3)),
-        unitId: entry.unit.id,
-      });
-      applyCanonicalUnitMirrors(game, entry.lane, entry.unit, deps);
+    function assignAnchorEntries(entries, slots, activeAnchorState, activeWaypointTarget, activeHoldRadius, activeAnchorCenterX, activeAnchorCenterY, activeAnchorFacing, activeAnchorLateral) {
+      for (let unitIndex = 0; unitIndex < entries.length; unitIndex += 1) {
+        const entry = entries[unitIndex];
+        const slot = slots[unitIndex];
+        const anchorLeashRadius = resolveUnitAnchorLeashRadius(entry.unit, activeHoldRadius, deps);
+        entry.unit.assignedSlotIndex = unitIndex;
+        entry.unit.anchorTargetX = slot.x;
+        entry.unit.anchorTargetY = slot.y;
+        entry.unit.anchorTargetProgress = activeAnchorState ? activeAnchorState.anchorProgress : 0;
+        entry.unit.anchorFacingX = activeAnchorFacing.x;
+        entry.unit.anchorFacingY = activeAnchorFacing.y;
+        entry.unit.anchorLateralX = activeAnchorLateral.x;
+        entry.unit.anchorLateralY = activeAnchorLateral.y;
+        entry.unit.commandState = activeAnchorState ? activeAnchorState.commandState : getLaneCommandState(ownerLane, deps);
+        entry.unit.anchorCenterX = activeAnchorCenterX;
+        entry.unit.anchorCenterY = activeAnchorCenterY;
+        entry.unit.anchorHoldRadius = activeHoldRadius;
+        entry.unit.anchorLeashRadius = anchorLeashRadius;
+        entry.unit.currentWaypointTargetX = activeWaypointTarget ? activeWaypointTarget.x : null;
+        entry.unit.currentWaypointTargetY = activeWaypointTarget ? activeWaypointTarget.y : null;
+        entry.unit.currentWaypointTargetKind = activeWaypointTarget ? activeWaypointTarget.kind : null;
+        entry.unit.canEngage = isLaneCommandCombatEnabledForUnit(game, entry.unit, deps);
+        entry.unit.combatLeashRadius = activeAnchorState
+          ? Math.max(activeAnchorState.engagementRadius, anchorLeashRadius)
+          : anchorLeashRadius;
+        ownerLane.assignedUnits.push(entry.unit.id);
+        ownerLane.commandSlots.push({
+          slotIndex: ownerLane.commandSlots.length,
+          x: Number(slot.x.toFixed(3)),
+          y: Number(slot.y.toFixed(3)),
+          unitId: entry.unit.id,
+        });
+        applyCanonicalUnitMirrors(game, entry.lane, entry.unit, deps);
+      }
     }
+
+    assignAnchorEntries(
+      orderedEntries,
+      commandSlots,
+      anchorState,
+      currentWaypointTarget,
+      anchorHoldRadius,
+      anchorCenterX,
+      anchorCenterY,
+      anchorFacing,
+      anchorLateral
+    );
+    assignAnchorEntries(
+      retreatingMarketEntries,
+      marketCommandSlots,
+      marketRetreatAnchorState,
+      marketWaypointTarget,
+      marketAnchorHoldRadius,
+      marketAnchorCenterX,
+      marketAnchorCenterY,
+      marketAnchorFacing,
+      marketAnchorLateral
+    );
 
     ownerLane.assignedUnitOrder = ownerLane.assignedUnits.slice();
   }

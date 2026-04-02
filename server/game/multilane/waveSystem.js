@@ -362,7 +362,7 @@ function runScheduledBarracksSends(game, deps = {}) {
     ensureBarracksSiteStates(lane, game);
     for (const siteDef of getBarracksSiteDefs(deps)) {
       const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
-      if (!descriptor || !descriptor.isBuilt)
+      if (!descriptor || !descriptor.isBuilt || descriptor.destroyed)
         continue;
 
       const interval = Math.max(1, descriptor.sendIntervalTicks);
@@ -391,6 +391,16 @@ function runScheduledBarracksSends(game, deps = {}) {
       }
     }
   }
+}
+
+function runScheduledBuildingConstruction(game, deps = {}) {
+  if (!game)
+    return;
+
+  const advanceFortressConstruction = requireDepFunction(deps, "advanceFortressConstruction");
+  const advanceBarracksSiteConstruction = requireDepFunction(deps, "advanceBarracksSiteConstruction");
+  advanceFortressConstruction(game);
+  advanceBarracksSiteConstruction(game);
 }
 
 function runScheduledWaves(game, deps = {}) {
@@ -436,6 +446,7 @@ module.exports = {
   resetWaveIntervalState,
   spawnScheduledWave,
   grantScheduledIncome,
+  runScheduledBuildingConstruction,
   runScheduledBarracksSends,
   runScheduledWaves,
   startNextWaveNow,

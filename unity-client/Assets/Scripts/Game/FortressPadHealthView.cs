@@ -12,11 +12,13 @@ namespace CastleDefender.Game
         static readonly Color HealthyLabelColor = new(0.84f, 0.96f, 0.88f, 0.98f);
         static readonly Color WoundedLabelColor = new(1f, 0.80f, 0.66f, 0.98f);
         static readonly Color CriticalLabelColor = new(1f, 0.58f, 0.52f, 0.98f);
+        static readonly Color ConstructionLabelColor = new(1f, 0.90f, 0.48f, 0.98f);
         static readonly System.Collections.Generic.HashSet<string> s_missingHpBarLogs = new();
 
         FortressPadAnchor _anchor;
         Transform _overlayRoot;
         Transform _labelRoot;
+        TMP_Text _statusLabel;
         TMP_Text _healthLabel;
         Transform _hpBarRoot;
         Transform _hpBarFill;
@@ -124,7 +126,7 @@ namespace CastleDefender.Game
             }
 
             var pad = snapshotApplier.GetFortressPad(lane.laneIndex, _anchor.PadId);
-            if (pad == null || !pad.isBuilt)
+            if (pad == null || (!pad.isBuilt && !pad.isConstructing))
             {
                 HideHud();
                 return;
@@ -145,6 +147,7 @@ namespace CastleDefender.Game
 
         void UpdateHud(MLFortressPad pad)
         {
+            bool constructing = pad != null && pad.isConstructing;
             Vector3 focus = _anchor.LabelTransform != null
                 ? _anchor.LabelTransform.position
                 : _anchor.FocusTransform.position;
@@ -165,31 +168,67 @@ namespace CastleDefender.Game
                 ? Mathf.Clamp01(pad.hp / pad.maxHp)
                 : 1f;
 
+            if (_statusLabel != null)
+            {
+                if (constructing)
+                {
+                    _statusLabel.gameObject.SetActive(true);
+                    _statusLabel.transform.localPosition = new Vector3(0f, 0.42f, 0f);
+                    _statusLabel.text = $"{ResolveConstructionVerb(pad.constructionKind)} {ResolveSecondsRemaining(pad.constructionTimerTicksRemaining)}s";
+                    _statusLabel.color = ConstructionLabelColor;
+                }
+                else if (pad.isDestroyed)
+                {
+                    _statusLabel.gameObject.SetActive(true);
+                    _statusLabel.transform.localPosition = new Vector3(0f, 0.42f, 0f);
+                    _statusLabel.text = "Destroyed";
+                    _statusLabel.color = CriticalLabelColor;
+                }
+                else
+                {
+                    _statusLabel.gameObject.SetActive(false);
+                }
+            }
+
             if (_healthLabel != null)
             {
-                int displayHp = Mathf.Max(0, Mathf.RoundToInt(pad.hp));
-                int displayMax = Mathf.Max(displayHp, Mathf.RoundToInt(pad.maxHp));
-                _healthLabel.transform.localPosition = new Vector3(0f, 0.22f, 0f);
-                _healthLabel.text = $"HP {displayHp}/{displayMax}";
-                _healthLabel.color = ResolveHealthLabelColor(hp01);
+                if (constructing)
+                {
+                    _healthLabel.transform.localPosition = new Vector3(0f, 0.12f, 0f);
+                    _healthLabel.text = string.IsNullOrWhiteSpace(pad.constructionTargetTierName)
+                        ? pad.buildingName
+                        : pad.constructionTargetTierName;
+                    _healthLabel.color = HealthyLabelColor;
+                }
+                else
+                {
+                    int displayHp = Mathf.Max(0, Mathf.RoundToInt(pad.hp));
+                    int displayMax = Mathf.Max(displayHp, Mathf.RoundToInt(pad.maxHp));
+                    _healthLabel.transform.localPosition = new Vector3(0f, 0.22f, 0f);
+                    _healthLabel.text = $"HP {displayHp}/{displayMax}";
+                    _healthLabel.color = ResolveHealthLabelColor(hp01);
+                }
             }
 
             if (_hpBarRoot != null)
             {
-                _hpBarRoot.gameObject.SetActive(true);
-                _hpBarRoot.localPosition = new Vector3(0f, -0.10f, 0f);
-                _hpBarRoot.localScale = Vector3.one * 0.92f;
-                HpBarVisuals.ApplyFill(_hpBarFill, _hpBarImage, hp01);
-                if (_hpBarFill != null)
+                _hpBarRoot.gameObject.SetActive(!constructing);
+                if (!constructing)
                 {
-                    _hpBarFill.localScale = new Vector3(
-                        _hpBarFillBaseScale.x * hp01,
-                        _hpBarFillBaseScale.y,
-                        _hpBarFillBaseScale.z);
-                    _hpBarFill.localPosition = new Vector3(
-                        0.5f * hp01,
-                        _hpBarFillBaseLocalPosition.y,
-                        _hpBarFillBaseLocalPosition.z);
+                    _hpBarRoot.localPosition = new Vector3(0f, -0.10f, 0f);
+                    _hpBarRoot.localScale = Vector3.one * 0.92f;
+                    HpBarVisuals.ApplyFill(_hpBarFill, _hpBarImage, hp01);
+                    if (_hpBarFill != null)
+                    {
+                        _hpBarFill.localScale = new Vector3(
+                            _hpBarFillBaseScale.x * hp01,
+                            _hpBarFillBaseScale.y,
+                            _hpBarFillBaseScale.z);
+                        _hpBarFill.localPosition = new Vector3(
+                            0.5f * hp01,
+                            _hpBarFillBaseLocalPosition.y,
+                            _hpBarFillBaseLocalPosition.z);
+                    }
                 }
             }
         }
@@ -205,6 +244,7 @@ namespace CastleDefender.Game
             _labelRoot = new GameObject("Hud").transform;
             _labelRoot.SetParent(_overlayRoot, false);
 
+            _statusLabel = CreateWorldLabel("Status", _labelRoot, 1.15f);
             _healthLabel = CreateWorldLabel("Health", _labelRoot, 1.35f);
             EnsureHpBar();
         }
@@ -309,6 +349,21 @@ namespace CastleDefender.Game
             if (hp01 >= 0.35f)
                 return WoundedLabelColor;
             return CriticalLabelColor;
+        }
+
+        static int ResolveSecondsRemaining(int ticksRemaining)
+        {
+            float tickHz = SnapshotApplier.Instance != null
+                ? Mathf.Max(1f, SnapshotApplier.Instance.GetTickHz())
+                : 20f;
+            return Mathf.Max(0, Mathf.CeilToInt(ticksRemaining / tickHz));
+        }
+
+        static string ResolveConstructionVerb(string constructionKind)
+        {
+            return string.Equals(constructionKind, "upgrade", System.StringComparison.OrdinalIgnoreCase)
+                ? "Upgrading"
+                : "Building";
         }
     }
 }

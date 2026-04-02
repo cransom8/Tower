@@ -338,6 +338,7 @@ function createMLGame(playerCount, options, deps = {}) {
   const createFortressPadStates = requireDepFunction(deps, "createFortressPadStates");
   const createBarracksSiteStates = requireDepFunction(deps, "createBarracksSiteStates");
   const createBarracksSiteRosterCounts = requireDepFunction(deps, "createBarracksSiteRosterCounts");
+  const createMarketRosterCounts = requireDepFunction(deps, "createMarketRosterCounts");
   const seedStartingCombatTestMilitia = requireDepFunction(deps, "seedStartingCombatTestMilitia");
   const recomputeTeamHpState = requireDepFunction(deps, "recomputeTeamHpState");
   const mulberry32 = requireDepFunction(deps, "mulberry32");
@@ -400,6 +401,7 @@ function createMLGame(playerCount, options, deps = {}) {
       fortressPads: createFortressPadStates(opt.teamHpStart),
       barracksSiteStates: createBarracksSiteStates(opt.teamHpStart, 1),
       barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
+      marketRosterCounts: createMarketRosterCounts(),
       heroCooldownReadyTicks: {},
       units: [],
       spawnQueue: [],
@@ -634,6 +636,7 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
   const applyBarracksSiteBuildAction = requireDepFunction(deps, "applyBarracksSiteBuildAction");
   const applyBarracksSiteUpgradeAction = requireDepFunction(deps, "applyBarracksSiteUpgradeAction");
   const buyBarracksUnit = requireDepFunction(deps, "buyBarracksUnit");
+  const buyMarketUnit = requireDepFunction(deps, "buyMarketUnit");
   const sellBarracksUnit = requireDepFunction(deps, "sellBarracksUnit");
   const deployBarracksHero = requireDepFunction(deps, "deployBarracksHero");
   const laneCommandStates = getLaneCommandStates(deps);
@@ -668,7 +671,7 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
     const padId = rawPadId || (getFortressPadByBuildingType(lane, rawBuildingType) || {}).padId;
     if (!padId)
       return { ok: false, reason: "Missing padId" };
-    return applyFortressUpgrade(game, lane, padId);
+    return applyFortressUpgrade(game, lane, padId, deps);
   }
 
   if (type === "build_barracks_site") {
@@ -693,6 +696,13 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
     const requestedCount = Math.max(1, Math.floor(Number((data && data.count) || 1) || 1));
     const count = Math.min(25, requestedCount);
     return buyBarracksUnit(game, laneIndex, lane, rosterKey, requestedBarracksId, count);
+  }
+
+  if (type === "buy_market_unit") {
+    const unitKey = String((data && data.unitKey) || "").trim();
+    const requestedCount = Math.max(1, Math.floor(Number((data && data.count) || 1) || 1));
+    const count = Math.min(25, requestedCount);
+    return buyMarketUnit(game, laneIndex, lane, unitKey, count, deps);
   }
 
   if (type === "sell_barracks_unit") {

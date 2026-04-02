@@ -30,6 +30,7 @@ namespace CastleDefender.Game
 
         readonly Dictionary<Renderer, Color> _baseColorCache = new();
         MaterialPropertyBlock _propertyBlock;
+        bool _visualsVisible = true;
 
         public VisualMode Mode => mode;
         public int CurrentTier { get; private set; } = 1;
@@ -75,6 +76,15 @@ namespace CastleDefender.Game
             ApplyTier(previewTier);
         }
 
+        public void SetVisualsVisible(bool visible)
+        {
+            if (_visualsVisible == visible)
+                return;
+
+            _visualsVisible = visible;
+            ApplyTier(CurrentTier);
+        }
+
         public void ApplyTier(int tier)
         {
             var tierRoots = CollectTierRoots();
@@ -95,6 +105,7 @@ namespace CastleDefender.Game
                 bool active = mode == VisualMode.AdditiveLayers
                     ? CurrentTier >= i + 1
                     : CurrentTier == i + 1;
+                active &= _visualsVisible;
                 if (tierRoot.activeSelf != active)
                     tierRoot.SetActive(active);
             }

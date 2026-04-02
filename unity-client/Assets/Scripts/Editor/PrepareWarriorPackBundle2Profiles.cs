@@ -87,18 +87,22 @@ public static class PrepareWarriorPackBundle2Profiles
             controllerPath = "Assets/ExplosiveLLC/2 Handed Warrior Mecanim Animation Pack/Animation Controller/2Handed Warrior Animation Controller.controller",
             controllerHint = "2handed warrior animation controller",
             flavor = ProfileFlavor.TwoHanded,
-            notes = "Heavy infantry profile for militia, footmen, knights, and the king.",
+            notes = "Warrior profile for militia, swordsmen, spear / polearm variants, and the king.",
         },
     };
 
     static readonly PrefabBindingConfig[] PrefabBindingConfigs =
     {
         new PrefabBindingConfig { prefabName = "TT_Peasant", profileAssetName = "Explosive_TwoHanded", notes = "Militia presentation." },
-        new PrefabBindingConfig { prefabName = "TT_Settler", profileAssetName = "Explosive_TTRTS_Default", notes = "Peasant / settler / trader civilian presentation." },
+        new PrefabBindingConfig { prefabName = "TT_Swordman", profileAssetName = "Explosive_TwoHanded", notes = "Legacy swordsman presentation." },
+        new PrefabBindingConfig { prefabName = "TT_Scout", profileAssetName = "Explosive_Archer", notes = "Scout presentation." },
         new PrefabBindingConfig { prefabName = "TT_Light_Infantry", profileAssetName = "Explosive_TwoHanded", notes = "Footman / swordsman presentation." },
+        new PrefabBindingConfig { prefabName = "TT_Spearman", profileAssetName = "Explosive_TwoHanded", notes = "Spearman presentation using the warrior set." },
         new PrefabBindingConfig { prefabName = "TT_Mounted_Knight", profileAssetName = "Explosive_TwoHanded", notes = "Knight presentation using the imported heavy melee controller." },
         new PrefabBindingConfig { prefabName = "TT_King", profileAssetName = "Explosive_TwoHanded", notes = "Hero king presentation." },
 
+        new PrefabBindingConfig { prefabName = "TT_Halberdier", profileAssetName = "Explosive_TwoHanded", notes = "Halberdier presentation using the warrior set." },
+        new PrefabBindingConfig { prefabName = "TT_Light_Cavalry", profileAssetName = "Explosive_TwoHanded", notes = "Lancer presentation using the warrior set." },
         new PrefabBindingConfig { prefabName = "TT_Heavy_Infantry", profileAssetName = "Explosive_Knight", notes = "Shieldman presentation." },
         new PrefabBindingConfig { prefabName = "TT_HeavySwordman", profileAssetName = "Explosive_Knight", notes = "Shield guard presentation." },
         new PrefabBindingConfig { prefabName = "TT_Heavy_Cavalry", profileAssetName = "Explosive_Knight", notes = "Guardian presentation." },

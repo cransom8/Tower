@@ -13,7 +13,8 @@ MonoBehaviour:
   m_Name: Explosive_TwoHanded
   m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Game.UnitAnimationProfile
   profileId: explosive_two_handed
-  notes: Heavy infantry profile for militia, footmen, knights, and the king.
+  notes: Warrior profile for militia, swordsmen, spear / polearm variants, and the
+    king.
   runtimeController: {fileID: 9100000, guid: e23ddec8737078d4099a429bee370c1b, type: 2}
   portraitController: {fileID: 9100000, guid: e23ddec8737078d4099a429bee370c1b, type: 2}
   overrideExistingControllers: 1

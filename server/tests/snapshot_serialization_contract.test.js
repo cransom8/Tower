@@ -198,4 +198,22 @@ test("ML public config serializes authoritative battlefield route segment world 
   assert.ok(Array.isArray(perimeterSegment.points) && perimeterSegment.points.length === 3, "expected perimeter world polyline to include a control point");
   assert.ok(Array.isArray(perimeterSegment.routeSpacePoints) && perimeterSegment.routeSpacePoints.length === 3, "expected perimeter route-space polyline to include a control point");
   assert.equal(perimeterSegment.points.length, perimeterSegment.routeSpacePoints.length);
+
+  const marketRearSegment = config.battlefieldLayout.routeSegments.find((segment) => segment && segment.segmentId === "AMKT_ARGR");
+  assert.ok(marketRearSegment, "expected curved market rear-loop segment AMKT_ARGR in battlefieldLayout");
+  assert.ok(Array.isArray(marketRearSegment.points) && marketRearSegment.points.length === 3, "expected market rear-loop world polyline to include a control point");
+  assert.ok(Array.isArray(marketRearSegment.routeSpacePoints) && marketRearSegment.routeSpacePoints.length === 3, "expected market rear-loop route-space polyline to include a control point");
+  assert.equal(marketRearSegment.points.length, marketRearSegment.routeSpacePoints.length);
+  assert.deepEqual(marketRearSegment.routeSpacePoints, [
+    { x: -24, y: 19 },
+    { x: -27.2, y: 24 },
+    { x: -24, y: 29 },
+  ]);
+  assert.ok(
+    Math.abs(
+      Number(marketRearSegment.points[1].y)
+        - ((Number(marketRearSegment.points[0].y) + Number(marketRearSegment.points[2].y)) * 0.5)
+    ) > 1,
+    "expected the authored market rear-loop control point to bend away from the straight market-to-rear-gate chord"
+  );
 });

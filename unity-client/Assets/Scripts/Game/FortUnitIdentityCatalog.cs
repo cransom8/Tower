@@ -84,7 +84,7 @@ namespace CastleDefender.Game
             new("ranged_t1", "human_default", "tt_archer", "tt_archer", "tt_archer", "Archer"),
             new("ranged_t2", "human_default", "tt_crossbowman", "tt_crossbowman", "tt_crossbowman", "Crossbowman"),
             new("ranged_t3", "human_default", "tt_mounted_scout", "tt_mounted_scout", "tt_mounted_scout", "Ranger"),
-            new("economy_t1", "human_default", "tt_settler", "tt_settler", "tt_settler", "Peasant"),
+            new("economy_t1", "human_default", "tt_peasant", "tt_peasant", "tt_peasant", "Peasant"),
             new("economy_t2", "human_default", "tt_settler", "tt_settler", "tt_settler", "Settler"),
             new("economy_t3", "human_default", "tt_settler", "tt_settler", "tt_settler", "Trader"),
             new("hero_king", "human_default", "tt_king", "tt_king", "tt_king", "King"),

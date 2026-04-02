@@ -381,6 +381,7 @@ public class LoadingScreen : MonoBehaviour
 
         yield return StartCoroutine(UnloadPreviousScenesExcept(_pendingScene));
         SetAudioListenersEnabledForScene(_pendingScene, true);
+        RefreshGlobalAudioManagerLoopPlayback(restartCurrentClip: true);
 
         if (loadingLabel)
             loadingLabel.text = "Starting game";
@@ -675,6 +676,43 @@ public class LoadingScreen : MonoBehaviour
 
             SetAudioListenersEnabledForScene(scene.name, false);
         }
+    }
+
+    static void RefreshGlobalAudioManagerLoopPlayback(bool restartCurrentClip)
+    {
+        Type audioManagerType = FindType("AudioManager");
+        if (audioManagerType == null)
+            return;
+
+        object instance = audioManagerType
+            .GetProperty("I", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null);
+        if (instance == null)
+            return;
+
+        audioManagerType
+            .GetMethod("RefreshLoopPlaybackForCurrentScene", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            ?.Invoke(instance, new object[] { restartCurrentClip });
+    }
+
+    static Type FindType(string fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName))
+            return null;
+
+        Type type = Type.GetType(fullName, false);
+        if (type != null)
+            return type;
+
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        for (int i = 0; i < assemblies.Length; i++)
+        {
+            type = assemblies[i].GetType(fullName, false);
+            if (type != null)
+                return type;
+        }
+
+        return null;
     }
 
     void FailTransition(string title, string detail)

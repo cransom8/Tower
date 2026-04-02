@@ -202,6 +202,7 @@ public static class BuildTTRTSUnitPrefabs
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
+        PrepareWarriorPackBundle2Profiles.ApplyTTRTSMapping();
         Debug.Log($"[BuildTTRTSUnitPrefabs] Done. built={built} failed={failed}");
     }
 

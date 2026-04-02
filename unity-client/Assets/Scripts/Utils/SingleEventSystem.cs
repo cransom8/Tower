@@ -23,6 +23,8 @@ public class SingleEventSystem : MonoBehaviour
             if (ShouldReplaceExistingInstance(_instance))
             {
                 Debug.Log($"[SingleEventSystem] Replacing stale EventSystem '{_instance.gameObject.name}' with '{gameObject.name}'.");
+                if (_instance.gameObject.activeSelf)
+                    _instance.gameObject.SetActive(false);
                 Destroy(_instance.gameObject);
                 _instance = this;
                 return;

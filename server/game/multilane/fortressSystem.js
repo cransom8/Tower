@@ -9,8 +9,36 @@ const FORTRESS_BUILD_STATES = Object.freeze({
   locked: "locked",
   availableToBuild: "available_to_build",
   built: "built",
+  constructing: "constructing",
+  upgrading: "upgrading",
+  destroyed: "destroyed",
   upgradeAvailable: "upgrade_available",
   maxTier: "max_tier",
+});
+
+const FORTRESS_CONSTRUCTION_KINDS = Object.freeze({
+  build: "build",
+  upgrade: "upgrade",
+});
+
+const DEFAULT_FORTRESS_BUILD_DURATION_TICKS = 12 * 20;
+const DEFAULT_FORTRESS_UPGRADE_DURATION_TICKS = 16 * 20;
+const FORTRESS_CONSTRUCTION_DURATION_TICKS = Object.freeze({
+  town_core: Object.freeze({ build: 0, upgrade: 18 * 20 }),
+  barracks: Object.freeze({ build: 12 * 20, upgrade: 14 * 20 }),
+  blacksmith: Object.freeze({ build: 12 * 20, upgrade: 14 * 20 }),
+  archery_tower: Object.freeze({ build: 12 * 20, upgrade: 14 * 20 }),
+  temple: Object.freeze({ build: 12 * 20, upgrade: 14 * 20 }),
+  wizard_tower: Object.freeze({ build: 12 * 20, upgrade: 14 * 20 }),
+  market: Object.freeze({ build: 10 * 20, upgrade: 14 * 20 }),
+  stable: Object.freeze({ build: 12 * 20, upgrade: 16 * 20 }),
+  workshop: Object.freeze({ build: 12 * 20, upgrade: 16 * 20 }),
+  library: Object.freeze({ build: 12 * 20, upgrade: 16 * 20 }),
+  lumber_mill: Object.freeze({ build: 10 * 20, upgrade: 14 * 20 }),
+  wall: Object.freeze({ build: 6 * 20, upgrade: 10 * 20 }),
+  gate: Object.freeze({ build: 6 * 20, upgrade: 10 * 20 }),
+  turret: Object.freeze({ build: 8 * 20, upgrade: 12 * 20 }),
+  tower_archer: Object.freeze({ build: 8 * 20, upgrade: 12 * 20 }),
 });
 
 function createFortressPadDef(
@@ -437,8 +465,166 @@ function createFortressPadStates(teamHpStart = DEFAULT_TEAM_HP_START) {
       maxHp,
       hp: maxHp,
       costHistory: tier > 0 ? [] : null,
+      constructionKind: null,
+      constructionTargetTier: 0,
+      constructionEndTick: 0,
+      constructionTotalTicks: 0,
     };
   });
+}
+
+function getCurrentFortressTick(game) {
+  return Math.max(0, Math.floor(Number(game && game.tick) || 0));
+}
+
+function clearFortressConstructionState(padState) {
+  if (!padState)
+    return;
+
+  padState.constructionKind = null;
+  padState.constructionTargetTier = 0;
+  padState.constructionEndTick = 0;
+  padState.constructionTotalTicks = 0;
+}
+
+function getFortressConstructionDurationTicks(buildingType, targetTier, kind = FORTRESS_CONSTRUCTION_KINDS.build) {
+  const durationDef = FORTRESS_CONSTRUCTION_DURATION_TICKS[buildingType] || null;
+  const fallback = kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+    ? DEFAULT_FORTRESS_UPGRADE_DURATION_TICKS
+    : DEFAULT_FORTRESS_BUILD_DURATION_TICKS;
+  const configuredDuration = durationDef ? durationDef[kind] : null;
+  const baseDuration = Number.isFinite(Number(configuredDuration))
+    ? Math.max(0, Math.floor(Number(configuredDuration)))
+    : fallback;
+  const safeTargetTier = Math.max(1, Math.floor(Number(targetTier) || 1));
+  const tierBonusTicks = kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+    ? Math.max(0, safeTargetTier - 2) * (2 * 20)
+    : Math.max(0, safeTargetTier - 1) * 20;
+  return Math.max(0, baseDuration + tierBonusTicks);
+}
+
+function getFortressConstructionState(padState, game = null) {
+  if (!padState)
+    return null;
+
+  const targetTier = Math.max(0, Math.floor(Number(padState.constructionTargetTier) || 0));
+  const totalTicks = Math.max(0, Math.floor(Number(padState.constructionTotalTicks) || 0));
+  const endTick = Math.max(0, Math.floor(Number(padState.constructionEndTick) || 0));
+  const kind = String(padState.constructionKind || "").trim().toLowerCase();
+  if (targetTier <= 0 || totalTicks <= 0 || endTick <= 0)
+    return null;
+  if (kind !== FORTRESS_CONSTRUCTION_KINDS.build && kind !== FORTRESS_CONSTRUCTION_KINDS.upgrade)
+    return null;
+
+  const currentTick = getCurrentFortressTick(game);
+  const remainingTicks = Math.max(0, endTick - currentTick);
+  const progress01 = totalTicks > 0
+    ? Math.min(1, Math.max(0, (totalTicks - remainingTicks) / totalTicks))
+    : 1;
+
+  return {
+    kind,
+    targetTier,
+    endTick,
+    totalTicks,
+    remainingTicks,
+    progress01,
+  };
+}
+
+function startFortressConstruction(game, padState, targetTier, kind = FORTRESS_CONSTRUCTION_KINDS.build) {
+  if (!padState)
+    return null;
+
+  const safeKind = kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+    ? FORTRESS_CONSTRUCTION_KINDS.upgrade
+    : FORTRESS_CONSTRUCTION_KINDS.build;
+  const safeTargetTier = Math.max(1, Math.floor(Number(targetTier) || 1));
+  const totalTicks = getFortressConstructionDurationTicks(padState.buildingType, safeTargetTier, safeKind);
+  const currentTick = getCurrentFortressTick(game);
+
+  if (totalTicks <= 0) {
+    clearFortressConstructionState(padState);
+    return {
+      kind: safeKind,
+      targetTier: safeTargetTier,
+      totalTicks: 0,
+      remainingTicks: 0,
+      progress01: 1,
+    };
+  }
+
+  padState.constructionKind = safeKind;
+  padState.constructionTargetTier = safeTargetTier;
+  padState.constructionTotalTicks = totalTicks;
+  padState.constructionEndTick = currentTick + totalTicks;
+
+  return getFortressConstructionState(padState, game);
+}
+
+function advanceFortressConstruction(game, deps = {}) {
+  if (!game || !Array.isArray(game.lanes))
+    return false;
+
+  let changed = false;
+  const currentTick = getCurrentFortressTick(game);
+  for (const lane of game.lanes) {
+    if (!lane || !Array.isArray(lane.fortressPads))
+      continue;
+
+    for (const padState of lane.fortressPads) {
+      const construction = getFortressConstructionState(padState, game);
+      if (!construction || construction.endTick > currentTick)
+        continue;
+
+      const priorBlacksmithBranchDefs = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+        && String(padState.buildingType || "").trim().toLowerCase() === "blacksmith"
+        && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
+          ? new Map([
+            ["infantry", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "infantry")],
+            ["polearm", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "polearm")],
+            ["shield", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "shield")],
+          ])
+          : null;
+      const priorMarketTierDef = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+        && String(padState.buildingType || "").trim().toLowerCase() === "market"
+        && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
+          ? deps.getCurrentMarketRosterDefinitionForLane(lane)
+          : null;
+
+      padState.tier = construction.targetTier;
+      padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, construction.targetTier, game.teamHpMax);
+      padState.hp = padState.maxHp;
+      clearFortressConstructionState(padState);
+
+      if (priorBlacksmithBranchDefs
+          && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
+          && typeof deps.upgradeOwnedBarracksBranchUnits === "function") {
+        for (const branchKey of ["infantry", "polearm", "shield"]) {
+          const previousDef = priorBlacksmithBranchDefs.get(branchKey) || null;
+          const nextDef = deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
+          if (!nextDef || !previousDef || nextDef.rosterKey === previousDef.rosterKey)
+            continue;
+          deps.upgradeOwnedBarracksBranchUnits(game, lane, branchKey, nextDef, deps);
+        }
+      }
+
+      if (priorMarketTierDef
+          && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
+          && typeof deps.upgradeOwnedMarketUnits === "function") {
+        const nextMarketTierDef = deps.getCurrentMarketRosterDefinitionForLane(lane);
+        if (nextMarketTierDef && nextMarketTierDef.unitKey !== priorMarketTierDef.unitKey)
+          deps.upgradeOwnedMarketUnits(game, lane, nextMarketTierDef, deps);
+      }
+
+      changed = true;
+    }
+  }
+
+  if (changed)
+    recomputeTeamHpState(game, deps);
+
+  return changed;
 }
 
 function getFortressRequiredTownCoreTier(buildingType, targetTier) {
@@ -583,24 +769,39 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   if (!buildingDef)
     return null;
 
+  const construction = getFortressConstructionState(padState, _game);
   const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
   const maxTier = getFortressMaxTier(padState.buildingType);
   const built = currentTier > 0;
+  const destroyed = built && Math.max(0, Math.floor(Number(padState.hp) || 0)) <= 0;
   const nextTier = Math.min(maxTier, currentTier + 1);
-  const targetTier = built ? nextTier : 1;
+  const targetTier = construction
+    ? construction.targetTier
+    : built ? nextTier : 1;
   const townCoreTier = getTownCoreTier(lane);
   const requiredTownCoreTier = getFortressRequiredTownCoreTier(padState.buildingType, targetTier);
-  const dependencyLockedReason = getFortressDependencyLockedReason(lane, padState.buildingType, targetTier);
+  const dependencyLockedReason = construction
+    ? null
+    : getFortressDependencyLockedReason(lane, padState.buildingType, targetTier);
   const canBuild = !built
+    && !construction
     && townCoreTier >= requiredTownCoreTier
     && !dependencyLockedReason;
   const canUpgrade = built
+    && !construction
+    && !destroyed
     && currentTier < maxTier
     && townCoreTier >= requiredTownCoreTier
     && !dependencyLockedReason;
 
   let buildState = FORTRESS_BUILD_STATES.locked;
-  if (!built) {
+  if (destroyed) {
+    buildState = FORTRESS_BUILD_STATES.destroyed;
+  } else if (construction) {
+    buildState = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+      ? FORTRESS_BUILD_STATES.upgrading
+      : FORTRESS_BUILD_STATES.constructing;
+  } else if (!built) {
     buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
   } else if (currentTier >= maxTier) {
     buildState = FORTRESS_BUILD_STATES.maxTier;
@@ -611,7 +812,13 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   }
 
   let lockedReason = null;
-  if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
+  if (construction) {
+    lockedReason = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+      ? "Upgrade in progress"
+      : "Construction in progress";
+  } else if (destroyed) {
+    lockedReason = "Destroyed";
+  } else if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
     lockedReason = dependencyLockedReason
       ? `Requires ${dependencyLockedReason}`
       : `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
@@ -629,6 +836,9 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     lockedReason,
     currentTier,
     maxTier,
+    targetTier,
+    construction,
+    destroyed,
     buildCost: getFortressBuildCost(padState.buildingType),
     nextUpgradeCost: built && currentTier < maxTier
       ? getFortressUpgradeCost(padState.buildingType, nextTier, deps)
@@ -833,6 +1043,7 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
   const built = currentTier > 0;
   const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
   const maxHp = Math.max(0, Math.floor(Number(padState.maxHp) || 0));
+  const construction = descriptor.construction;
   const allegianceKey = typeof deps.resolveLaneAllegianceKey === "function"
     ? deps.resolveLaneAllegianceKey(lane)
     : null;
@@ -852,11 +1063,22 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
     tier: currentTier,
     maxTier: descriptor.maxTier,
     currentTierName: getBuildingTierDisplayName(padState.buildingType, currentTier),
-    nextTier: currentTier < descriptor.maxTier ? currentTier + 1 : currentTier,
-    nextTierName: currentTier < descriptor.maxTier
-      ? getBuildingTierDisplayName(padState.buildingType, currentTier + 1)
+    nextTier: descriptor.targetTier,
+    nextTierName: descriptor.targetTier > currentTier
+      ? getBuildingTierDisplayName(padState.buildingType, descriptor.targetTier)
       : getBuildingTierDisplayName(padState.buildingType, currentTier),
     isBuilt: built,
+    isConstructing: !!construction,
+    constructionKind: construction ? construction.kind : null,
+    constructionTargetTier: construction ? construction.targetTier : currentTier,
+    constructionTargetTierName: getBuildingTierDisplayName(
+      padState.buildingType,
+      construction ? construction.targetTier : currentTier
+    ),
+    constructionTimerTicksRemaining: construction ? construction.remainingTicks : 0,
+    constructionTimerTotalTicks: construction ? construction.totalTicks : 0,
+    constructionProgress01: construction ? construction.progress01 : 0,
+    isDestroyed: !!descriptor.destroyed,
     canBuild: descriptor.canBuild,
     canUpgrade: descriptor.canUpgrade,
     buildCost: descriptor.buildCost,
@@ -887,12 +1109,19 @@ function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
   lane.gold -= descriptor.buildCost;
   lane.totalBuildSpend += descriptor.buildCost;
   lane.buildSpendThisRound += descriptor.buildCost;
-  padState.tier = 1;
-  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, 1, game.teamHpMax);
-  padState.hp = padState.maxHp;
+  padState.tier = 0;
+  padState.maxHp = 0;
+  padState.hp = 0;
+  const construction = startFortressConstruction(game, padState, 1, FORTRESS_CONSTRUCTION_KINDS.build);
+  if (construction && construction.totalTicks <= 0) {
+    padState.tier = 1;
+    padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, 1, game.teamHpMax);
+    padState.hp = padState.maxHp;
+  }
   if (!Array.isArray(padState.costHistory))
     padState.costHistory = [];
   padState.costHistory.push({ cost: descriptor.buildCost });
+  recomputeTeamHpState(game, deps);
   return { ok: true };
 }
 
@@ -911,16 +1140,52 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
   if (lane.gold < descriptor.nextUpgradeCost)
     return { ok: false, reason: "Not enough gold" };
 
+  const priorBlacksmithBranchDefs = String(padState.buildingType || "").trim().toLowerCase() === "blacksmith"
+    && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
+      ? new Map([
+        ["infantry", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "infantry")],
+        ["polearm", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "polearm")],
+        ["shield", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "shield")],
+      ])
+      : null;
+  const priorMarketTierDef = String(padState.buildingType || "").trim().toLowerCase() === "market"
+    && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
+      ? deps.getCurrentMarketRosterDefinitionForLane(lane)
+      : null;
   const nextTier = padState.tier + 1;
   lane.gold -= descriptor.nextUpgradeCost;
   lane.totalBuildSpend += descriptor.nextUpgradeCost;
   lane.buildSpendThisRound += descriptor.nextUpgradeCost;
-  padState.tier = nextTier;
-  padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, nextTier, game.teamHpMax);
-  padState.hp = padState.maxHp;
+  const construction = startFortressConstruction(game, padState, nextTier, FORTRESS_CONSTRUCTION_KINDS.upgrade);
+  if (construction && construction.totalTicks <= 0) {
+    padState.tier = nextTier;
+    padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, nextTier, game.teamHpMax);
+    padState.hp = padState.maxHp;
+  }
   if (!Array.isArray(padState.costHistory))
     padState.costHistory = [];
   padState.costHistory.push({ cost: descriptor.nextUpgradeCost });
+
+  if (priorBlacksmithBranchDefs
+      && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
+      && typeof deps.upgradeOwnedBarracksBranchUnits === "function") {
+    for (const branchKey of ["infantry", "polearm", "shield"]) {
+      const previousDef = priorBlacksmithBranchDefs.get(branchKey) || null;
+      const nextDef = deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
+      if (!nextDef || !previousDef || nextDef.rosterKey === previousDef.rosterKey)
+        continue;
+      deps.upgradeOwnedBarracksBranchUnits(game, lane, branchKey, nextDef, deps);
+    }
+  }
+
+  if (priorMarketTierDef
+      && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
+      && typeof deps.upgradeOwnedMarketUnits === "function") {
+    const nextMarketTierDef = deps.getCurrentMarketRosterDefinitionForLane(lane);
+    if (nextMarketTierDef && nextMarketTierDef.unitKey !== priorMarketTierDef.unitKey)
+      deps.upgradeOwnedMarketUnits(game, lane, nextMarketTierDef, deps);
+  }
+
   return { ok: true };
 }
 
@@ -928,10 +1193,14 @@ module.exports = {
   DEFAULT_TEAM_HP_START,
   FRONT_GATE_COMBAT_OFFSET,
   FORTRESS_BUILD_STATES,
+  FORTRESS_CONSTRUCTION_KINDS,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,
   createFortressPadDef,
   createFortressPadStates,
+  getFortressConstructionDurationTicks,
+  getFortressConstructionState,
+  advanceFortressConstruction,
   getFortressMaxTier,
   resolveFortressBuildingMaxHp,
   getFortressRequiredTownCoreTier,

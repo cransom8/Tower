@@ -58,6 +58,19 @@ const BARRACKS_ROUTE_NODE_SUFFIXES = Object.freeze({
   right: "RGT",
 });
 
+const MARKET_ROUTE_NODE_SUFFIXES = Object.freeze({
+  market: "MKT",
+  rearGate: "RGR",
+  tradeOutpost: "BST",
+});
+
+const MARKET_ROUTE_NODE_OFFSETS = Object.freeze({
+  market: Object.freeze({ x: 0, y: 5 }),
+  rearGate: Object.freeze({ x: 0, y: -5 }),
+  tradeOutpost: Object.freeze({ x: 0, y: -12 }),
+});
+const MARKET_ROUTE_CURVE_LATERAL_OFFSET = 3.2;
+
 const ROUTE_GRAPH_NODE_POSITIONS = Object.freeze(buildBarracksRouteGraphNodePositions());
 
 // Route graph polylines are simulation-space Battlefield Route segments.
@@ -137,6 +150,7 @@ const ROUTE_SEGMENT_POLYLINES = Object.freeze({
   ]),
   ...buildWaveLanePolylines(),
   ...buildBarracksRouteLinkPolylines(),
+  ...buildMarketRouteLinkPolylines(),
 });
 
 const ROUTE_SEGMENT_LENGTHS = Object.freeze(Object.fromEntries(
@@ -259,6 +273,21 @@ function getBarracksRouteStartNodeId(laneIndex, barracksId) {
   return `${coreNodeId}${suffix}`;
 }
 
+function getMarketRouteNodeId(laneIndex) {
+  const coreNodeId = getLaneNodeId(laneIndex);
+  return coreNodeId ? `${coreNodeId}${MARKET_ROUTE_NODE_SUFFIXES.market}` : null;
+}
+
+function getRearGateRouteNodeId(laneIndex) {
+  const coreNodeId = getLaneNodeId(laneIndex);
+  return coreNodeId ? `${coreNodeId}${MARKET_ROUTE_NODE_SUFFIXES.rearGate}` : null;
+}
+
+function getTradeOutpostRouteNodeId(laneIndex) {
+  const coreNodeId = getLaneNodeId(laneIndex);
+  return coreNodeId ? `${coreNodeId}${MARKET_ROUTE_NODE_SUFFIXES.tradeOutpost}` : null;
+}
+
 function getLaneCoreNodeIdForRouteNode(nodeId) {
   const normalizedNodeId = String(nodeId || "").trim().toUpperCase();
   if (ROUTE_NODE_IDS.includes(normalizedNodeId))
@@ -269,7 +298,10 @@ function getLaneCoreNodeIdForRouteNode(nodeId) {
       const suffix = normalizedNodeId.slice(coreNodeId.length);
       if (suffix === BARRACKS_ROUTE_NODE_SUFFIXES.center
           || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.left
-          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.right) {
+          || suffix === BARRACKS_ROUTE_NODE_SUFFIXES.right
+          || suffix === MARKET_ROUTE_NODE_SUFFIXES.market
+          || suffix === MARKET_ROUTE_NODE_SUFFIXES.rearGate
+          || suffix === MARKET_ROUTE_NODE_SUFFIXES.tradeOutpost) {
         return coreNodeId;
       }
     }
@@ -307,6 +339,21 @@ function buildBarracksRouteGraphNodePositions() {
         y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
       });
     }
+
+    for (const [nodeKey, offset] of Object.entries(MARKET_ROUTE_NODE_OFFSETS)) {
+      const routeNodeId = nodeKey === "market"
+        ? getMarketRouteNodeId(laneIndex)
+        : nodeKey === "rearGate"
+          ? getRearGateRouteNodeId(laneIndex)
+          : getTradeOutpostRouteNodeId(laneIndex);
+      if (!routeNodeId || !offset)
+        continue;
+
+      positions[routeNodeId] = Object.freeze({
+        x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
+        y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
+      });
+    }
   }
 
   return positions;
@@ -331,6 +378,50 @@ function buildBarracksRouteLinkPolylines() {
         Object.freeze({ x: corePos.x, y: corePos.y }),
       ]);
     }
+  }
+
+  return segments;
+}
+
+function buildMarketRouteLinkPolylines() {
+  const segments = {};
+  for (let laneIndex = 0; laneIndex < LANE_NODE_IDS.length; laneIndex += 1) {
+    const coreNodeId = getLaneNodeId(laneIndex);
+    const marketNodeId = getMarketRouteNodeId(laneIndex);
+    const rearGateNodeId = getRearGateRouteNodeId(laneIndex);
+    const tradeOutpostNodeId = getTradeOutpostRouteNodeId(laneIndex);
+    const coreNodePos = coreNodeId ? ROUTE_GRAPH_NODE_POSITIONS[coreNodeId] : null;
+    const marketNodePos = marketNodeId ? ROUTE_GRAPH_NODE_POSITIONS[marketNodeId] : null;
+    const rearGateNodePos = rearGateNodeId ? ROUTE_GRAPH_NODE_POSITIONS[rearGateNodeId] : null;
+    const tradeOutpostNodePos = tradeOutpostNodeId ? ROUTE_GRAPH_NODE_POSITIONS[tradeOutpostNodeId] : null;
+    if (!coreNodePos || !marketNodeId || !rearGateNodeId || !tradeOutpostNodeId
+        || !marketNodePos || !rearGateNodePos || !tradeOutpostNodePos) {
+      continue;
+    }
+
+    const rearLoopControlPoint = Object.freeze({
+      x: Number(coreNodePos.x) - MARKET_ROUTE_CURVE_LATERAL_OFFSET,
+      y: (Number(marketNodePos.y) + Number(rearGateNodePos.y)) * 0.5,
+    });
+
+    segments[`${marketNodeId}_${rearGateNodeId}`] = Object.freeze([
+      Object.freeze({ x: marketNodePos.x, y: marketNodePos.y }),
+      rearLoopControlPoint,
+      Object.freeze({ x: rearGateNodePos.x, y: rearGateNodePos.y }),
+    ]);
+    segments[`${rearGateNodeId}_${tradeOutpostNodeId}`] = Object.freeze([
+      Object.freeze({ x: rearGateNodePos.x, y: rearGateNodePos.y }),
+      Object.freeze({ x: tradeOutpostNodePos.x, y: tradeOutpostNodePos.y }),
+    ]);
+    segments[`${tradeOutpostNodeId}_${rearGateNodeId}`] = Object.freeze([
+      Object.freeze({ x: tradeOutpostNodePos.x, y: tradeOutpostNodePos.y }),
+      Object.freeze({ x: rearGateNodePos.x, y: rearGateNodePos.y }),
+    ]);
+    segments[`${rearGateNodeId}_${marketNodeId}`] = Object.freeze([
+      Object.freeze({ x: rearGateNodePos.x, y: rearGateNodePos.y }),
+      rearLoopControlPoint,
+      Object.freeze({ x: marketNodePos.x, y: marketNodePos.y }),
+    ]);
   }
 
   return segments;
@@ -394,6 +485,31 @@ function getBarracksSiteWorldPosition(laneIndex, barracksId) {
     x: axes.core.x + (axes.lateral.x * offset.x) + (axes.forward.x * offset.y),
     y: axes.core.y + (axes.lateral.y * offset.x) + (axes.forward.y * offset.y),
   };
+}
+
+function getMarketPadWorldPosition(laneIndex) {
+  const routeNodeId = getMarketRouteNodeId(laneIndex);
+  return routeNodeId && ROUTE_GRAPH_NODE_POSITIONS[routeNodeId]
+    ? {
+      x: ROUTE_GRAPH_NODE_POSITIONS[routeNodeId].x,
+      y: ROUTE_GRAPH_NODE_POSITIONS[routeNodeId].y,
+    }
+    : null;
+}
+
+function buildMarketLoopRouteSegments(laneIndex) {
+  const marketNodeId = getMarketRouteNodeId(laneIndex);
+  const rearGateNodeId = getRearGateRouteNodeId(laneIndex);
+  const tradeOutpostNodeId = getTradeOutpostRouteNodeId(laneIndex);
+  if (!marketNodeId || !rearGateNodeId || !tradeOutpostNodeId)
+    return null;
+
+  return [
+    `${marketNodeId}_${rearGateNodeId}`,
+    `${rearGateNodeId}_${tradeOutpostNodeId}`,
+    `${tradeOutpostNodeId}_${rearGateNodeId}`,
+    `${rearGateNodeId}_${marketNodeId}`,
+  ];
 }
 
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
@@ -754,6 +870,8 @@ module.exports = {
   LANE_COMBAT_AXES,
   BARRACKS_SITE_COMBAT_OFFSETS,
   BARRACKS_ROUTE_NODE_SUFFIXES,
+  MARKET_ROUTE_NODE_SUFFIXES,
+  MARKET_ROUTE_NODE_OFFSETS,
   ROUTE_GRAPH_NODE_POSITIONS,
   ROUTE_SEGMENT_POLYLINES,
   ROUTE_SEGMENT_LENGTHS,
@@ -769,11 +887,16 @@ module.exports = {
   getNodeIndex,
   getLaneCombatAxes,
   getBarracksRouteStartNodeId,
+  getMarketRouteNodeId,
+  getRearGateRouteNodeId,
+  getTradeOutpostRouteNodeId,
   getLaneCoreNodeIdForRouteNode,
   isBarracksRouteStartNode,
   getWaveSpawnWorldPosition,
   getPadWorldPosition,
   getBarracksSiteWorldPosition,
+  getMarketPadWorldPosition,
+  buildMarketLoopRouteSegments,
   buildRouteSegments,
   parseRouteSegmentId,
   getRouteLength,

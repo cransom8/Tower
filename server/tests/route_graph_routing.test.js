@@ -132,6 +132,35 @@ function createAttacker(overrides = {}) {
   };
 }
 
+function createMarketWorker(overrides = {}) {
+  const sourceLaneIndex = overrides.sourceLaneIndex ?? 0;
+  const sourceTeam = overrides.sourceTeam ?? "red";
+  return {
+    ...createAttacker({
+      ...overrides,
+      id: overrides.id || "market_worker",
+      ownerLaneIndex: overrides.ownerLaneIndex ?? sourceLaneIndex,
+      ownerLane: overrides.ownerLane ?? sourceLaneIndex,
+      targetLaneIndex: overrides.targetLaneIndex ?? sourceLaneIndex,
+      objectiveLaneIndex: overrides.objectiveLaneIndex ?? sourceLaneIndex,
+      laneId: overrides.laneId ?? sourceLaneIndex,
+      sourceLaneIndex,
+      sourceTeam,
+      sourceBarracksId: null,
+      sourceBarracksKey: null,
+      spawnSourceType: "market_roster",
+      stance: overrides.stance ?? null,
+      isWaveUnit: false,
+    }),
+    marketUnitKey: overrides.marketUnitKey ?? "peasant",
+    isMarketWorker: overrides.isMarketWorker ?? true,
+    rosterKey: null,
+    role: overrides.role ?? "economy",
+    archetypeKey: overrides.archetypeKey ?? "economy_t1",
+    canEngage: overrides.canEngage ?? false,
+  };
+}
+
 function tick(game, count = 1) {
   for (let i = 0; i < count; i += 1)
     simMl.mlTick(game);
@@ -192,6 +221,132 @@ test("lane command state controls barracks destinations regardless of barracks s
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "left"), 1);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "right"), 1);
   assert.equal(simMl.resolveTargetLaneForBarracksSend(game, 1, "center"), 1);
+});
+
+test("market workers keep marching their economy loop until retreat, then hold the town core and can fight", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
+  const targetLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  const worker = createMarketWorker({
+    id: "economy_route_worker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+  });
+  sourceLane.units.push(worker);
+
+  tick(game, 1);
+
+  assert.equal(worker.routeType, "OUTER_LOOP");
+  assert.equal(worker.pathContractType, "barracks_loop");
+  assert.equal(worker.targetLaneIndex, sourceLane.laneIndex);
+  assert.equal(worker.objectiveLaneIndex, sourceLane.laneIndex);
+  assert.equal(worker.canEngage, false);
+
+  const attackProgress = Number(worker.pathIdx);
+  tick(game, 4);
+  assert.ok(
+    Math.abs(Number(worker.pathIdx) - attackProgress) > 0.0001,
+    "market workers should keep advancing around the economy route while the lane attacks."
+  );
+
+  const attackStateHostile = createAttacker({
+    id: "economy_worker_attack_state_hostile",
+    spawnSourceType: "dungeon_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    ownerLaneIndex: -1,
+    targetLaneIndex: sourceLane.laneIndex,
+    laneId: sourceLane.laneIndex,
+    posX: Number(worker.posX) + 0.15,
+    posY: Number(worker.posY) + 0.15,
+    baseSpeed: 0,
+    atkCd: 999,
+  });
+  sourceLane.units.push(attackStateHostile);
+
+  tick(game, 2);
+  assert.equal(
+    worker.combatTargetId,
+    null,
+    "market workers should not seek combat while still running the economy route."
+  );
+
+  sourceLane.units = sourceLane.units.filter((unit) => unit !== attackStateHostile);
+
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const defendProgress = Number(worker.pathIdx);
+  tick(game, 4);
+  assert.equal(worker.pathContractType, "barracks_loop");
+  assert.equal(worker.canEngage, false);
+  assert.ok(
+    Math.abs(Number(worker.pathIdx) - defendProgress) > 0.0001,
+    "market workers should keep looping during DEFEND instead of joining the combat anchor."
+  );
+
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_retreat", { progress: 0 });
+  const distanceBeforeRetreat = Math.hypot(
+    Number(worker.posX) - Number(getTownCoreTargetPosition(sourceLane).posX),
+    Number(worker.posY) - Number(getTownCoreTargetPosition(sourceLane).posY)
+  );
+  tick(game, 1);
+
+  assert.equal(worker.pathContractType, "retreat_anchor");
+  assert.equal(worker.currentWaypointTargetKind, "town_core");
+  assert.equal(worker.canEngage, true);
+  const distanceToRetreatSlotAfterFirstTick = Math.hypot(
+    Number(worker.posX) - Number(worker.anchorTargetX),
+    Number(worker.posY) - Number(worker.anchorTargetY)
+  );
+  assert.ok(
+    distanceBeforeRetreat > 0.5,
+    "expected the worker to be away from the Town Core before retreat begins."
+  );
+  assert.ok(
+    distanceToRetreatSlotAfterFirstTick > 0.25,
+    "retreating market workers should walk back to the Town Core instead of snapping into their retreat slot."
+  );
+
+  let reachedRetreatHold = false;
+  for (let step = 0; step < 80; step += 1) {
+    tick(game, 1);
+    const distanceToRetreatSlot = Math.hypot(
+      Number(worker.posX) - Number(worker.anchorTargetX),
+      Number(worker.posY) - Number(worker.anchorTargetY)
+    );
+    if (distanceToRetreatSlot <= 0.25) {
+      reachedRetreatHold = true;
+      break;
+    }
+  }
+  assert.equal(reachedRetreatHold, true, "retreating market workers should eventually walk back into their Town Core hold slot.");
+
+  const retreatHostile = createAttacker({
+    id: "economy_worker_retreat_hostile",
+    spawnSourceType: "dungeon_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    ownerLaneIndex: -1,
+    targetLaneIndex: sourceLane.laneIndex,
+    laneId: sourceLane.laneIndex,
+    posX: Number(worker.anchorCenterX) + 0.2,
+    posY: Number(worker.anchorCenterY) + 0.2,
+    baseSpeed: 0,
+    atkCd: 999,
+  });
+  sourceLane.units.push(retreatHostile);
+
+  let foundRetreatCombat = false;
+  for (let step = 0; step < 20; step += 1) {
+    tick(game, 1);
+    if (worker.combatTargetId === retreatHostile.id) {
+      foundRetreatCombat = true;
+      break;
+    }
+  }
+
+  assert.equal(foundRetreatCombat, true, "retreating market workers should acquire nearby hostiles once they fall back to the Town Core.");
 });
 
 test("two-player seating uses red and yellow as the only live bases", () => {

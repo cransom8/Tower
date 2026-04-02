@@ -7,10 +7,9 @@ namespace CastleDefender.Game
 {
     public enum UnitVoiceCue
     {
-        Spawn,
         Attack,
-        Hurt,
-        Death,
+        Defend,
+        Retreat,
     }
 
     public static class UnitVoiceLibrary
@@ -51,7 +50,7 @@ namespace CastleDefender.Game
             return true;
         }
 
-        public static bool HasGeneratedClips(MLUnit unit, UnitVoiceCue cue = UnitVoiceCue.Spawn)
+        public static bool HasGeneratedClips(MLUnit unit, UnitVoiceCue cue = UnitVoiceCue.Attack)
         {
             if (!TryResolveProfileKey(unit, out string profileKey))
                 return false;
@@ -89,10 +88,9 @@ namespace CastleDefender.Game
 
         static string ResolveCueFolder(UnitVoiceCue cue) => cue switch
         {
-            UnitVoiceCue.Spawn => "spawn",
             UnitVoiceCue.Attack => "attack",
-            UnitVoiceCue.Hurt => "hurt",
-            UnitVoiceCue.Death => "death",
+            UnitVoiceCue.Defend => "defend",
+            UnitVoiceCue.Retreat => "retreat",
             _ => "attack",
         };
 

@@ -619,6 +619,11 @@ const applyCanonicalUnitMirrors = bindSystemMethodWithDeps(
   "applyCanonicalUnitMirrors",
   () => LANE_COMMAND_SYSTEM_DEPS
 );
+const getMarketRouteNodeId = bindSystemMethod(routeRuntimeSystem, "getMarketRouteNodeId");
+const getRearGateRouteNodeId = bindSystemMethod(routeRuntimeSystem, "getRearGateRouteNodeId");
+const getTradeOutpostRouteNodeId = bindSystemMethod(routeRuntimeSystem, "getTradeOutpostRouteNodeId");
+const getMarketPadWorldPosition = bindSystemMethod(routeRuntimeSystem, "getMarketPadWorldPosition");
+const buildMarketLoopRouteSegments = bindSystemMethod(routeRuntimeSystem, "buildMarketLoopRouteSegments");
 const buildRoutePathId = bindSystemMethod(routeRuntimeSystem, "buildRoutePathId");
 const resolveUnitNextWaypoint = bindSystemMethod(
   routeRuntimeSystem,
@@ -672,7 +677,12 @@ const createBarracksSiteRosterCounts = bindSystemMethod(
   barracksSystem,
   "createBarracksSiteRosterCounts"
 );
+const createMarketRosterCounts = bindSystemMethod(
+  barracksSystem,
+  "createMarketRosterCounts"
+);
 const getBarracksSiteDef = bindSystemMethod(barracksSystem, "getBarracksSiteDef");
+const getMarketRosterDefinition = bindSystemMethod(barracksSystem, "getMarketRosterDefinition");
 const normalizeBarracksSiteId = bindSystemMethod(
   barracksSystem,
   "normalizeBarracksSiteId"
@@ -692,6 +702,10 @@ const logBarracksRosterState = bindSystemMethod(
 const getBarracksSiteCounts = bindSystemMethod(
   barracksSystem,
   "getBarracksSiteCounts"
+);
+const getMarketRosterCounts = bindSystemMethod(
+  barracksSystem,
+  "getMarketRosterCounts"
 );
 const hasOwnedBarracksUnits = bindSystemMethod(
   barracksSystem,
@@ -762,6 +776,14 @@ const getHighestBuiltBarracksSiteTier = bindSystemMethod(
   barracksSystem,
   "getHighestBuiltBarracksSiteTier"
 );
+const getCurrentBarracksRosterDefinitionForBranch = bindSystemMethod(
+  barracksSystem,
+  "getCurrentBarracksRosterDefinitionForBranch"
+);
+const getCurrentMarketRosterDefinitionForLane = bindSystemMethod(
+  barracksSystem,
+  "getCurrentMarketRosterDefinitionForLane"
+);
 const resolveBarracksRosterUnlockContext = bindSystemMethod(
   barracksSystem,
   "resolveBarracksRosterUnlockContext"
@@ -773,6 +795,10 @@ const getHeroRosterDefinition = bindSystemMethod(
 const getHeroRosterLockedReason = bindSystemMethod(
   barracksSystem,
   "getHeroRosterLockedReason"
+);
+const completeMarketWorkerLap = bindSystemMethod(
+  barracksSystem,
+  "completeMarketWorkerLap"
 );
 const getFortressPadState = bindSystemMethod(fortressSystem, "getFortressPadState");
 const getFortressPadByBuildingType = bindSystemMethod(
@@ -790,6 +816,13 @@ const getLaneTownCoreMaxHp = bindSystemMethod(
   fortressSystem,
   "getLaneTownCoreMaxHp"
 );
+function advanceFortressConstruction(game) {
+  return fortressSystem.advanceFortressConstruction(game, FORTRESS_SYSTEM_DEPS);
+}
+
+function advanceBarracksSiteConstruction(game) {
+  return barracksSystem.advanceBarracksSiteConstruction(game);
+}
 
 const FORTRESS_SYSTEM_DEPS = Object.freeze({
   getLaneCombatAxes,
@@ -797,6 +830,25 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
   isScheduledWaveUnit,
   shouldKeepUnitAfterLaneDefeat,
   resolveLaneAllegianceKey,
+  getCurrentBarracksRosterDefinitionForBranch,
+  getCurrentMarketRosterDefinitionForLane,
+  upgradeOwnedBarracksBranchUnits(game, lane, branchKey, targetRosterDef) {
+    return barracksSystem.upgradeOwnedBarracksBranchUnits(
+      game,
+      lane,
+      branchKey,
+      targetRosterDef,
+      BARRACKS_SYSTEM_DEPS
+    );
+  },
+  upgradeOwnedMarketUnits(game, lane, targetUnitDef) {
+    return barracksSystem.upgradeOwnedMarketUnits(
+      game,
+      lane,
+      targetUnitDef,
+      BARRACKS_SYSTEM_DEPS
+    );
+  },
   log,
   getBarracksUpgradeCost(nextTier) {
     const nextDef = getBarracksUpgradeDef(nextTier);
@@ -829,6 +881,9 @@ const BARRACKS_SYSTEM_DEPS = Object.freeze({
   getUnitType,
   resolveTowerDef,
   resolveUnitDef,
+  getBaseCombatPathSpeed,
+  buildAbilitiesForUnitType,
+  applyCanonicalUnitMirrors,
   resolveLaneAllegianceKey,
   getBarracksSiteWorldPosition,
   resolveTargetLaneForBarracksSend,
@@ -848,6 +903,9 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   getLaneTownCoreCombatTarget,
   getWaveSpawnWorldPosition,
   getBarracksSiteWorldPosition,
+  getMarketPadWorldPosition,
+  getMarketRouteNodeId,
+  buildMarketLoopRouteSegments,
   resolveSpawnSourceTypeFromUnit,
   resolveSpawnLogicalPosition,
   normalizeBarracksSiteId,
@@ -914,6 +972,8 @@ const WAVE_SYSTEM_DEPS = Object.freeze({
   isScheduledWaveUnit,
   getEffectiveWaveEntrySpeedMult,
   createRoundSnapshotLane,
+  advanceFortressConstruction,
+  advanceBarracksSiteConstruction,
   ensureBarracksSiteStates,
   describeBarracksSite,
   getBarracksSiteState,
@@ -998,6 +1058,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   combatLog,
   grantScheduledIncome,
   runScheduledWaves,
+  runScheduledBuildingConstruction,
   runScheduledBarracksSends,
   syncLaneCommandAssignments,
   laneHasOccupyingForces,
@@ -1045,7 +1106,11 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   moveLaneControlledUnitToAnchor,
   relaxUnitRouteOffsets,
   advanceRouteState,
+  computeUnitRoutePathIndex,
   setUnitRouteSnapshotState,
+  onMarketWorkerLapComplete(game, lane, unit) {
+    return completeMarketWorkerLap(game, lane, unit);
+  },
   buildRoutePathId,
   resolveUnitNextWaypoint,
   applySeparation2D,
@@ -1079,6 +1144,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   createFortressPadStates,
   createBarracksSiteStates,
   createBarracksSiteRosterCounts,
+  createMarketRosterCounts,
   seedStartingCombatTestMilitia,
   recomputeTeamHpState,
   getBarracksSiteCounts,
@@ -1105,6 +1171,16 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
       lane,
       rosterKey,
       requestedBarracksId,
+      count,
+      BARRACKS_SYSTEM_DEPS
+    );
+  },
+  buyMarketUnit(game, laneIndex, lane, unitKey, count) {
+    return barracksSystem.buyMarketUnit(
+      game,
+      laneIndex,
+      lane,
+      unitKey,
       count,
       BARRACKS_SYSTEM_DEPS
     );
@@ -1264,6 +1340,10 @@ function createBarracksSiteSnapshot(game, lane, barracksId) {
 
 function createBarracksRosterSnapshot(game, lane) {
   return barracksSystem.createBarracksRosterSnapshot(game, lane, BARRACKS_SYSTEM_DEPS);
+}
+
+function createMarketRosterSnapshot(game, lane) {
+  return barracksSystem.createMarketRosterSnapshot(game, lane, BARRACKS_SYSTEM_DEPS);
 }
 
 function createFortressPadSnapshot(game, lane, padState) {
@@ -1623,7 +1703,7 @@ function canEngageRouteUnitTarget(game, attacker, target) {
 }
 
 function isRouteUnitHostileToLane(game, lane, unit) {
-  if (!lane || !unit || unit.hp <= 0 || unit.isDefender)
+  if (!lane || !unit || unit.hp <= 0 || unit.isDefender || unit.isMarketWorker)
     return false;
 
   const laneTeam = resolveLaneAllegianceKey(lane);
@@ -1706,6 +1786,8 @@ function shouldLaneControlledUnitRouteMarch(unit) {
     return false;
 
   const commandState = normalizeLaneCommandState(unit.commandState);
+  if (unit && unit.isMarketWorker)
+    return commandState !== LANE_COMMAND_STATES.RETREAT;
   if (commandState === LANE_COMMAND_STATES.ATTACK)
     return true;
 
@@ -2112,6 +2194,10 @@ function grantScheduledIncome(game) {
   return waveSystem.grantScheduledIncome(game, WAVE_SYSTEM_DEPS);
 }
 
+function runScheduledBuildingConstruction(game) {
+  return waveSystem.runScheduledBuildingConstruction(game, WAVE_SYSTEM_DEPS);
+}
+
 function runScheduledBarracksSends(game) {
   return waveSystem.runScheduledBarracksSends(game, WAVE_SYSTEM_DEPS);
 }
@@ -2163,6 +2249,7 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   createLaneUpcomingWavePreview,
   createLaneUpcomingWaveQueue,
   createBarracksRosterSnapshot,
+  createMarketRosterSnapshot,
   createHeroRosterSnapshot,
   resolveLaneAllegianceKey,
   resolveUnitAllegianceKey,
@@ -2224,7 +2311,11 @@ const PUBLIC_CONFIG_SERIALIZATION_DEPS = Object.freeze({
   ROUTE_SEGMENT_POLYLINES,
   getLaneNodeId,
   getWaveSpawnNodeId,
+  getLaneCombatAxes,
   getBarracksRouteStartNodeId,
+  getMarketRouteNodeId,
+  getRearGateRouteNodeId,
+  getTradeOutpostRouteNodeId,
   getDefaultSlotDefinitions,
   defaultEnvironmentPlayerCount: FIXED_SLOT_LAYOUT.length,
   normalizeAllegianceKey,

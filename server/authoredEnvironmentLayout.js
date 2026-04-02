@@ -15,6 +15,13 @@ const LANE_COLOR_TO_KEY = Object.freeze({
   4: "green",
 });
 
+const LANE_NAME_TO_KEY = Object.freeze({
+  red: "red",
+  yellow: "yellow",
+  blue: "blue",
+  green: "green",
+});
+
 let s_cachedAuthoredEnvironmentLayout = null;
 
 function loadAuthoredEnvironmentLayout() {
@@ -30,6 +37,7 @@ function loadAuthoredEnvironmentLayout() {
   const prefabText = fs.readFileSync(PREFAB_PATH, "utf8");
   const blocks = prefabText.split(/^--- /m).slice(1);
   const transforms = new Map();
+  const gameObjects = new Map();
   const padComponents = [];
   const barracksComponents = [];
   const waveSpawnComponents = [];
@@ -41,6 +49,14 @@ function loadAuthoredEnvironmentLayout() {
       continue;
 
     const fileId = String(headerMatch[1]);
+    if (/^GameObject:/m.test(block)) {
+      gameObjects.set(fileId, {
+        fileId,
+        name: extractScalar(block, "m_Name"),
+      });
+      continue;
+    }
+
     if (/^Transform:/m.test(block)) {
       const gameObjectId = extractFileId(block, "m_GameObject");
       const parentTransformId = extractFileId(block, "m_Father") || "0";
@@ -91,10 +107,10 @@ function loadAuthoredEnvironmentLayout() {
 
   const worldCache = new Map();
   const lanes = {
-    red: { pads: {}, barracks: {} },
-    yellow: { pads: {}, barracks: {} },
-    blue: { pads: {}, barracks: {} },
-    green: { pads: {}, barracks: {} },
+    red: { pads: {}, barracks: {}, tradeOutpost: null },
+    yellow: { pads: {}, barracks: {}, tradeOutpost: null },
+    blue: { pads: {}, barracks: {}, tradeOutpost: null },
+    green: { pads: {}, barracks: {}, tradeOutpost: null },
   };
 
   for (const pad of padComponents) {
@@ -141,6 +157,34 @@ function loadAuthoredEnvironmentLayout() {
     lanes[laneKey].barracks[site.barracksId] = {
       x: roundWorldAxis(worldPosition.x),
       y: roundWorldAxis(worldPosition.z),
+    };
+  }
+
+  for (const gameObject of gameObjects.values()) {
+    const match = String(gameObject && gameObject.name || "").trim().match(/^(Red|Yellow|Blue|Green)_BeastLair$/i);
+    if (!match)
+      continue;
+
+    const laneKey = LANE_NAME_TO_KEY[String(match[1] || "").trim().toLowerCase()];
+    if (!laneKey || !lanes[laneKey])
+      continue;
+
+    const worldPosition = resolveWorldPositionForGameObject(
+      gameObject.fileId,
+      transforms,
+      transformByGameObjectId,
+      worldCache
+    );
+    if (!worldPosition) {
+      throw new Error(
+        `[authoredEnvironmentLayout] Trade outpost '${gameObject.name || "<null>"}' on lane '${laneKey}' is missing a resolvable Transform.`
+      );
+    }
+
+    lanes[laneKey].tradeOutpost = {
+      x: roundWorldAxis(worldPosition.x),
+      y: roundWorldAxis(worldPosition.z),
+      name: "Beast Lair",
     };
   }
 
@@ -327,6 +371,12 @@ function validateRequiredLaneAnchors(lanes) {
         );
       }
     }
+
+    if (!lane.tradeOutpost) {
+      throw new Error(
+        `[authoredEnvironmentLayout] Lane '${laneKey}' is missing required authored trade outpost 'BeastLair'.`
+      );
+    }
   }
 }
 
@@ -334,6 +384,7 @@ function freezeLaneLayout(lane) {
   return Object.freeze({
     pads: Object.freeze(cloneObject(lane.pads)),
     barracks: Object.freeze(cloneObject(lane.barracks)),
+    tradeOutpost: lane.tradeOutpost ? Object.freeze({ ...lane.tradeOutpost }) : null,
   });
 }
 

@@ -70,6 +70,8 @@ namespace CastleDefender.Editor
                         if (!UnitVoiceLibrary.HasGeneratedClips(previewUnit, cue))
                             failures.Add($"Missing imported voice clips for '{unit.DisplayName}' ({unit.Id}) cue '{cue}'.");
                     }
+
+                    ValidateGeneratedCombatSfx(unit, previewUnit, failures);
                 }
 
                 if (failures.Count > 0)
@@ -227,6 +229,36 @@ namespace CastleDefender.Editor
 
                 yield return unit;
             }
+        }
+
+        static void ValidateGeneratedCombatSfx(RaceProgressionUnitDefinition unit, MLUnit previewUnit, List<string> failures)
+        {
+            UnitCombatSfxLibrary.ResolvedProfile profile = UnitCombatSfxLibrary.ResolveForUnit(null, previewUnit);
+            if (profile == null)
+                return;
+
+            foreach (UnitCombatSfxCue cue in EnumerateRequiredCombatCues(profile))
+            {
+                if (!UnitCombatSfxLibrary.HasGeneratedClips(profile, cue))
+                {
+                    failures.Add(
+                        $"Missing imported combat SFX for '{unit.DisplayName}' ({unit.Id}) profile '{profile.ProfileKey}' cue '{cue}'.");
+                }
+            }
+        }
+
+        static IEnumerable<UnitCombatSfxCue> EnumerateRequiredCombatCues(UnitCombatSfxLibrary.ResolvedProfile profile)
+        {
+            yield return UnitCombatSfxCue.Spawn;
+            yield return UnitCombatSfxCue.Attack;
+            yield return UnitCombatSfxCue.Hurt;
+            yield return UnitCombatSfxCue.Death;
+
+            if (profile != null && profile.EnableImpactCue)
+                yield return UnitCombatSfxCue.Impact;
+
+            if (profile != null && profile.EnableDefendCue)
+                yield return UnitCombatSfxCue.Defend;
         }
 
         static List<string> ValidateAssignedRuntimeSfx()

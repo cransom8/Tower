@@ -55,14 +55,16 @@ test("public multilane config exposes market tiers and economy unit progression 
       economyLapGold: marketByKey.get("peasant").economyLapGold,
       routeStartBuildingType: marketByKey.get("peasant").routeStartBuildingType,
       routeEndBuildingType: marketByKey.get("peasant").routeEndBuildingType,
+      routeEndBuildingName: marketByKey.get("peasant").routeEndBuildingName,
       nextUnitKey: marketByKey.get("peasant").nextUnitKey,
     },
     {
       unlockBuildingType: "market",
       requiredBuildingTier: 1,
       economyLapGold: 4,
-      routeStartBuildingType: "town_core",
-      routeEndBuildingType: "market",
+      routeStartBuildingType: "market",
+      routeEndBuildingType: "trade_outpost",
+      routeEndBuildingName: "Beast Lair",
       nextUnitKey: "settler",
     }
   );

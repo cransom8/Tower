@@ -88,6 +88,7 @@ const SPAWN_SOURCE_TYPES = Object.freeze({
   SCHEDULED_WAVE: "dungeon_wave",
   BARRACKS_ROSTER: "barracks_roster",
   BARRACKS_HERO: "barracks_hero",
+  MARKET_ROSTER: "market_roster",
 });
 
 const ALLEGIANCE_KEYS = Object.freeze({

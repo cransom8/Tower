@@ -33,6 +33,7 @@ namespace CastleDefender.Game
         // ── Runtime state ─────────────────────────────────────────────────────
         class ProjView
         {
+            public string     id;
             public GameObject go;
             public Vector3    from;
             public Vector3    to;
@@ -99,7 +100,7 @@ namespace CastleDefender.Game
                 {
                     var hitEffect = HitEffectPool.Get();
                     if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType, v.damageType));
-                    AudioManager.I?.Play(HitSFXFor(v.projectileType, v.damageType));
+                    TryPlayProjectileCombatSfx(v.id, v.projectileType, v.damageType, UnitCombatSfxCue.Impact, 0.22f, HitSFXFor(v.projectileType, v.damageType));
                 }
 
                 if (v.go != null) Destroy(v.go);
@@ -179,6 +180,7 @@ namespace CastleDefender.Game
 
             var view = new ProjView
             {
+                id             = p.id,
                 go             = go,
                 from           = from,
                 to             = to,
@@ -193,7 +195,7 @@ namespace CastleDefender.Game
             };
             _projs[p.id] = view;
 
-            AudioManager.I?.Play(ShootSFXFor(p.projectileType, p.damageType));
+            TryPlayProjectileCombatSfx(p.id, p.projectileType, p.damageType, UnitCombatSfxCue.Attack, 0.24f, ShootSFXFor(p.projectileType, p.damageType));
             return view;
         }
 
@@ -330,6 +332,32 @@ namespace CastleDefender.Game
                 Destroy(view.go);
 
             _projs.Remove(projectileId);
+        }
+
+        static void TryPlayProjectileCombatSfx(
+            string projectileId,
+            string projectileType,
+            string damageType,
+            UnitCombatSfxCue cue,
+            float volumeScale,
+            AudioManager.SFX legacyFallback)
+        {
+            UnitCombatSfxPlaybackResult result = UnitCombatSfxLibrary.TryPlay(
+                UnitCombatSfxLibrary.ResolveForProjectile(projectileType, damageType),
+                projectileId,
+                cue,
+                Time.time,
+                volumeScale);
+            if (!ShouldFallbackToLegacyCombatSfx(result))
+                return;
+
+            AudioManager.I?.Play(legacyFallback, volumeScale);
+        }
+
+        static bool ShouldFallbackToLegacyCombatSfx(UnitCombatSfxPlaybackResult result)
+        {
+            return result == UnitCombatSfxPlaybackResult.MissingProfile
+                || result == UnitCombatSfxPlaybackResult.MissingClips;
         }
 
         // ── Audio / FX helpers ────────────────────────────────────────────────

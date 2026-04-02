@@ -239,15 +239,11 @@ namespace CastleDefender.UI
         Image _detailsBuildingIcon;
         TMP_Text _detailsBuildingFallback;
         TMP_Text _txtDetailsTitle;
-        TMP_Text _txtDetailsStats;
         TMP_Text _txtDetailsState;
-        TMP_Text _txtDetailsRequirement;
-        TMP_Text _txtDetailsMoves;
         TMP_Text _txtDetailsCustomization;
         TMP_Text _txtDetailsAudioStatus;
         TMP_Text _txtDetailsBody;
         TMP_Text _txtDetailsPreviewStatus;
-        Button _btnDetailsClose;
         Button _btnDetailsPreviewSfx;
         TMP_Text _txtDetailsPreviewSfx;
         Button _btnDetailsPreviewVoice;
@@ -907,17 +903,13 @@ namespace CastleDefender.UI
             _detailsBuildingIcon = null;
             _detailsBuildingFallback = null;
             _txtDetailsTitle = null;
-            _txtDetailsStats = null;
             _txtDetailsState = null;
-            _txtDetailsRequirement = null;
-            _txtDetailsMoves = null;
             _detailsStatsRowsRoot = null;
             _detailsRequirementRowsRoot = null;
             _detailsMovesRowsRoot = null;
             _txtDetailsCustomization = null;
             _txtDetailsAudioStatus = null;
             _txtDetailsBody = null;
-            _btnDetailsClose = null;
             _btnDetailsPreviewSfx = null;
             _txtDetailsPreviewSfx = null;
             _btnDetailsPreviewVoice = null;
@@ -2364,16 +2356,16 @@ namespace CastleDefender.UI
             ApplyReadableTextStyle(_txtDetailsTitle, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
             SetResponsiveSingleLine(_txtDetailsTitle, 24f, 36f);
 
-            _btnDetailsClose = MakeButton(topRow.transform, "Btn_DetailsClose", "Close", 58f, new Color(0.20f, 0.28f, 0.40f, 1f));
-            var closeLayout = _btnDetailsClose.GetComponent<LayoutElement>();
+            var btnDetailsClose = MakeButton(topRow.transform, "Btn_DetailsClose", "Close", 58f, new Color(0.20f, 0.28f, 0.40f, 1f));
+            var closeLayout = btnDetailsClose.GetComponent<LayoutElement>();
             if (closeLayout != null)
                 closeLayout.preferredWidth = 196f;
-            var closeText = _btnDetailsClose.GetComponentInChildren<TMP_Text>();
+            var closeText = btnDetailsClose.GetComponentInChildren<TMP_Text>();
             if (closeText != null)
                 ApplyReadableTextStyle(closeText, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
             if (closeText != null)
                 closeText.fontSize = 18f;
-            _btnDetailsClose.onClick.AddListener(CloseDetailsModal);
+            btnDetailsClose.onClick.AddListener(CloseDetailsModal);
 
             var mainRow = new GameObject("DetailsMainRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
             mainRow.transform.SetParent(modalGo.transform, false);
@@ -2551,23 +2543,23 @@ namespace CastleDefender.UI
             var statsCard = CreateDetailsModalCard(infoContentGo.transform, "StatsCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 230f);
             var statsHeader = MakeLabel(statsCard.transform, "Txt_StatsHeader", "War Ledger", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
             ApplyReadableTextStyle(statsHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
-            _txtDetailsStats = MakeLabel(statsCard.transform, "Txt_Stats", "", 16, new Color(0.88f, 0.90f, 0.96f), 182f);
-            ApplyReadableTextStyle(_txtDetailsStats, new Color(0.88f, 0.90f, 0.96f), TextAlignmentOptions.TopLeft);
-            SetResponsiveWrappedText(_txtDetailsStats, 13f, 16f);
+            var txtDetailsStats = MakeLabel(statsCard.transform, "Txt_Stats", "", 16, new Color(0.88f, 0.90f, 0.96f), 182f);
+            ApplyReadableTextStyle(txtDetailsStats, new Color(0.88f, 0.90f, 0.96f), TextAlignmentOptions.TopLeft);
+            SetResponsiveWrappedText(txtDetailsStats, 13f, 16f);
 
             var requirementCard = CreateDetailsModalCard(infoContentGo.transform, "RequirementCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 134f);
             var requirementHeader = MakeLabel(requirementCard.transform, "Txt_RequirementHeader", "Unlock Decree", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
             ApplyReadableTextStyle(requirementHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
-            _txtDetailsRequirement = MakeLabel(requirementCard.transform, "Txt_Requirement", "", 15, new Color(0.82f, 0.86f, 0.92f), 102f);
-            ApplyReadableTextStyle(_txtDetailsRequirement, new Color(0.82f, 0.86f, 0.92f), TextAlignmentOptions.TopLeft);
-            SetResponsiveWrappedText(_txtDetailsRequirement, 13f, 15f);
+            var txtDetailsRequirement = MakeLabel(requirementCard.transform, "Txt_Requirement", "", 15, new Color(0.82f, 0.86f, 0.92f), 102f);
+            ApplyReadableTextStyle(txtDetailsRequirement, new Color(0.82f, 0.86f, 0.92f), TextAlignmentOptions.TopLeft);
+            SetResponsiveWrappedText(txtDetailsRequirement, 13f, 15f);
 
             var movesCard = CreateDetailsModalCard(infoContentGo.transform, "MovesCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 204f);
             var movesHeader = MakeLabel(movesCard.transform, "Txt_MovesHeader", "Move Scroll", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
             ApplyReadableTextStyle(movesHeader, new Color(0.96f, 0.84f, 0.50f, 1f), TextAlignmentOptions.Center, FontStyles.Bold);
-            _txtDetailsMoves = MakeLabel(movesCard.transform, "Txt_Moves", "", 15, new Color(0.84f, 0.88f, 0.95f), 160f);
-            ApplyReadableTextStyle(_txtDetailsMoves, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
-            SetResponsiveWrappedText(_txtDetailsMoves, 13f, 15f);
+            var txtDetailsMoves = MakeLabel(movesCard.transform, "Txt_Moves", "", 15, new Color(0.84f, 0.88f, 0.95f), 160f);
+            ApplyReadableTextStyle(txtDetailsMoves, new Color(0.84f, 0.88f, 0.95f), TextAlignmentOptions.TopLeft);
+            SetResponsiveWrappedText(txtDetailsMoves, 13f, 15f);
 
             var customizationCard = CreateDetailsModalCard(infoContentGo.transform, "CustomizationCard", new Color(0.08f, 0.11f, 0.18f, 0.96f), 238f);
             var customizationHeader = MakeLabel(customizationCard.transform, "Txt_CustomizationHeader", "Armory & Vanity Shop", 18, new Color(0.96f, 0.84f, 0.50f, 1f), 28f);
@@ -2646,7 +2638,6 @@ namespace CastleDefender.UI
             bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
             var section = CreateSectionPanel(parent, "Section_Details", new Color(0.08f, 0.11f, 0.18f, 0.98f), compact ? 338f : 0f, flexibleHeight: compact ? 0f : 1f);
             _detailsOverlayRoot = section;
-            _btnDetailsClose = null;
 
             var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             titlePlate.transform.SetParent(section.transform, false);
@@ -2721,9 +2712,6 @@ namespace CastleDefender.UI
             _txtDetailsState = CreateDetailsTextCard(contentGo.transform, "StateCard", "Unlock State", compact ? 78f : 84f, compact ? 15 : 16, selectedColor, 32f, compact, TextAlignmentOptions.Center, FontStyles.Bold);
             _detailsRequirementRowsRoot = CreateDetailsIconListCard(contentGo.transform, "RequirementCard", "Unlock Requirements", compact ? 116f : 126f, compact);
             _detailsMovesRowsRoot = CreateDetailsIconListCard(contentGo.transform, "MovesCard", "Combat Readout", compact ? 146f : 156f, compact);
-            _txtDetailsStats = null;
-            _txtDetailsRequirement = null;
-            _txtDetailsMoves = null;
             _txtDetailsBody = CreateDetailsTextCard(contentGo.transform, "BodyCard", "Chronicle", compact ? 162f : 174f, compact ? 12 : 13, new Color(0.78f, 0.82f, 0.90f), compact ? 116f : 126f, compact);
             if (_txtDetailsBody != null)
             {
@@ -4765,6 +4753,12 @@ namespace CastleDefender.UI
 
         void PreviewSelectedUnitSfx()
         {
+            if (TryPlayPreviewCombatSfx(_selectedUnit, out var generatedLabel))
+            {
+                SetDetailsPreviewStatus($"{_selectedUnit?.DisplayName ?? "This entry"} is previewing {generatedLabel.ToLowerInvariant()} audio.");
+                return;
+            }
+
             if (!TryResolvePreviewSfx(_selectedUnit, out var sfx, out var label))
             {
                 SetDetailsPreviewStatus("No dedicated sound preview is wired for this entry yet.");
@@ -5987,9 +5981,9 @@ namespace CastleDefender.UI
                 "archer" => "Drawn from huntsmen and garrison bowmen once the Archery Tower is built.",
                 "crossbowman" => "Armory-trained marksman issued heavier ranged weapons at tier two.",
                 "ranger" => "Veteran frontier skirmisher fielded from the fully upgraded Archery Tower.",
-                "peasant" => "Starter trade laborer sent between the Town Core and Market.",
-                "settler" => "Experienced civilian courier trusted with higher-value cargo.",
-                "trader" => "Top-tier commercial runner representing the Market's late-game route economy.",
+                "peasant" => "Starter trade laborer sent from the Market through the Rear Gate to the Beast Lair.",
+                "settler" => "Experienced civilian courier that replaces Peasants on the higher-value market route.",
+                "trader" => "Top-tier commercial runner representing the Market's final rear-gate trade economy.",
                 "king" => "The sovereign enters the field only after Castle is secured.",
                 "paladin" => "Holy champion released when the realm reaches Castle.",
                 "bishop" => "Senior church leader unlocked at Castle to support the army.",
@@ -6022,9 +6016,9 @@ namespace CastleDefender.UI
                 "archer" => "Baseline ranged pressure from the fifth rank.",
                 "crossbowman" => "Tier-two ranged specialist intended to hit harder than base archers.",
                 "ranger" => "Late-game skirmisher intended to finish the ranged branch cleanly.",
-                "peasant" => "Carries the starter economy route for the human trade branch.",
-                "settler" => "Improves the value of every completed route lap.",
-                "trader" => "Represents the fully upgraded market economy runner.",
+                "peasant" => "Carries the starter rear-gate economy route for the human trade branch.",
+                "settler" => "Improves the value of every completed market route lap.",
+                "trader" => "Represents the fully upgraded rear-gate market runner.",
                 "king" => "Frontline hero commander for the Castle outcome row.",
                 "paladin" => "Holy frontline hero meant to absorb and punish pressure.",
                 "bishop" => "Backline hero support that should sit behind the main damage ranks.",
@@ -6517,7 +6511,46 @@ namespace CastleDefender.UI
         static bool TryPlayPreviewVoice(RaceProgressionUnitDefinition unit)
         {
             MLUnit previewUnit = BuildPreviewVoiceUnit(unit);
-            return previewUnit != null && UnitVoiceLibrary.TryPlay(previewUnit, UnitVoiceCue.Spawn, 0.9f);
+            return previewUnit != null && UnitVoiceLibrary.TryPlay(previewUnit, UnitVoiceCue.Attack, 0.9f);
+        }
+
+        static bool TryPlayPreviewCombatSfx(RaceProgressionUnitDefinition unit, out string label)
+        {
+            label = null;
+
+            MLUnit previewUnit = BuildPreviewVoiceUnit(unit);
+            UnitCombatSfxLibrary.ResolvedProfile profile = UnitCombatSfxLibrary.ResolveForUnit(null, previewUnit);
+            if (previewUnit == null || profile == null || !UnitCombatSfxLibrary.HasGeneratedClips(profile, UnitCombatSfxCue.Attack))
+                return false;
+
+            UnitCombatSfxPlaybackResult result = UnitCombatSfxLibrary.TryPlay(
+                profile,
+                previewUnit.id,
+                UnitCombatSfxCue.Attack,
+                Time.unscaledTime,
+                0.9f,
+                bypassChance: true);
+            if (result != UnitCombatSfxPlaybackResult.Played)
+                return false;
+
+            label = ResolvePreviewCombatSfxLabel(profile);
+            return true;
+        }
+
+        static string ResolvePreviewCombatSfxLabel(UnitCombatSfxLibrary.ResolvedProfile profile)
+        {
+            string profileKey = profile != null ? (profile.ProfileKey ?? string.Empty).Trim().ToLowerInvariant() : string.Empty;
+            return profileKey switch
+            {
+                "light_melee" => "Light Melee Clash",
+                "heavy_melee" => "Heavy Melee Cleave",
+                "polearm" => "Polearm Strike",
+                "bow" => "Bow Release",
+                "crossbow" => "Crossbow Fire",
+                "arcane" => "Arcane Cast",
+                "support" => "Holy Cast",
+                _ => "Combat SFX",
+            };
         }
 
         static MLUnit BuildPreviewVoiceUnit(RaceProgressionUnitDefinition unit)
@@ -6607,7 +6640,7 @@ namespace CastleDefender.UI
                 return "Runtime note: Stable progression exists in the tree, but the live game does not yet attach a horse roster to it.";
 
             if (IsEconomyUnit(unit))
-                return "Runtime note: Market runners are live and generate gold on completed route laps.";
+                return "Runtime note: Market runners are live, loop through the Rear Gate, and generate gold on completed route laps.";
 
             return null;
         }
@@ -6760,26 +6793,7 @@ namespace CastleDefender.UI
         static void EnsureEventSystem()
         {
             var manager = FindFirstObjectByType<LoadoutPhaseManager>(FindObjectsInactive.Include);
-            var existing = SceneEventSystemUtility.FindBest(manager);
-
-            if (existing == null)
-            {
-                var go = new GameObject("LoadoutEventSystem");
-                existing = go.AddComponent<EventSystem>();
-                go.AddComponent<StandaloneInputModule>();
-                go.AddComponent<SingleEventSystem>();
-                Debug.Log("[RaceProgression] Created fallback EventSystem.");
-                return;
-            }
-
-            if (!existing.gameObject.activeSelf)
-                existing.gameObject.SetActive(true);
-
-            if (existing.GetComponent<BaseInputModule>() == null)
-                existing.gameObject.AddComponent<StandaloneInputModule>();
-
-            if (existing.GetComponent<SingleEventSystem>() == null)
-                existing.gameObject.AddComponent<SingleEventSystem>();
+            SceneEventSystemUtility.EnsureSceneLocal(manager, "LoadoutEventSystem", "RaceProgression");
         }
 
         Canvas FindCanvasInCurrentScene()

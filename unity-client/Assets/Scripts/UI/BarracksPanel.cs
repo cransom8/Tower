@@ -1100,7 +1100,7 @@ namespace CastleDefender.UI
 
             if (TxtCost != null)
                 TxtCost.text = focusedPad != null && !string.Equals(focusedPad.buildingType, "barracks", System.StringComparison.OrdinalIgnoreCase)
-                    ? BuildFocusedPadSummary(focusedPad, lane.barracksRoster, lane.heroRoster)
+                    ? BuildFocusedPadSummary(lane, focusedPad, lane.barracksRoster, lane.heroRoster)
                     : BuildBuildingOverviewStatus(lane);
 
             if (TxtAffordance != null)
@@ -1113,7 +1113,7 @@ namespace CastleDefender.UI
                     ? hasGuidedPadMessage
                         ? guidedPadMessage
                         : focusedPad != null && !string.Equals(focusedPad.buildingType, "barracks", System.StringComparison.OrdinalIgnoreCase)
-                        ? BuildFocusedPadHint(focusedPad, lane.barracksRoster, lane.heroRoster, sendSeconds, waveSeconds)
+                        ? BuildFocusedPadHint(lane, focusedPad, lane.barracksRoster, lane.heroRoster, sendSeconds, waveSeconds)
                         : BuildBuildingOverviewHint(lane)
                     : _statusMessage;
                 TxtAffordance.color = string.IsNullOrWhiteSpace(_statusMessage)
@@ -1165,15 +1165,17 @@ namespace CastleDefender.UI
             if (focusedBarracks != null)
             {
                 CreateFocusedBarracksSection(lane, focusedBarracks);
+                CreateFocusedBarracksRosterSection(lane, focusedBarracks);
                 if (focusedBarracks.isBuilt)
                 {
-                    CreateFocusedBarracksRosterSection(lane, focusedBarracks);
                     CreateFocusedBarracksHeroSection(lane, focusedBarracks);
                 }
             }
             else if (focusedPad != null)
             {
                 CreateFocusedPadSection(lane);
+                if (string.Equals(focusedPad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+                    CreateFocusedMarketRosterSection(lane, focusedPad);
             }
             else
             {
@@ -1202,7 +1204,10 @@ namespace CastleDefender.UI
                 {
                     var pad = lane.fortressPads[i];
                     if (pad == null) continue;
-                    sig += $"{pad.padId}:{pad.tier}:{pad.buildState}:{pad.canBuild}:{pad.canUpgrade}:{Mathf.RoundToInt(pad.hp)}:{Mathf.RoundToInt(pad.maxHp)}:{pad.lockedReason}|";
+                    sig +=
+                        $"{pad.padId}:{pad.tier}:{pad.buildState}:{pad.isConstructing}:{pad.constructionKind}:" +
+                        $"{pad.constructionTargetTier}:{pad.constructionTimerTicksRemaining}:{pad.canBuild}:{pad.canUpgrade}:" +
+                        $"{Mathf.RoundToInt(pad.hp)}:{Mathf.RoundToInt(pad.maxHp)}:{pad.lockedReason}|";
                 }
             }
 
@@ -1212,7 +1217,7 @@ namespace CastleDefender.UI
                 {
                     var entry = lane.barracksRoster[i];
                     if (entry == null) continue;
-                    sig += $"{entry.rosterKey}:{entry.skinKey}:{entry.ownedCount}:{entry.buyCost}:{entry.sellRefund}:{entry.unlocked}:{entry.lockedReason}|";
+                    sig += $"{entry.rosterKey}:{entry.skinKey}:{entry.ownedCount}:{entry.buyCost}:{entry.sellRefund}:{entry.unlocked}:{entry.availableForPurchase}:{entry.currentTier}:{entry.lockedReason}|";
                 }
             }
 
@@ -1223,15 +1228,28 @@ namespace CastleDefender.UI
                     var site = lane.barracksSites[i];
                     if (site == null) continue;
                     sig +=
-                        $"{site.barracksId}:{site.isBuilt}:{site.level}:{site.buildState}:{site.canBuild}:{site.canUpgrade}:" +
-                        $"{Mathf.RoundToInt(site.hp)}:{Mathf.RoundToInt(site.maxHp)}:{site.lockedReason}|";
+                        $"{site.barracksId}:{site.isBuilt}:{site.level}:{site.buildState}:{site.isConstructing}:" +
+                        $"{site.constructionKind}:{site.constructionTargetLevel}:{site.constructionTimerTicksRemaining}:" +
+                        $"{site.canBuild}:{site.canUpgrade}:{Mathf.RoundToInt(site.hp)}:{Mathf.RoundToInt(site.maxHp)}:{site.lockedReason}|";
                     if (site.roster == null) continue;
                     for (int rosterIndex = 0; rosterIndex < site.roster.Length; rosterIndex++)
                     {
                         var entry = site.roster[rosterIndex];
                         if (entry == null) continue;
-                        sig += $"{site.barracksId}:{entry.rosterKey}:{entry.skinKey}:{entry.ownedCount}:{entry.buyCost}:{entry.sellRefund}:{entry.unlocked}:{entry.lockedReason}|";
+                        sig += $"{site.barracksId}:{entry.rosterKey}:{entry.skinKey}:{entry.ownedCount}:{entry.buyCost}:{entry.sellRefund}:{entry.unlocked}:{entry.availableForPurchase}:{entry.currentTier}:{entry.lockedReason}|";
                     }
+                }
+            }
+
+            if (lane.marketRoster != null)
+            {
+                for (int i = 0; i < lane.marketRoster.Length; i++)
+                {
+                    var entry = lane.marketRoster[i];
+                    if (entry == null) continue;
+                    sig +=
+                        $"market:{entry.unitKey}:{entry.skinKey}:{entry.ownedCount}:{entry.buyCost}:{entry.unlocked}:" +
+                        $"{entry.availableForPurchase}:{entry.currentTier}:{entry.economyLapGold}:{entry.lockedReason}|";
                 }
             }
 
@@ -1280,19 +1298,25 @@ namespace CastleDefender.UI
 
         void CreateFocusedBarracksRosterSection(MLLaneSnap lane, MLBarracksSite site)
         {
-            int rosterEntries = CountRosterEntries(site?.roster);
-            int expectedEntries = GetFocusedBarracksExpectedRosterCount(site);
-            string headerText = expectedEntries > 0
-                ? $"Standard Units ({rosterEntries}/{expectedEntries})"
-                : $"Standard Units ({rosterEntries})";
-            CreateSectionHeader(headerText);
+            var visibleEntries = GetCurrentBarracksRosterEntries(site?.roster);
+            CreateSectionHeader(site != null && !site.isBuilt
+                ? $"Rank 1 Unit Preview ({visibleEntries.Count})"
+                : $"Current Unit Options ({visibleEntries.Count})");
             if (site?.roster == null || site.roster.Length == 0)
             {
                 CreateInfoCard("No barracks-specific roster data is available yet.");
                 return;
             }
 
-            var ordered = (MLBarracksRosterEntry[])site.roster.Clone();
+            if (visibleEntries.Count <= 0)
+            {
+                CreateInfoCard(site != null && !site.isBuilt
+                    ? "Build this barracks to activate purchases. Until then, each branch previews its rank 1 unit so you can jump straight to the required unlock building."
+                    : "No current unit options are purchasable yet. Build or upgrade the linked fortress branches to expose the active tier for each line.");
+                return;
+            }
+
+            var ordered = visibleEntries.ToArray();
             System.Array.Sort(ordered, CompareFocusedBarracksRosterEntries);
             var grid = CreateFocusedBarracksCardRail();
             for (int i = 0; i < ordered.Length; i++)
@@ -1306,6 +1330,53 @@ namespace CastleDefender.UI
             Canvas.ForceUpdateCanvases();
             RestoreFocusedBarracksRailPosition(grid);
             SyncFocusedBarracksRailChrome(grid);
+        }
+
+        void CreateFocusedMarketRosterSection(MLLaneSnap lane, MLFortressPad pad)
+        {
+            CreateSectionHeader("Trade Workers");
+            if (lane == null || pad == null)
+            {
+                CreateInfoCard("Market data is not available yet.");
+                return;
+            }
+
+            if (!pad.isBuilt)
+            {
+                CreateInfoCard("Build the Market first. Once purchased, this branch hires the current economy worker tier and sends it through the Rear Gate trade loop.");
+                return;
+            }
+
+            var currentEntry = GetCurrentMarketRosterEntry(lane);
+            if (currentEntry == null)
+            {
+                CreateInfoCard("The active Market worker tier is missing from the snapshot.");
+                return;
+            }
+
+            var nextEntry = GetNextMarketRosterEntry(lane, currentEntry);
+            var card = CreateCardContainer();
+            TintCard(card, pad.canUpgrade
+                ? new Color(0.18f, 0.26f, 0.15f, 0.98f)
+                : new Color(0.14f, 0.20f, 0.24f, 0.98f));
+            CreateCardTitle(card, $"{currentEntry.displayName}  Market Tier {Mathf.Max(1, currentEntry.tier)}");
+
+            CreateRosterPortrait(
+                card,
+                new[] { currentEntry.portraitKey, currentEntry.skinKey, currentEntry.catalogUnitKey, currentEntry.unitTypeKey, currentEntry.archetypeKey, currentEntry.unitKey },
+                $"{currentEntry.unitKey}:{currentEntry.archetypeKey}:{currentEntry.presentationKey}:{currentEntry.skinKey}:{currentEntry.unitTypeKey}",
+                IsCompactPanelLayout() ? (IsTightPanelLayout() ? 76f : 96f) : 128f);
+
+            CreateBodyText(card, BuildFocusedMarketEntryBody(currentEntry, nextEntry, pad));
+
+            var actions = CreateActionRow(card);
+            CreateActionButton(
+                actions,
+                BuildFocusedMarketBuyLabel(lane, currentEntry),
+                () => ExecuteFocusedMarketBuy(currentEntry),
+                CanBuyMarketWorker(lane, pad, currentEntry));
+            if (pad.canUpgrade && nextEntry != null)
+                CreateActionButton(actions, $"Upgrade to {nextEntry.displayName}", null, false, minWidth: 170f, highlighted: true);
         }
 
         void CreateFocusedBarracksHeroSection(MLLaneSnap lane, MLBarracksSite site)
@@ -1576,7 +1647,7 @@ namespace CastleDefender.UI
 
             TintCard(card, ResolveFocusedBarracksCardTint(entry));
             if (!entry.unlocked)
-                WireLockedRosterCardNavigation(card, () => RedirectLockedUnitToUnlockBuilding(lane, entry));
+                WireLockedRosterCardNavigation(card, () => RedirectLockedUnitToUnlockBuilding(lane, entry, site));
 
             var top = CreateVerticalBlock(card, "Top", IsCompactPanelLayout() ? 4f : 6f);
             var topElement = top.gameObject.AddComponent<LayoutElement>();
@@ -1883,7 +1954,7 @@ namespace CastleDefender.UI
             var card = CreateCardContainer();
             TintCard(card, ResolvePadCardTint(pad));
             CreateCardTitle(card, $"{pad.buildingName}  {HumanizeBuildState(pad.buildState)}");
-            CreateBodyText(card, BuildFocusedPadCardBody(pad, lane.barracksRoster, lane.heroRoster));
+            CreateBodyText(card, BuildFocusedPadCardBody(lane, pad, lane.barracksRoster, lane.heroRoster));
 
             bool hasGuidedUnlock = TryGetGuidedUnlockForPad(pad, out var guidedAction, out string guidedHelperText);
             if (hasGuidedUnlock && !string.IsNullOrWhiteSpace(guidedHelperText))
@@ -1999,7 +2070,7 @@ namespace CastleDefender.UI
                 : ResolvePadCardTint(pad));
             WireOverviewCardNavigation(card, () => OpenOverviewPad(lane, pad));
             CreateCardTitle(card, string.IsNullOrWhiteSpace(pad.displayName) ? pad.buildingName : pad.displayName);
-            CreateBodyText(card, BuildBuildingOverviewPadBody(pad, lane.barracksRoster, lane.heroRoster));
+            CreateBodyText(card, BuildBuildingOverviewPadBody(lane, pad, lane.barracksRoster, lane.heroRoster));
             CreateInlineText(
                 card,
                 "FocusHint",
@@ -2075,7 +2146,7 @@ namespace CastleDefender.UI
                 "Select a branch card to focus that world building and open its detailed interaction UI.";
         }
 
-        string BuildBuildingOverviewPadBody(MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
+        string BuildBuildingOverviewPadBody(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
                 return "No building selected.";
@@ -2088,6 +2159,15 @@ namespace CastleDefender.UI
                 : string.IsNullOrWhiteSpace(pad.lockedReason)
                     ? "Available to purchase from its detailed view."
                     : pad.lockedReason;
+
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var currentMarketEntry = GetCurrentMarketRosterEntry(lane);
+                string marketLine = currentMarketEntry != null && pad.isBuilt
+                    ? $"Current Worker: {currentMarketEntry.displayName}   Owned {Mathf.Max(0, currentMarketEntry.ownedCount)}   {Mathf.Max(0, currentMarketEntry.economyLapGold)}g/lap"
+                    : $"Trade Units: {BuildUnlockPreview(pad, roster, heroRoster)}";
+                return $"{ownership}\n{stateLine}\n{marketLine}";
+            }
 
             return
                 $"{ownership}\n" +
@@ -2108,6 +2188,82 @@ namespace CastleDefender.UI
             }
 
             return null;
+        }
+
+        MLMarketRosterEntry GetCurrentMarketRosterEntry(MLLaneSnap lane)
+        {
+            if (lane?.marketRoster == null)
+                return null;
+
+            MLMarketRosterEntry unlockedFallback = null;
+            for (int i = 0; i < lane.marketRoster.Length; i++)
+            {
+                var entry = lane.marketRoster[i];
+                if (entry == null)
+                    continue;
+                if (entry.availableForPurchase || entry.currentTier)
+                    return entry;
+                if (unlockedFallback == null && entry.unlocked)
+                    unlockedFallback = entry;
+            }
+
+            return unlockedFallback;
+        }
+
+        MLMarketRosterEntry FindMarketRosterEntry(MLLaneSnap lane, string unitKey)
+        {
+            if (lane?.marketRoster == null || string.IsNullOrWhiteSpace(unitKey))
+                return null;
+
+            for (int i = 0; i < lane.marketRoster.Length; i++)
+            {
+                var entry = lane.marketRoster[i];
+                if (entry != null && string.Equals(entry.unitKey, unitKey, System.StringComparison.OrdinalIgnoreCase))
+                    return entry;
+            }
+
+            return null;
+        }
+
+        MLMarketRosterEntry FindMarketRosterEntryByTier(MLLaneSnap lane, int tier)
+        {
+            if (lane?.marketRoster == null)
+                return null;
+
+            int targetTier = Mathf.Max(1, tier);
+            for (int i = 0; i < lane.marketRoster.Length; i++)
+            {
+                var entry = lane.marketRoster[i];
+                if (entry != null && Mathf.Max(1, entry.tier) == targetTier)
+                    return entry;
+            }
+
+            return null;
+        }
+
+        MLMarketRosterEntry GetNextMarketRosterEntry(MLLaneSnap lane, MLMarketRosterEntry currentEntry)
+        {
+            if (currentEntry == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(currentEntry.nextUnitKey))
+                return FindMarketRosterEntry(lane, currentEntry.nextUnitKey);
+
+            return FindMarketRosterEntryByTier(lane, Mathf.Max(1, currentEntry.tier + 1));
+        }
+
+        static string BuildMarketRouteSummary(MLMarketRosterEntry entry)
+        {
+            if (entry == null)
+                return "Market -> Rear Gate -> Beast Lair";
+
+            string start = !string.IsNullOrWhiteSpace(entry.routeStartBuildingName)
+                ? entry.routeStartBuildingName
+                : "Market";
+            string end = !string.IsNullOrWhiteSpace(entry.routeEndBuildingName)
+                ? entry.routeEndBuildingName
+                : "Beast Lair";
+            return $"{start} -> Rear Gate -> {end}";
         }
 
         string BuildTechBranchTitle(MLFortressPad pad)
@@ -2201,9 +2357,9 @@ namespace CastleDefender.UI
 
                 return tier switch
                 {
-                    1 => "Economy routes begin here.",
-                    2 => "Expands the market economy route.",
-                    3 => "Unlocks the final market route tier.",
+                    1 => "Peasant trade loop through the Rear Gate to the Beast Lair.",
+                    2 => "Settlers replace existing market workers and improve each trade lap.",
+                    3 => "Traders replace existing market workers and maximize lap value.",
                     _ => "No market unlock data.",
                 };
             }
@@ -2724,7 +2880,7 @@ namespace CastleDefender.UI
             return
                 $"{ownership}\n" +
                 $"{stateLine}\n" +
-                $"Tech: {CountUnlockedUnits(site.roster)}/{CountRosterEntries(site.roster)} unit entries unlocked";
+                $"Current Options: {CountPurchasableUnits(site.roster)}   Owned Units: {CountOwnedUnits(site.roster)}";
         }
 
         void OpenOverviewPad(MLLaneSnap lane, MLFortressPad pad)
@@ -2860,10 +3016,32 @@ namespace CastleDefender.UI
             return false;
         }
 
-        void RedirectLockedUnitToUnlockBuilding(MLLaneSnap lane, MLBarracksRosterEntry entry)
+        void RedirectLockedUnitToUnlockBuilding(MLLaneSnap lane, MLBarracksRosterEntry entry, MLBarracksSite sourceSite = null)
         {
             if (lane == null || entry == null)
                 return;
+
+            if (string.Equals(entry.unlockBuildingType, "barracks", System.StringComparison.OrdinalIgnoreCase))
+            {
+                string sourceBarracksId = NormalizeBarracksId(sourceSite?.barracksId);
+                if (!string.IsNullOrWhiteSpace(sourceBarracksId))
+                {
+                    bool openedBarracks = FortressSelectionController.OpenBarracksSite(lane.laneIndex, sourceBarracksId);
+                    if (!openedBarracks)
+                    {
+                        _statusMessage = $"Unable to focus {ResolveBarracksDisplayName(sourceSite)}.";
+                        RefreshHeader(force: true);
+                    }
+                    else
+                    {
+                        ClearGuidedUnlockContext();
+                        _statusMessage = null;
+                        RefreshHeader(force: true);
+                        RefreshContent(force: true);
+                    }
+                    return;
+                }
+            }
 
             if (string.IsNullOrWhiteSpace(entry.unlockBuildingType) && string.IsNullOrWhiteSpace(entry.unlockPadId))
             {
@@ -2927,6 +3105,9 @@ namespace CastleDefender.UI
             if (site == null)
                 return string.Empty;
 
+            if (site.isConstructing)
+                return $"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}   {site.constructionTargetTierName}";
+
             if (!site.isBuilt)
                 return BuildFocusedBarracksPurchaseStatus(site);
 
@@ -2940,6 +3121,12 @@ namespace CastleDefender.UI
         {
             if (site == null)
                 return string.Empty;
+
+            if (site.isConstructing)
+                return $"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}   Target {site.constructionTargetTierName}";
+
+            if (site.isDestroyed)
+                return $"Destroyed   {site.displayName} is offline";
 
             if (!site.isBuilt)
             {
@@ -2955,7 +3142,7 @@ namespace CastleDefender.UI
                 $"HP {Mathf.RoundToInt(site.hp)}/{Mathf.RoundToInt(site.maxHp)}",
                 $"Active {CountActiveUnitsForBarracks(lane, site)}",
                 $"Owned {CountOwnedUnits(site.roster)}",
-                $"Unlocked {CountUnlockedUnits(site.roster)}/{(site.roster != null ? site.roster.Length : 0)}",
+                $"Current Options {CountPurchasableUnits(site.roster)}",
                 $"Level {Mathf.Max(1, site.level)}/{Mathf.Max(1, site.maxLevel)}",
             };
             if (spawnIntervalSeconds >= 0)
@@ -2972,6 +3159,12 @@ namespace CastleDefender.UI
             if (site == null)
                 return string.Empty;
 
+            if (site.isConstructing)
+                return $"{site.displayName} is still under construction.";
+
+            if (site.isDestroyed)
+                return $"{site.displayName} is destroyed and cannot send units.";
+
             if (!site.isBuilt)
                 return BuildFocusedBarracksPurchaseStatus(site);
 
@@ -2979,10 +3172,10 @@ namespace CastleDefender.UI
             if (!string.IsNullOrWhiteSpace(activeLead))
                 return $"Active {activeLead}";
 
-            int unlockedUnits = CountUnlockedUnits(site.roster);
-            return unlockedUnits > 0
-                ? $"Unlocked {unlockedUnits} unit option{(unlockedUnits == 1 ? string.Empty : "s")} for this barracks. Buy units here to add live barracks output."
-                : "No units unlocked yet. Build the listed fortress branches to unlock barracks units.";
+            int purchasableUnits = CountPurchasableUnits(site.roster);
+            return purchasableUnits > 0
+                ? $"This barracks currently offers {purchasableUnits} live unit option{(purchasableUnits == 1 ? string.Empty : "s")}. Each branch only shows its active tier."
+                : "No current unit options are available yet. Build the linked fortress branches to expose the active tier for each line.";
         }
 
         string BuildFocusedBarracksHint(MLLaneSnap lane, MLBarracksSite site)
@@ -2990,16 +3183,22 @@ namespace CastleDefender.UI
             if (site == null)
                 return "Waiting for barracks data...";
 
+            if (site.isConstructing)
+                return $"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}. The barracks roster unlocks when construction finishes.";
+
+            if (site.isDestroyed)
+                return $"{site.displayName} is destroyed and currently offline.";
+
             if (!site.isBuilt)
                 return BuildFocusedBarracksPurchaseHint(lane, site);
 
-            int unlockedUnits = CountUnlockedUnits(site.roster);
-            if (unlockedUnits <= 0)
-                return "All units are still tech-locked. Build the listed fortress structures first.";
+            int purchasableUnits = CountPurchasableUnits(site.roster);
+            if (purchasableUnits <= 0)
+                return "No current barracks options are live yet. Build the listed fortress structures first.";
 
-            int cheapestCost = GetCheapestUnlockedCost(site.roster);
+            int cheapestCost = GetCheapestPurchasableCost(site.roster);
             if (lane != null && cheapestCost > 0 && lane.gold < cheapestCost)
-                return $"Need {Mathf.Max(0, cheapestCost - Mathf.FloorToInt(lane.gold))} more gold for the cheapest unlocked purchase.";
+                return $"Need {Mathf.Max(0, cheapestCost - Mathf.FloorToInt(lane.gold))} more gold for the cheapest current unit purchase.";
 
             return "Swipe on mobile or use the mouse wheel on desktop to browse. Buy and sell from the top row on each card.";
         }
@@ -3008,6 +3207,17 @@ namespace CastleDefender.UI
         {
             if (site == null)
                 return "No barracks selected.";
+
+            if (site.isConstructing)
+            {
+                return
+                    $"State {HumanizeBuildState(site.buildState)}\n" +
+                    $"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}\n" +
+                    $"Target {site.constructionTargetTierName}";
+            }
+
+            if (site.isDestroyed)
+                return $"HP 0/{Mathf.RoundToInt(site.maxHp)}   {site.displayName} is destroyed.";
 
             if (!site.isBuilt)
             {
@@ -3064,6 +3274,16 @@ namespace CastleDefender.UI
             if (site == null)
                 return "No barracks selected.";
 
+            if (site.isConstructing)
+            {
+                return
+                    $"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}\n" +
+                    $"Target {site.constructionTargetTierName}";
+            }
+
+            if (site.isDestroyed)
+                return $"Health 0/{Mathf.RoundToInt(site.maxHp)}\nDestroyed";
+
             if (!site.isBuilt)
                 return BuildFocusedBarracksPurchaseStatus(site);
 
@@ -3081,6 +3301,9 @@ namespace CastleDefender.UI
         {
             if (site == null)
                 return string.Empty;
+
+            if (site.isConstructing)
+                return BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site));
 
             return BuildFocusedBarracksCostText(site);
         }
@@ -3259,6 +3482,47 @@ namespace CastleDefender.UI
             return total;
         }
 
+        List<MLBarracksRosterEntry> GetCurrentBarracksRosterEntries(MLBarracksRosterEntry[] roster)
+        {
+            var visibleEntries = new List<MLBarracksRosterEntry>();
+            if (roster == null)
+                return visibleEntries;
+
+            var visibleByBranch = new Dictionary<string, MLBarracksRosterEntry>(System.StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < roster.Length; i++)
+            {
+                var entry = roster[i];
+                if (entry == null)
+                    continue;
+
+                string branchKey = string.IsNullOrWhiteSpace(entry.branchKey)
+                    ? entry.rosterKey ?? string.Empty
+                    : entry.branchKey;
+                if (entry.availableForPurchase || entry.currentTier)
+                {
+                    visibleByBranch[branchKey] = entry;
+                    continue;
+                }
+
+                if (visibleByBranch.TryGetValue(branchKey, out var existingVisible)
+                    && (existingVisible.availableForPurchase || existingVisible.currentTier))
+                {
+                    continue;
+                }
+
+                if (!visibleByBranch.TryGetValue(branchKey, out existingVisible)
+                    || Mathf.Max(1, entry.tier) < Mathf.Max(1, existingVisible.tier)
+                    || (Mathf.Max(1, entry.tier) == Mathf.Max(1, existingVisible.tier) && entry.sortIndex < existingVisible.sortIndex))
+                {
+                    visibleByBranch[branchKey] = entry;
+                }
+            }
+
+            foreach (var entry in visibleByBranch.Values)
+                visibleEntries.Add(entry);
+            return visibleEntries;
+        }
+
         int CountUnlockedUnits(MLBarracksRosterEntry[] roster)
         {
             if (roster == null)
@@ -3275,6 +3539,22 @@ namespace CastleDefender.UI
             return total;
         }
 
+        int CountPurchasableUnits(MLBarracksRosterEntry[] roster)
+        {
+            if (roster == null)
+                return 0;
+
+            int total = 0;
+            for (int i = 0; i < roster.Length; i++)
+            {
+                var entry = roster[i];
+                if (entry != null && entry.availableForPurchase)
+                    total += 1;
+            }
+
+            return total;
+        }
+
         int GetCheapestUnlockedCost(MLBarracksRosterEntry[] roster)
         {
             if (roster == null)
@@ -3285,6 +3565,24 @@ namespace CastleDefender.UI
             {
                 var entry = roster[i];
                 if (entry == null || !entry.unlocked)
+                    continue;
+
+                cheapest = Mathf.Min(cheapest, Mathf.Max(0, entry.buyCost));
+            }
+
+            return cheapest == int.MaxValue ? 0 : cheapest;
+        }
+
+        int GetCheapestPurchasableCost(MLBarracksRosterEntry[] roster)
+        {
+            if (roster == null)
+                return 0;
+
+            int cheapest = int.MaxValue;
+            for (int i = 0; i < roster.Length; i++)
+            {
+                var entry = roster[i];
+                if (entry == null || !entry.availableForPurchase)
                     continue;
 
                 cheapest = Mathf.Min(cheapest, Mathf.Max(0, entry.buyCost));
@@ -3319,10 +3617,23 @@ namespace CastleDefender.UI
             return $"Fortress loop live. Next barracks send in {Mathf.Max(0, sendSeconds)}s. Next wave in {Mathf.Max(0, waveSeconds)}s.";
         }
 
-        string BuildFocusedPadSummary(MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
+        string BuildFocusedPadSummary(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
                 return string.Empty;
+
+            if (pad.isConstructing)
+                return $"{BuildConstructionTimerLabel(pad.constructionKind, GetConstructionSecondsRemaining(pad))}   {pad.constructionTargetTierName}";
+
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var currentEntry = GetCurrentMarketRosterEntry(lane);
+                return pad.isBuilt
+                    ? currentEntry != null
+                        ? $"Health {Mathf.RoundToInt(pad.hp)}/{Mathf.RoundToInt(pad.maxHp)}   {currentEntry.displayName} x{Mathf.Max(0, currentEntry.ownedCount)}   {Mathf.Max(0, currentEntry.economyLapGold)}g/lap"
+                        : $"Health {Mathf.RoundToInt(pad.hp)}/{Mathf.RoundToInt(pad.maxHp)}   Trade route ready"
+                    : $"Cost {pad.buildCost}g   Unlocks {BuildUnlockPreview(pad, roster, heroRoster)}";
+            }
 
             string unlocks = BuildUnlockPreview(pad, roster, heroRoster);
             return pad.isBuilt
@@ -3330,37 +3641,105 @@ namespace CastleDefender.UI
                 : $"Cost {pad.buildCost}g   Unlocks {unlocks}";
         }
 
-        string BuildFocusedPadHint(MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster, int sendSeconds, int waveSeconds)
+        string BuildFocusedPadHint(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster, int sendSeconds, int waveSeconds)
         {
             if (pad == null)
                 return "Select a fortress pad.";
 
-            string primary = !pad.isBuilt && pad.canBuild
-                ? $"Tap Build to construct {pad.buildingName}."
-                : pad.canUpgrade
-                    ? $"Tap Upgrade to advance {pad.buildingName}."
-                    : !string.IsNullOrWhiteSpace(pad.lockedReason)
-                        ? pad.lockedReason
-                        : $"{pad.buildingName} is ready.";
+            if (pad.isConstructing)
+                return $"{BuildConstructionTimerLabel(pad.constructionKind, GetConstructionSecondsRemaining(pad))}. {pad.constructionTargetTierName} is still under construction.";
 
-            string nextPreview = BuildNextUpgradePreview(pad, roster, heroRoster);
+            if (pad.isDestroyed)
+                return $"{pad.buildingName} is destroyed and offline.";
+
+            string primary;
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var currentEntry = GetCurrentMarketRosterEntry(lane);
+                var nextEntry = GetNextMarketRosterEntry(lane, currentEntry);
+                primary = !pad.isBuilt && pad.canBuild
+                    ? $"Tap Build to construct {pad.buildingName}."
+                    : pad.canUpgrade
+                        ? nextEntry != null
+                            ? $"Tap Upgrade to convert all current market workers into {nextEntry.displayName}s."
+                            : $"Tap Upgrade to advance {pad.buildingName}."
+                        : currentEntry != null
+                            ? lane != null && lane.gold < currentEntry.buyCost
+                                ? $"Need {Mathf.Max(0, currentEntry.buyCost - Mathf.FloorToInt(lane.gold))}g more to buy {currentEntry.displayName}."
+                                : $"Buy {currentEntry.displayName} to run the rear-gate trade loop."
+                            : !string.IsNullOrWhiteSpace(pad.lockedReason)
+                                ? pad.lockedReason
+                                : $"{pad.buildingName} is ready.";
+            }
+            else
+            {
+                primary = !pad.isBuilt && pad.canBuild
+                    ? $"Tap Build to construct {pad.buildingName}."
+                    : pad.canUpgrade
+                        ? $"Tap Upgrade to advance {pad.buildingName}."
+                        : !string.IsNullOrWhiteSpace(pad.lockedReason)
+                            ? pad.lockedReason
+                            : $"{pad.buildingName} is ready.";
+            }
+
+            string nextPreview = BuildNextUpgradePreview(lane, pad, roster, heroRoster);
             if (!string.IsNullOrWhiteSpace(nextPreview))
                 primary += $"  {nextPreview}";
+
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+                return primary;
 
             return $"{primary}  Send {Mathf.Max(0, sendSeconds)}s  Wave {Mathf.Max(0, waveSeconds)}s.";
         }
 
-        string BuildFocusedPadCardBody(MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
+        string BuildFocusedPadCardBody(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
                 return "No building pad selected.";
+
+            if (pad.isConstructing)
+            {
+                return
+                    $"{BuildConstructionTimerLabel(pad.constructionKind, GetConstructionSecondsRemaining(pad))}\n" +
+                    $"Target {pad.constructionTargetTierName}\n" +
+                    $"Unlocks: {BuildUnlockPreview(pad, roster, heroRoster)}";
+            }
+
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var currentEntry = GetCurrentMarketRosterEntry(lane);
+                string marketText =
+                    $"Tier {Mathf.Max(0, pad.tier)}/{Mathf.Max(1, pad.maxTier)}   " +
+                    $"Health {Mathf.RoundToInt(pad.hp)}/{Mathf.RoundToInt(pad.maxHp)}";
+
+                if (currentEntry != null)
+                {
+                    marketText +=
+                        $"\nCurrent Worker: {currentEntry.displayName}   Owned x{Mathf.Max(0, currentEntry.ownedCount)}   Buy {Mathf.Max(0, currentEntry.buyCost)}g" +
+                        $"\nRoute: {BuildMarketRouteSummary(currentEntry)}" +
+                        $"\nLap Value: {Mathf.Max(0, currentEntry.economyLapGold)} gold";
+                }
+                else
+                {
+                    marketText += $"\nUnlocks: {BuildUnlockPreview(pad, roster, heroRoster)}";
+                }
+
+                string marketNextPreview = BuildNextUpgradePreview(lane, pad, roster, heroRoster);
+                if (!string.IsNullOrWhiteSpace(marketNextPreview))
+                    marketText += $"\n{marketNextPreview}";
+
+                if (!string.IsNullOrWhiteSpace(pad.lockedReason))
+                    marketText += $"\nRequirement: {pad.lockedReason}";
+
+                return marketText;
+            }
 
             string text =
                 $"Tier {Mathf.Max(0, pad.tier)}/{Mathf.Max(1, pad.maxTier)}   " +
                 $"Health {Mathf.RoundToInt(pad.hp)}/{Mathf.RoundToInt(pad.maxHp)}\n" +
                 $"Unlocks: {BuildUnlockPreview(pad, roster, heroRoster)}";
 
-            string nextPreview = BuildNextUpgradePreview(pad, roster, heroRoster);
+            string nextPreview = BuildNextUpgradePreview(lane, pad, roster, heroRoster);
             if (!string.IsNullOrWhiteSpace(nextPreview))
                 text += $"\n{nextPreview}";
 
@@ -3370,7 +3749,7 @@ namespace CastleDefender.UI
             return text;
         }
 
-        string BuildNextUpgradePreview(MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
+        string BuildNextUpgradePreview(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
                 return string.Empty;
@@ -3379,6 +3758,15 @@ namespace CastleDefender.UI
                 return "Next Upgrade: Max tier reached.";
 
             int targetTier = Mathf.Max(1, pad.tier + 1);
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var nextEntry = FindMarketRosterEntryByTier(lane, targetTier);
+                if (nextEntry != null)
+                    return $"Next Upgrade: {ResolveBuildingTierName(pad.buildingType, targetTier, pad.nextTierName)} converts all existing market workers into {nextEntry.displayName}s.";
+
+                return $"Next Upgrade: {ResolveBuildingTierName(pad.buildingType, targetTier, pad.nextTierName)} strengthens the market trade loop.";
+            }
+
             var unlocks = new List<string>();
             if (roster != null)
             {
@@ -3594,6 +3982,27 @@ namespace CastleDefender.UI
             if (pad == null)
                 return "No unlock data";
 
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+            {
+                var marketConfigs = SnapshotApplier.Instance?.LatestMLMatchConfig?.marketRosterConfigs;
+                if (marketConfigs != null)
+                {
+                    var unlocks = new List<string>();
+                    for (int i = 0; i < marketConfigs.Length; i++)
+                    {
+                        var entry = marketConfigs[i];
+                        if (entry == null)
+                            continue;
+                        unlocks.Add($"T{Mathf.Max(1, entry.requiredBuildingTier)}: {entry.displayName}");
+                    }
+
+                    if (unlocks.Count > 0)
+                        return string.Join("  |  ", unlocks);
+                }
+
+                return "T1: Peasant  |  T2: Settler  |  T3: Trader";
+            }
+
             var preview = string.Empty;
             if (roster != null)
             {
@@ -3640,8 +4049,14 @@ namespace CastleDefender.UI
             {
                 case "available_to_build":
                     return new Color(0.26f, 0.22f, 0.10f, 0.98f);
+                case "constructing":
+                    return new Color(0.26f, 0.19f, 0.09f, 0.98f);
+                case "upgrading":
+                    return new Color(0.18f, 0.24f, 0.12f, 0.98f);
                 case "upgrade_available":
                     return new Color(0.14f, 0.24f, 0.18f, 0.98f);
+                case "destroyed":
+                    return new Color(0.24f, 0.11f, 0.09f, 0.98f);
                 case "locked":
                     return new Color(0.15f, 0.16f, 0.20f, 0.98f);
                 case "max_tier":
@@ -3656,7 +4071,10 @@ namespace CastleDefender.UI
             switch (value)
             {
                 case "available_to_build": return "Available To Build";
+                case "constructing": return "Constructing";
+                case "upgrading": return "Upgrading";
                 case "upgrade_available": return "Upgrade Available";
+                case "destroyed": return "Destroyed";
                 case "max_tier": return "Max Tier";
                 case "locked": return "Locked";
                 default: return "Built";
@@ -3748,6 +4166,30 @@ namespace CastleDefender.UI
                 return snapshotApplier.GetBarracksSiteSendSecondsRemaining(laneIndex, site.barracksId);
 
             return Mathf.CeilToInt(site.sendTimerTicksRemaining / Mathf.Max(1f, SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetTickHz() : 20));
+        }
+
+        int GetConstructionSecondsRemaining(MLFortressPad pad)
+        {
+            if (pad == null)
+                return -1;
+
+            return Mathf.CeilToInt(pad.constructionTimerTicksRemaining / Mathf.Max(1f, SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetTickHz() : 20));
+        }
+
+        int GetConstructionSecondsRemaining(MLBarracksSite site)
+        {
+            if (site == null)
+                return -1;
+
+            return Mathf.CeilToInt(site.constructionTimerTicksRemaining / Mathf.Max(1f, SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetTickHz() : 20));
+        }
+
+        static string BuildConstructionTimerLabel(string constructionKind, int seconds)
+        {
+            string verb = string.Equals(constructionKind, "upgrade", System.StringComparison.OrdinalIgnoreCase)
+                ? "Upgrading"
+                : "Building";
+            return $"{verb} {Mathf.Max(0, seconds)}s";
         }
 
         bool IsPadFocused(string padId)
@@ -4368,7 +4810,8 @@ namespace CastleDefender.UI
                 return;
 
             var actionRow = CreateHorizontalFillBlock(parent, "PrimaryActions", 6f);
-            if (!site.isBuilt)
+            bool unlocksFromBarracks = string.Equals(entry.unlockBuildingType, "barracks", System.StringComparison.OrdinalIgnoreCase);
+            if (!site.isBuilt && unlocksFromBarracks)
             {
                 CreateFocusedBarracksActionChip(
                     actionRow,
@@ -4388,7 +4831,7 @@ namespace CastleDefender.UI
                     BuildLockedUnitRedirectActionLabel(entry),
                     new Color(0.36f, 0.24f, 0.10f, 0.98f),
                     true,
-                    () => RedirectLockedUnitToUnlockBuilding(lane, entry));
+                    () => RedirectLockedUnitToUnlockBuilding(lane, entry, site));
                 return;
             }
 
@@ -4493,7 +4936,11 @@ namespace CastleDefender.UI
                 return "Waiting for roster data";
 
             if (!site.isBuilt)
+            {
+                if (!string.Equals(entry.unlockBuildingType, "barracks", System.StringComparison.OrdinalIgnoreCase))
+                    return $"Locked - {BuildFocusedBarracksUnlockLabel(entry)}";
                 return "Buy Building first";
+            }
 
             if (!entry.unlocked)
                 return $"Locked - {BuildFocusedBarracksUnlockLabel(entry)}";
@@ -4614,6 +5061,63 @@ namespace CastleDefender.UI
                 ? $"Buying {entry.displayName} x{count} for {ResolveBarracksDisplayName(site)}..."
                 : $"Buying {entry.displayName} for {ResolveBarracksDisplayName(site)}...";
             ActionSender.BuyBarracksUnit(entry.rosterKey, site.barracksId, count);
+            RefreshHeader(force: true);
+        }
+
+        string BuildFocusedMarketEntryBody(MLMarketRosterEntry entry, MLMarketRosterEntry nextEntry, MLFortressPad pad)
+        {
+            if (entry == null)
+                return "No active market worker tier is available.";
+
+            string text =
+                $"Owned x{Mathf.Max(0, entry.ownedCount)}   Buy {Mathf.Max(0, entry.buyCost)}g   {Mathf.Max(0, entry.economyLapGold)}g/lap\n" +
+                $"Route: {BuildMarketRouteSummary(entry)}";
+
+            if (!string.IsNullOrWhiteSpace(entry.description))
+                text += $"\n{entry.description}";
+
+            if (nextEntry != null)
+            {
+                text += pad != null && pad.canUpgrade
+                    ? $"\nUpgrade Preview: {nextEntry.displayName} replaces every current worker when the Market reaches Tier {Mathf.Max(1, nextEntry.tier)}."
+                    : $"\nNext Worker Tier: {nextEntry.displayName} at Market Tier {Mathf.Max(1, nextEntry.tier)}.";
+            }
+
+            return text;
+        }
+
+        bool CanBuyMarketWorker(MLLaneSnap lane, MLFortressPad pad, MLMarketRosterEntry entry)
+        {
+            return CanEditBarracks()
+                && lane != null
+                && pad != null
+                && pad.isBuilt
+                && entry != null
+                && entry.availableForPurchase
+                && lane.gold >= entry.buyCost;
+        }
+
+        string BuildFocusedMarketBuyLabel(MLLaneSnap lane, MLMarketRosterEntry entry)
+        {
+            if (entry == null)
+                return "Buy Worker";
+
+            if (!entry.availableForPurchase)
+                return "Tier Locked";
+
+            if (lane != null && lane.gold < entry.buyCost)
+                return $"Need {Mathf.Max(0, entry.buyCost - Mathf.FloorToInt(lane.gold))}g";
+
+            return $"Buy {entry.displayName} {Mathf.Max(0, entry.buyCost)}g";
+        }
+
+        void ExecuteFocusedMarketBuy(MLMarketRosterEntry entry)
+        {
+            if (entry == null)
+                return;
+
+            _statusMessage = $"Hiring {entry.displayName} from the Market...";
+            ActionSender.BuyMarketUnit(entry.unitKey);
             RefreshHeader(force: true);
         }
 

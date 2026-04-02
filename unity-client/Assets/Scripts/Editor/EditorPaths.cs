@@ -48,8 +48,10 @@ namespace CastleDefender.Editor
 
         public const string TT_RTS_ROOT = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard";
         public const string TT_BUILDINGS_ROOT = TT_RTS_ROOT + "/models/buildings";
+        public const string TT_BUILDING_CONSTRUCTION_ROOT = TT_BUILDINGS_ROOT + "/construction";
         public const string TT_EXTRAS_ROOT = TT_RTS_ROOT + "/models/extras";
         public const string TT_BANNERS_ROOT = TT_RTS_ROOT + "/prefabs/banners";
+        public const string TT_FX_PREFABS_ROOT = TT_RTS_ROOT + "/FX/FX_prefabs";
         public const string TT_BUILDING_MATERIAL = TT_RTS_ROOT + "/models/materials/TT_RTS_Buildings.mat";
         public const string TT_BUILDING_WHITE_MATERIAL = TT_RTS_ROOT + "/models/materials/color/Buildings/TT_RTS_buildings_white.mat";
 
@@ -76,6 +78,34 @@ namespace CastleDefender.Editor
         public const string TT_BUILDING_TOWER_A = TT_BUILDINGS_ROOT + "/Tower_A.FBX";
         public const string TT_BUILDING_TOWER_B = TT_BUILDINGS_ROOT + "/Tower_B.FBX";
         public const string TT_BUILDING_TOWER_C = TT_BUILDINGS_ROOT + "/Tower_C.FBX";
+        public const string TT_CONSTRUCTION_BARRACKS_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Barracks_0.FBX";
+        public const string TT_CONSTRUCTION_BARRACKS_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Barracks_1.FBX";
+        public const string TT_CONSTRUCTION_BLACKSMITH_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Blacksmith_0.FBX";
+        public const string TT_CONSTRUCTION_BLACKSMITH_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Blacksmith_1.FBX";
+        public const string TT_CONSTRUCTION_TEMPLE_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Temple_0.FBX";
+        public const string TT_CONSTRUCTION_TEMPLE_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Temple_1.FBX";
+        public const string TT_CONSTRUCTION_MAGE_TOWER_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/MageTower_0.FBX";
+        public const string TT_CONSTRUCTION_MAGE_TOWER_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/MageTower_1.FBX";
+        public const string TT_CONSTRUCTION_ARCHERY_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Archery_0.FBX";
+        public const string TT_CONSTRUCTION_ARCHERY_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Archery_1.FBX";
+        public const string TT_CONSTRUCTION_STABLES_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Stables_0.FBX";
+        public const string TT_CONSTRUCTION_STABLES_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Stables_1.FBX";
+        public const string TT_CONSTRUCTION_WORKSHOP_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Workshop_0.FBX";
+        public const string TT_CONSTRUCTION_WORKSHOP_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Workshop_1.FBX";
+        public const string TT_CONSTRUCTION_LIBRARY_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Library_0.FBX";
+        public const string TT_CONSTRUCTION_LIBRARY_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Library_1.FBX";
+        public const string TT_CONSTRUCTION_MARKET_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Market_0.FBX";
+        public const string TT_CONSTRUCTION_MARKET_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Market_1.FBX";
+        public const string TT_CONSTRUCTION_LUMBER_MILL_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/LumberMill_0.FBX";
+        public const string TT_CONSTRUCTION_LUMBER_MILL_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/LumberMill_1.FBX";
+        public const string TT_CONSTRUCTION_WALL_A_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_wall_0.FBX";
+        public const string TT_CONSTRUCTION_WALL_A_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_wall_1.FBX";
+        public const string TT_CONSTRUCTION_GATE_A_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_gate_0.FBX";
+        public const string TT_CONSTRUCTION_GATE_A_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_gate_1.FBX";
+        public const string TT_CONSTRUCTION_CORNER_A_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_corner_0.FBX";
+        public const string TT_CONSTRUCTION_CORNER_A_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Wall_A_corner_1.FBX";
+        public const string TT_CONSTRUCTION_TOWER_A_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Tower_A_0.FBX";
+        public const string TT_CONSTRUCTION_TOWER_A_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Tower_A_1.FBX";
 
         public const string TT_BANNER_BLUE = TT_BANNERS_ROOT + "/TT_Banner_Blue_A.prefab";
         public const string TT_BANNER_RED = TT_BANNERS_ROOT + "/TT_Banner_Red.prefab";
@@ -86,6 +116,10 @@ namespace CastleDefender.Editor
         public const string TT_BANNER_MATERIAL_YELLOW = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_yellow.mat";
         public const string TT_BANNER_MATERIAL_GREEN = TT_RTS_ROOT + "/models/extras/banners/materials/colors/TT_Banner_green_A.mat";
         public const string TT_SHIELD = TT_EXTRAS_ROOT + "/weapons/shield_20.FBX";
+        public const string TT_HAMMER = TT_EXTRAS_ROOT + "/weapons/w_hammer.FBX";
+        public const string TT_BUILDING_BURNING_SMALL_FX = TT_FX_PREFABS_ROOT + "/FX_Building_burning_small.prefab";
+        public const string TT_BUILDING_BURNING_FX = TT_FX_PREFABS_ROOT + "/FX_Building_burning.prefab";
+        public const string TT_BUILDING_DESTROYED_FX = TT_FX_PREFABS_ROOT + "/FX_Building_Destroyed_mid.prefab";
 
         public const string GENERATED_BUILDING_PREFABS_ROOT = "Assets/Prefabs/Buildings/Generated";
         public const string GENERATED_BUILDING_MATERIALS_ROOT = "Assets/Materials/TT/Generated";

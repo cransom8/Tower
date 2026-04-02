@@ -383,6 +383,9 @@ namespace CastleDefender.Net
         public string slotKey;
         public string branchId;
         public MLWorldPoint townCore;
+        public MLWorldPoint market;
+        public MLWorldPoint rearGate;
+        public MLWorldPoint tradeOutpost;
         public MLWorldPoint frontGate;
         public MLWorldPoint waveSpawn;
         public MLFortressPadPlacement[] fortressPads;
@@ -516,6 +519,7 @@ namespace CastleDefender.Net
         public MLBarracksSite[] barracksSites;
         public MLBarracksRosterEntry[] barracksRoster;
         public MLHeroRosterEntry[] heroRoster;
+        public MLMarketRosterEntry[] marketRoster;
         public MLUpcomingWave upcomingWave;
         public MLUpcomingWave[] upcomingWaveQueue;
         public int            barracksSendTimerTicksRemaining;
@@ -593,6 +597,14 @@ namespace CastleDefender.Net
         public int    nextTier;
         public string nextTierName;
         public bool   isBuilt;
+        public bool   isConstructing;
+        public string constructionKind;
+        public int    constructionTargetTier;
+        public string constructionTargetTierName;
+        public int    constructionTimerTicksRemaining;
+        public int    constructionTimerTotalTicks;
+        public float  constructionProgress01;
+        public bool   isDestroyed;
         public bool   canBuild;
         public bool   canUpgrade;
         public int    buildCost;
@@ -623,6 +635,8 @@ namespace CastleDefender.Net
         public string productionBuildingType;
         public string productionBuildingName;
         public int    tier;
+        public bool   availableForPurchase;
+        public bool   currentTier;
         public int    ownedCount;
         public int    buyCost;
         public int    sellRefund;
@@ -633,6 +647,45 @@ namespace CastleDefender.Net
         public int    requiredBuildingTier;
         public string unlockPadId;
         public string barracksId;
+        public string lockedReason;
+    }
+
+    [Serializable]
+    public class MLMarketRosterEntry
+    {
+        public string unitKey;
+        public string displayName;
+        public string role;
+        public string roleLabel;
+        public int    sortIndex;
+        public string archetypeKey;
+        public string presentationKey;
+        public string unitTypeKey;
+        public string catalogUnitKey;
+        public string skinKey;
+        public string portraitKey;
+        public string branchKey;
+        public string branchLabel;
+        public string productionBuildingType;
+        public string productionBuildingName;
+        public int    tier;
+        public bool   availableForPurchase;
+        public bool   currentTier;
+        public int    ownedCount;
+        public int    buyCost;
+        public bool   unlocked;
+        public string unlockBuildingType;
+        public string unlockBuildingName;
+        public string unlockBuildingTierName;
+        public int    requiredBuildingTier;
+        public string unlockPadId;
+        public int    economyLapGold;
+        public string routeStartBuildingType;
+        public string routeStartBuildingName;
+        public string routeEndBuildingType;
+        public string routeEndBuildingName;
+        public string nextUnitKey;
+        public string description;
         public string lockedReason;
     }
 
@@ -651,6 +704,14 @@ namespace CastleDefender.Net
         public int    level;
         public int    maxLevel;
         public string buildState;
+        public bool   isConstructing;
+        public string constructionKind;
+        public int    constructionTargetLevel;
+        public string constructionTargetTierName;
+        public int    constructionTimerTicksRemaining;
+        public int    constructionTimerTotalTicks;
+        public float  constructionProgress01;
+        public bool   isDestroyed;
         public bool   canBuild;
         public bool   canUpgrade;
         public int    buildCost;
@@ -757,6 +818,8 @@ namespace CastleDefender.Net
         public string presentationKey;
         public string catalogUnitKey;
         public string skinKey;      // null = default skin; otherwise overrides prefab lookup
+        public string marketUnitKey;
+        public bool   isMarketWorker;
         public bool   isHero;
         public string heroKey;
         public string heroVisualStyleKey;

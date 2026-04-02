@@ -47,6 +47,19 @@ namespace CastleDefender.Game
             SendAction("buy_barracks_unit", new { rosterKey, barracksId, count });
         }
 
+        public static void BuyMarketUnit(string unitKey, int count = 1)
+        {
+            if (string.IsNullOrWhiteSpace(unitKey))
+            {
+                Debug.LogError("[MarketTrace][ClientBuy] Refusing to send buy_market_unit because unitKey is missing.");
+                return;
+            }
+
+            count = Mathf.Max(1, count);
+            Debug.Log($"[MarketTrace][ClientBuy] unitKey='{unitKey}' count={count}");
+            SendAction("buy_market_unit", new { unitKey, count });
+        }
+
         public static void SellBarracksUnit(string rosterKey, string barracksId = null)
         {
             if (string.IsNullOrWhiteSpace(barracksId))

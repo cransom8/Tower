@@ -1,0 +1,60 @@
+{
+  "provider": "elevenlabs",
+  "outputRoot": "unity-client/Assets/Resources/Generated/UnitCombatSfx",
+  "profiles": [
+    {
+      "key": "common",
+      "clips": {
+        "spawn": "Short battlefield unit spawn and weapon unsheathe stinger. Light steel draw, cloth and leather settle, no voices, no music.",
+        "hurt": "Short human battlefield hurt reaction. Nonverbal armored grunt with light armor movement, no gore, no voices, no music.",
+        "death": "Short medieval human combat death collapse. Armor, cloth, and body drop, nonverbal, no gore, no music."
+      }
+    },
+    {
+      "key": "light_melee",
+      "clips": {
+        "attack": "Short light one-handed melee slash with quick steel whoosh and light hit. Militia or swordsman energy, no voices, no music."
+      }
+    },
+    {
+      "key": "heavy_melee",
+      "clips": {
+        "attack": "Short heavy armored melee swing and cleave. Knight, shield guard, paladin, or king style. Weighty steel, solid impact, no voices, no music.",
+        "defend": "Short shield block and brace. Heavy shield catch with armored strain, no voices, no music."
+      }
+    },
+    {
+      "key": "polearm",
+      "clips": {
+        "attack": "Short spear or halberd thrust and sweep with piercing contact. Polearm battlefield foley, no voices, no music."
+      }
+    },
+    {
+      "key": "bow",
+      "clips": {
+        "attack": "Short bow release with brief arrow whoosh. Clean medieval archer shot, no voices, no music.",
+        "impact": "Short arrow impact into armor or wood. Sharp medieval projectile thunk, no voices, no music."
+      }
+    },
+    {
+      "key": "crossbow",
+      "clips": {
+        "attack": "Short crossbow fire with bolt snap and brief whoosh. Heavy mechanical twang, no voices, no music.",
+        "impact": "Short heavy bolt impact. Punchier and harder than an arrow hit, no voices, no music."
+      }
+    },
+    {
+      "key": "arcane",
+      "clips": {
+        "attack": "Short arcane cast and orb launch. Focused magical crackle with battlefield clarity, no voices, no music.",
+        "impact": "Short arcane orb impact. Tight magical burst with shimmering energy, no voices, no music."
+      }
+    },
+    {
+      "key": "support",
+      "clips": {
+        "attack": "Short holy heal cast with a brief apply shimmer. Sacred battlefield support magic, no voices, no choir, no music."
+      }
+    }
+  ]
+}

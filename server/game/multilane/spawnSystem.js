@@ -10,6 +10,7 @@ const DEFAULT_SPAWN_SOURCE_TYPES = Object.freeze({
   SCHEDULED_WAVE: "dungeon_wave",
   BARRACKS_ROSTER: "barracks_roster",
   BARRACKS_HERO: "barracks_hero",
+  MARKET_ROSTER: "market_roster",
 });
 
 const DEFAULT_ALLEGIANCE_KEYS = Object.freeze({
@@ -96,6 +97,8 @@ function normalizeSpawnSourceType(value, deps = {}) {
       return spawnSourceTypes.BARRACKS_ROSTER;
     case spawnSourceTypes.BARRACKS_HERO:
       return spawnSourceTypes.BARRACKS_HERO;
+    case spawnSourceTypes.MARKET_ROSTER:
+      return spawnSourceTypes.MARKET_ROSTER;
     default:
       return null;
   }
@@ -119,6 +122,9 @@ function resolveSpawnSourceTypeFromWaveDef(waveDef, deps = {}) {
   const explicitSourceType = normalizeSpawnSourceType(waveDef && waveDef.spawnSourceType, deps);
   if (explicitSourceType)
     return explicitSourceType;
+
+  if (waveDef && String(waveDef.spawnSourceType || "").trim().toLowerCase() === DEFAULT_SPAWN_SOURCE_TYPES.MARKET_ROSTER)
+    return spawnSourceTypes.MARKET_ROSTER;
 
   if (waveDef && waveDef.isHero)
     return spawnSourceTypes.BARRACKS_HERO;
@@ -200,6 +206,9 @@ function validateSpawnDefinition(game, targetLane, waveDef, options = {}, deps =
   const sourceLane = getSourceLane(game, sourceLaneIndex);
   const sourceBarracksKey = resolveSourceBarracksId(waveDef, deps);
   const sourceTeam = normalizeAllegianceKey(waveDef && waveDef.sourceTeam);
+  const requiresSourceLane = spawnType === spawnSourceTypes.MARKET_ROSTER
+    || spawnType === spawnSourceTypes.BARRACKS_ROSTER
+    || spawnType === spawnSourceTypes.BARRACKS_HERO;
 
   if (!targetLane)
     return { ok: false, reason: "Missing target lane", spawnType };
@@ -207,13 +216,13 @@ function validateSpawnDefinition(game, targetLane, waveDef, options = {}, deps =
   if (logicalPos.x < 0 || logicalPos.x >= gridWidth || logicalPos.y < 0)
     return { ok: false, reason: "Resolved spawn index is out of legal queue bounds", spawnType };
 
-  if ((spawnType === spawnSourceTypes.BARRACKS_ROSTER || spawnType === spawnSourceTypes.BARRACKS_HERO) && !sourceLane)
+  if (requiresSourceLane && !sourceLane)
     return { ok: false, reason: "Spawn source lane is missing", spawnType };
 
   if ((spawnType === spawnSourceTypes.BARRACKS_ROSTER || spawnType === spawnSourceTypes.BARRACKS_HERO) && !sourceBarracksKey)
     return { ok: false, reason: "Spawn source barracks id is missing", spawnType };
 
-  if ((spawnType === spawnSourceTypes.BARRACKS_ROSTER || spawnType === spawnSourceTypes.BARRACKS_HERO)
+  if (requiresSourceLane
       && sourceLane && sourceTeam && resolveLaneAllegianceKey(sourceLane) !== sourceTeam) {
     return { ok: false, reason: "Spawn source team does not match source lane ownership", spawnType };
   }
@@ -312,6 +321,8 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
       sourceBarracksKey: spawnValidation.sourceBarracksKey,
       requestedSpawnKey: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
         ? `lane:${lane.laneIndex}:wave_origin`
+        : spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER
+          ? `lane:${spawnValidation.sourceLaneIndex}:market`
         : `lane:${spawnValidation.sourceLaneIndex}:barracks:${spawnValidation.sourceBarracksKey}`,
       resolvedMarkerName: `server_queue_${spawnValidation.spawnType}`,
       resolvedLogicalPosition: spawnValidation.logicalPos,
@@ -328,6 +339,8 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   const sourceLane = getSourceLane(game, spawnValidation.sourceLaneIndex);
   const objectiveLaneIndex = spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
     ? lane.laneIndex
+    : spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER
+      ? spawnValidation.sourceLaneIndex
     : getLaneCommandRouteObjectiveLaneIndex(game, sourceLane);
   const queuedUnit = {
     id: `wu${game.nextUnitId++}`,
@@ -354,6 +367,8 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
       waveDef.presentationKey || getDefaultFortPresentationKey(deps)
     ),
     skinKey: waveDef.skinKey || null,
+    marketUnitKey: waveDef.marketUnitKey || null,
+    isMarketWorker: spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER,
     isHero: !!waveDef.isHero,
     heroKey: waveDef.heroKey || null,
     heroVisualStyleKey: waveDef.heroVisualStyleKey || null,

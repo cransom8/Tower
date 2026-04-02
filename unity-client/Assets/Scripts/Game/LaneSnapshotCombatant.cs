@@ -79,6 +79,8 @@ namespace CastleDefender.Game
         public float MaxHp => Mathf.Max(1f, _maxHp);
         public float AttackRange => Mathf.Max(0.5f, _combatProfile.attackRange);
         public float EngagementRange => Mathf.Max(AttackRange, _combatProfile.engagementRange);
+        public float MoveSpeed => Mathf.Max(0.1f, _combatProfile.moveSpeed > 0f ? _combatProfile.moveSpeed : 1f);
+        public float AttackIntervalSeconds => Mathf.Max(0.25f, _combatProfile.attackIntervalSeconds > 0f ? _combatProfile.attackIntervalSeconds : 0.9f);
         public string DefenderTeamKey => _defenderTeamKey;
         public BattleTeam Team => _team;
         public bool IsLocallyControllingPosition => false;

@@ -20,12 +20,16 @@ namespace CastleDefender.Game
         const float AttackVisualMaxHoldSeconds = 0.58f;
         const float HitReactVisualMinHoldSeconds = 0.10f;
         const float HitReactVisualMaxHoldSeconds = 0.30f;
+        const float DefaultMoveAnimatorReferenceSpeed = 5f;
+        const float MinMoveAnimatorSpeedMultiplier = 0.85f;
+        const float MaxMoveAnimatorSpeedMultiplier = 1.35f;
+        const float MinAttackAnimatorSpeedMultiplier = 0.85f;
+        const float MaxAttackAnimatorSpeedMultiplier = 1.45f;
         const float UnitVoiceAnyGlobalCooldownSeconds = 0.20f;
         const float UnitVoicePerSpeakerCooldownSeconds = 1.10f;
-        const float SpawnVoiceCueCooldownSeconds = 0.12f;
-        const float AttackVoiceCueCooldownSeconds = 0.38f;
-        const float HurtVoiceCueCooldownSeconds = 0.42f;
-        const float DeathVoiceCueCooldownSeconds = 0.18f;
+        const float AttackVoiceCueCooldownSeconds = 0.22f;
+        const float DefendVoiceCueCooldownSeconds = 0.22f;
+        const float RetreatVoiceCueCooldownSeconds = 0.22f;
         const float CombatSfxCooldownSeconds = 0.06f;
         const float ImpactFxPerTargetCooldownSeconds = 0.08f;
         const float GroundProbeHeight = 32f;
@@ -53,6 +57,9 @@ namespace CastleDefender.Game
         const string BarracksRouteNodeCenterSuffix = "CTR";
         const string BarracksRouteNodeLeftSuffix = "LFT";
         const string BarracksRouteNodeRightSuffix = "RGT";
+        const string MarketRouteNodeMarketSuffix = "MKT";
+        const string MarketRouteNodeRearGateSuffix = "RGR";
+        const string MarketRouteNodeTradeOutpostSuffix = "BST";
         const string UnitSelectionLayerName = "UnitSelection";
         const string UnitFootprintLayerName = "UnitFootprint";
         const string SnapshotUnitNamePrefix = "SnapshotUnit_";
@@ -60,6 +67,8 @@ namespace CastleDefender.Game
         static readonly Color HostileBaseColor = new(0.90f, 0.30f, 0.10f);
         static readonly Color HostileRimColor = new(1.00f, 0.55f, 0.00f);
         static readonly bool EnableVerboseSpawnAuditLogs = false;
+        static readonly int VelocityXParameterHash = Animator.StringToHash("Velocity X");
+        static readonly int VelocityZParameterHash = Animator.StringToHash("Velocity Z");
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
         static readonly HashSet<string> AllowedSnapshotPresenterBehaviours = new(StringComparer.Ordinal)
         {
@@ -67,6 +76,7 @@ namespace CastleDefender.Game
             typeof(LaneSnapshotCombatant).FullName,
             typeof(SnapshotAnimationEventRelay).FullName,
             typeof(UnitAnimationBinding).FullName,
+            typeof(UnitCombatSfxBinding).FullName,
             "CastleDefender.Game.TeamColorMaterialProfile",
             "CastleDefender.Game.UnitTeamAccentMarkers",
             "CastleDefender.Game.TTRTSUnitProportionScaler",
@@ -101,6 +111,7 @@ namespace CastleDefender.Game
             public Animator[] animators;
             public Renderer[] renderers;
             public UnitAnimationResolver.ResolvedProfile animationProfile;
+            public UnitCombatSfxLibrary.ResolvedProfile combatSfxProfile;
             public MLUnit latestSnapshotUnit;
             public Vector3 snapshotWorldPos;
             public Vector3 snapshotVelocity;
@@ -115,13 +126,15 @@ namespace CastleDefender.Game
             public bool hasDesiredFacing;
             public UnitAnimationStateIntent visualState = UnitAnimationStateIntent.Idle;
             public Vector3 lastFramePosition;
+            public bool[] animatorHasVelocityX;
+            public bool[] animatorHasVelocityZ;
+            public float attackAnimatorSpeedMultiplier = 1f;
         }
 
         [Header("Runtime Snapshot Units")]
         public UnitPrefabRegistry Registry;
         public GameObject HpBarPrefab;
 
-        [SerializeField] float spawnSnapDistance = 4f;
         [SerializeField] bool returnToLobbyOnContentFailure = true;
         [SerializeField] float contentFailureLobbyReturnDelaySeconds = 1.5f;
         [Header("Combat Debug")]
@@ -149,6 +162,7 @@ namespace CastleDefender.Game
         readonly Dictionary<AudioManager.SFX, float> _lastCombatSfxAt = new();
         readonly Dictionary<string, float> _lastUnitVoiceAtBySpeaker = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<UnitVoiceCue, float> _lastUnitVoiceAtByCue = new();
+        readonly Dictionary<int, string> _lastLaneCommandVoiceStateByLaneIndex = new();
         string _lastSnapshotSummaryLog;
         float _lastSnapTime = -1f;
         float _lastAnyUnitVoiceAt = float.MinValue;
@@ -261,6 +275,12 @@ namespace CastleDefender.Game
                 UnitAnimationStateIntent desiredState = hitReacting
                     ? UnitAnimationStateIntent.HitReact
                     : UnitAnimationResolver.ResolveRuntimeIntent(view.latestSnapshotUnit, moving, attacking);
+                if (desiredState == UnitAnimationStateIntent.Defend
+                    && view.visualState != UnitAnimationStateIntent.Defend)
+                {
+                    TryPlayUnitCombatSfx(view, view.latestSnapshotUnit, UnitCombatSfxCue.Defend, now, 0.18f);
+                }
+                ApplyAnimatorPlayback(view, desiredState, flatDelta, dt);
                 SetVisualState(view, desiredState);
                 view.lastFramePosition = currentPosition;
             }
@@ -342,6 +362,7 @@ namespace CastleDefender.Game
             }
 
             RefreshBattlefieldRouteCache(snap);
+            TryPlayLaneCommandVoiceTransition(snap, now);
 
             _seenIds.Clear();
             int totalSnapshotUnitsReceived = 0;
@@ -432,7 +453,9 @@ namespace CastleDefender.Game
                     view.hadSnapshot = true;
                     view.latestSnapshotUnit = unit;
                     view.animationProfile = UnitAnimationResolver.ResolveForUnit(view.go, unit);
+                    view.combatSfxProfile = UnitCombatSfxLibrary.ResolveForUnit(view.go, unit);
                     UnitAnimationResolver.PrepareAnimators(view.animators, view.animationProfile, forPortrait: false);
+                    CacheAnimatorParameterSupport(view);
 
                     if (!view.go.activeSelf && !view.combatant.IsLocallyDefeated)
                         view.go.SetActive(true);
@@ -460,12 +483,12 @@ namespace CastleDefender.Game
                     {
                         if (unit.hp <= 0.01f)
                         {
-                            TryPlayUnitVoice(unit, UnitVoiceCue.Death, now, 0.90f, bypassChance: true);
+                            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Death, now, 0.34f, AudioManager.SFX.UnitDeath);
                         }
                         else
                         {
                             PlayHitReactFeedback(view, now);
-                            TryPlayUnitVoice(unit, UnitVoiceCue.Hurt, now, 0.82f);
+                            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Hurt, now, 0.20f);
                         }
                     }
 
@@ -473,9 +496,8 @@ namespace CastleDefender.Game
                     {
                         view.lastAttackAt = now;
                         view.combatant?.NotifyAttack(now);
-                        PlayAttackAnimation(view);
-                        PlayAttackFeedback(snap, lane, unit, previousSnapshotUnit, now);
-                        TryPlayUnitVoice(unit, UnitVoiceCue.Attack, now, 0.72f);
+                        PlayAttackAnimation(view, unit);
+                        PlayAttackFeedback(snap, lane, view, unit, previousSnapshotUnit, now);
                     }
 
                     view.lastServerAttackPulse = unit.attackPulse;
@@ -632,7 +654,6 @@ namespace CastleDefender.Game
                     ?? animator.gameObject.AddComponent<SnapshotAnimationEventRelay>();
 
                 animator.Rebind();
-                animator.Update(0f);
             }
 
             var combatant = go.GetComponent<LaneSnapshotCombatant>();
@@ -657,6 +678,7 @@ namespace CastleDefender.Game
                 animators = animators,
                 renderers = renderers,
                 animationProfile = animationProfile,
+                combatSfxProfile = UnitCombatSfxLibrary.ResolveForUnit(go, unit),
                 latestSnapshotUnit = unit,
                 snapshotWorldPos = spawnPos,
                 snapshotVelocity = Vector3.zero,
@@ -665,12 +687,20 @@ namespace CastleDefender.Game
                 lastServerAttackPulse = unit.attackPulse,
                 lastFramePosition = spawnPos,
             };
+            CacheAnimatorParameterSupport(view);
 
             _views[unit.id] = view;
             go.SetActive(true);
+            for (int i = 0; i < animators.Length; i++)
+            {
+                var animator = animators[i];
+                if (animator == null || !animator.isActiveAndEnabled)
+                    continue;
+
+                animator.Update(0f);
+            }
             SetVisualState(view, UnitAnimationResolver.ResolveRuntimeIntent(unit, moving: false, attacking: false));
-            AudioManager.I?.Play(AudioManager.SFX.UnitSpawn, 0.25f);
-            TryPlayUnitVoice(unit, UnitVoiceCue.Spawn, Time.time, 0.78f);
+            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Spawn, Time.time, 0.25f, AudioManager.SFX.UnitSpawn);
             LogVerboseSpawnAudit(
                 $"[SpawnAudit][ClientInstantiate] unitId='{unit.id}' unitType='{unit.type}' " +
                 $"resolvedCatalogUnitKey='{resolvedCatalogUnitKey ?? "<null>"}' skin='{resolvedSkinKey ?? "<default>"}' " +
@@ -890,9 +920,6 @@ namespace CastleDefender.Game
             if (!_views.TryGetValue(id, out var view))
                 return;
 
-            if (view.latestSnapshotUnit != null && view.latestSnapshotUnit.hp <= 0.01f)
-                TryPlayUnitVoice(view.latestSnapshotUnit, UnitVoiceCue.Death, Time.time, 0.90f, bypassChance: true);
-
             DestroyImpactFxHistory(id);
             DestroyImpactFxHistory(view.latestSnapshotUnit != null ? view.latestSnapshotUnit.combatTargetId : null);
             if (view.go != null)
@@ -915,6 +942,11 @@ namespace CastleDefender.Game
             }
 
             _toRemove.Clear();
+            _lastLaneCommandVoiceStateByLaneIndex.Clear();
+            _lastUnitVoiceAtBySpeaker.Clear();
+            _lastUnitVoiceAtByCue.Clear();
+            _lastAnyUnitVoiceAt = float.MinValue;
+            UnitCombatSfxLibrary.ResetPlaybackState();
             DestroyOrphanedRuntimePresenters();
         }
 
@@ -2215,7 +2247,8 @@ namespace CastleDefender.Game
                 || string.Equals(normalizedNode, RouteNodeB, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(normalizedNode, RouteNodeC, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(normalizedNode, RouteNodeD, StringComparison.OrdinalIgnoreCase)
-                || TryParseBarracksRouteNodeId(normalizedNode, out _, out _);
+                || TryParseBarracksRouteNodeId(normalizedNode, out _, out _)
+                || TryParseMarketRouteNodeId(normalizedNode, out _, out _);
         }
 
         static bool IsWaveSpawnNode(string nodeId)
@@ -2242,6 +2275,8 @@ namespace CastleDefender.Game
         {
             if (TryParseBarracksRouteNodeId(nodeId, out int barracksLaneIndex, out _))
                 return barracksLaneIndex;
+            if (TryParseMarketRouteNodeId(nodeId, out int marketLaneIndex, out _))
+                return marketLaneIndex;
 
             if (string.Equals(nodeId, RouteNodeA, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(nodeId, RouteWaveNodeA, StringComparison.OrdinalIgnoreCase))
@@ -2301,6 +2336,40 @@ namespace CastleDefender.Game
                 _ => null,
             };
             return !string.IsNullOrWhiteSpace(barracksId);
+        }
+
+        static bool TryParseMarketRouteNodeId(string nodeId, out int laneIndex, out string nodeKind)
+        {
+            laneIndex = -1;
+            nodeKind = null;
+
+            string normalizedNode = string.IsNullOrWhiteSpace(nodeId)
+                ? null
+                : nodeId.Trim().ToUpperInvariant();
+            if (string.IsNullOrWhiteSpace(normalizedNode) || normalizedNode.Length <= 1)
+                return false;
+
+            string coreNodeId = normalizedNode[..1];
+            laneIndex = coreNodeId switch
+            {
+                RouteNodeA => 0,
+                RouteNodeB => 1,
+                RouteNodeC => 2,
+                RouteNodeD => 3,
+                _ => -1,
+            };
+            if (laneIndex < 0)
+                return false;
+
+            string suffix = normalizedNode[1..];
+            nodeKind = suffix switch
+            {
+                MarketRouteNodeMarketSuffix => "market",
+                MarketRouteNodeRearGateSuffix => "rear_gate",
+                MarketRouteNodeTradeOutpostSuffix => "trade_outpost",
+                _ => null,
+            };
+            return !string.IsNullOrWhiteSpace(nodeKind);
         }
 
         static bool TrySampleBattlefieldPolyline(
@@ -3004,6 +3073,131 @@ namespace CastleDefender.Game
             target.rotation = Quaternion.Slerp(target.rotation, desired, turnT);
         }
 
+        static void CacheAnimatorParameterSupport(WaveView view)
+        {
+            if (view == null || view.animators == null)
+                return;
+
+            int animatorCount = view.animators.Length;
+            if (view.animatorHasVelocityX == null || view.animatorHasVelocityX.Length != animatorCount)
+                view.animatorHasVelocityX = new bool[animatorCount];
+            if (view.animatorHasVelocityZ == null || view.animatorHasVelocityZ.Length != animatorCount)
+                view.animatorHasVelocityZ = new bool[animatorCount];
+
+            for (int i = 0; i < animatorCount; i++)
+            {
+                var animator = view.animators[i];
+                view.animatorHasVelocityX[i] = HasAnimatorFloatParameter(animator, VelocityXParameterHash);
+                view.animatorHasVelocityZ[i] = HasAnimatorFloatParameter(animator, VelocityZParameterHash);
+            }
+        }
+
+        static bool HasAnimatorFloatParameter(Animator animator, int parameterHash)
+        {
+            if (animator == null)
+                return false;
+
+            var parameters = animator.parameters;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (parameters[i].type == AnimatorControllerParameterType.Float
+                    && parameters[i].nameHash == parameterHash)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static void ApplyAnimatorPlayback(WaveView view, UnitAnimationStateIntent desiredState, Vector3 flatDelta, float dt)
+        {
+            if (view == null || view.animators == null)
+                return;
+
+            float baseAnimatorSpeed = view.animationProfile != null
+                ? Mathf.Max(0.05f, view.animationProfile.AnimatorSpeedMultiplier)
+                : 1f;
+            bool locomoting = desiredState == UnitAnimationStateIntent.Move
+                || desiredState == UnitAnimationStateIntent.Retreat;
+            float stateSpeedMultiplier = 1f;
+            if (locomoting)
+            {
+                float referenceMoveSpeed = view.combatant != null
+                    ? view.combatant.MoveSpeed
+                    : DefaultMoveAnimatorReferenceSpeed;
+                float planarSpeed = dt > 0.0001f
+                    ? flatDelta.magnitude / dt
+                    : 0f;
+                if (planarSpeed > 0.01f && referenceMoveSpeed > 0.01f)
+                {
+                    stateSpeedMultiplier = Mathf.Clamp(
+                        planarSpeed / referenceMoveSpeed,
+                        MinMoveAnimatorSpeedMultiplier,
+                        MaxMoveAnimatorSpeedMultiplier);
+                }
+            }
+            else if (desiredState == UnitAnimationStateIntent.Attack)
+            {
+                stateSpeedMultiplier = Mathf.Clamp(
+                    view.attackAnimatorSpeedMultiplier,
+                    MinAttackAnimatorSpeedMultiplier,
+                    MaxAttackAnimatorSpeedMultiplier);
+            }
+            else
+            {
+                view.attackAnimatorSpeedMultiplier = 1f;
+            }
+
+            Vector3 planarVelocity = dt > 0.0001f ? flatDelta / dt : Vector3.zero;
+            Vector3 localVelocity = view.go != null
+                ? view.go.transform.InverseTransformDirection(planarVelocity)
+                : planarVelocity;
+            float moveReference = view.combatant != null
+                ? view.combatant.MoveSpeed
+                : DefaultMoveAnimatorReferenceSpeed;
+            float velocityX = 0f;
+            float velocityZ = 0f;
+            if (locomoting && moveReference > 0.01f)
+            {
+                velocityX = Mathf.Clamp(localVelocity.x / moveReference, -1.25f, 1.25f);
+                velocityZ = Mathf.Clamp(localVelocity.z / moveReference, -1.25f, 1.25f);
+            }
+
+            for (int i = 0; i < view.animators.Length; i++)
+            {
+                var animator = view.animators[i];
+                if (animator == null)
+                    continue;
+
+                animator.speed = baseAnimatorSpeed * stateSpeedMultiplier;
+                if (view.animatorHasVelocityX != null
+                    && i < view.animatorHasVelocityX.Length
+                    && view.animatorHasVelocityX[i])
+                {
+                    SetAnimatorFloat(animator, VelocityXParameterHash, velocityX, dt);
+                }
+
+                if (view.animatorHasVelocityZ != null
+                    && i < view.animatorHasVelocityZ.Length
+                    && view.animatorHasVelocityZ[i])
+                {
+                    SetAnimatorFloat(animator, VelocityZParameterHash, velocityZ, dt);
+                }
+            }
+        }
+
+        static void SetAnimatorFloat(Animator animator, int parameterHash, float value, float dt)
+        {
+            if (animator == null)
+                return;
+
+            if (dt > 0.0001f)
+                animator.SetFloat(parameterHash, value, 0.08f, dt);
+            else
+                animator.SetFloat(parameterHash, value);
+        }
+
         static void SetVisualState(WaveView view, UnitAnimationStateIntent desired)
         {
             if (view == null || view.animators == null || view.visualState == desired)
@@ -3020,13 +3214,13 @@ namespace CastleDefender.Game
             UnitAnimationResolver.CrossFadeFirstAvailable(view.animators, states, transitionSeconds);
         }
 
-        void PlayAttackFeedback(MLSnapshot snap, MLLaneSnap lane, MLUnit unit, MLUnit previousSnapshotUnit, float now)
+        void PlayAttackFeedback(MLSnapshot snap, MLLaneSnap lane, WaveView view, MLUnit unit, MLUnit previousSnapshotUnit, float now)
         {
             if (unit == null)
                 return;
 
             UnitAnimationAttackFamily family = UnitAnimationResolver.ResolveRuntimeAttackFamily(unit);
-            TryPlayCombatSfx(AttackSfxFor(family), 0.28f, now);
+            TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Attack, now, AttackVolumeFor(family), AttackSfxFor(family));
             if (!unit.combatContact)
                 return;
 
@@ -3063,18 +3257,80 @@ namespace CastleDefender.Game
             view.lastHitReactUntil = Mathf.Max(view.lastHitReactUntil, now + holdSeconds);
         }
 
-        static void PlayAttackAnimation(WaveView view)
+        static void PlayAttackAnimation(WaveView view, MLUnit unit)
         {
             if (view == null)
                 return;
 
-            float holdSeconds = PlayIntentAnimation(
-                view,
-                UnitAnimationStateIntent.Attack,
+            float holdSeconds = Mathf.Clamp(
                 AttackVisualHoldSeconds,
                 AttackVisualMinHoldSeconds,
                 AttackVisualMaxHoldSeconds);
+            string[] stateNames = UnitAnimationResolver.ResolveAttackPulseStates(
+                view.animationProfile,
+                unit ?? view.latestSnapshotUnit,
+                unit != null ? unit.attackPulse : view.lastServerAttackPulse + 1);
+            if (stateNames.Length > 0
+                && UnitAnimationResolver.TryFindPlayableState(view.animators, stateNames, out Animator foundAnimator, out string foundState))
+            {
+                float clipLength = UnitAnimationResolver.ResolveClipLength(foundAnimator, foundState);
+                view.attackAnimatorSpeedMultiplier = ComputeAttackPlaybackMultiplier(view, clipLength);
+                ApplyAnimatorPlayback(view, UnitAnimationStateIntent.Attack, Vector3.zero, 0f);
+                bool played = UnitAnimationResolver.CrossFadeFirstAvailable(
+                    view.animators,
+                    stateNames,
+                    view.animationProfile != null
+                        ? view.animationProfile.GetTransitionSeconds(UnitAnimationStateIntent.Attack)
+                        : 0.08f,
+                    fixedTime: false);
+                if (played)
+                {
+                    float effectiveAnimatorSpeed = foundAnimator != null
+                        ? Mathf.Max(0.05f, foundAnimator.speed)
+                        : 1f;
+                    if (clipLength > 0f)
+                        holdSeconds = Mathf.Clamp(
+                            clipLength / effectiveAnimatorSpeed,
+                            AttackVisualMinHoldSeconds,
+                            AttackVisualMaxHoldSeconds);
+                    view.visualState = UnitAnimationStateIntent.Attack;
+                }
+            }
+            else
+            {
+                view.attackAnimatorSpeedMultiplier = 1f;
+                ApplyAnimatorPlayback(view, UnitAnimationStateIntent.Attack, Vector3.zero, 0f);
+                holdSeconds = PlayIntentAnimation(
+                    view,
+                    UnitAnimationStateIntent.Attack,
+                    AttackVisualHoldSeconds,
+                    AttackVisualMinHoldSeconds,
+                    AttackVisualMaxHoldSeconds);
+            }
+
             view.lastVisualAttackUntil = Time.time + holdSeconds;
+        }
+
+        static float ComputeAttackPlaybackMultiplier(WaveView view, float clipLength)
+        {
+            if (view?.combatant == null || clipLength <= 0f)
+                return 1f;
+
+            float attackIntervalSeconds = view.combatant.AttackIntervalSeconds;
+            if (attackIntervalSeconds <= 0f)
+                return 1f;
+
+            float targetDuration = Mathf.Clamp(
+                attackIntervalSeconds * 0.92f,
+                AttackVisualMinHoldSeconds,
+                AttackVisualMaxHoldSeconds);
+            if (targetDuration <= 0.01f)
+                return 1f;
+
+            return Mathf.Clamp(
+                clipLength / targetDuration,
+                MinAttackAnimatorSpeedMultiplier,
+                MaxAttackAnimatorSpeedMultiplier);
         }
 
         static float PlayIntentAnimation(
@@ -3132,6 +3388,35 @@ namespace CastleDefender.Game
             AudioManager.I?.Play(sfx, volumeScale);
         }
 
+        void TryPlayUnitCombatSfx(
+            WaveView view,
+            MLUnit unit,
+            UnitCombatSfxCue cue,
+            float now,
+            float volumeScale,
+            AudioManager.SFX? legacyFallback = null)
+        {
+            UnitCombatSfxLibrary.ResolvedProfile profile = view != null
+                ? view.combatSfxProfile
+                : UnitCombatSfxLibrary.ResolveForUnit(null, unit);
+            UnitCombatSfxPlaybackResult result = UnitCombatSfxLibrary.TryPlay(
+                profile,
+                ResolveVoiceSpeakerId(unit),
+                cue,
+                now,
+                volumeScale);
+            if (!legacyFallback.HasValue || !ShouldFallbackToLegacyCombatSfx(result))
+                return;
+
+            TryPlayCombatSfx(legacyFallback.Value, volumeScale, now);
+        }
+
+        static bool ShouldFallbackToLegacyCombatSfx(UnitCombatSfxPlaybackResult result)
+        {
+            return result == UnitCombatSfxPlaybackResult.MissingProfile
+                || result == UnitCombatSfxPlaybackResult.MissingClips;
+        }
+
         static AudioManager.SFX AttackSfxFor(UnitAnimationAttackFamily family) => family switch
         {
             UnitAnimationAttackFamily.Ranged => AudioManager.SFX.ArcherShoot,
@@ -3148,6 +3433,15 @@ namespace CastleDefender.Game
             UnitAnimationAttackFamily.Support => HitEffect.TowerType.Ballista,
             UnitAnimationAttackFamily.Siege => HitEffect.TowerType.Ballista,
             _ => HitEffect.TowerType.Fighter,
+        };
+
+        static float AttackVolumeFor(UnitAnimationAttackFamily family) => family switch
+        {
+            UnitAnimationAttackFamily.Ranged => 0.24f,
+            UnitAnimationAttackFamily.Magic => 0.26f,
+            UnitAnimationAttackFamily.Support => 0.24f,
+            UnitAnimationAttackFamily.Siege => 0.28f,
+            _ => 0.28f,
         };
 
         void DestroyImpactFxHistory(string targetId)
@@ -3193,29 +3487,156 @@ namespace CastleDefender.Game
             _lastAnyUnitVoiceAt = now;
         }
 
+        void TryPlayLaneCommandVoiceTransition(MLSnapshot snap, float now)
+        {
+            if (snap?.lanes == null)
+                return;
+
+            int myLaneIndex = ResolveLocalLaneIndex();
+            if (myLaneIndex < 0)
+                return;
+
+            MLLaneSnap myLane = FindLaneSnapshot(snap, myLaneIndex);
+            string commandState = NormalizeLaneCommandStateForVoice(myLane != null ? myLane.commandState : null);
+            if (string.IsNullOrWhiteSpace(commandState))
+                return;
+
+            if (!_lastLaneCommandVoiceStateByLaneIndex.TryGetValue(myLaneIndex, out string previousCommandState))
+            {
+                _lastLaneCommandVoiceStateByLaneIndex[myLaneIndex] = commandState;
+                return;
+            }
+
+            if (string.Equals(previousCommandState, commandState, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _lastLaneCommandVoiceStateByLaneIndex[myLaneIndex] = commandState;
+
+            if (!TryResolveLaneCommandVoiceCue(commandState, out UnitVoiceCue cue))
+                return;
+
+            if (!TryResolveLaneCommandVoiceSpeaker(snap, myLaneIndex, out MLUnit speaker))
+                return;
+
+            TryPlayUnitVoice(speaker, cue, now, 0.88f, bypassChance: true);
+        }
+
         static float ResolveVoiceChance(MLUnit unit, UnitVoiceCue cue)
         {
-            bool isHero = unit != null && (unit.isHero || !string.IsNullOrWhiteSpace(unit.heroKey));
             return cue switch
             {
-                // Keep heroes more expressive, but make common troop barks reliable enough
-                // that a player can actually notice the system during normal play.
-                UnitVoiceCue.Spawn => isHero ? 1f : 1f,
-                UnitVoiceCue.Attack => isHero ? 0.50f : 0.22f,
-                UnitVoiceCue.Hurt => isHero ? 0.90f : 0.45f,
-                UnitVoiceCue.Death => isHero ? 1f : 1f,
-                _ => 0.15f,
+                UnitVoiceCue.Attack => 1f,
+                UnitVoiceCue.Defend => 1f,
+                UnitVoiceCue.Retreat => 1f,
+                _ => 1f,
             };
         }
 
         static float ResolveVoiceCueCooldown(UnitVoiceCue cue) => cue switch
         {
-            UnitVoiceCue.Spawn => SpawnVoiceCueCooldownSeconds,
             UnitVoiceCue.Attack => AttackVoiceCueCooldownSeconds,
-            UnitVoiceCue.Hurt => HurtVoiceCueCooldownSeconds,
-            UnitVoiceCue.Death => DeathVoiceCueCooldownSeconds,
+            UnitVoiceCue.Defend => DefendVoiceCueCooldownSeconds,
+            UnitVoiceCue.Retreat => RetreatVoiceCueCooldownSeconds,
             _ => AttackVoiceCueCooldownSeconds,
         };
+
+        int ResolveLocalLaneIndex()
+        {
+            if (_boundSnapshotApplier != null)
+                return _boundSnapshotApplier.MyLaneIndex;
+            if (SnapshotApplier.Instance != null)
+                return SnapshotApplier.Instance.MyLaneIndex;
+            return NetworkManager.Instance != null ? NetworkManager.Instance.MyLaneIndex : -1;
+        }
+
+        static MLLaneSnap FindLaneSnapshot(MLSnapshot snap, int laneIndex)
+        {
+            if (snap?.lanes == null || laneIndex < 0)
+                return null;
+
+            for (int i = 0; i < snap.lanes.Length; i++)
+            {
+                MLLaneSnap lane = snap.lanes[i];
+                if (lane != null && lane.laneIndex == laneIndex)
+                    return lane;
+            }
+
+            return null;
+        }
+
+        static string NormalizeLaneCommandStateForVoice(string commandState)
+        {
+            if (string.IsNullOrWhiteSpace(commandState))
+                return null;
+
+            string normalized = commandState.Trim().ToUpperInvariant();
+            return normalized switch
+            {
+                "ATTACK" => "ATTACK",
+                "DEFEND" => "DEFEND",
+                "RETREAT" => "RETREAT",
+                _ => null,
+            };
+        }
+
+        static bool TryResolveLaneCommandVoiceCue(string commandState, out UnitVoiceCue cue)
+        {
+            cue = UnitVoiceCue.Attack;
+            switch (NormalizeLaneCommandStateForVoice(commandState))
+            {
+                case "ATTACK":
+                    cue = UnitVoiceCue.Attack;
+                    return true;
+                case "DEFEND":
+                    cue = UnitVoiceCue.Defend;
+                    return true;
+                case "RETREAT":
+                    cue = UnitVoiceCue.Retreat;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static bool TryResolveLaneCommandVoiceSpeaker(MLSnapshot snap, int ownerLaneIndex, out MLUnit speaker)
+        {
+            speaker = null;
+            if (snap?.lanes == null || ownerLaneIndex < 0)
+                return false;
+
+            List<MLUnit> candidates = null;
+            for (int laneIndex = 0; laneIndex < snap.lanes.Length; laneIndex++)
+            {
+                MLLaneSnap lane = snap.lanes[laneIndex];
+                if (lane?.units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                {
+                    MLUnit unit = lane.units[unitIndex];
+                    if (!IsLaneCommandVoiceCandidate(unit, ownerLaneIndex))
+                        continue;
+
+                    candidates ??= new List<MLUnit>(8);
+                    candidates.Add(unit);
+                }
+            }
+
+            if (candidates == null || candidates.Count == 0)
+                return false;
+
+            speaker = candidates[UnityEngine.Random.Range(0, candidates.Count)];
+            return speaker != null;
+        }
+
+        static bool IsLaneCommandVoiceCandidate(MLUnit unit, int ownerLaneIndex)
+        {
+            if (unit == null || unit.hp <= 0.01f || unit.isWaveUnit || !UnitVoiceLibrary.HasVoiceProfile(unit))
+                return false;
+
+            int resolvedOwnerLaneIndex = unit.ownerLaneIndex >= 0 ? unit.ownerLaneIndex : unit.ownerLane;
+            return resolvedOwnerLaneIndex == ownerLaneIndex;
+        }
 
         static string ResolveVoiceSpeakerId(MLUnit unit)
         {

@@ -244,7 +244,9 @@ function processLane(game, lane, deps = {}) {
   const moveLaneControlledUnitToAnchor = requireDepFunction(deps, "moveLaneControlledUnitToAnchor");
   const relaxUnitRouteOffsets = requireDepFunction(deps, "relaxUnitRouteOffsets");
   const advanceRouteState = requireDepFunction(deps, "advanceRouteState");
+  const computeUnitRoutePathIndex = requireDepFunction(deps, "computeUnitRoutePathIndex");
   const setUnitRouteSnapshotState = requireDepFunction(deps, "setUnitRouteSnapshotState");
+  const onMarketWorkerLapComplete = requireDepFunction(deps, "onMarketWorkerLapComplete");
   const applySeparation2D = requireDepFunction(deps, "applySeparation2D");
   const resolveProjectile = requireDepFunction(deps, "resolveProjectile");
   const resolveAbilityHook = requireDepFunction(deps, "resolveAbilityHook");
@@ -270,6 +272,7 @@ function processLane(game, lane, deps = {}) {
 
     const startedTickWithCombatTarget = !!(unit.combatTarget && unit.combatTarget.unitId);
     const startedTickInCombat = unit.combatState === waveUnitStates.COMBAT || unit.routeState === waveUnitStates.COMBAT;
+    const priorMarketRouteProgress = unit.isMarketWorker ? computeUnitRoutePathIndex(unit) : null;
     const supportProfile = resolveUnitSupportProfile(unit);
     const healerMode = supportProfile.isHealer;
     unit.combatState = waveUnitStates.IDLE;
@@ -482,14 +485,23 @@ function processLane(game, lane, deps = {}) {
       unit.combatState = waveUnitStates.MOVING;
       unit.routeState = waveUnitStates.MOVING;
       if (isLaneControlledUnit(unit)) {
+        const routeMarching = shouldLaneControlledUnitRouteMarch(unit);
         if (startedTickWithCombatTarget || startedTickInCombat || unit.movementMode === unitMovementModes.COMBAT_ENGAGE)
           syncUnitRouteStateToWorldPosition(unit);
-        if (shouldLaneControlledUnitRouteMarch(unit))
+        if (routeMarching)
           movementAdvanced = advanceLaneControlledUnitAlongRoute(unit);
         else
           movementAdvanced = moveLaneControlledUnitToAnchor(unit);
+        if (unit.isMarketWorker && routeMarching) {
+          const nextMarketRouteProgress = computeUnitRoutePathIndex(unit);
+          if (Number.isFinite(priorMarketRouteProgress)
+              && Number.isFinite(nextMarketRouteProgress)
+              && nextMarketRouteProgress < priorMarketRouteProgress - 0.0001) {
+            onMarketWorkerLapComplete(game, lane, unit);
+          }
+        }
         if (!movementAdvanced) {
-          unit.movementMode = shouldLaneControlledUnitRouteMarch(unit)
+          unit.movementMode = routeMarching
             ? unitMovementModes.LANE_TRAVEL
             : unitMovementModes.ANCHOR_JOIN;
         }
@@ -513,6 +525,15 @@ function processLane(game, lane, deps = {}) {
           }
           advanceRouteState(unit, routeSpeed);
           setUnitRouteSnapshotState(unit);
+          if (unit.isMarketWorker) {
+            const nextMarketRouteProgress = computeUnitRoutePathIndex(unit);
+            if (Number.isFinite(priorMarketRouteProgress)
+                && Number.isFinite(nextMarketRouteProgress)
+                && nextMarketRouteProgress < priorMarketRouteProgress - 0.0001) {
+              onMarketWorkerLapComplete(game, lane, unit);
+            }
+            unit.canEngage = false;
+          }
           unit._missingRouteLogged = false;
           logWaveRouteProgress(game, lane, unit, deps);
         }
@@ -651,6 +672,7 @@ function finalizeTick(game, deps = {}) {
 function mlTick(game, deps = {}) {
   const grantScheduledIncome = requireDepFunction(deps, "grantScheduledIncome");
   const runScheduledWaves = requireDepFunction(deps, "runScheduledWaves");
+  const runScheduledBuildingConstruction = requireDepFunction(deps, "runScheduledBuildingConstruction");
   const runScheduledBarracksSends = requireDepFunction(deps, "runScheduledBarracksSends");
   const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
 
@@ -662,6 +684,7 @@ function mlTick(game, deps = {}) {
     game.startedAt = Date.now();
   grantScheduledIncome(game);
   runScheduledWaves(game);
+  runScheduledBuildingConstruction(game);
   runScheduledBarracksSends(game);
   syncLaneCommandAssignments(game);
   game.roundState = "combat";

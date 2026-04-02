@@ -274,6 +274,7 @@ function createMLSnapshot(game, deps) {
     createLaneUpcomingWavePreview,
     createLaneUpcomingWaveQueue,
     createBarracksRosterSnapshot,
+    createMarketRosterSnapshot,
     createHeroRosterSnapshot,
     resolveLaneAllegianceKey,
     resolveUnitAllegianceKey,
@@ -341,6 +342,7 @@ function createMLSnapshot(game, deps) {
       const barracksTimerSnapshot = getLaneBarracksSendTimerSnapshot(game, lane, deps);
       syncLegacyBarracksAggregate(lane);
       const barracksRoster = createBarracksRosterSnapshot(game, lane);
+      const marketRoster = createMarketRosterSnapshot(game, lane);
       const mapSnapshotUnit = (u) => {
         const presentation = resolveSnapshotPresentationState(game, lane, u, {
           LANE_COMMAND_STATES,
@@ -399,6 +401,8 @@ function createMLSnapshot(game, deps) {
           sourceBarracksKey: canonicalSourceBarracksId,
           sourceBarracksId: canonicalSourceBarracksId,
           spawnSourceType,
+          marketUnitKey: u.marketUnitKey || null,
+          isMarketWorker: !!u.isMarketWorker,
           type: u.type,
           archetypeKey: u.archetypeKey || null,
           presentationKey: u.presentationKey || null,
@@ -530,6 +534,7 @@ function createMLSnapshot(game, deps) {
         upcomingWave: createLaneUpcomingWavePreview(game, lane),
         upcomingWaveQueue: createLaneUpcomingWaveQueue(game, lane, 5),
         barracksRoster,
+        marketRoster,
         heroRoster: createHeroRosterSnapshot(game, lane),
         barracksSendTimerTicksRemaining: barracksTimerSnapshot.remaining,
         barracksSendTimerTotalTicks: barracksTimerSnapshot.total,
@@ -588,7 +593,11 @@ function createMLPublicConfig(options, deps) {
     ROUTE_SEGMENT_POLYLINES,
     getLaneNodeId,
     getWaveSpawnNodeId,
+    getLaneCombatAxes,
     getBarracksRouteStartNodeId,
+    getMarketRouteNodeId,
+    getRearGateRouteNodeId,
+    getTradeOutpostRouteNodeId,
     getDefaultSlotDefinitions,
     defaultEnvironmentPlayerCount,
     normalizeAllegianceKey,
@@ -743,9 +752,9 @@ function createMLPublicConfig(options, deps) {
     requiredBuildingTier: Math.max(1, Math.floor(Number(unitDef.requiredBuildingTier) || 1)),
     economyLapGold: Math.max(0, Math.floor(Number(unitDef.economyLapGold) || 0)),
     routeStartBuildingType: unitDef.routeStartBuildingType || "town_core",
-    routeStartBuildingName: getBuildingDisplayName(unitDef.routeStartBuildingType || "town_core"),
+    routeStartBuildingName: unitDef.routeStartBuildingName || getBuildingDisplayName(unitDef.routeStartBuildingType || "town_core"),
     routeEndBuildingType: unitDef.routeEndBuildingType || "market",
-    routeEndBuildingName: getBuildingDisplayName(unitDef.routeEndBuildingType || "market"),
+    routeEndBuildingName: unitDef.routeEndBuildingName || getBuildingDisplayName(unitDef.routeEndBuildingType || "market"),
     nextUnitKey: unitDef.nextUnitKey || null,
     description: unitDef.description || "",
     };
@@ -768,7 +777,11 @@ function createMLPublicConfig(options, deps) {
     ROUTE_SEGMENT_POLYLINES,
     getLaneNodeId,
     getWaveSpawnNodeId,
+    getLaneCombatAxes,
     getBarracksRouteStartNodeId,
+    getMarketRouteNodeId,
+    getRearGateRouteNodeId,
+    getTradeOutpostRouteNodeId,
     getDefaultSlotDefinitions,
     defaultEnvironmentPlayerCount,
     normalizeAllegianceKey,

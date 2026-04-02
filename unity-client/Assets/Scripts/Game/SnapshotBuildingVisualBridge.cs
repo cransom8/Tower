@@ -35,6 +35,7 @@ namespace CastleDefender.Game
         FortressPadAnchor _fortressPad;
         BarracksSiteView _barracksSiteView;
         TieredBuildingVisual _tieredVisual;
+        BuildingLifecycleVisual _lifecycleVisual;
         Renderer[] _generatedRenderers = Array.Empty<Renderer>();
         MaterialPropertyBlock _hologramPropertyBlock;
         bool _subscribed;
@@ -167,6 +168,9 @@ namespace CastleDefender.Game
 
             if (_tieredVisual == null)
                 _tieredVisual = instance.GetComponentInChildren<TieredBuildingVisual>(true);
+            _lifecycleVisual = instance.GetComponent<BuildingLifecycleVisual>();
+            if (_lifecycleVisual == null)
+                _lifecycleVisual = instance.GetComponentInChildren<BuildingLifecycleVisual>(true);
 
             if (_tieredVisual == null)
             {
@@ -185,6 +189,10 @@ namespace CastleDefender.Game
         {
             bool built = false;
             int tier = 1;
+            bool constructing = false;
+            float constructionProgress01 = 0f;
+            bool destroyed = false;
+            float hp01 = 1f;
             bool hasSnapshot = SnapshotApplier.Instance?.LatestML?.lanes != null;
 
             if (_barracksSiteView != null)
@@ -224,6 +232,10 @@ namespace CastleDefender.Game
 
                 built = site != null && site.isBuilt;
                 tier = built ? Mathf.Max(1, site.level) : 1;
+                constructing = site != null && site.isConstructing;
+                constructionProgress01 = site != null ? Mathf.Clamp01(site.constructionProgress01) : 0f;
+                destroyed = site != null && site.isDestroyed;
+                hp01 = site != null && site.maxHp > 0f ? Mathf.Clamp01(site.hp / site.maxHp) : 1f;
             }
             else if (_fortressPad != null)
             {
@@ -262,6 +274,10 @@ namespace CastleDefender.Game
 
                 built = pad != null && pad.isBuilt;
                 tier = built ? Mathf.Max(1, pad.tier) : 1;
+                constructing = pad != null && pad.isConstructing;
+                constructionProgress01 = pad != null ? Mathf.Clamp01(pad.constructionProgress01) : 0f;
+                destroyed = pad != null && pad.isDestroyed;
+                hp01 = pad != null && pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : 1f;
             }
 
             if (_tieredVisual == null)
@@ -283,8 +299,25 @@ namespace CastleDefender.Game
             }
 
             _tieredVisual.ApplyTier(tier);
+            destroyed = destroyed && built;
+            if (destroyed)
+                constructing = false;
 
-            if (!built)
+            if (_lifecycleVisual != null)
+            {
+                bool showConstructionStages = constructing && !built;
+                bool showConstructionFx = constructing;
+                bool showDamagedFx = built && !destroyed && hp01 > 0f && hp01 <= 0.35f;
+                _lifecycleVisual.ApplyState(
+                    !showConstructionStages,
+                    constructionProgress01,
+                    showConstructionFx,
+                    showConstructionStages,
+                    showDamagedFx,
+                    destroyed);
+            }
+
+            if (!built && !constructing)
             {
                 if (!ApplyLockedHologram())
                 {
@@ -477,6 +510,7 @@ namespace CastleDefender.Game
         {
             if (_tieredVisual != null)
                 _tieredVisual.gameObject.SetActive(false);
+            _lifecycleVisual?.HideAllPresentation();
 
             SetLegacyRenderersVisible(true);
             SetInteractionEnabled(enableInteraction);
@@ -595,6 +629,7 @@ namespace CastleDefender.Game
         {
             if (_tieredVisual != null)
                 _tieredVisual.gameObject.SetActive(false);
+            _lifecycleVisual?.HideAllPresentation();
 
             SetLegacyRenderersVisible(false);
             SetInteractionEnabled(true);

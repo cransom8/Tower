@@ -18,6 +18,10 @@ const {
 } = require("./fortressSystem");
 
 const TICK_HZ = 20;
+const BARRACKS_CONSTRUCTION_KINDS = Object.freeze({
+  build: "build",
+  upgrade: "upgrade",
+});
 const BARRACKS_LEVEL_ONE_SPEED_MULT = 0.50;
 const SPEED_UPGRADE_STEP = 0.25;
 const BARRACKS_COST_BASE = 100;
@@ -25,6 +29,8 @@ const BARRACKS_REQ_INCOME_BASE = 8;
 const BARRACKS_ROSTER_REFUND_PCT = 70;
 const STARTING_COMBAT_TEST_BARRACKS_ID = "center";
 const STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY = "militia";
+const DEFAULT_BARRACKS_BUILD_DURATION_TICKS = 12 * TICK_HZ;
+const DEFAULT_BARRACKS_UPGRADE_DURATION_TICKS = 14 * TICK_HZ;
 
 const BARRACKS_ROLE_SORT_ORDER = Object.freeze({
   melee: 0,
@@ -107,10 +113,11 @@ const MARKET_ROSTER_DEFS = Object.freeze([
     requiredBuildingTier: 1,
     tier: 1,
     economyLapGold: 4,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
+    routeStartBuildingType: "market",
+    routeEndBuildingType: "trade_outpost",
+    routeEndBuildingName: "Beast Lair",
     nextUnitKey: "settler",
-    description: "Carries starter trade goods between the Town Core and Market.",
+    description: "Carries starter trade goods from the Market through the Rear Gate to the Beast Lair trade run.",
     sortIndex: 10,
   },
   {
@@ -127,10 +134,11 @@ const MARKET_ROSTER_DEFS = Object.freeze([
     requiredBuildingTier: 2,
     tier: 2,
     economyLapGold: 7,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
+    routeStartBuildingType: "market",
+    routeEndBuildingType: "trade_outpost",
+    routeEndBuildingName: "Beast Lair",
     nextUnitKey: "trader",
-    description: "Carries more goods and trade value than Peasants between the Town Core and Market.",
+    description: "Carries more goods and trade value than Peasants on the Market Rear Gate trade loop.",
     sortIndex: 20,
   },
   {
@@ -147,10 +155,11 @@ const MARKET_ROSTER_DEFS = Object.freeze([
     requiredBuildingTier: 3,
     tier: 3,
     economyLapGold: 10,
-    routeStartBuildingType: "town_core",
-    routeEndBuildingType: "market",
+    routeStartBuildingType: "market",
+    routeEndBuildingType: "trade_outpost",
+    routeEndBuildingName: "Beast Lair",
     nextUnitKey: null,
-    description: "Top-tier trade runner carrying the highest-value cargo between the Town Core and Market.",
+    description: "Top-tier trade runner carrying the highest-value cargo on the Market Rear Gate trade loop.",
     sortIndex: 30,
   },
 ]);
@@ -214,8 +223,27 @@ function createBarracksSiteRosterCounts() {
   return siteCounts;
 }
 
+function createMarketRosterCounts() {
+  const counts = {};
+  for (const def of MARKET_ROSTER_DEFS)
+    counts[def.unitKey] = 0;
+  return counts;
+}
+
 function getBarracksSiteDef(barracksId) {
   return BARRACKS_SITE_DEFS.find((entry) => entry && entry.barracksId === barracksId) || null;
+}
+
+function getBarracksRosterDefinition(rosterKey) {
+  return BARRACKS_ROSTER_DEFS.find((entry) => entry.rosterKey === rosterKey) || null;
+}
+
+function getHeroRosterDefinition(heroKey) {
+  return HERO_ROSTER_DEFS.find((entry) => entry.heroKey === heroKey) || null;
+}
+
+function getMarketRosterDefinition(unitKey) {
+  return MARKET_ROSTER_DEFS.find((entry) => entry && entry.unitKey === unitKey) || null;
 }
 
 function normalizeBarracksSiteId(value) {
@@ -279,6 +307,14 @@ function getBarracksSiteCounts(lane, barracksId) {
   return lane.barracksSiteRosterCounts[normalizedId];
 }
 
+function getMarketRosterCounts(lane) {
+  if (!lane)
+    return null;
+  if (!lane.marketRosterCounts || typeof lane.marketRosterCounts !== "object")
+    lane.marketRosterCounts = createMarketRosterCounts();
+  return lane.marketRosterCounts;
+}
+
 function hasOwnedBarracksUnits(lane, barracksId) {
   const siteCounts = getBarracksSiteCounts(lane, barracksId);
   if (!siteCounts)
@@ -320,6 +356,84 @@ function getBarracksSiteSendIntervalTicks(level) {
   return seconds * TICK_HZ;
 }
 
+function getCurrentBarracksTick(game) {
+  return Math.max(0, Math.floor(Number(game && game.tick) || 0));
+}
+
+function getBarracksSiteConstructionDurationTicks(targetLevel, kind = BARRACKS_CONSTRUCTION_KINDS.build) {
+  const safeLevel = Math.max(1, normalizeBarracksSiteLevel(targetLevel));
+  if (kind === BARRACKS_CONSTRUCTION_KINDS.upgrade)
+    return DEFAULT_BARRACKS_UPGRADE_DURATION_TICKS + (Math.max(0, safeLevel - 2) * (2 * TICK_HZ));
+  return DEFAULT_BARRACKS_BUILD_DURATION_TICKS + (Math.max(0, safeLevel - 1) * TICK_HZ);
+}
+
+function clearBarracksSiteConstructionState(siteState) {
+  if (!siteState)
+    return;
+
+  siteState.constructionKind = null;
+  siteState.constructionTargetLevel = 0;
+  siteState.constructionEndTick = 0;
+  siteState.constructionTotalTicks = 0;
+}
+
+function getBarracksSiteConstructionState(siteState, game = null) {
+  if (!siteState)
+    return null;
+
+  const targetLevel = Math.max(0, Math.floor(Number(siteState.constructionTargetLevel) || 0));
+  const totalTicks = Math.max(0, Math.floor(Number(siteState.constructionTotalTicks) || 0));
+  const endTick = Math.max(0, Math.floor(Number(siteState.constructionEndTick) || 0));
+  const kind = String(siteState.constructionKind || "").trim().toLowerCase();
+  if (targetLevel <= 0 || totalTicks <= 0 || endTick <= 0)
+    return null;
+  if (kind !== BARRACKS_CONSTRUCTION_KINDS.build && kind !== BARRACKS_CONSTRUCTION_KINDS.upgrade)
+    return null;
+
+  const currentTick = getCurrentBarracksTick(game);
+  const remainingTicks = Math.max(0, endTick - currentTick);
+  const progress01 = totalTicks > 0
+    ? Math.min(1, Math.max(0, (totalTicks - remainingTicks) / totalTicks))
+    : 1;
+  return {
+    kind,
+    targetLevel,
+    totalTicks,
+    endTick,
+    remainingTicks,
+    progress01,
+  };
+}
+
+function startBarracksSiteConstruction(game, siteState, targetLevel, kind = BARRACKS_CONSTRUCTION_KINDS.build) {
+  if (!siteState)
+    return null;
+
+  const safeKind = kind === BARRACKS_CONSTRUCTION_KINDS.upgrade
+    ? BARRACKS_CONSTRUCTION_KINDS.upgrade
+    : BARRACKS_CONSTRUCTION_KINDS.build;
+  const safeTargetLevel = Math.max(1, normalizeBarracksSiteLevel(targetLevel));
+  const totalTicks = getBarracksSiteConstructionDurationTicks(safeTargetLevel, safeKind);
+  const currentTick = getCurrentBarracksTick(game);
+
+  if (totalTicks <= 0) {
+    clearBarracksSiteConstructionState(siteState);
+    return {
+      kind: safeKind,
+      targetLevel: safeTargetLevel,
+      totalTicks: 0,
+      remainingTicks: 0,
+      progress01: 1,
+    };
+  }
+
+  siteState.constructionKind = safeKind;
+  siteState.constructionTargetLevel = safeTargetLevel;
+  siteState.constructionTotalTicks = totalTicks;
+  siteState.constructionEndTick = currentTick + totalTicks;
+  return getBarracksSiteConstructionState(siteState, game);
+}
+
 function createBarracksSiteState(siteDef, options = {}) {
   const built = !!options.isBuilt;
   const level = built ? normalizeBarracksSiteLevel(options.level) : 0;
@@ -340,6 +454,10 @@ function createBarracksSiteState(siteDef, options = {}) {
       ? Math.max(1, Math.floor(Number(options.nextSendTick) || interval))
       : 0,
     costHistory: Array.isArray(options.costHistory) ? options.costHistory.slice() : [],
+    constructionKind: options.constructionKind || null,
+    constructionTargetLevel: Math.max(0, Math.floor(Number(options.constructionTargetLevel) || 0)),
+    constructionEndTick: Math.max(0, Math.floor(Number(options.constructionEndTick) || 0)),
+    constructionTotalTicks: Math.max(0, Math.floor(Number(options.constructionTotalTicks) || 0)),
   };
 }
 
@@ -405,6 +523,10 @@ function ensureBarracksSiteStates(lane, game) {
         hp: current.hp,
         nextSendTick: current.nextSendTick,
         costHistory: current.costHistory,
+        constructionKind: current.constructionKind,
+        constructionTargetLevel: current.constructionTargetLevel,
+        constructionEndTick: current.constructionEndTick,
+        constructionTotalTicks: current.constructionTotalTicks,
       });
       continue;
     }
@@ -420,14 +542,6 @@ function ensureBarracksSiteStates(lane, game) {
   lane.barracksSiteStates = next;
   syncLegacyBarracksAggregate(lane);
   return next;
-}
-
-function getBarracksRosterDefinition(rosterKey) {
-  return BARRACKS_ROSTER_DEFS.find((entry) => entry.rosterKey === rosterKey) || null;
-}
-
-function getHeroRosterDefinition(heroKey) {
-  return HERO_ROSTER_DEFS.find((entry) => entry.heroKey === heroKey) || null;
 }
 
 function getBarracksRoleSortIndex(role) {
@@ -489,17 +603,26 @@ function describeBarracksSite(game, lane, barracksId) {
   if (!siteDef || !siteState)
     return null;
 
+  const construction = getBarracksSiteConstructionState(siteState, game);
   const built = !!siteState.isBuilt;
   const level = built ? normalizeBarracksSiteLevel(siteState.level) : 0;
+  const destroyed = built && Math.max(0, Math.floor(Number(siteState.hp) || 0)) <= 0;
   const maxLevel = getBarracksSiteMaxLevel();
   const nextLevel = built ? Math.min(maxLevel, level + 1) : 1;
+  const targetLevel = construction ? construction.targetLevel : nextLevel;
   const townCoreTier = getTownCoreTier(lane);
-  const requiredTownCoreTier = getFortressRequiredTownCoreTier("barracks", nextLevel);
-  const canBuild = !built && townCoreTier >= requiredTownCoreTier;
-  const canUpgrade = built && level < maxLevel && townCoreTier >= requiredTownCoreTier;
+  const requiredTownCoreTier = getFortressRequiredTownCoreTier("barracks", targetLevel);
+  const canBuild = !built && !construction && townCoreTier >= requiredTownCoreTier;
+  const canUpgrade = built && !construction && !destroyed && level < maxLevel && townCoreTier >= requiredTownCoreTier;
 
   let buildState = FORTRESS_BUILD_STATES.locked;
-  if (!built) {
+  if (destroyed) {
+    buildState = FORTRESS_BUILD_STATES.destroyed;
+  } else if (construction) {
+    buildState = construction.kind === BARRACKS_CONSTRUCTION_KINDS.upgrade
+      ? FORTRESS_BUILD_STATES.upgrading
+      : FORTRESS_BUILD_STATES.constructing;
+  } else if (!built) {
     buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
   } else if (level >= maxLevel) {
     buildState = FORTRESS_BUILD_STATES.maxTier;
@@ -510,7 +633,13 @@ function describeBarracksSite(game, lane, barracksId) {
   }
 
   let lockedReason = null;
-  if (!built && !canBuild) {
+  if (construction) {
+    lockedReason = construction.kind === BARRACKS_CONSTRUCTION_KINDS.upgrade
+      ? "Upgrade in progress"
+      : "Construction in progress";
+  } else if (destroyed) {
+    lockedReason = "Destroyed";
+  } else if (!built && !canBuild) {
     lockedReason = `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
   } else if (built && level < maxLevel && !canUpgrade) {
     lockedReason = `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
@@ -541,6 +670,9 @@ function describeBarracksSite(game, lane, barracksId) {
     isBuilt: built,
     level,
     maxLevel,
+    targetLevel,
+    construction,
+    destroyed,
     buildState,
     canBuild,
     canUpgrade,
@@ -560,7 +692,7 @@ function getBarracksSiteLockedReason(siteDef) {
 
 function isBarracksSiteAvailable(lane, barracksId) {
   const descriptor = describeBarracksSite(null, lane, barracksId);
-  return !!(descriptor && descriptor.isBuilt);
+  return !!(descriptor && descriptor.isBuilt && !descriptor.destroyed);
 }
 
 function getBarracksRosterLockedReason(rosterDef) {
@@ -577,7 +709,7 @@ function getBarracksRosterLockedReason(rosterDef) {
 
 function getBuiltBarracksSiteTier(lane, barracksId) {
   const descriptor = describeBarracksSite(null, lane, barracksId);
-  if (!descriptor || !descriptor.isBuilt)
+  if (!descriptor || !descriptor.isBuilt || descriptor.destroyed)
     return 0;
 
   return Math.max(1, Math.floor(Number(descriptor.level) || 1));
@@ -618,6 +750,44 @@ function resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId = null) 
   };
 }
 
+function resolveMarketRosterUnlockContext(lane, unitDef) {
+  const requiredBuildingTier = Math.max(1, Math.floor(Number(unitDef && unitDef.requiredBuildingTier) || 1));
+  const unlockBuildingType = String((unitDef && unitDef.unlockBuildingType) || "market").trim().toLowerCase();
+  const unlockPad = getFortressPadByBuildingType(lane, unlockBuildingType);
+  const unlockTier = getHighestBuiltFortressPadTier(lane, unlockBuildingType);
+  return {
+    unlockPad,
+    unlockPadId: unlockPad ? unlockPad.padId : null,
+    unlockTier,
+    unlocked: unlockTier >= requiredBuildingTier,
+    buildingDef: FORTRESS_BUILDING_DEFS[unlockBuildingType] || null,
+  };
+}
+
+function getCurrentBarracksRosterDefinitionForBranch(lane, branchKey, barracksId = null) {
+  if (!lane || !branchKey)
+    return null;
+
+  return BARRACKS_ROSTER_DEFS
+    .filter((entry) => entry && entry.branchKey === branchKey)
+    .sort((left, right) => Math.max(1, left.tier || 1) - Math.max(1, right.tier || 1))
+    .reduce((current, rosterDef) => (
+      resolveBarracksRosterUnlockContext(lane, rosterDef, barracksId).unlocked ? rosterDef : current
+    ), null);
+}
+
+function getCurrentMarketRosterDefinitionForLane(lane) {
+  if (!lane)
+    return null;
+
+  return MARKET_ROSTER_DEFS
+    .slice()
+    .sort((left, right) => Math.max(1, left.tier || 1) - Math.max(1, right.tier || 1))
+    .reduce((current, unitDef) => (
+      resolveMarketRosterUnlockContext(lane, unitDef).unlocked ? unitDef : current
+    ), null);
+}
+
 function getHeroRosterLockedReason(heroDef) {
   if (!heroDef)
     return "Hero locked";
@@ -627,6 +797,18 @@ function getHeroRosterLockedReason(heroDef) {
   if (buildingDef && heroDef.requiredBuildingTier > 0)
     return `${buildingDef.displayName}: ${tierName}`;
   return "Castle required";
+}
+
+function getMarketRosterLockedReason(unitDef) {
+  if (!unitDef)
+    return "Market unit locked";
+
+  const buildingDef = FORTRESS_BUILDING_DEFS[unitDef.unlockBuildingType];
+  const buildingName = buildingDef ? buildingDef.displayName : unitDef.unlockBuildingType;
+  const tierName = getBuildingTierDisplayName(unitDef.unlockBuildingType, unitDef.requiredBuildingTier);
+  if (String(buildingName || "").trim().toLowerCase() === String(tierName || "").trim().toLowerCase())
+    return `${buildingName} required`;
+  return `${buildingName}: ${tierName}`;
 }
 
 function getBarracksSiteCombatTarget(lane, barracksId, deps = {}) {
@@ -709,8 +891,8 @@ function countBuiltBarracksSites(lane) {
 
   let built = 0;
   for (const siteDef of BARRACKS_SITE_DEFS) {
-    const state = lane.barracksSiteStates[siteDef.barracksId];
-    if (state && state.isBuilt)
+    const descriptor = describeBarracksSite(null, lane, siteDef.barracksId);
+    if (descriptor && descriptor.isBuilt && !descriptor.destroyed)
       built += 1;
   }
   return built;
@@ -857,6 +1039,30 @@ function getBarracksRosterSellRefund(rosterDef, deps = {}) {
   return Math.max(1, Math.floor((buyCost * BARRACKS_ROSTER_REFUND_PCT) / 100));
 }
 
+function getMarketRosterBuyCost(unitDef, deps = {}) {
+  if (!unitDef)
+    return 0;
+
+  const presentation = resolveFortPresentation(
+    unitDef.archetypeKey,
+    unitDef.presentationKey,
+    unitDef.displayName,
+    deps
+  );
+  const unitType = typeof deps.getUnitType === "function"
+    ? deps.getUnitType(presentation.catalogUnitKey)
+    : null;
+  const buildCost = Math.floor(Number(unitType && unitType.build_cost) || 0);
+  if (buildCost > 0)
+    return buildCost;
+
+  const unitDefResolved = typeof deps.resolveUnitDef === "function"
+    ? deps.resolveUnitDef(unitDef.archetypeKey)
+    : null;
+  const sendCost = Math.max(1, Math.floor(Number(unitDefResolved && unitDefResolved.cost) || 1));
+  return Math.max(5, sendCost * 5);
+}
+
 function createBarracksSiteRosterSnapshot(game, lane, barracksId, deps = {}) {
   const normalizedId = normalizeBarracksSiteId(barracksId);
   if (!normalizedId)
@@ -867,7 +1073,7 @@ function createBarracksSiteRosterSnapshot(game, lane, barracksId, deps = {}) {
     return [];
 
   const siteCounts = getBarracksSiteCounts(lane, normalizedId) || {};
-  const siteBuilt = !!descriptor.isBuilt;
+  const siteBuilt = !!descriptor.isBuilt && !descriptor.destroyed;
 
   return BARRACKS_ROSTER_DEFS
     .slice()
@@ -887,6 +1093,12 @@ function createBarracksSiteRosterSnapshot(game, lane, barracksId, deps = {}) {
       );
       const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef, normalizedId);
       const unlocked = siteBuilt && unlockContext.unlocked;
+      const currentTierDef = getCurrentBarracksRosterDefinitionForBranch(lane, rosterDef.branchKey, normalizedId);
+      const availableForPurchase = !!(
+        unlocked
+        && currentTierDef
+        && currentTierDef.rosterKey === rosterDef.rosterKey
+      );
       const buildingDef = unlockContext.buildingDef;
       const buyCost = getBarracksRosterBuyCost(rosterDef, deps);
       const sellRefund = getBarracksRosterSellRefund(rosterDef, deps);
@@ -909,6 +1121,8 @@ function createBarracksSiteRosterSnapshot(game, lane, barracksId, deps = {}) {
         productionBuildingType: rosterDef.productionBuildingType,
         productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
         tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
+        availableForPurchase,
+        currentTier: availableForPurchase,
         ownedCount,
         buyCost,
         sellRefund,
@@ -940,6 +1154,7 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
   const siteState = descriptor.siteState;
   const hp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.hp) || 0)) : 0;
   const maxHp = descriptor.isBuilt ? Math.max(0, Math.floor(Number(siteState.maxHp) || 0)) : 0;
+  const construction = descriptor.construction;
   const allegianceKey = typeof deps.resolveLaneAllegianceKey === "function"
     ? deps.resolveLaneAllegianceKey(lane)
     : null;
@@ -957,6 +1172,17 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
     level: descriptor.level,
     maxLevel: descriptor.maxLevel,
     buildState: descriptor.buildState,
+    isConstructing: !!construction,
+    constructionKind: construction ? construction.kind : null,
+    constructionTargetLevel: construction ? construction.targetLevel : descriptor.level,
+    constructionTargetTierName: getBuildingTierDisplayName(
+      "barracks",
+      construction ? construction.targetLevel : descriptor.level
+    ),
+    constructionTimerTicksRemaining: construction ? construction.remainingTicks : 0,
+    constructionTimerTotalTicks: construction ? construction.totalTicks : 0,
+    constructionProgress01: construction ? construction.progress01 : 0,
+    isDestroyed: !!descriptor.destroyed,
     canBuild: descriptor.canBuild,
     canUpgrade: descriptor.canUpgrade,
     buildCost: descriptor.buildCost,
@@ -986,6 +1212,12 @@ function createBarracksRosterSnapshot(game, lane, deps = {}) {
     .map((rosterDef) => {
       const unlockContext = resolveBarracksRosterUnlockContext(lane, rosterDef);
       const unlocked = unlockContext.unlocked;
+      const currentTierDef = getCurrentBarracksRosterDefinitionForBranch(lane, rosterDef.branchKey);
+      const availableForPurchase = !!(
+        unlocked
+        && currentTierDef
+        && currentTierDef.rosterKey === rosterDef.rosterKey
+      );
       const buildingDef = unlockContext.buildingDef;
       const buyCost = getBarracksRosterBuyCost(rosterDef, deps);
       const sellRefund = getBarracksRosterSellRefund(rosterDef, deps);
@@ -1018,6 +1250,8 @@ function createBarracksRosterSnapshot(game, lane, deps = {}) {
         productionBuildingType: rosterDef.productionBuildingType,
         productionBuildingName: getBuildingDisplayName(rosterDef.productionBuildingType),
         tier: Math.max(1, Math.floor(Number(rosterDef.tier) || 1)),
+        availableForPurchase,
+        currentTier: availableForPurchase,
         ownedCount,
         buyCost,
         sellRefund,
@@ -1032,6 +1266,261 @@ function createBarracksRosterSnapshot(game, lane, deps = {}) {
     });
 }
 
+function createMarketRosterSnapshot(game, lane, deps = {}) {
+  const marketCounts = getMarketRosterCounts(lane) || {};
+  const currentTierDef = getCurrentMarketRosterDefinitionForLane(lane);
+
+  return MARKET_ROSTER_DEFS
+    .slice()
+    .sort((left, right) => (left.sortIndex || 0) - (right.sortIndex || 0))
+    .map((unitDef) => {
+      const presentation = resolveFortPresentation(
+        unitDef.archetypeKey,
+        unitDef.presentationKey,
+        unitDef.displayName,
+        deps
+      );
+      const unlockContext = resolveMarketRosterUnlockContext(lane, unitDef);
+      const unlocked = unlockContext.unlocked;
+      const availableForPurchase = !!(
+        unlocked
+        && currentTierDef
+        && currentTierDef.unitKey === unitDef.unitKey
+      );
+      const ownedCount = Math.max(0, Math.floor(Number(marketCounts[unitDef.unitKey]) || 0));
+
+      return {
+        unitKey: unitDef.unitKey,
+        displayName: unitDef.displayName,
+        role: unitDef.role,
+        roleLabel: unitDef.roleLabel || "Economy",
+        sortIndex: unitDef.sortIndex || 0,
+        archetypeKey: unitDef.archetypeKey,
+        presentationKey: presentation.presentationKey,
+        unitTypeKey: presentation.catalogUnitKey,
+        catalogUnitKey: presentation.catalogUnitKey,
+        skinKey: presentation.skinKey || null,
+        portraitKey: presentation.portraitKey || null,
+        branchKey: unitDef.branchKey || "market",
+        branchLabel: unitDef.branchLabel || "Market",
+        productionBuildingType: unitDef.productionBuildingType || "market",
+        productionBuildingName: getBuildingDisplayName(unitDef.productionBuildingType || "market"),
+        tier: Math.max(1, Math.floor(Number(unitDef.tier) || 1)),
+        availableForPurchase,
+        currentTier: availableForPurchase,
+        ownedCount,
+        buyCost: getMarketRosterBuyCost(unitDef, deps),
+        unlocked,
+        unlockBuildingType: unitDef.unlockBuildingType || "market",
+        unlockBuildingName: unlockContext.buildingDef ? unlockContext.buildingDef.displayName : (unitDef.unlockBuildingType || "market"),
+        unlockBuildingTierName: getBuildingTierDisplayName(unitDef.unlockBuildingType || "market", unitDef.requiredBuildingTier),
+        requiredBuildingTier: Math.max(1, Math.floor(Number(unitDef.requiredBuildingTier) || 1)),
+        unlockPadId: unlockContext.unlockPadId,
+        economyLapGold: Math.max(0, Math.floor(Number(unitDef.economyLapGold) || 0)),
+        routeStartBuildingType: unitDef.routeStartBuildingType || "market",
+        routeStartBuildingName: unitDef.routeStartBuildingName || getBuildingDisplayName(unitDef.routeStartBuildingType || "market"),
+        routeEndBuildingType: unitDef.routeEndBuildingType || "trade_outpost",
+        routeEndBuildingName: unitDef.routeEndBuildingName || getBuildingDisplayName(unitDef.routeEndBuildingType || "trade_outpost"),
+        nextUnitKey: unitDef.nextUnitKey || null,
+        description: unitDef.description || "",
+        lockedReason: unlocked ? null : getMarketRosterLockedReason(unitDef),
+      };
+    });
+}
+
+function forEachLiveRouteUnit(game, visitor) {
+  if (!game || !Array.isArray(game.lanes) || typeof visitor !== "function")
+    return;
+
+  for (const liveLane of game.lanes) {
+    if (!liveLane)
+      continue;
+
+    for (const collectionName of ["units", "spawnQueue"]) {
+      const collection = liveLane[collectionName];
+      if (!Array.isArray(collection))
+        continue;
+
+      for (const unit of collection) {
+        if (!unit)
+          continue;
+        visitor(liveLane, unit, collectionName);
+      }
+    }
+  }
+}
+
+function applyLiveRosterDefinition(game, liveLane, unit, rosterDef, deps = {}) {
+  if (!unit || !rosterDef || !rosterDef.archetypeKey)
+    return false;
+
+  const resolvedUnitDef = typeof deps.resolveUnitDef === "function"
+    ? deps.resolveUnitDef(rosterDef.archetypeKey)
+    : null;
+  if (!resolvedUnitDef)
+    return false;
+
+  const presentation = resolveFortPresentation(
+    rosterDef.archetypeKey,
+    rosterDef.presentationKey,
+    rosterDef.displayName,
+    deps
+  );
+  const previousMaxHp = Math.max(1, Math.floor(Number(unit.maxHp) || Number(unit.hp) || resolvedUnitDef.hp || 1));
+  const hpRatio = Math.max(0, Math.min(1, (Number(unit.hp) || previousMaxHp) / previousMaxHp));
+  const sourceLane = game && Array.isArray(game.lanes) && Number.isInteger(unit.sourceLaneIndex)
+    ? game.lanes[unit.sourceLaneIndex]
+    : null;
+  const speedScale = String(rosterDef.productionBuildingType || "").trim().toLowerCase() === "blacksmith"
+    ? getBarracksSpeedMult(sourceLane && sourceLane.barracks)
+    : 1;
+  const baseSpeed = typeof deps.getBaseCombatPathSpeed === "function"
+    ? deps.getBaseCombatPathSpeed(rosterDef.archetypeKey)
+    : Number(resolvedUnitDef.pathSpeed) || Number(unit.baseSpeed) || 0.18;
+
+  unit.type = rosterDef.archetypeKey;
+  unit.unitTypeKey = rosterDef.archetypeKey;
+  unit.archetypeKey = rosterDef.archetypeKey;
+  unit.presentationKey = presentation.presentationKey;
+  unit.catalogUnitKey = presentation.catalogUnitKey;
+  unit.skinKey = presentation.skinKey || null;
+  unit.role = rosterDef.role || unit.role || null;
+  unit.baseDmg = Number(resolvedUnitDef.dmg) || Number(unit.baseDmg) || 0;
+  unit.baseSpeed = Math.max(0.01, Number(baseSpeed) * speedScale);
+  unit.atkCdTicks = Math.max(1, Math.floor(Number(resolvedUnitDef.atkCdTicks) || Number(unit.atkCdTicks) || 1));
+  unit.armorType = resolvedUnitDef.armorType || unit.armorType || "MEDIUM";
+  unit.damageReductionPct = Number(resolvedUnitDef.damageReductionPct) || 0;
+  unit.bounty = Number(resolvedUnitDef.bounty) || Number(unit.bounty) || 1;
+  unit.maxHp = Math.max(1, Math.ceil(Number(resolvedUnitDef.hp) || previousMaxHp));
+  unit.hp = Math.max(1, Math.min(unit.maxHp, Math.ceil(unit.maxHp * hpRatio)));
+  if (typeof deps.buildAbilitiesForUnitType === "function")
+    unit.abilities = deps.buildAbilitiesForUnitType(rosterDef.archetypeKey);
+
+  if (Object.prototype.hasOwnProperty.call(rosterDef, "rosterKey")) {
+    unit.rosterKey = rosterDef.rosterKey;
+    unit.marketUnitKey = null;
+    unit.isMarketWorker = false;
+  } else if (Object.prototype.hasOwnProperty.call(rosterDef, "unitKey")) {
+    unit.marketUnitKey = rosterDef.unitKey;
+    unit.rosterKey = null;
+    unit.isMarketWorker = true;
+    unit.canEngage = false;
+  }
+
+  if (typeof deps.applyCanonicalUnitMirrors === "function")
+    deps.applyCanonicalUnitMirrors(game, liveLane, unit);
+  if (unit.isMarketWorker)
+    unit.canEngage = false;
+  return true;
+}
+
+function collapseBarracksBranchCountsToTier(lane, branchKey, targetRosterDef) {
+  if (!lane || !branchKey || !targetRosterDef || !targetRosterDef.rosterKey)
+    return 0;
+
+  let totalMoved = 0;
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId);
+    if (!siteCounts)
+      continue;
+
+    let branchTotal = 0;
+    for (const rosterDef of BARRACKS_ROSTER_DEFS) {
+      if (!rosterDef || rosterDef.branchKey !== branchKey)
+        continue;
+      branchTotal += Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0));
+      siteCounts[rosterDef.rosterKey] = 0;
+    }
+    siteCounts[targetRosterDef.rosterKey] = branchTotal;
+    totalMoved += branchTotal;
+  }
+
+  return totalMoved;
+}
+
+function collapseMarketCountsToTier(lane, targetUnitDef) {
+  const marketCounts = getMarketRosterCounts(lane);
+  if (!marketCounts || !targetUnitDef || !targetUnitDef.unitKey)
+    return 0;
+
+  let totalMoved = 0;
+  for (const unitDef of MARKET_ROSTER_DEFS) {
+    if (!unitDef)
+      continue;
+    totalMoved += Math.max(0, Math.floor(Number(marketCounts[unitDef.unitKey]) || 0));
+    marketCounts[unitDef.unitKey] = 0;
+  }
+  marketCounts[targetUnitDef.unitKey] = totalMoved;
+  return totalMoved;
+}
+
+function upgradeOwnedBarracksBranchUnits(game, lane, branchKey, targetRosterDef, deps = {}) {
+  if (!game || !lane || !branchKey || !targetRosterDef)
+    return 0;
+
+  collapseBarracksBranchCountsToTier(lane, branchKey, targetRosterDef);
+  let upgraded = 0;
+  forEachLiveRouteUnit(game, (liveLane, unit) => {
+    if (!unit || Number(unit.hp) <= 0)
+      return;
+    if (Number(unit.sourceLaneIndex) !== Number(lane.laneIndex))
+      return;
+    const unitRosterDef = getBarracksRosterDefinition(unit.rosterKey);
+    if (!unitRosterDef || unitRosterDef.branchKey !== branchKey)
+      return;
+    if (applyLiveRosterDefinition(game, liveLane, unit, targetRosterDef, deps))
+      upgraded += 1;
+  });
+  return upgraded;
+}
+
+function upgradeOwnedMarketUnits(game, lane, targetUnitDef, deps = {}) {
+  if (!game || !lane || !targetUnitDef)
+    return 0;
+
+  collapseMarketCountsToTier(lane, targetUnitDef);
+  let upgraded = 0;
+  forEachLiveRouteUnit(game, (liveLane, unit) => {
+    if (!unit || Number(unit.hp) <= 0)
+      return;
+    if (Number(unit.sourceLaneIndex) !== Number(lane.laneIndex))
+      return;
+    if (!unit.isMarketWorker && !unit.marketUnitKey)
+      return;
+    if (applyLiveRosterDefinition(game, liveLane, unit, targetUnitDef, deps))
+      upgraded += 1;
+  });
+  return upgraded;
+}
+
+function spawnPurchasedMarketWorker(game, lane, unitDef, deps = {}) {
+  if (!game || !lane || !unitDef || typeof deps.spawnWaveUnit !== "function")
+    return false;
+
+  const presentation = resolveFortPresentation(
+    unitDef.archetypeKey,
+    unitDef.presentationKey,
+    unitDef.displayName,
+    deps
+  );
+  deps.spawnWaveUnit(game, lane, {
+    unit_type: unitDef.archetypeKey,
+    hp_mult: 1,
+    dmg_mult: 1,
+    speed_mult: 1,
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team || null,
+    spawnSourceType: "market_roster",
+    marketUnitKey: unitDef.unitKey,
+    archetypeKey: unitDef.archetypeKey,
+    presentationKey: presentation.presentationKey,
+    skinKey: presentation.skinKey || null,
+    role: unitDef.role || "economy",
+    spawnIndex: Math.max(0, Array.isArray(lane.spawnQueue) ? lane.spawnQueue.length : 0),
+  });
+  return true;
+}
+
 function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {}) {
   if (!game || !lane)
     return [];
@@ -1042,7 +1531,7 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
     : BARRACKS_SITE_DEFS;
   for (const siteDef of siteDefs) {
     const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
-    if (!descriptor || !descriptor.isBuilt)
+    if (!descriptor || !descriptor.isBuilt || descriptor.destroyed)
       continue;
 
     const rosterEntries = createBarracksSiteRosterSnapshot(game, lane, siteDef.barracksId, deps)
@@ -1237,21 +1726,28 @@ function applyBarracksSiteBuildAction(game, lane, barracksId) {
 
   const siteState = descriptor.siteState;
   const nextLevel = 1;
-  const interval = getBarracksSiteSendIntervalTicks(nextLevel);
-  const maxHp = getBarracksSiteBaseMaxHp();
 
   lane.gold -= descriptor.buildCost;
   lane.totalBuildSpend += descriptor.buildCost;
   lane.buildSpendThisRound += descriptor.buildCost;
-  siteState.isBuilt = true;
-  siteState.level = nextLevel;
-  siteState.maxHp = maxHp;
-  siteState.hp = maxHp;
-  siteState.nextSendTick = Math.floor(Number(game && game.tick) || 0) + interval;
+  siteState.isBuilt = false;
+  siteState.level = 0;
+  siteState.maxHp = 0;
+  siteState.hp = 0;
+  siteState.nextSendTick = 0;
+  const construction = startBarracksSiteConstruction(game, siteState, nextLevel, BARRACKS_CONSTRUCTION_KINDS.build);
+  if (construction && construction.totalTicks <= 0) {
+    siteState.isBuilt = true;
+    siteState.level = nextLevel;
+    siteState.maxHp = getBarracksSiteBaseMaxHp();
+    siteState.hp = siteState.maxHp;
+    siteState.nextSendTick = getCurrentBarracksTick(game) + getBarracksSiteSendIntervalTicks(nextLevel);
+  }
   if (!Array.isArray(siteState.costHistory))
     siteState.costHistory = [];
   siteState.costHistory.push({ cost: descriptor.buildCost });
-  syncLegacyBarracksAggregate(lane);
+  if (siteState.isBuilt)
+    syncLegacyBarracksAggregate(lane);
   return { ok: true };
 }
 
@@ -1275,15 +1771,61 @@ function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
   lane.gold -= descriptor.upgradeCost;
   lane.totalBuildSpend += descriptor.upgradeCost;
   lane.buildSpendThisRound += descriptor.upgradeCost;
-  siteState.level = nextLevel;
-  siteState.maxHp = Math.max(getBarracksSiteBaseMaxHp(), Math.floor(Number(siteState.maxHp) || 0));
-  siteState.hp = siteState.maxHp;
-  siteState.nextSendTick = currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval));
+  const construction = startBarracksSiteConstruction(game, siteState, nextLevel, BARRACKS_CONSTRUCTION_KINDS.upgrade);
+  if (construction && construction.totalTicks <= 0) {
+    siteState.level = nextLevel;
+    siteState.maxHp = Math.max(getBarracksSiteBaseMaxHp(), Math.floor(Number(siteState.maxHp) || 0));
+    siteState.hp = siteState.maxHp;
+    siteState.nextSendTick = currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval));
+    syncLegacyBarracksAggregate(lane);
+  }
   if (!Array.isArray(siteState.costHistory))
     siteState.costHistory = [];
   siteState.costHistory.push({ cost: descriptor.upgradeCost });
-  syncLegacyBarracksAggregate(lane);
   return { ok: true };
+}
+
+function advanceBarracksSiteConstruction(game) {
+  if (!game || !Array.isArray(game.lanes))
+    return false;
+
+  let changed = false;
+  const currentTick = getCurrentBarracksTick(game);
+  for (const lane of game.lanes) {
+    if (!lane || !lane.barracksSiteStates || typeof lane.barracksSiteStates !== "object")
+      continue;
+
+    let laneChanged = false;
+    for (const siteState of Object.values(lane.barracksSiteStates)) {
+      const construction = getBarracksSiteConstructionState(siteState, game);
+      if (!construction || construction.endTick > currentTick)
+        continue;
+
+      const wasBuilt = !!siteState.isBuilt;
+      const previousLevel = Math.max(0, Math.floor(Number(siteState.level) || 0));
+      const nextLevel = Math.max(1, normalizeBarracksSiteLevel(construction.targetLevel));
+      const nextInterval = getBarracksSiteSendIntervalTicks(nextLevel);
+      const currentRemaining = wasBuilt
+        ? Math.max(0, Math.floor(Number(siteState.nextSendTick) || 0) - currentTick)
+        : 0;
+
+      siteState.isBuilt = true;
+      siteState.level = nextLevel;
+      siteState.maxHp = getBarracksSiteBaseMaxHp();
+      siteState.hp = siteState.maxHp;
+      siteState.nextSendTick = wasBuilt && previousLevel > 0
+        ? currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval))
+        : currentTick + nextInterval;
+      clearBarracksSiteConstructionState(siteState);
+      laneChanged = true;
+      changed = true;
+    }
+
+    if (laneChanged)
+      syncLegacyBarracksAggregate(lane);
+  }
+
+  return changed;
 }
 
 function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1, deps = {}) {
@@ -1305,7 +1847,7 @@ function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1
   const siteSnapshot = createBarracksSiteSnapshot(game, lane, normalizedBarracksId, deps);
   if (!siteSnapshot)
     return { ok: false, reason: "Unknown barracks" };
-  if (!siteSnapshot.isBuilt)
+  if (!siteSnapshot.isBuilt || siteSnapshot.isDestroyed)
     return { ok: false, reason: siteSnapshot.lockedReason || "Buy Building first" };
 
   const rosterEntry = Array.isArray(siteSnapshot.roster)
@@ -1315,6 +1857,8 @@ function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1
     return { ok: false, reason: "Unknown barracks unit" };
   if (!rosterEntry.unlocked)
     return { ok: false, reason: rosterEntry.lockedReason || "Unit is locked" };
+  if (!rosterEntry.availableForPurchase)
+    return { ok: false, reason: "A higher-tier version is now the current purchase for this branch" };
 
   const totalCost = Math.max(0, rosterEntry.buyCost * safeCount);
   if (lane.gold < totalCost)
@@ -1333,6 +1877,79 @@ function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1
   );
   logBarracksRosterState(lane, `after_buy:${normalizedBarracksId}:${rosterKey}`);
   return { ok: true };
+}
+
+function buyMarketUnit(game, laneIndex, lane, unitKey, count = 1, deps = {}) {
+  const safeCount = Math.min(25, Math.max(1, Math.floor(Number(count) || 1)));
+  console.log(
+    `[MarketTrace][ServerBuy] action='buy_market_unit' lane=${laneIndex} ` +
+    `unitKey='${unitKey}' count=${safeCount}`
+  );
+
+  const unitDef = getMarketRosterDefinition(unitKey);
+  if (!unitDef)
+    return { ok: false, reason: "Unknown market unit" };
+
+  const marketPad = getFortressPadByBuildingType(lane, "market");
+  if (!marketPad || Math.max(0, Math.floor(Number(marketPad.tier) || 0)) <= 0)
+    return { ok: false, reason: "Build the Market first" };
+
+  const marketRoster = createMarketRosterSnapshot(game, lane, deps);
+  const marketEntry = Array.isArray(marketRoster)
+    ? marketRoster.find((entry) => entry && entry.unitKey === unitKey)
+    : null;
+  if (!marketEntry)
+    return { ok: false, reason: "Unknown market unit" };
+  if (!marketEntry.unlocked)
+    return { ok: false, reason: marketEntry.lockedReason || "Market unit is locked" };
+  if (!marketEntry.availableForPurchase)
+    return { ok: false, reason: "A higher-tier market worker is now the current purchase" };
+
+  const totalCost = Math.max(0, marketEntry.buyCost * safeCount);
+  if (lane.gold < totalCost)
+    return { ok: false, reason: "Not enough gold" };
+
+  lane.gold -= totalCost;
+  lane.totalBuildSpend += totalCost;
+  lane.buildSpendThisRound += totalCost;
+  const marketCounts = getMarketRosterCounts(lane);
+  if (!marketCounts)
+    return { ok: false, reason: "Market roster state is unavailable" };
+  marketCounts[unitKey] = Math.max(0, Math.floor(Number(marketCounts[unitKey]) || 0) + safeCount);
+  for (let i = 0; i < safeCount; i += 1)
+    spawnPurchasedMarketWorker(game, lane, unitDef, deps);
+
+  console.log(
+    `[MarketTrace][ServerBuy] lane=${laneIndex} unitKey='${unitKey}' ` +
+    `ownedCount=${marketCounts[unitKey]} totalCost=${totalCost}`
+  );
+  return { ok: true };
+}
+
+function completeMarketWorkerLap(game, fallbackLane, unit) {
+  if (!game || !unit)
+    return 0;
+
+  const ownerLane = Array.isArray(game.lanes) && Number.isInteger(unit.sourceLaneIndex)
+    ? game.lanes[unit.sourceLaneIndex]
+    : fallbackLane;
+  if (!ownerLane)
+    return 0;
+
+  const unitDef = getMarketRosterDefinition(unit.marketUnitKey)
+    || MARKET_ROSTER_DEFS.find((entry) => entry && entry.archetypeKey === unit.archetypeKey)
+    || getCurrentMarketRosterDefinitionForLane(ownerLane);
+  if (!unitDef)
+    return 0;
+
+  const lapGold = Math.max(0, Math.floor(Number(unitDef.economyLapGold) || 0));
+  if (lapGold <= 0)
+    return 0;
+
+  ownerLane.gold += lapGold;
+  unit.marketLapCount = Math.max(0, Math.floor(Number(unit.marketLapCount) || 0)) + 1;
+  unit.lastMarketLapTick = Math.floor(Number(game.tick) || 0);
+  return lapGold;
 }
 
 function sellBarracksUnit(laneIndex, lane, rosterKey, barracksId, deps = {}) {
@@ -1380,7 +1997,7 @@ function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId, deps = {
   const siteDescriptor = describeBarracksSite(game, lane, normalizedBarracksId);
   if (!siteDescriptor)
     return { ok: false, reason: "Unknown barracks" };
-  if (!siteDescriptor.isBuilt)
+  if (!siteDescriptor.isBuilt || siteDescriptor.destroyed)
     return { ok: false, reason: siteDescriptor.lockedReason || "Buy Building first" };
 
   if (!isHeroUnlockedForLane(lane, heroDef))
@@ -1493,6 +2110,7 @@ module.exports = {
   BARRACKS_ROSTER_REFUND_PCT,
   STARTING_COMBAT_TEST_BARRACKS_ID,
   STARTING_COMBAT_TEST_MILITIA_ROSTER_KEY,
+  BARRACKS_CONSTRUCTION_KINDS,
   BARRACKS_ROLE_SORT_ORDER,
   BARRACKS_SPAWN_ROLE_ORDER,
   BARRACKS_SITE_DEFS,
@@ -1504,11 +2122,14 @@ module.exports = {
   getBarracksSpeedMult,
   createBarracksRosterCounts,
   createBarracksSiteRosterCounts,
+  createMarketRosterCounts,
   getBarracksSiteDef,
+  getMarketRosterDefinition,
   normalizeBarracksSiteId,
   summarizeBarracksSiteCounts,
   summarizeBarracksSiteRosterEntries,
   getBarracksSiteCounts,
+  getMarketRosterCounts,
   hasOwnedBarracksUnits,
   getBarracksSiteTierRequirement,
   getBarracksSiteBuildCost,
@@ -1516,6 +2137,8 @@ module.exports = {
   normalizeBarracksSiteLevel,
   getBarracksSiteBaseMaxHp,
   getBarracksSiteSendIntervalTicks,
+  getBarracksSiteConstructionDurationTicks,
+  getBarracksSiteConstructionState,
   createBarracksSiteState,
   createBarracksSiteStates,
   syncLegacyBarracksAggregate,
@@ -1530,9 +2153,13 @@ module.exports = {
   getBuiltBarracksSiteTier,
   getHighestBuiltBarracksSiteTier,
   resolveBarracksRosterUnlockContext,
+  resolveMarketRosterUnlockContext,
   getBarracksRosterDefinition,
   getHeroRosterDefinition,
+  getCurrentBarracksRosterDefinitionForBranch,
+  getCurrentMarketRosterDefinitionForLane,
   getHeroRosterLockedReason,
+  getMarketRosterLockedReason,
   getBarracksSiteCombatTarget,
   isHeroUnlockedForLane,
   getHeroCooldownReadyTick,
@@ -1544,7 +2171,9 @@ module.exports = {
   getBarracksRosterSellRefund,
   createBarracksSiteRosterSnapshot,
   createBarracksSiteSnapshot,
+  advanceBarracksSiteConstruction,
   createBarracksRosterSnapshot,
+  createMarketRosterSnapshot,
   getBarracksRoleSortIndex,
   getBarracksSpawnQueueRoleSortIndex,
   buildBarracksRosterSpawnEntries,
@@ -1554,6 +2183,10 @@ module.exports = {
   applyBarracksSiteBuildAction,
   applyBarracksSiteUpgradeAction,
   buyBarracksUnit,
+  buyMarketUnit,
+  upgradeOwnedBarracksBranchUnits,
+  upgradeOwnedMarketUnits,
+  completeMarketWorkerLap,
   sellBarracksUnit,
   deployBarracksHero,
   seedStartingCombatTestMilitia,

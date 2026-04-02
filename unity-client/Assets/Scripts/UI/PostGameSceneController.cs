@@ -311,24 +311,7 @@ namespace CastleDefender.UI
             yield return null;
             yield return null;
 
-            var currentEventSystem = EventSystem.current;
-            if (currentEventSystem != null && currentEventSystem.gameObject.scene == gameObject.scene)
-                yield break;
-
-            var sceneEventSystem = FindEventSystemInScene(gameObject.scene);
-            if (sceneEventSystem != null)
-            {
-                if (sceneEventSystem.GetComponent<StandaloneInputModule>() == null)
-                    sceneEventSystem.gameObject.AddComponent<StandaloneInputModule>();
-                Debug.Log("[PostGameFlow] Reusing scene-local EventSystem for post-game input.");
-                yield break;
-            }
-
-            var eventSystemGo = new GameObject("PostGameEventSystem");
-            SceneManager.MoveGameObjectToScene(eventSystemGo, gameObject.scene);
-            eventSystemGo.AddComponent<EventSystem>();
-            eventSystemGo.AddComponent<StandaloneInputModule>();
-            Debug.Log("[PostGameFlow] Created scene-local EventSystem for post-game input.");
+            SceneEventSystemUtility.EnsureSceneLocal(this, "PostGameEventSystem", "PostGameFlow");
         }
 
         System.Collections.IEnumerator LogStableOpenState()
@@ -356,21 +339,6 @@ namespace CastleDefender.UI
                 var canvas = root.GetComponentInChildren<Canvas>(true);
                 if (canvas != null)
                     return canvas;
-            }
-
-            return null;
-        }
-
-        static EventSystem FindEventSystemInScene(Scene scene)
-        {
-            if (!scene.IsValid())
-                return null;
-
-            foreach (var root in scene.GetRootGameObjects())
-            {
-                var eventSystem = root.GetComponentInChildren<EventSystem>(true);
-                if (eventSystem != null)
-                    return eventSystem;
             }
 
             return null;

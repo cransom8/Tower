@@ -41,6 +41,8 @@ namespace CastleDefender.UI
     public class LoginUI : MonoBehaviour
     {
         GameObject _runtimeAudioListener;
+        const int CinematicAudioSampleRate = 44100;
+        const int CinematicAudioChannels = 2;
 
         [Preserve]
         sealed class LoginRequest
@@ -109,10 +111,14 @@ namespace CastleDefender.UI
         public string LoginCinematicFolder = "LoginCinematics";
         public string[] IntroClipFileNames =
         {
-            "motion2Fast_Dark_medieval_forge_interior_No_people_visibleA_si_0.mp4",
-            "motion2Fast_Topdown_view_of_a_medieval_fortress_courtyard_at_n_0.mp4",
+            "Blacksmith_First Slide.mp4",
+            "Sword Quinch_Second Slide.mp4",
+            "Long Goodbyes_Third Slide.mp4",
+            "They are Coming_Last Slide.mp4",
         };
-        public string LoginLoopClipFileName = "motion2Fast_Topdown_view_at_the_top_of_medieval_fortress_battl_0.mp4";
+        public string LoginLoopClipFileName = "";
+        public float FinalIntroClipRevealTimeSeconds = 7f;
+        public float CinematicVideoVolume = 1f;
         public bool AllowIntroSkip = true;
         public float IntroTitleFadeInDuration = 0.55f;
         public float IntroTitleHoldDuration = 1.35f;
@@ -125,6 +131,17 @@ namespace CastleDefender.UI
         public float IntroTaglineDelay = 0.32f;
         public float IntroStampDuration = 0.16f;
         public float IntroStampSettleDuration = 0.20f;
+
+        [Header("Cinematic Audio")]
+        public AudioClip IntroTitleStampClip;
+        public float IntroTitleStampVolume = 1.3f;
+        public AudioClip IntroForgeQuenchClip;
+        public float IntroForgeQuenchDelay = 1f;
+        public float IntroForgeQuenchVolume = 1.05f;
+        public string IntroTitleStampPcmFileName = "login_title_stamp_metal.pcm";
+        public string IntroForgeQuenchPcmFileName = "forge_blade_quench_oil.pcm";
+        public string LoginWindLoopPcmFileName = "courtyard_cold_wind_loop.pcm";
+        public float LoginWindLoopVolume = 0.72f;
 
         // ── State ─────────────────────────────────────────────────────────────
         bool   _isRegisterTab   = false;
@@ -143,6 +160,7 @@ namespace CastleDefender.UI
         bool   _cinematicAssetsResolved = false;
         bool   _freezeLoginBackgroundOnPrepare = false;
         bool   _loginBackgroundFrozen = false;
+        bool   _playedIntroForgeQuench = false;
         string _activeVideoPath = "";
         string _loopVideoPath = "";
         readonly Queue<string> _pendingIntroVideoPaths = new();
@@ -163,9 +181,17 @@ namespace CastleDefender.UI
         AspectRatioFitter _cinematicBackgroundAspect;
         VideoPlayer _cinematicVideoPlayer;
         RenderTexture _cinematicVideoTexture;
+        AudioSource _cinematicOneShotSource;
+        AudioSource _cinematicLoopSource;
+        AudioClip _introTitleStampRuntimeClip;
+        AudioClip _introForgeQuenchRuntimeClip;
+        AudioClip _loginWindLoopRuntimeClip;
         Coroutine _introTitleRoutine;
         Coroutine _loginRevealRoutine;
         Coroutine _loginBackgroundFreezeRoutine;
+        Coroutine _introTimedStopRoutine;
+        Coroutine _introForgeQuenchRoutine;
+        Coroutine _cinematicAudioPreloadRoutine;
 
         public bool IsReadyForFinalRuntimeScreenshot
         {
@@ -297,6 +323,12 @@ namespace CastleDefender.UI
 
             if (_loginBackgroundFreezeRoutine != null)
                 StopCoroutine(_loginBackgroundFreezeRoutine);
+
+            if (_introTimedStopRoutine != null)
+                StopCoroutine(_introTimedStopRoutine);
+
+            StopPendingCinematicAudio();
+            ReleaseCinematicAudio();
 
             if (_cinematicVideoTexture != null)
             {
@@ -682,6 +714,8 @@ namespace CastleDefender.UI
 
             _allowTapToSkipIntro = AllowIntroSkip;
             _backgroundLoopActive = false;
+            _playedIntroForgeQuench = false;
+            StopPendingCinematicAudio();
             _pendingIntroVideoPaths.Clear();
             foreach (var path in _resolvedIntroVideoPaths)
                 _pendingIntroVideoPaths.Enqueue(path);
@@ -738,7 +772,12 @@ namespace CastleDefender.UI
         void BeginLoginLoopAndReveal(bool skipBrandReveal = false)
         {
             _introSequenceActive = false;
-            StartLoopBackground();
+            StopPendingCinematicAudio();
+            bool hasLoopBackground = !string.IsNullOrWhiteSpace(_loopVideoPath);
+            if (hasLoopBackground)
+                StartLoopBackground();
+            else
+                FreezeCurrentCinematicFrame();
 
             if (_introTitleRoutine != null)
             {
@@ -746,7 +785,7 @@ namespace CastleDefender.UI
                 _introTitleRoutine = null;
             }
 
-            if (skipBrandReveal)
+            if (skipBrandReveal || !hasLoopBackground)
             {
                 _allowTapToSkipIntro = false;
                 UpdateSkipIntroVisibility(false);
@@ -793,6 +832,7 @@ namespace CastleDefender.UI
             ResetIntroOverlayVisualState();
             _introTitleGroup.alpha = 1f;
             yield return new WaitForSecondsRealtime(Mathf.Max(0f, EndTitleRevealDelay));
+            PlayCinematicOneShot(ResolveCinematicClip(_introTitleStampRuntimeClip, IntroTitleStampClip), IntroTitleStampVolume);
             yield return StampIntroElement(_introTitleCanvasGroup, _introTitleText.rectTransform, _introTitleBasePosition, new Vector2(0f, -22f), 1.22f, 0.93f);
             yield return new WaitForSecondsRealtime(Mathf.Max(0f, IntroTaglineDelay));
             yield return StampIntroElement(_introTaglineCanvasGroup, _introTaglineText.rectTransform, _introTaglineBasePosition, new Vector2(0f, -10f), 1.14f, 0.96f);
@@ -938,7 +978,7 @@ namespace CastleDefender.UI
             _cinematicVideoPlayer.playOnAwake = false;
             _cinematicVideoPlayer.waitForFirstFrame = true;
             _cinematicVideoPlayer.skipOnDrop = true;
-            _cinematicVideoPlayer.audioOutputMode = VideoAudioOutputMode.None;
+            _cinematicVideoPlayer.audioOutputMode = VideoAudioOutputMode.Direct;
             _cinematicVideoPlayer.renderMode = VideoRenderMode.RenderTexture;
 
             _cinematicVideoTexture = new RenderTexture(1280, 720, 0, RenderTextureFormat.ARGB32);
@@ -965,6 +1005,12 @@ namespace CastleDefender.UI
                 _loginBackgroundFreezeRoutine = null;
             }
 
+            if (_introTimedStopRoutine != null)
+            {
+                StopCoroutine(_introTimedStopRoutine);
+                _introTimedStopRoutine = null;
+            }
+
             _activeVideoPath = path;
             _freezeLoginBackgroundOnPrepare =
                 HoldLoginBackgroundOnFinalFrame &&
@@ -985,10 +1031,51 @@ namespace CastleDefender.UI
             if (_cinematicBackgroundImage != null && source.targetTexture != null)
                 _cinematicBackgroundImage.texture = source.targetTexture;
 
+            for (ushort trackIndex = 0; trackIndex < source.audioTrackCount; trackIndex++)
+            {
+                source.EnableAudioTrack(trackIndex, true);
+                source.SetDirectAudioMute(trackIndex, false);
+                if (source.canSetDirectAudioVolume)
+                    source.SetDirectAudioVolume(trackIndex, Mathf.Max(0f, CinematicVideoVolume));
+            }
+
             source.Play();
 
             if (_freezeLoginBackgroundOnPrepare)
                 _loginBackgroundFreezeRoutine = StartCoroutine(HoldVideoOnFinalFrame(source));
+            else if (ShouldStopFinalIntroClipEarly(source))
+                _introTimedStopRoutine = StartCoroutine(StopFinalIntroClipAtConfiguredTime(source));
+        }
+
+        bool ShouldStopFinalIntroClipEarly(VideoPlayer source)
+        {
+            return
+                source != null &&
+                _introSequenceActive &&
+                _resolvedIntroVideoPaths.Count > 0 &&
+                !string.IsNullOrWhiteSpace(_activeVideoPath) &&
+                string.Equals(_activeVideoPath, _resolvedIntroVideoPaths[_resolvedIntroVideoPaths.Count - 1], StringComparison.OrdinalIgnoreCase) &&
+                FinalIntroClipRevealTimeSeconds > 0f;
+        }
+
+        void HandlePreparedCinematicAudio()
+        {
+            TryStartLoginWindLoopForActiveClip();
+
+            AudioClip quenchClip = ResolveCinematicClip(_introForgeQuenchRuntimeClip, IntroForgeQuenchClip);
+            if (_playedIntroForgeQuench ||
+                quenchClip == null ||
+                _resolvedIntroVideoPaths.Count == 0 ||
+                string.IsNullOrWhiteSpace(_activeVideoPath) ||
+                !string.Equals(_activeVideoPath, _resolvedIntroVideoPaths[0], StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (_introForgeQuenchRoutine != null)
+                StopCoroutine(_introForgeQuenchRoutine);
+
+            _introForgeQuenchRoutine = StartCoroutine(
+                PlayDelayedCinematicAudio(quenchClip, IntroForgeQuenchDelay, IntroForgeQuenchVolume));
+            _playedIntroForgeQuench = true;
         }
 
         void HandleCinematicVideoLoopPointReached(VideoPlayer source)
@@ -1068,6 +1155,253 @@ namespace CastleDefender.UI
             }
 
             _loginBackgroundFreezeRoutine = null;
+        }
+
+        IEnumerator StopFinalIntroClipAtConfiguredTime(VideoPlayer source)
+        {
+            if (source == null)
+                yield break;
+
+            double revealTime = Math.Max(0.05d, FinalIntroClipRevealTimeSeconds);
+            if (source.length > 0d)
+                revealTime = Math.Min(revealTime, Math.Max(0.05d, source.length));
+
+            while (source != null && source.isPrepared)
+            {
+                if (!source.isPlaying)
+                {
+                    yield return null;
+                    continue;
+                }
+
+                if (source.time >= revealTime)
+                {
+                    source.Pause();
+                    _loginBackgroundFrozen = true;
+                    _introTimedStopRoutine = null;
+                    BeginLoginLoopAndReveal();
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            _introTimedStopRoutine = null;
+        }
+
+        void FreezeCurrentCinematicFrame()
+        {
+            if (_cinematicVideoPlayer == null || !_cinematicVideoPlayer.isPrepared)
+                return;
+
+            _cinematicVideoPlayer.Pause();
+            _loginBackgroundFrozen = true;
+        }
+
+        IEnumerator PlayDelayedCinematicAudio(AudioClip clip, float delay, float volume)
+        {
+            if (clip == null)
+                yield break;
+
+            if (delay > 0f)
+                yield return new WaitForSecondsRealtime(delay);
+
+            PlayCinematicOneShot(clip, volume);
+            _introForgeQuenchRoutine = null;
+        }
+
+        void StopPendingCinematicAudio()
+        {
+            if (_introForgeQuenchRoutine == null)
+                return;
+
+            StopCoroutine(_introForgeQuenchRoutine);
+            _introForgeQuenchRoutine = null;
+        }
+
+        void PlayCinematicOneShot(AudioClip clip, float volume)
+        {
+            if (clip == null || _cinematicOneShotSource == null)
+                return;
+
+            _cinematicOneShotSource.PlayOneShot(clip, Mathf.Max(0f, volume));
+        }
+
+        void EnsureCinematicAudioSources()
+        {
+            if (_cinematicOneShotSource == null)
+            {
+                _cinematicOneShotSource = gameObject.AddComponent<AudioSource>();
+                _cinematicOneShotSource.playOnAwake = false;
+                _cinematicOneShotSource.loop = false;
+                _cinematicOneShotSource.spatialBlend = 0f;
+            }
+
+            if (_cinematicLoopSource == null)
+            {
+                _cinematicLoopSource = gameObject.AddComponent<AudioSource>();
+                _cinematicLoopSource.playOnAwake = false;
+                _cinematicLoopSource.loop = true;
+                _cinematicLoopSource.spatialBlend = 0f;
+            }
+        }
+
+        void StartCinematicAudioPreload()
+        {
+            if (_cinematicAudioPreloadRoutine != null)
+                return;
+
+            _cinematicAudioPreloadRoutine = StartCoroutine(PreloadCinematicAudio());
+        }
+
+        IEnumerator PreloadCinematicAudio()
+        {
+            yield return LoadStreamingPcmClip(IntroTitleStampPcmFileName, clip => _introTitleStampRuntimeClip = clip);
+            yield return LoadStreamingPcmClip(IntroForgeQuenchPcmFileName, clip => _introForgeQuenchRuntimeClip = clip);
+            yield return LoadStreamingPcmClip(LoginWindLoopPcmFileName, clip =>
+            {
+                _loginWindLoopRuntimeClip = clip;
+                TryStartLoginWindLoopForActiveClip();
+            });
+
+            _cinematicAudioPreloadRoutine = null;
+        }
+
+        IEnumerator LoadStreamingPcmClip(string fileName, Action<AudioClip> assignClip)
+        {
+            if (assignClip == null || string.IsNullOrWhiteSpace(fileName))
+                yield break;
+
+            string path = BuildStreamingAssetUrl(fileName);
+            if (string.IsNullOrWhiteSpace(path))
+                yield break;
+
+            byte[] pcmData = null;
+            if (path.Contains("://", StringComparison.Ordinal))
+            {
+                using var req = UnityWebRequest.Get(path);
+                yield return req.SendWebRequest();
+                if (req.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"[LoginUI] Failed to load cinematic audio '{fileName}' from '{path}': {req.error}");
+                    yield break;
+                }
+
+                pcmData = req.downloadHandler?.data;
+            }
+            else
+            {
+                if (!File.Exists(path))
+                {
+                    Debug.LogWarning($"[LoginUI] Cinematic audio file not found at '{path}'.");
+                    yield break;
+                }
+
+                pcmData = File.ReadAllBytes(path);
+            }
+
+            AudioClip clip = CreatePcm16AudioClip(fileName, pcmData, CinematicAudioSampleRate, CinematicAudioChannels);
+            if (clip == null)
+            {
+                Debug.LogWarning($"[LoginUI] Failed to decode cinematic PCM audio '{fileName}'.");
+                yield break;
+            }
+
+            assignClip(clip);
+        }
+
+        static AudioClip CreatePcm16AudioClip(string fileName, byte[] pcmData, int sampleRate, int channels)
+        {
+            if (pcmData == null || pcmData.Length < 2 || channels <= 0)
+                return null;
+
+            int sampleValueCount = pcmData.Length / 2;
+            int frameCount = sampleValueCount / channels;
+            if (frameCount <= 0)
+                return null;
+
+            var samples = new float[frameCount * channels];
+            for (int i = 0; i < samples.Length; i++)
+            {
+                int byteIndex = i * 2;
+                short sample = (short)(pcmData[byteIndex] | (pcmData[byteIndex + 1] << 8));
+                samples[i] = sample / 32768f;
+            }
+
+            var clip = AudioClip.Create(Path.GetFileNameWithoutExtension(fileName), frameCount, channels, sampleRate, false);
+            clip.SetData(samples, 0);
+            return clip;
+        }
+
+        void TryStartLoginWindLoopForActiveClip()
+        {
+            if (_cinematicLoopSource == null || _loginWindLoopRuntimeClip == null || string.IsNullOrWhiteSpace(_activeVideoPath))
+                return;
+
+            bool shouldPlayWind =
+                (_resolvedIntroVideoPaths.Count > 1 &&
+                 string.Equals(_activeVideoPath, _resolvedIntroVideoPaths[1], StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(_loopVideoPath) &&
+                 string.Equals(_activeVideoPath, _loopVideoPath, StringComparison.OrdinalIgnoreCase));
+
+            if (!shouldPlayWind)
+                return;
+
+            if (_cinematicLoopSource.clip != _loginWindLoopRuntimeClip)
+            {
+                _cinematicLoopSource.Stop();
+                _cinematicLoopSource.clip = _loginWindLoopRuntimeClip;
+            }
+
+            _cinematicLoopSource.volume = Mathf.Max(0f, LoginWindLoopVolume);
+            if (!_cinematicLoopSource.isPlaying)
+                _cinematicLoopSource.Play();
+        }
+
+        static AudioClip ResolveCinematicClip(AudioClip runtimeClip, AudioClip fallbackClip)
+        {
+            return runtimeClip != null ? runtimeClip : fallbackClip;
+        }
+
+        void ReleaseCinematicAudio()
+        {
+            if (_cinematicAudioPreloadRoutine != null)
+            {
+                StopCoroutine(_cinematicAudioPreloadRoutine);
+                _cinematicAudioPreloadRoutine = null;
+            }
+
+            if (_cinematicOneShotSource != null)
+            {
+                _cinematicOneShotSource.Stop();
+                Destroy(_cinematicOneShotSource);
+                _cinematicOneShotSource = null;
+            }
+
+            if (_cinematicLoopSource != null)
+            {
+                _cinematicLoopSource.Stop();
+                Destroy(_cinematicLoopSource);
+                _cinematicLoopSource = null;
+            }
+
+            if (_introTitleStampRuntimeClip != null)
+            {
+                Destroy(_introTitleStampRuntimeClip);
+                _introTitleStampRuntimeClip = null;
+            }
+
+            if (_introForgeQuenchRuntimeClip != null)
+            {
+                Destroy(_introForgeQuenchRuntimeClip);
+                _introForgeQuenchRuntimeClip = null;
+            }
+
+            if (_loginWindLoopRuntimeClip != null)
+            {
+                Destroy(_loginWindLoopRuntimeClip);
+                _loginWindLoopRuntimeClip = null;
+            }
         }
 
         void UpdateSkipIntroVisibility(bool show)

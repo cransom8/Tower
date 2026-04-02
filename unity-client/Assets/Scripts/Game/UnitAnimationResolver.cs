@@ -105,6 +105,134 @@ namespace CastleDefender.Game
             "Unsheathe",
             "Idle",
         };
+        static readonly string[][] DefaultMeleeAttackRotation =
+        {
+            new[] { "Attack1", "MoveAttack1" },
+            new[] { "Attack2", "MoveAttack2" },
+            new[] { "Attack1", "Run2-Attack1" },
+            new[] { "Attack2", "Attack3" },
+            new[] { "SpecialAttack1", "Jump-Attack1", "AttackHeavy" },
+            new[] { "Attack1", "MoveAttack1" },
+            new[] { "Attack2", "MoveAttack2" },
+            new[] { "Attack1", "Run2-Attack1" },
+            new[] { "Attack2", "Attack3" },
+            new[] { "SpecialAttack2", "Jump-Attack1", "AttackHeavy" },
+        };
+        static readonly string[][] DefaultRangedAttackRotation =
+        {
+            new[] { "RangeAttack1", "AttackBow", "AttackCrossbow", "Shoot" },
+            new[] { "Aiming-Firing", "MoveAttack1", "Attack1" },
+            new[] { "RangeAttack1_Run", "MoveAttack2", "RangeAttack1" },
+            new[] { "Attack1", "MoveAttack1", "Shoot" },
+            new[] { "SpecialAttack1", "Aiming-Firing", "Shoot" },
+            new[] { "RangeAttack1", "AttackBow", "AttackCrossbow", "Shoot" },
+            new[] { "Aiming-Firing", "MoveAttack1", "Attack1" },
+            new[] { "RangeAttack1_Run", "MoveAttack2", "RangeAttack1" },
+        };
+        static readonly string[][] DefaultMagicAttackRotation =
+        {
+            new[] { "RangeAttack1", "Attack1", "Cast" },
+            new[] { "Attack2", "CastSpell", "AttackCast" },
+            new[] { "Attack1", "RangeAttack2", "Cast" },
+            new[] { "Attack2", "AttackCast", "CastSpell" },
+            new[] { "SpecialAttack1", "Cast", "CastSpell" },
+            new[] { "RangeAttack1", "Attack1", "AttackCast" },
+            new[] { "Attack2", "RangeAttack2", "CastSpell" },
+            new[] { "SpecialAttack2", "AttackCast", "Cast" },
+        };
+        static readonly string[][] DefaultSupportAttackRotation =
+        {
+            new[] { "Cast", "CastSpell", "RangeAttack1", "Attack1" },
+            new[] { "Attack1", "Attack2", "AttackCast" },
+            new[] { "CastSpell", "RangeAttack2", "Attack1" },
+            new[] { "Attack2", "AttackCast", "Cast" },
+            new[] { "SpecialAttack1", "CastSpell", "RangeAttack1" },
+            new[] { "Attack1", "Attack2", "Cast" },
+            new[] { "SpecialAttack2", "CastSpell", "AttackCast" },
+        };
+        static readonly string[][] DefaultSiegeAttackRotation =
+        {
+            new[] { "RangeAttack1", "Shoot", "AttackHeavy" },
+            new[] { "Attack1", "RangeAttack1", "Shoot" },
+            new[] { "Attack2", "AttackHeavy", "RangeAttack1" },
+            new[] { "SpecialAttack1", "Shoot", "Attack1" },
+            new[] { "RangeAttack1", "AttackHeavy", "Attack2" },
+            new[] { "SpecialAttack2", "Shoot", "Attack1" },
+        };
+        static readonly string[] DefaultMeleeAttackFallbackOrder =
+        {
+            "Attack1",
+            "Attack2",
+            "Attack3",
+            "MoveAttack1",
+            "MoveAttack2",
+            "Run2-Attack1",
+            "Jump-Attack1",
+            "AttackHeavy",
+            "SpecialAttack1",
+            "SpecialAttack2",
+            "AttackSwordShield",
+            "AttackDaggers",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] DefaultRangedAttackFallbackOrder =
+        {
+            "RangeAttack1",
+            "Aiming-Firing",
+            "RangeAttack1_Run",
+            "AttackBow",
+            "AttackCrossbow",
+            "Shoot",
+            "MoveAttack1",
+            "MoveAttack2",
+            "Attack1",
+            "SpecialAttack1",
+            "SpecialAttack2",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] DefaultMagicAttackFallbackOrder =
+        {
+            "RangeAttack1",
+            "RangeAttack2",
+            "Attack1",
+            "Attack2",
+            "Cast",
+            "CastSpell",
+            "AttackCast",
+            "SpecialAttack1",
+            "SpecialAttack2",
+            "Shoot",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] DefaultSupportAttackFallbackOrder =
+        {
+            "Cast",
+            "CastSpell",
+            "AttackCast",
+            "RangeAttack1",
+            "RangeAttack2",
+            "Attack1",
+            "Attack2",
+            "SpecialAttack1",
+            "SpecialAttack2",
+            "Attack",
+            "attack",
+        };
+        static readonly string[] DefaultSiegeAttackFallbackOrder =
+        {
+            "RangeAttack1",
+            "Shoot",
+            "AttackHeavy",
+            "Attack1",
+            "Attack2",
+            "SpecialAttack1",
+            "SpecialAttack2",
+            "Attack",
+            "attack",
+        };
         static readonly string[] CommonStatePathPrefixes =
         {
             "Base Layer.",
@@ -131,6 +259,7 @@ namespace CastleDefender.Game
             public bool OverrideExistingControllers { get; set; }
             public bool ApplyRootMotion { get; set; }
             public float AnimatorSpeedMultiplier { get; set; }
+            public UnitAnimationAttackFamily AttackFamily { get; set; }
             public string[] IdleStates { get; set; }
             public string[] MoveStates { get; set; }
             public string[] AttackStates { get; set; }
@@ -199,6 +328,7 @@ namespace CastleDefender.Game
                     || (profile != null && profile.overrideExistingControllers),
                 ApplyRootMotion = ResolveApplyRootMotion(binding, profile),
                 AnimatorSpeedMultiplier = ResolveAnimatorSpeed(binding, profile),
+                AttackFamily = attackFamily,
                 IdleStates = ResolveStates(profile != null ? profile.idle : null, DefaultIdleStates),
                 MoveStates = ResolveStates(profile != null ? profile.move : null, DefaultMoveStates),
                 AttackStates = ResolveAttackStates(profile, attackFamily),
@@ -367,6 +497,43 @@ namespace CastleDefender.Game
                 fixedTime);
         }
 
+        public static string[] ResolveAttackPulseStates(ResolvedProfile profile, MLUnit unit, int attackPulse)
+        {
+            string[] attackStates = profile != null ? profile.AttackStates : DefaultAttackStates;
+            string[] availableTerminalStates = ResolveDistinctTerminalStateNames(attackStates);
+            if (availableTerminalStates.Length == 0)
+                return DefaultAttackStates;
+
+            UnitAnimationAttackFamily family = profile != null && profile.AttackFamily != UnitAnimationAttackFamily.Unspecified
+                ? profile.AttackFamily
+                : ResolveRuntimeAttackFamily(unit);
+            string[] orderedTerminalStates = BuildAttackPulseTerminalPriority(family, availableTerminalStates, attackPulse);
+            return ExpandStateAliases(orderedTerminalStates.Length > 0 ? orderedTerminalStates : availableTerminalStates);
+        }
+
+        public static bool PlayAttackPulse(
+            Animator[] animators,
+            ResolvedProfile profile,
+            MLUnit unit,
+            int attackPulse,
+            bool fixedTime,
+            out string playedState)
+        {
+            playedState = null;
+            if (animators == null)
+                return false;
+
+            string[] stateNames = ResolveAttackPulseStates(profile, unit, attackPulse);
+            if (!TryFindPlayableState(animators, stateNames, out _, out playedState))
+                return false;
+
+            return CrossFadeFirstAvailable(
+                animators,
+                stateNames,
+                profile != null ? profile.GetTransitionSeconds(UnitAnimationStateIntent.Attack) : 0.08f,
+                fixedTime);
+        }
+
         public static float ResolveClipLength(Animator animator, string stateName)
         {
             if (animator == null || string.IsNullOrWhiteSpace(stateName))
@@ -440,6 +607,98 @@ namespace CastleDefender.Game
                 UnitAnimationAttackFamily.Support => ResolveStates(profile != null ? profile.attackSupport : null, DefaultSupportAttackStates),
                 UnitAnimationAttackFamily.Siege => ResolveStates(profile != null ? profile.attackSiege : null, DefaultSiegeAttackStates),
                 _ => ResolveStates(profile != null ? profile.attackDefault : null, DefaultAttackStates),
+            };
+        }
+
+        static string[] ResolveDistinctTerminalStateNames(string[] stateNames)
+        {
+            if (stateNames == null || stateNames.Length == 0)
+                return Array.Empty<string>();
+
+            var distinct = new List<string>(stateNames.Length);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < stateNames.Length; i++)
+            {
+                string terminalStateName = ResolveTerminalStateName(stateNames[i]);
+                if (string.IsNullOrWhiteSpace(terminalStateName) || !seen.Add(terminalStateName))
+                    continue;
+
+                distinct.Add(terminalStateName);
+            }
+
+            return distinct.ToArray();
+        }
+
+        static string[] BuildAttackPulseTerminalPriority(
+            UnitAnimationAttackFamily family,
+            string[] availableTerminalStates,
+            int attackPulse)
+        {
+            if (availableTerminalStates == null || availableTerminalStates.Length == 0)
+                return Array.Empty<string>();
+
+            var ordered = new List<string>(availableTerminalStates.Length + 8);
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var available = new HashSet<string>(availableTerminalStates, StringComparer.OrdinalIgnoreCase);
+            string[][] rotation = ResolveAttackRotation(family);
+            if (rotation.Length > 0)
+            {
+                int rotationIndex = attackPulse > 0
+                    ? (attackPulse - 1) % rotation.Length
+                    : 0;
+                AppendAvailableTerminalMatches(ordered, seen, available, rotation[rotationIndex]);
+                AppendAvailableTerminalMatches(ordered, seen, available, rotation[(rotationIndex + 1) % rotation.Length]);
+            }
+
+            AppendAvailableTerminalMatches(ordered, seen, available, ResolveAttackFallbackOrder(family));
+            AppendAvailableTerminalMatches(ordered, seen, available, availableTerminalStates);
+            return ordered.ToArray();
+        }
+
+        static void AppendAvailableTerminalMatches(
+            List<string> ordered,
+            HashSet<string> seen,
+            HashSet<string> available,
+            params string[] candidates)
+        {
+            if (ordered == null || seen == null || available == null || candidates == null)
+                return;
+
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string candidate = candidates[i];
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+
+                string trimmed = candidate.Trim();
+                if (!available.Contains(trimmed) || !seen.Add(trimmed))
+                    continue;
+
+                ordered.Add(trimmed);
+            }
+        }
+
+        static string[][] ResolveAttackRotation(UnitAnimationAttackFamily family)
+        {
+            return family switch
+            {
+                UnitAnimationAttackFamily.Ranged => DefaultRangedAttackRotation,
+                UnitAnimationAttackFamily.Magic => DefaultMagicAttackRotation,
+                UnitAnimationAttackFamily.Support => DefaultSupportAttackRotation,
+                UnitAnimationAttackFamily.Siege => DefaultSiegeAttackRotation,
+                _ => DefaultMeleeAttackRotation,
+            };
+        }
+
+        static string[] ResolveAttackFallbackOrder(UnitAnimationAttackFamily family)
+        {
+            return family switch
+            {
+                UnitAnimationAttackFamily.Ranged => DefaultRangedAttackFallbackOrder,
+                UnitAnimationAttackFamily.Magic => DefaultMagicAttackFallbackOrder,
+                UnitAnimationAttackFamily.Support => DefaultSupportAttackFallbackOrder,
+                UnitAnimationAttackFamily.Siege => DefaultSiegeAttackFallbackOrder,
+                _ => DefaultMeleeAttackFallbackOrder,
             };
         }
 
