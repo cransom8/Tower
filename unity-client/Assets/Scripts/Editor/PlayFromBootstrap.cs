@@ -5,6 +5,7 @@
 
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using UnityEngine;
 
 namespace CastleDefender.Editor
 {
@@ -12,6 +13,7 @@ namespace CastleDefender.Editor
     static class PlayFromBootstrap
     {
         const string BootstrapPath = "Assets/Scenes/Bootstrap.unity";
+        const string GameMlPath = "Assets/Scenes/Game_ML.unity";
 
         static PlayFromBootstrap()
         {
@@ -24,12 +26,14 @@ namespace CastleDefender.Editor
             {
                 if (ClassicRpgUiScreenshotAutomation.IsCaptureBatchRunning)
                 {
+                    ClearBootstrapOverride();
                     EditorSceneManager.playModeStartScene = null;
                     return;
                 }
 
                 // Save any unsaved changes in the current scene first.
                 EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo();
+                PersistBootstrapOverrideForActiveScene();
 
                 // Tell Unity to start Play Mode from Bootstrap instead of the active scene.
                 EditorSceneManager.playModeStartScene =
@@ -38,8 +42,29 @@ namespace CastleDefender.Editor
             else if (state == PlayModeStateChange.EnteredEditMode)
             {
                 // Clear the override so scene-specific tools still work normally.
+                ClearBootstrapOverride();
                 EditorSceneManager.playModeStartScene = null;
             }
+        }
+
+        static void PersistBootstrapOverrideForActiveScene()
+        {
+            ClearBootstrapOverride();
+
+            var activeScene = EditorSceneManager.GetActiveScene();
+            if (activeScene.path != GameMlPath)
+                return;
+
+            PlayerPrefs.SetString(
+                CastleDefender.Net.BootstrapManager.EditorSceneOverridePrefKey,
+                activeScene.name);
+            PlayerPrefs.Save();
+        }
+
+        static void ClearBootstrapOverride()
+        {
+            PlayerPrefs.DeleteKey(CastleDefender.Net.BootstrapManager.EditorSceneOverridePrefKey);
+            PlayerPrefs.Save();
         }
     }
 }

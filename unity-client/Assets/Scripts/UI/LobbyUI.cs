@@ -89,7 +89,7 @@ namespace CastleDefender.UI
         public TMP_Text Txt_DisplayName;
 
         [Header("Settings Panel")]
-        [SerializeField] bool showSettingsPanel = false;
+        [SerializeField] bool showSettingsPanel = true;
         [SerializeField] float settingsButtonSize = 46f;
         [SerializeField] Vector2 settingsPanelSize = new Vector2(172f, 228f);
         [SerializeField] float settingsTopInset = 14f;
@@ -104,6 +104,8 @@ namespace CastleDefender.UI
 
         // ── Wizard state ──────────────────────────────────────────────────────
         const  string _gameType = "line_wars";
+        const  string WinterBackdropResourcePath = "UI/Lobby/WinterForestBackdrop";
+        static Sprite _winterBackdropSprite;
         string _matchFormat = "ffa";
         bool   _pendingRanked;
         bool   _showingJoinInput;
@@ -143,6 +145,7 @@ namespace CastleDefender.UI
         GameObject _settingsOverlay;
         Button _settingsMenuButton;
         TMP_Text _settingsMenuButtonLabel;
+        bool _loggingOut;
 
         // ─────────────────────────────────────────────────────────────────────
         void Start()
@@ -430,16 +433,13 @@ namespace CastleDefender.UI
             if (Btn_AddBot_Easy != null) Btn_AddBot_Easy.gameObject.SetActive(_isHost);
             if (Btn_AddBot_Medium != null) Btn_AddBot_Medium.gameObject.SetActive(_isHost);
             if (Btn_AddBot_Hard != null) Btn_AddBot_Hard.gameObject.SetActive(_isHost);
+            RefreshReadyButtonVisualState();
         }
 
         void OnToggleReady()
         {
             _isReady = !_isReady;
-            if (TxtReadyBtn != null) TxtReadyBtn.text = _isReady ? "Ready!" : "Ready";
-            if (Btn_Ready != null)
-                Btn_Ready.image.color = _isReady
-                    ? new Color(0.2f, 0.7f, 0.3f)
-                    : new Color(0.25f, 0.25f, 0.3f);
+            RefreshReadyButtonVisualState();
             ActionSender.LobbyReady(_isReady);
             Play(AudioManager.SFX.ButtonClick);
         }
@@ -463,11 +463,27 @@ namespace CastleDefender.UI
         }
 
         // ── NetworkManager event handlers ─────────────────────────────────────
-        void HandleConnected()   => SetStatus("Choose a queue.");
+        void HandleConnected()
+        {
+            if (_loggingOut)
+            {
+                SetStatus("Returning to sign-in...");
+                return;
+            }
+
+            SetStatus("Choose a queue.");
+        }
+
         void HandleDisconnected()
         {
             _inQueue = false;
             GoToStep(2);
+            if (_loggingOut)
+            {
+                SetStatus("Returning to sign-in...");
+                return;
+            }
+
             SetStatus("Disconnected. Reconnecting...");
         }
 
@@ -650,7 +666,7 @@ namespace CastleDefender.UI
                     Txt_SeasonInfo.text = "";
                     yield break;
                 }
-                Txt_SeasonInfo.text = $"Season {resp.season.id}: {resp.season.name}";
+                Txt_SeasonInfo.text = resp.season.id.ToString();
             }
             catch
             {
@@ -858,6 +874,7 @@ namespace CastleDefender.UI
             DestroyCanvasChild("PremiumLobbyBackdrop");
             DestroyCanvasChild("PremiumLobbySafeArea");
             DestroyCanvasChild("PremiumLobbyStage");
+            DestroyCanvasChild("PremiumLeaderboardDock");
 
             BuildPremiumBackdrop(_premiumCompactLayout);
 
@@ -899,27 +916,40 @@ namespace CastleDefender.UI
             Stretch(root);
             root.SetSiblingIndex(0);
 
-            var background = root.gameObject.AddComponent<Image>();
-            ClassicRpgUiRuntime.ApplyPanel(background, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.22f));
+            var fallback = root.gameObject.AddComponent<Image>();
+            fallback.color = new Color(0.02f, 0.03f, 0.06f, 1f);
+            fallback.raycastTarget = false;
 
-            CreateBackdropBar(root, "TopBanner", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, compact ? -34f : -44f), new Vector2(compact ? 780f : 1060f, compact ? 86f : 112f), new Color(1f, 1f, 1f, 0.74f));
-            CreateBackdropBar(root, "BottomBanner", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 34f : 44f), new Vector2(compact ? 780f : 1060f, compact ? 88f : 112f), new Color(1f, 1f, 1f, 0.30f));
+            var scenic = CreateUiRect("ScenicBackdrop", root);
+            Stretch(scenic);
+            scenic.SetSiblingIndex(0);
 
-            if (compact)
+            var scenicImage = scenic.gameObject.AddComponent<Image>();
+            scenicImage.raycastTarget = false;
+            scenicImage.color = new Color(1f, 1f, 1f, 0.98f);
+            var backdropSprite = LoadWinterBackdropSprite();
+            if (backdropSprite != null)
             {
-                CreateBackdropFlag(root, "TopHeraldry", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -128f), new Vector2(190f, 260f), new Color(1f, 1f, 1f, 0.13f), false);
+                scenicImage.sprite = backdropSprite;
+                scenicImage.type = Image.Type.Simple;
+                scenicImage.preserveAspect = true;
+
+                var fitter = scenic.gameObject.AddComponent<AspectRatioFitter>();
+                fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+                fitter.aspectRatio = backdropSprite.rect.width / Mathf.Max(1f, backdropSprite.rect.height);
             }
-            else
-            {
-                CreateBackdropFlag(root, "LeftHeraldry", new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(128f, 0f), new Vector2(240f, 332f), new Color(1f, 1f, 1f, 0.18f), false);
-                CreateBackdropFlag(root, "RightHeraldry", new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-374f, 18f), new Vector2(220f, 308f), new Color(1f, 1f, 1f, 0.14f), true);
-            }
+
+            CreateTintLayer(root, "BackdropWash", Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, new Color(0.04f, 0.07f, 0.11f, 0.42f));
+            CreateTintLayer(root, "TopShade", new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, compact ? -6f : -12f), new Vector2(0f, compact ? 210f : 250f), new Color(0.01f, 0.02f, 0.05f, 0.68f));
+            CreateTintLayer(root, "BottomShade", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 0f : 12f), new Vector2(0f, compact ? 180f : 220f), new Color(0.02f, 0.03f, 0.05f, 0.60f));
+            CreateTintLayer(root, "LeftShade", new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(compact ? 84f : 170f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.42f));
+            CreateTintLayer(root, "RightShade", new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), Vector2.zero, new Vector2(compact ? 84f : 170f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.48f));
         }
 
         void BuildPremiumHeader(Transform parent, bool compact)
         {
             var header = CreateUiRect("PremiumLobbyHeader", parent);
-            header.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 152f : 176f;
+            header.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 126f : 154f;
 
             var layout = header.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
@@ -927,31 +957,31 @@ namespace CastleDefender.UI
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 8f;
+            layout.spacing = compact ? 4f : 8f;
 
-            var overline = CreateUiText("Overline", header, "WAR COUNCIL", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
-            overline.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
+            var overline = CreateUiText("Overline", header, "WAR COUNCIL", compact ? 16f : 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
+            overline.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 20f : 24f;
 
             var titlePlate = CreateUiImage("TitlePlate", header, ClassicRpgPanelSkin.TitleLong, Color.white, false);
             var titlePlateLayout = titlePlate.gameObject.AddComponent<LayoutElement>();
-            titlePlateLayout.preferredWidth = compact ? 460f : 520f;
-            titlePlateLayout.preferredHeight = compact ? 86f : 96f;
+            titlePlateLayout.preferredWidth = compact ? 430f : 560f;
+            titlePlateLayout.preferredHeight = compact ? 78f : 92f;
 
-            _premiumScreenTitle = CreateUiText("Title", titlePlate.transform, "Choose Your Match", compact ? 30f : 34f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
-            Stretch(_premiumScreenTitle.rectTransform, new Vector2(26f, 16f), new Vector2(-26f, -18f));
+            _premiumScreenTitle = CreateUiText("Title", titlePlate.transform, "Choose Your Match", compact ? 30f : 38f, ClassicRpgTextTone.Title, ClassicRpgUiRuntime.WarmGold);
+            Stretch(_premiumScreenTitle.rectTransform, new Vector2(26f, 12f), new Vector2(-26f, -18f));
 
             _premiumScreenSubtitle = CreateUiText(
                 "Subtitle",
                 header,
                 compact
-                    ? "Queue, inspect progression, and ready the match from a cleaner command hub."
-                    : "Assemble your session, inspect progression, and step into battle with a stronger front-end presence.",
-                compact ? 16f : 18f,
+                    ? "Queue, gather, and enter the warpath."
+                    : "Choose your next march, gather the war council, and step into battle.",
+                compact ? 14f : 16f,
                 ClassicRpgTextTone.Body,
-                ClassicRpgUiRuntime.BrightText);
+                new Color(0.92f, 0.90f, 0.84f, 0.88f));
             _premiumScreenSubtitle.textWrappingMode = TextWrappingModes.Normal;
             _premiumScreenSubtitle.alignment = TextAlignmentOptions.Center;
-            _premiumScreenSubtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 36f : 44f;
+            _premiumScreenSubtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 26f : 30f;
         }
 
         void BuildPremiumBody(Transform parent, bool compact)
@@ -997,7 +1027,7 @@ namespace CastleDefender.UI
 
             _premiumRailColumn = CreateUiRect("RailColumn", body);
             var railLayout = _premiumRailColumn.gameObject.AddComponent<LayoutElement>();
-            railLayout.preferredWidth = compact ? 0f : 312f;
+            railLayout.preferredWidth = compact ? 0f : 286f;
             railLayout.flexibleWidth = compact ? 1f : 0f;
             railLayout.minWidth = 0f;
         }
@@ -1025,14 +1055,14 @@ namespace CastleDefender.UI
                 layout.childControlHeight = false;
                 layout.childForceExpandWidth = true;
                 layout.childForceExpandHeight = false;
-                layout.spacing = 14f;
+                layout.spacing = 18f;
                 layout.padding = new RectOffset(6, 6, 6, 6);
             }
 
-            var commandCard = CreateCard(parent, "CommanderCard", compact ? 132f : 122f);
+            var commandCard = CreateCard(parent, "CommanderCard", compact ? 104f : 112f);
             if (compact) commandCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
-            var commandHeader = CreateUiText("Header", commandCard.transform, "COMMANDER", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
-            commandHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
+            var commandHeader = CreateUiText("Header", commandCard.transform, "Commander", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
+            commandHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
             string commanderName = !string.IsNullOrWhiteSpace(Txt_DisplayName?.text)
                 ? Txt_DisplayName.text
                 : (AuthManager.IsAuthenticated ? AuthManager.DisplayName : "Guest");
@@ -1041,68 +1071,72 @@ namespace CastleDefender.UI
                 commandCard,
                 "CommanderValue",
                 commanderName,
-                42f,
-                24f,
-                ClassicRpgTextTone.Title,
+                compact ? 24f : 26f,
+                compact ? 16f : 18f,
+                ClassicRpgTextTone.BodyStrong,
                 ClassicRpgUiRuntime.WarmGold,
                 TextAlignmentOptions.Center,
                 allowWrap: false);
 
-            var seasonCard = CreateCard(parent, "SeasonCard", compact ? 132f : 136f);
+            var seasonCard = CreateCard(parent, "SeasonCard", compact ? 100f : 108f);
             if (compact) seasonCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
-            var seasonHeader = CreateUiText("Header", seasonCard.transform, "SEASON", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
-            seasonHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
-            string seasonSummary = Txt_SeasonInfo != null ? Txt_SeasonInfo.text : string.Empty;
+            var seasonHeader = CreateUiText("Header", seasonCard.transform, "Season", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
+            seasonHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
+            string seasonSummary = ExtractSeasonDisplayValue(Txt_SeasonInfo != null ? Txt_SeasonInfo.text : string.Empty);
             HideLegacyText(Txt_SeasonInfo);
             Txt_SeasonInfo = CreateCardValueText(
                 seasonCard,
                 "SeasonValue",
                 seasonSummary,
-                72f,
+                compact ? 22f : 24f,
                 compact ? 16f : 18f,
-                ClassicRpgTextTone.Body,
-                ClassicRpgUiRuntime.BrightText,
-                TextAlignmentOptions.Center);
+                ClassicRpgTextTone.BodyStrong,
+                ClassicRpgUiRuntime.WarmGold,
+                TextAlignmentOptions.Center,
+                allowWrap: false);
 
-            var statusCard = CreateCard(parent, "StatusCard", compact ? 154f : 220f);
+            var statusCard = CreateCard(parent, "StatusCard", compact ? 112f : 124f);
             if (compact) statusCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
-            var statusHeader = CreateUiText("Header", statusCard.transform, "STATUS", 18f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.SoftGold);
-            statusHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
+            var statusHeader = CreateUiText("Header", statusCard.transform, "Status", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
+            statusHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
             string statusSummary = TxtStatus != null ? TxtStatus.text : string.Empty;
             HideLegacyText(TxtStatus);
             TxtStatus = CreateCardValueText(
                 statusCard,
                 "StatusValue",
                 statusSummary,
-                compact ? 62f : 116f,
-                compact ? 15f : 18f,
+                compact ? 28f : 34f,
+                compact ? 15f : 16f,
                 ClassicRpgTextTone.Body,
-                ClassicRpgUiRuntime.BrightText,
-                TextAlignmentOptions.TopLeft);
+                ClassicRpgUiRuntime.WarmGold,
+                TextAlignmentOptions.Center);
 
             if (Btn_ToggleLeaderboard != null)
             {
-                Btn_ToggleLeaderboard.transform.SetParent(statusCard.transform, false);
-                PrepareButton(Btn_ToggleLeaderboard, 46f, compact ? 0f : 240f);
+                var dock = CreateLeaderboardDock(compact);
+                Btn_ToggleLeaderboard.transform.SetParent(dock, false);
+                PrepareButton(Btn_ToggleLeaderboard, 46f, compact ? 0f : 208f);
                 SetButtonLabel(Btn_ToggleLeaderboard, "Show Leaderboard");
-                ClassicRpgUiRuntime.ApplyButton(Btn_ToggleLeaderboard, ClassicRpgButtonSkin.MiniGold);
+                ApplyButtonStyle(Btn_ToggleLeaderboard, ClassicRpgButtonSkin.MiniGold, 46f);
+                Stretch(Btn_ToggleLeaderboard.transform as RectTransform);
             }
         }
 
         RectTransform CreateCard(Transform parent, string name, float preferredHeight)
         {
-            var card = CreateUiImage(name, parent, ClassicRpgPanelSkin.PaperMedium, new Color(0.15f, 0.13f, 0.10f, 0.96f), true);
+            var card = CreateUiImage(name, parent, ClassicRpgPanelSkin.PortraitBackdrop, new Color(0.01f, 0.02f, 0.04f, 0.94f), true);
             var rect = card.rectTransform;
             var layoutElement = card.gameObject.AddComponent<LayoutElement>();
             layoutElement.preferredHeight = preferredHeight;
             var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = 10f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
+            layout.spacing = 4f;
+            layout.padding = new RectOffset(16, 16, 14, 14);
+            EnsureDecorativeFrame(rect);
             return rect;
         }
 
@@ -1114,7 +1148,7 @@ namespace CastleDefender.UI
             if (Panel_Step3_Type != null)
             {
                 Panel_Step3_Type.transform.SetParent(host, false);
-                StylePanelShell(Panel_Step3_Type, compact ? 386f : 544f, flexibleHeight: true);
+                StyleTypePanelShell(Panel_Step3_Type, compact ? 326f : 392f);
                 _premiumTypeStack = EnsureContentRoot(Panel_Step3_Type.transform as RectTransform, "PremiumTypeStack");
                 var typeLayout = _premiumTypeStack.GetComponent<VerticalLayoutGroup>() ?? _premiumTypeStack.gameObject.AddComponent<VerticalLayoutGroup>();
                 typeLayout.childAlignment = TextAnchor.MiddleCenter;
@@ -1122,8 +1156,8 @@ namespace CastleDefender.UI
                 typeLayout.childControlHeight = false;
                 typeLayout.childForceExpandWidth = true;
                 typeLayout.childForceExpandHeight = false;
-                typeLayout.spacing = 12f;
-                typeLayout.padding = compact ? new RectOffset(24, 24, 26, 24) : new RectOffset(32, 32, 42, 32);
+                typeLayout.spacing = compact ? 14f : 16f;
+                typeLayout.padding = compact ? new RectOffset(34, 34, 14, 14) : new RectOffset(96, 96, 18, 18);
             }
 
             if (Panel_Step4A_Queue != null)
@@ -1219,9 +1253,46 @@ namespace CastleDefender.UI
 
             var image = panel.GetComponent<Image>();
             if (image != null)
-                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.16f, 0.14f, 0.10f, 0.96f));
+            {
+                image.enabled = true;
+                image.raycastTarget = false;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.07f, 0.09f, 0.13f, 0.86f));
+            }
 
             EnsureDecorativeFrame(rect);
+        }
+
+        void StyleTypePanelShell(GameObject panel, float preferredHeight)
+        {
+            if (panel == null)
+                return;
+
+            var rect = panel.transform as RectTransform;
+            if (rect == null)
+                return;
+
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = Vector2.zero;
+            rect.sizeDelta = new Vector2(0f, preferredHeight);
+
+            var layoutElement = rect.GetComponent<LayoutElement>() ?? rect.gameObject.AddComponent<LayoutElement>();
+            layoutElement.minHeight = preferredHeight;
+            layoutElement.preferredHeight = preferredHeight;
+            layoutElement.flexibleHeight = 1f;
+            layoutElement.flexibleWidth = 1f;
+
+            var image = panel.GetComponent<Image>();
+            if (image != null)
+            {
+                image.enabled = false;
+                image.raycastTarget = false;
+            }
+
+            var frame = rect.Find("PremiumFrame");
+            if (frame != null)
+                frame.gameObject.SetActive(false);
         }
 
         RectTransform EnsureContentRoot(RectTransform panelRect, string name)
@@ -1243,11 +1314,15 @@ namespace CastleDefender.UI
             if (panelRect == null)
                 return;
 
-            if (panelRect.Find("PremiumFrame") == null)
+            var existing = panelRect.Find("PremiumFrame") as RectTransform;
+            if (existing != null)
             {
-                var frame = CreateUiImage("PremiumFrame", panelRect, ClassicRpgPanelSkin.Frame, new Color(1f, 1f, 1f, 0.92f), true);
-                Stretch(frame.rectTransform, new Vector2(-4f, -4f), new Vector2(4f, 4f));
+                existing.gameObject.SetActive(true);
+                return;
             }
+
+            var frame = CreateUiImage("PremiumFrame", panelRect, ClassicRpgPanelSkin.Frame, new Color(0.90f, 0.84f, 0.72f, 0.50f), true);
+            Stretch(frame.rectTransform, new Vector2(-4f, -4f), new Vector2(4f, 4f));
         }
 
         void StyleLobbyButtons()
@@ -1286,15 +1361,13 @@ namespace CastleDefender.UI
             {
                 var progressionButton = _progressionButtonRoot.GetComponent<Button>();
                 if (progressionButton != null)
-                {
-                    PrepareButton(progressionButton, 46f, 240f);
-                    ClassicRpgUiRuntime.ApplyButton(progressionButton, ClassicRpgButtonSkin.MiniGold);
-                }
+                    ApplyButtonStyle(progressionButton, ClassicRpgButtonSkin.MiniGold, 46f);
             }
 
             StyleTextBlock(Txt_LobbyCode, ClassicRpgTextTone.Title, 24f, ClassicRpgUiRuntime.WarmGold);
             StyleTextBlock(Txt_MemberList, ClassicRpgTextTone.Body, 18f, ClassicRpgUiRuntime.BrightText);
             StyleTextBlock(Txt_QueueStatus, ClassicRpgTextTone.Body, 22f, ClassicRpgUiRuntime.BrightText);
+            RefreshReadyButtonVisualState();
         }
 
         void StyleLeaderboardPanel()
@@ -1313,7 +1386,7 @@ namespace CastleDefender.UI
 
             var image = Panel_Leaderboard.GetComponent<Image>();
             if (image != null)
-                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.16f, 0.13f, 0.10f, 0.97f));
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.07f, 0.09f, 0.13f, 0.92f));
 
             EnsureDecorativeFrame(rect);
 
@@ -1372,19 +1445,19 @@ namespace CastleDefender.UI
             {
                 case 4:
                     _premiumScreenTitle.text = "Searching For Battle";
-                    _premiumScreenSubtitle.text = "Stay ready while the war room prepares your match and the battlefield content warms up.";
+                    _premiumScreenSubtitle.text = "Hold position while scouts find a worthy battlefront.";
                     break;
                 case 5:
                     _premiumScreenTitle.text = "Lobby Assembly";
-                    _premiumScreenSubtitle.text = "Review the roster, ready your party, and launch with a stronger sense of occasion.";
+                    _premiumScreenSubtitle.text = "Review the roster, ready the council, and launch when the host gives the word.";
                     break;
                 case 3:
                     _premiumScreenTitle.text = "Match Format";
-                    _premiumScreenSubtitle.text = "Set the format for the upcoming battle.";
+                    _premiumScreenSubtitle.text = "Set the terms of the coming engagement.";
                     break;
                 default:
                     _premiumScreenTitle.text = "Choose Your Match";
-                    _premiumScreenSubtitle.text = "Enter matchmaking, create a private room, or inspect progression from a more premium command hub.";
+                    _premiumScreenSubtitle.text = "Choose your next march, gather the war council, and step into battle.";
                     break;
             }
         }
@@ -1429,7 +1502,58 @@ namespace CastleDefender.UI
                 return;
 
             PrepareButton(button, height, 0f);
-            ClassicRpgUiRuntime.ApplyButton(button, skin);
+
+            var image = button.targetGraphic as Image ?? button.GetComponent<Image>();
+            if (image != null)
+            {
+                button.targetGraphic = image;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.InventoryTitle, true, Color.white);
+                image.raycastTarget = true;
+            }
+
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                var labelColor = skin switch
+                {
+                    ClassicRpgButtonSkin.MiniGreen => ClassicRpgUiRuntime.SuccessText,
+                    ClassicRpgButtonSkin.MiniBrown => ClassicRpgUiRuntime.BrightText,
+                    _ => ClassicRpgUiRuntime.WarmGold,
+                };
+
+                ClassicRpgUiRuntime.ApplyTextStyle(
+                    label,
+                    ClassicRpgTextStyle.ButtonLabel,
+                    TextAlignmentOptions.Center,
+                    labelColor,
+                    allowWrap: false);
+                label.fontSize = height >= 54f ? 24f : height >= 46f ? 19f : 17f;
+                label.raycastTarget = false;
+            }
+
+            var colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(0.95f, 0.98f, 1f, 1f);
+            colors.pressedColor = skin switch
+            {
+                ClassicRpgButtonSkin.MiniGreen => new Color(0.84f, 0.95f, 0.86f, 1f),
+                ClassicRpgButtonSkin.MiniBrown => new Color(0.84f, 0.88f, 0.94f, 1f),
+                _ => new Color(0.88f, 0.93f, 1f, 1f),
+            };
+            colors.selectedColor = new Color(0.97f, 0.99f, 1f, 1f);
+            colors.disabledColor = new Color(1f, 1f, 1f, 0.44f);
+            colors.fadeDuration = 0.10f;
+            button.transition = Selectable.Transition.ColorTint;
+            button.colors = colors;
+        }
+
+        void RefreshReadyButtonVisualState()
+        {
+            if (Btn_Ready == null)
+                return;
+
+            ApplyButtonStyle(Btn_Ready, _isReady ? ClassicRpgButtonSkin.MiniGreen : ClassicRpgButtonSkin.MiniBrown, 48f);
+            SetButtonLabel(Btn_Ready, _isReady ? "Ready!" : "Ready");
         }
 
         void ReparentTo(Transform parent, RectTransform rect, float height, float width = 0f)
@@ -1541,6 +1665,87 @@ namespace CastleDefender.UI
             if (mirror)
                 image.rectTransform.localScale = new Vector3(-1f, 1f, 1f);
             image.gameObject.AddComponent<UiAmbientMotion>();
+        }
+
+        RectTransform CreateLeaderboardDock(bool compact)
+        {
+            var dock = CreateUiRect("PremiumLeaderboardDock", _canvasRect);
+            dock.anchorMin = compact ? new Vector2(0.5f, 0f) : new Vector2(1f, 0f);
+            dock.anchorMax = compact ? new Vector2(0.5f, 0f) : new Vector2(1f, 0f);
+            dock.pivot = compact ? new Vector2(0.5f, 0f) : new Vector2(1f, 0f);
+            dock.anchoredPosition = compact ? new Vector2(0f, 28f) : new Vector2(-34f, 46f);
+            dock.sizeDelta = compact ? new Vector2(248f, 46f) : new Vector2(208f, 46f);
+            dock.localScale = Vector3.one;
+            dock.localRotation = Quaternion.identity;
+            return dock;
+        }
+
+        static string ExtractSeasonDisplayValue(string seasonSummary)
+        {
+            if (string.IsNullOrWhiteSpace(seasonSummary))
+                return string.Empty;
+
+            const string prefix = "Season ";
+            if (seasonSummary.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string remainder = seasonSummary.Substring(prefix.Length);
+                int colonIndex = remainder.IndexOf(':');
+                if (colonIndex >= 0)
+                    remainder = remainder.Substring(0, colonIndex);
+
+                return remainder.Trim();
+            }
+
+            return seasonSummary.Trim();
+        }
+
+        static void CreateTintLayer(
+            RectTransform parent,
+            string name,
+            Vector2 anchorMin,
+            Vector2 anchorMax,
+            Vector2 pivot,
+            Vector2 anchoredPosition,
+            Vector2 sizeDelta,
+            Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+
+            var rect = go.GetComponent<RectTransform>();
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.pivot = pivot;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = sizeDelta;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
+
+            var image = go.GetComponent<Image>();
+            image.color = color;
+            image.raycastTarget = false;
+        }
+
+        static Sprite LoadWinterBackdropSprite()
+        {
+            if (_winterBackdropSprite != null)
+                return _winterBackdropSprite;
+
+            var texture = Resources.Load<Texture2D>(WinterBackdropResourcePath);
+            if (texture == null)
+            {
+                Debug.LogWarning($"[LobbyUI] Missing lobby backdrop resource at Resources/{WinterBackdropResourcePath}.");
+                return null;
+            }
+
+            texture.wrapMode = TextureWrapMode.Clamp;
+            _winterBackdropSprite = Sprite.Create(
+                texture,
+                new Rect(0f, 0f, texture.width, texture.height),
+                new Vector2(0.5f, 0.5f),
+                100f);
+            _winterBackdropSprite.name = "WinterForestBackdrop_Runtime";
+            return _winterBackdropSprite;
         }
 
         static RectTransform CreateUiRect(string name, Transform parent)
@@ -1836,6 +2041,7 @@ namespace CastleDefender.UI
             footerLayout.spacing = 12f;
 
             var closeButton = CreateSettingsButton(footer.transform, "CloseButton", "Close", new Color(0.18f, 0.24f, 0.30f, 0.98f), 46f);
+            var logoutButton = CreateSettingsButton(footer.transform, "LogoutButton", "Log Out", new Color(0.34f, 0.24f, 0.12f, 0.98f), 46f);
             var quitButton = CreateSettingsButton(footer.transform, "QuitButton", "Quit Game", new Color(0.42f, 0.17f, 0.17f, 0.98f), 46f);
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
@@ -1869,6 +2075,7 @@ namespace CastleDefender.UI
             healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
             tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
             closeButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
+            logoutButton.onClick.AddListener(OnLogoutPressed);
             quitButton.onClick.AddListener(OnQuitPressed);
 
             RefreshSettingsPanelValues();
@@ -2219,11 +2426,42 @@ namespace CastleDefender.UI
             UpdateSettingsMenuButtonState();
         }
 
+        void OnLogoutPressed()
+        {
+            if (LoadingScreen.IsTransitionInProgress)
+            {
+                SetStatus("The war room is already shifting to another screen.");
+                Play(AudioManager.SFX.Error);
+                return;
+            }
+
+            _loggingOut = true;
+            _inQueue = false;
+            _awaitingLoadoutScene = false;
+            CloseProgressionViewer();
+            SetSettingsOverlayVisible(false, immediate: true);
+            ClearReconnectPrefs();
+            AuthManager.ClearToken();
+            NetworkManager.Instance?.ReconnectForCurrentAuth("lobby logout");
+            SetStatus("Returning to sign-in...");
+            Play(AudioManager.SFX.ButtonClick);
+            LoadingScreen.LoadScene("Login");
+        }
+
         void OnQuitPressed()
         {
             Play(AudioManager.SFX.ButtonClick);
             if (TryQuitGame(SetStatus))
                 SetStatus("Closing game...");
+        }
+
+        static void ClearReconnectPrefs()
+        {
+            PlayerPrefs.DeleteKey("reconnect_token");
+            PlayerPrefs.DeleteKey("reconnect_code");
+            PlayerPrefs.DeleteKey("reconnect_lane");
+            PlayerPrefs.DeleteKey("reconnect_gametype");
+            PlayerPrefs.Save();
         }
 
         static bool TryQuitGame(Action<string> onUnsupported = null)

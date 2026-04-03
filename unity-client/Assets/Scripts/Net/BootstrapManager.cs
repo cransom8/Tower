@@ -11,6 +11,7 @@
 // Flow: Bootstrap scene loads → singletons Awake (DontDestroyOnLoad) → Start() fires
 // → Login scene loads additively → Bootstrap scene unloads → Login takes over.
 
+using System;
 using System.Collections;
 using UnityEngine;
 
@@ -18,6 +19,8 @@ namespace CastleDefender.Net
 {
     public class BootstrapManager : MonoBehaviour
     {
+        public const string EditorSceneOverridePrefKey = "castle_defender.bootstrap.editor_scene_override";
+
         [Tooltip("Name of the first scene to load after singletons have initialised.")]
         [SerializeField] string FirstScene = "Login";
         GameObject _runtimeAudioListener;
@@ -30,12 +33,45 @@ namespace CastleDefender.Net
 
         IEnumerator Start()
         {
-            Debug.Log($"[BootstrapManager] Start beginning. FirstScene='{FirstScene}'.");
+            string firstScene = ResolveFirstScene();
+            Debug.Log($"[BootstrapManager] Start beginning. FirstScene='{firstScene}'.");
             // Give all Awake() calls one frame to complete before transitioning.
             yield return null;
-            Debug.Log($"[BootstrapManager] Requesting LoadingScreen transition to '{FirstScene}'.");
-            LoadingScreen.LoadScene(FirstScene);
+            Debug.Log($"[BootstrapManager] Requesting LoadingScreen transition to '{firstScene}'.");
+
+            if (string.Equals(firstScene, "Game_ML", StringComparison.OrdinalIgnoreCase))
+            {
+                LoadingScreen.LoadSceneWithRemoteContentGate(
+                    firstScene,
+                    preloadEnvironment: true);
+                yield break;
+            }
+
+            LoadingScreen.LoadScene(firstScene);
         }
+
+        string ResolveFirstScene()
+        {
+#if UNITY_EDITOR
+            string overrideScene = ConsumeEditorSceneOverride();
+            if (!string.IsNullOrWhiteSpace(overrideScene))
+                return overrideScene;
+#endif
+            return FirstScene;
+        }
+
+#if UNITY_EDITOR
+        static string ConsumeEditorSceneOverride()
+        {
+            string overrideScene = PlayerPrefs.GetString(EditorSceneOverridePrefKey, string.Empty);
+            if (string.IsNullOrWhiteSpace(overrideScene))
+                return null;
+
+            PlayerPrefs.DeleteKey(EditorSceneOverridePrefKey);
+            PlayerPrefs.Save();
+            return overrideScene.Trim();
+        }
+#endif
 
         void EnsureBootstrapAudioListener()
         {

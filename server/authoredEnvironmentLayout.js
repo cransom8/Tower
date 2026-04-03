@@ -229,18 +229,18 @@ function loadAuthoredEnvironmentLayout() {
 }
 
 function extractScalar(block, key) {
-  const match = block.match(new RegExp(`\\n  ${escapeRegex(key)}: (.+)\\n`));
+  const match = block.match(new RegExp(`\\r?\\n  ${escapeRegex(key)}: ([^\\r\\n]+)\\r?\\n`));
   return match ? String(match[1]).trim() : "";
 }
 
 function extractFileId(block, key) {
-  const match = block.match(new RegExp(`\\n  ${escapeRegex(key)}: \\{fileID: ([0-9]+)\\}`));
+  const match = block.match(new RegExp(`\\r?\\n  ${escapeRegex(key)}: \\{fileID: ([0-9-]+)\\}`));
   return match ? String(match[1]) : "";
 }
 
 function extractVector3(block, key) {
   const match = block.match(
-    new RegExp(`\\n  ${escapeRegex(key)}: \\{x: ([^,]+), y: ([^,]+), z: ([^}]+)\\}`)
+    new RegExp(`\\r?\\n  ${escapeRegex(key)}: \\{x: ([^,]+), y: ([^,]+), z: ([^}]+)\\}`)
   );
   return match
     ? {
@@ -253,7 +253,7 @@ function extractVector3(block, key) {
 
 function extractQuaternion(block, key) {
   const match = block.match(
-    new RegExp(`\\n  ${escapeRegex(key)}: \\{x: ([^,]+), y: ([^,]+), z: ([^,]+), w: ([^}]+)\\}`)
+    new RegExp(`\\r?\\n  ${escapeRegex(key)}: \\{x: ([^,]+), y: ([^,]+), z: ([^,]+), w: ([^}]+)\\}`)
   );
   return match
     ? {

@@ -49,6 +49,7 @@ namespace CastleDefender.Game
         public Vector3 BattlefieldCameraPosition = new Vector3(0f, 20f, -10f);
         [Tooltip("World point the battlefield camera looks at.")]
         public Vector3 BattlefieldLookTarget = new Vector3(0f, 0f, 0f);
+        static readonly Color BattlefieldBackgroundColor = new(0.90f, 0.98f, 1f, 1f);
 
         [Header("Camera Re-lock (frames to hold camera after scene load)")]
         [Tooltip("Number of frames to re-apply the battlefield camera POV, preventing any late-initializing component from overriding it.")]
@@ -76,6 +77,18 @@ namespace CastleDefender.Game
 
         const int TickHz = 20; // must match server TICK_HZ
         static readonly List<FortressPadAnchor> s_cameraAnchors = new();
+        static readonly List<FortressPadAnchor> s_cameraFrameAnchors = new();
+        static readonly string[] s_priorityCameraPadIds =
+        {
+            "town_core_pad",
+            "barracks_pad",
+            "market_pad",
+            "gate_front_pad",
+            "turret_front_gate_left_pad",
+            "turret_front_gate_right_pad",
+            "turret_front_left_pad",
+            "turret_front_right_pad",
+        };
 
         string _playerSide;     // "left" | "right" — cached on first snapshot
         string _prevRoundState; // tracks previous round state for transition detection
@@ -130,9 +143,7 @@ namespace CastleDefender.Game
         // Called when match_ready fires — lane index is now authoritative.
         void OnMatchReadySnapCamera(MLMatchReadyPayload _)
         {
-            EnsureCameraPOV();
-            // Re-arm the lock so a few frames of position jitter are absorbed.
-            _cameraLockCountdown = CameraLockFrames;
+            RefreshBattlefieldCamera();
         }
 
         void OnMLSnapshot(MLSnapshot snap)
@@ -380,6 +391,13 @@ namespace CastleDefender.Game
                 gameObject.AddComponent<CenterBarracksOnboardingController>();
         }
 
+        public void RefreshBattlefieldCamera()
+        {
+            EnsureCameraPOV();
+            // Re-arm the lock so a few frames of position jitter are absorbed.
+            _cameraLockCountdown = CameraLockFrames;
+        }
+
         void EnsureCameraPOV()
         {
             if (!ForceCameraPreset) return;
@@ -389,6 +407,8 @@ namespace CastleDefender.Game
 
             cam.orthographic     = true;
             cam.orthographicSize = CameraOrthoSize;
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = BattlefieldBackgroundColor;
 
             // Position camera over the local player's assigned lane.
             // Falls back to lane 0 if NetworkManager isn't ready yet.
@@ -427,6 +447,7 @@ namespace CastleDefender.Game
                 if (fortressCtrl.CameraTarget == null)
                     fortressCtrl.CameraTarget = cam.transform;
 
+                fortressCtrl.EnableBoundsClamp = true;
                 fortressCtrl.SnapToCurrentPosition();
                 return;
             }
@@ -452,6 +473,7 @@ namespace CastleDefender.Game
             if (ctrl.CameraTarget == null)
                 ctrl.CameraTarget = cam.transform;
 
+            ctrl.EnableBoundsClamp = true;
             // Sync the controller so pan/zoom starts from exactly this position.
             ctrl.SnapToCurrentPosition();
         }
@@ -470,10 +492,45 @@ namespace CastleDefender.Game
             Bounds laneBounds = default;
             FortressPadAnchor townCoreAnchor = null;
             FortressPadAnchor barracksAnchor = null;
+            FortressPadAnchor gateFrontAnchor = null;
+
+            s_cameraFrameAnchors.Clear();
 
             for (int i = 0; i < s_cameraAnchors.Count; i++)
             {
                 var anchor = s_cameraAnchors[i];
+                if (anchor == null)
+                    continue;
+
+                if (townCoreAnchor == null &&
+                    anchor.MatchesPad("town_core_pad"))
+                {
+                    townCoreAnchor = anchor;
+                }
+
+                if (barracksAnchor == null &&
+                    anchor.MatchesPad("barracks_pad"))
+                {
+                    barracksAnchor = anchor;
+                }
+
+                if (gateFrontAnchor == null &&
+                    anchor.MatchesPad("gate_front_pad"))
+                {
+                    gateFrontAnchor = anchor;
+                }
+
+                if (IsPriorityFortressCameraAnchor(anchor))
+                    s_cameraFrameAnchors.Add(anchor);
+            }
+
+            var framingAnchors = s_cameraFrameAnchors.Count > 0
+                ? s_cameraFrameAnchors
+                : s_cameraAnchors;
+
+            for (int i = 0; i < framingAnchors.Count; i++)
+            {
+                var anchor = framingAnchors[i];
                 if (anchor == null)
                     continue;
 
@@ -487,18 +544,6 @@ namespace CastleDefender.Game
                 {
                     laneBounds.Encapsulate(bounds);
                 }
-
-                if (townCoreAnchor == null &&
-                    anchor.MatchesPad("town_core_pad"))
-                {
-                    townCoreAnchor = anchor;
-                }
-
-                if (barracksAnchor == null &&
-                    anchor.MatchesPad("barracks_pad"))
-                {
-                    barracksAnchor = anchor;
-                }
             }
 
             if (!hasBounds)
@@ -507,9 +552,11 @@ namespace CastleDefender.Game
             focusWorld = laneBounds.center;
             if (townCoreAnchor != null)
             {
-                Vector3 outward = barracksAnchor != null
-                    ? barracksAnchor.FocusTransform.position - townCoreAnchor.FocusTransform.position
-                    : laneBounds.center - townCoreAnchor.FocusTransform.position;
+                Vector3 outward = gateFrontAnchor != null
+                    ? gateFrontAnchor.FocusTransform.position - townCoreAnchor.FocusTransform.position
+                    : barracksAnchor != null
+                        ? barracksAnchor.FocusTransform.position - townCoreAnchor.FocusTransform.position
+                        : laneBounds.center - townCoreAnchor.FocusTransform.position;
                 outward.y = 0f;
                 if (outward.sqrMagnitude > 0.001f)
                     screenUp = outward.normalized;
@@ -524,9 +571,9 @@ namespace CastleDefender.Game
 
             float halfVertical = 0f;
             float halfHorizontal = 0f;
-            for (int i = 0; i < s_cameraAnchors.Count; i++)
+            for (int i = 0; i < framingAnchors.Count; i++)
             {
-                var anchor = s_cameraAnchors[i];
+                var anchor = framingAnchors[i];
                 if (anchor == null)
                     continue;
 
@@ -546,6 +593,20 @@ namespace CastleDefender.Game
             float gameplaySurfaceY = BattlefieldSpaceMapper.TileToWorld(laneIndex, 0f, 0f).y;
             focusWorld = new Vector3(focusWorld.x, gameplaySurfaceY, focusWorld.z);
             return true;
+        }
+
+        static bool IsPriorityFortressCameraAnchor(FortressPadAnchor anchor)
+        {
+            if (anchor == null)
+                return false;
+
+            for (int i = 0; i < s_priorityCameraPadIds.Length; i++)
+            {
+                if (anchor.MatchesPad(s_priorityCameraPadIds[i]))
+                    return true;
+            }
+
+            return false;
         }
 
         string ResolveLaneSlotColor(int laneIndex)

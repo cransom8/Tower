@@ -2482,6 +2482,7 @@ namespace CastleDefender.UI
         void OnLoginSuccess(string accessToken)
         {
             AuthManager.SaveToken(accessToken);
+            NetworkManager.Instance?.ReconnectForCurrentAuth("login success");
             Debug.Log($"[Login] Signed in as {AuthManager.DisplayName}");
             SetStatus($"Welcome, {AuthManager.DisplayName}!");
             ShowContentRetryAction(false);

@@ -1,6 +1,7 @@
 using CastleDefender.Game;
 using CastleDefender.Net;
 using System.Collections;
+using System;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -31,7 +32,7 @@ public class CameraController : MonoBehaviour
 
     [Header("Zoom")]
     public float OrthoSizeMin = 4f;
-    public float OrthoSizeMax = 80f;
+    public float OrthoSizeMax = 120f;
     public float ZoomSpeed = 4f;
     public float PinchSpeed = 0.02f;
     public float ZoomSmoothing = 8f;
@@ -288,6 +289,15 @@ public class CameraController : MonoBehaviour
         if (!EnableBoundsClamp)
             return;
 
+        ClampZoomToBounds();
+
+        if (TryGetAllowedFocusRange(_targetOrtho, out var minFocus, out var maxFocus))
+        {
+            _targetFocus.x = Mathf.Clamp(_targetFocus.x, minFocus.x, maxFocus.x);
+            _targetFocus.z = Mathf.Clamp(_targetFocus.z, minFocus.y, maxFocus.y);
+            return;
+        }
+
         _targetFocus.x = Mathf.Clamp(_targetFocus.x, BoundsMin.x, BoundsMax.x);
         _targetFocus.z = Mathf.Clamp(_targetFocus.z, BoundsMin.y, BoundsMax.y);
     }
@@ -316,17 +326,7 @@ public class CameraController : MonoBehaviour
 
     void UpdateTargetPose()
     {
-        Vector3 planarUp = Quaternion.Euler(0f, _targetYaw, 0f) * Vector3.forward;
-        float tiltRadians = Mathf.Clamp(_targetTilt, TiltMin, TiltMax) * Mathf.Deg2Rad;
-        Vector3 forward = (Vector3.down * Mathf.Cos(tiltRadians)) + (planarUp * Mathf.Sin(tiltRadians));
-        forward = forward.normalized;
-
-        float downComponent = Mathf.Max(0.05f, -forward.y);
-        float distance = _cameraHeight / downComponent;
-
-        _targetPos = _targetFocus - (forward * distance);
-        _targetPos.y = FocusPlaneY + _cameraHeight;
-        _targetRotation = Quaternion.LookRotation(forward, planarUp);
+        ComputeTargetPose(_targetFocus, out _targetPos, out _targetRotation);
     }
 
     void SyncCameraStateFromTransform(bool captureDefaults)
@@ -353,6 +353,8 @@ public class CameraController : MonoBehaviour
         else
             _targetTilt = Mathf.Clamp(Vector3.Angle(Vector3.down, forward), TiltMin, TiltMax);
 
+        ClampZoomToBounds();
+        ClampTargetFocus();
         UpdateTargetPose();
 
         if (captureDefaults)
@@ -377,6 +379,7 @@ public class CameraController : MonoBehaviour
         _targetOrtho = _defaultOrtho;
         _targetTilt = _defaultTilt;
         _targetYaw = _defaultYaw;
+        ClampZoomToBounds();
         ClampTargetFocus();
         UpdateTargetPose();
         ReportPreferenceChange();
@@ -392,6 +395,8 @@ public class CameraController : MonoBehaviour
     public void SetTilt(float tiltDegrees)
     {
         _targetTilt = Mathf.Clamp(tiltDegrees, TiltMin, TiltMax);
+        ClampZoomToBounds();
+        ClampTargetFocus();
         UpdateTargetPose();
         ReportPreferenceChange();
     }
@@ -404,6 +409,7 @@ public class CameraController : MonoBehaviour
     public void SetRotation(float yawDegrees)
     {
         _targetYaw = yawDegrees;
+        ClampTargetFocus();
         UpdateTargetPose();
         ReportPreferenceChange();
     }
@@ -416,6 +422,9 @@ public class CameraController : MonoBehaviour
     public void SetZoom(float zoomSize)
     {
         _targetOrtho = Mathf.Clamp(zoomSize, OrthoSizeMin, OrthoSizeMax);
+        ClampZoomToBounds();
+        ClampTargetFocus();
+        UpdateTargetPose();
         ReportPreferenceChange();
     }
 
@@ -434,6 +443,7 @@ public class CameraController : MonoBehaviour
 
         float previousOrtho = MainCam.orthographicSize;
         _targetOrtho = Mathf.Clamp(_targetOrtho + delta, OrthoSizeMin, OrthoSizeMax);
+        ClampZoomToBounds();
         MainCam.orthographicSize = _targetOrtho;
 
         if (TryScreenToGround(focusScreenPoint, out var worldAfter))
@@ -455,6 +465,9 @@ public class CameraController : MonoBehaviour
     {
         if (!EnsureCameraReferences())
             return;
+
+        if (EnableBoundsClamp)
+            ConfigureBoundsFromGrid();
 
         SyncCameraStateFromTransform(true);
         CameraTarget.position = _targetPos;
@@ -507,6 +520,7 @@ public class CameraController : MonoBehaviour
             if (!changed)
                 return;
 
+            ClampZoomToBounds();
             ClampTargetFocus();
             UpdateTargetPose();
             CameraTarget.position = _targetPos;
@@ -521,6 +535,9 @@ public class CameraController : MonoBehaviour
 
     void ConfigureBoundsFromGrid()
     {
+        if (ConfigureBoundsFromFloor())
+            return;
+
         if (ConfigureBoundsFromFortressAnchors())
             return;
 
@@ -550,6 +567,41 @@ public class CameraController : MonoBehaviour
         const float marginZ = 8f;
         BoundsMin = new Vector2(Mathf.Min(minX - marginX, -140f), minZ - marginZ);
         BoundsMax = new Vector2(Mathf.Max(maxX + marginX, 140f), maxZ + marginZ);
+    }
+
+    bool ConfigureBoundsFromFloor()
+    {
+        var renderers = FindObjectsByType<Renderer>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        bool hasBounds = false;
+        Bounds floorBounds = default;
+
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null || !renderer.enabled)
+                continue;
+
+            if (!string.Equals(renderer.gameObject.name, "Floor", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!hasBounds)
+            {
+                floorBounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                floorBounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        if (!hasBounds)
+            return false;
+
+        const float inset = 6f;
+        BoundsMin = new Vector2(floorBounds.min.x + inset, floorBounds.min.z + inset);
+        BoundsMax = new Vector2(floorBounds.max.x - inset, floorBounds.max.z - inset);
+        return true;
     }
 
     bool ConfigureBoundsFromFortressAnchors()
@@ -583,6 +635,124 @@ public class CameraController : MonoBehaviour
         BoundsMin = new Vector2(minX - marginX, minZ - marginZ);
         BoundsMax = new Vector2(maxX + marginX, maxZ + marginZ);
         return true;
+    }
+
+    void ClampZoomToBounds()
+    {
+        if (!EnableBoundsClamp)
+            return;
+
+        _targetOrtho = Mathf.Clamp(_targetOrtho, OrthoSizeMin, OrthoSizeMax);
+        if (TryGetAllowedFocusRange(_targetOrtho, out _, out _))
+            return;
+
+        float low = OrthoSizeMin;
+        float high = _targetOrtho;
+        if (!TryGetAllowedFocusRange(low, out _, out _))
+        {
+            _targetOrtho = low;
+            return;
+        }
+
+        for (int i = 0; i < 14; i++)
+        {
+            float mid = (low + high) * 0.5f;
+            if (TryGetAllowedFocusRange(mid, out _, out _))
+                low = mid;
+            else
+                high = mid;
+        }
+
+        _targetOrtho = low;
+    }
+
+    bool TryGetAllowedFocusRange(float orthoSize, out Vector2 minFocus, out Vector2 maxFocus)
+    {
+        minFocus = new Vector2(BoundsMin.x, BoundsMin.y);
+        maxFocus = new Vector2(BoundsMax.x, BoundsMax.y);
+
+        if (!TryGetVisibleGroundDeltas(orthoSize, out var deltas))
+            return false;
+
+        float minAllowedX = float.NegativeInfinity;
+        float maxAllowedX = float.PositiveInfinity;
+        float minAllowedZ = float.NegativeInfinity;
+        float maxAllowedZ = float.PositiveInfinity;
+
+        for (int i = 0; i < deltas.Length; i++)
+        {
+            var delta = deltas[i];
+            minAllowedX = Mathf.Max(minAllowedX, BoundsMin.x - delta.x);
+            maxAllowedX = Mathf.Min(maxAllowedX, BoundsMax.x - delta.x);
+            minAllowedZ = Mathf.Max(minAllowedZ, BoundsMin.y - delta.z);
+            maxAllowedZ = Mathf.Min(maxAllowedZ, BoundsMax.y - delta.z);
+        }
+
+        if (minAllowedX > maxAllowedX || minAllowedZ > maxAllowedZ)
+            return false;
+
+        minFocus = new Vector2(minAllowedX, minAllowedZ);
+        maxFocus = new Vector2(maxAllowedX, maxAllowedZ);
+        return true;
+    }
+
+    bool TryGetVisibleGroundDeltas(float orthoSize, out Vector3[] deltas)
+    {
+        deltas = null;
+        if (orthoSize <= 0f)
+            return false;
+
+        float aspect = MainCam != null && MainCam.pixelHeight > 0
+            ? Mathf.Max(0.1f, MainCam.aspect)
+            : Mathf.Max(0.1f, (float)Screen.width / Mathf.Max(1f, Screen.height));
+
+        ComputeTargetPose(_targetFocus, out var cameraPos, out var cameraRotation);
+        Vector3 cameraForward = cameraRotation * Vector3.forward;
+        if (Mathf.Abs(cameraForward.y) < FocusPlaneResolveEpsilon)
+            return false;
+
+        float halfHeight = orthoSize;
+        float halfWidth = orthoSize * aspect;
+        Vector3 cameraRight = cameraRotation * Vector3.right;
+        Vector3 cameraUp = cameraRotation * Vector3.up;
+
+        deltas = new Vector3[4];
+        int index = 0;
+        for (int sx = -1; sx <= 1; sx += 2)
+        {
+            for (int sy = -1; sy <= 1; sy += 2)
+            {
+                Vector3 rayOrigin = cameraPos
+                    + (cameraRight * (sx * halfWidth))
+                    + (cameraUp * (sy * halfHeight));
+                float distance = (FocusPlaneY - rayOrigin.y) / cameraForward.y;
+                if (distance < 0f)
+                    return false;
+
+                Vector3 groundPoint = rayOrigin + (cameraForward * distance);
+                deltas[index++] = new Vector3(
+                    groundPoint.x - _targetFocus.x,
+                    0f,
+                    groundPoint.z - _targetFocus.z);
+            }
+        }
+
+        return true;
+    }
+
+    void ComputeTargetPose(Vector3 focus, out Vector3 targetPos, out Quaternion targetRotation)
+    {
+        Vector3 planarUp = Quaternion.Euler(0f, _targetYaw, 0f) * Vector3.forward;
+        float tiltRadians = Mathf.Clamp(_targetTilt, TiltMin, TiltMax) * Mathf.Deg2Rad;
+        Vector3 forward = (Vector3.down * Mathf.Cos(tiltRadians)) + (planarUp * Mathf.Sin(tiltRadians));
+        forward = forward.normalized;
+
+        float downComponent = Mathf.Max(0.05f, -forward.y);
+        float distance = _cameraHeight / downComponent;
+
+        targetPos = focus - (forward * distance);
+        targetPos.y = FocusPlaneY + _cameraHeight;
+        targetRotation = Quaternion.LookRotation(forward, planarUp);
     }
 
     bool IsPointerOverUi()

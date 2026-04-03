@@ -3813,7 +3813,7 @@ MonoBehaviour:
   Txt_SeasonInfo: {fileID: 1040706095}
   TxtStatus: {fileID: 124314533}
   Txt_DisplayName: {fileID: 1782085811}
-  showSettingsPanel: 0
+  showSettingsPanel: 1
   settingsButtonSize: 46
   settingsPanelSize: {x: 172, y: 228}
   settingsTopInset: 14

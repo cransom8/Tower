@@ -269,6 +269,13 @@ namespace CastleDefender.Game
             if (!TryResolveInteractiveLane(out var lane))
                 return;
 
+            // Remote environments arrive asynchronously, so skip validation until authored
+            // fortress objects actually exist in the live scene.
+            int activeAnchorCount = FortressPadAnchor.CollectAnchors(s_anchorScratch);
+            int activeBarracksCount = BarracksSiteView.CollectSites(s_barracksScratch);
+            if (activeAnchorCount == 0 && activeBarracksCount == 0)
+                return;
+
             if (lane.fortressPads != null)
             {
                 for (int i = 0; i < lane.fortressPads.Length; i++)

@@ -36,27 +36,25 @@ public class EnvironmentLoader : MonoBehaviour
         string address = string.IsNullOrWhiteSpace(environmentAddress)
             ? RemoteContentManager.GameMlEnvironmentAddress
             : environmentAddress.Trim();
+        string expectedContentHash = ResolveExpectedEnvironmentContentHash();
 
         RemoteContentVerification.RecordAwaitOnly(nameof(EnvironmentLoader), "t1.environment");
-
-        float deadline = Time.realtimeSinceStartup + Mathf.Max(1f, readinessTimeoutSeconds);
         GameObject prefab = null;
-        while (!remoteContent.TryGetLoadedEnvironmentPrefab(address, out prefab))
+        if (!remoteContent.TryGetLoadedEnvironmentPrefab(address, out prefab))
         {
-            if (!string.IsNullOrWhiteSpace(remoteContent.LastError))
-            {
-                HardFail($"{failureTitle} {remoteContent.LastError}");
-                yield break;
-            }
+            yield return remoteContent.EnsureEnvironmentReady(
+                address,
+                expectedContentHash,
+                requester: nameof(EnvironmentLoader));
 
-            if (Time.realtimeSinceStartup >= deadline)
+            if (!remoteContent.TryGetLoadedEnvironmentPrefab(address, out prefab))
             {
                 HardFail(
-                    $"{failureTitle} Expected environment '{address}' to be ready before the match scene finished loading.");
+                    string.IsNullOrWhiteSpace(remoteContent.LastError)
+                        ? $"{failureTitle} Expected environment '{address}' to be ready before the match scene finished loading."
+                        : $"{failureTitle} {remoteContent.LastError}");
                 yield break;
             }
-
-            yield return null;
         }
 
         if (_instance != null)
@@ -78,6 +76,15 @@ public class EnvironmentLoader : MonoBehaviour
 
     IEnumerator WaitForBattlefieldLayoutAndApply(string address)
     {
+        if (ShouldUseAuthoredEnvironmentPreview())
+        {
+            Debug.LogWarning(
+                $"[EnvironmentLoader] No live match bootstrap detected while loading '{address}'. " +
+                "Using the authored environment preview positions in editor play mode.");
+            RefreshBattlefieldCamera();
+            yield break;
+        }
+
         float deadline = Time.realtimeSinceStartup + Mathf.Max(1f, layoutReadinessTimeoutSeconds);
         SnapshotApplier snapshotApplier = null;
         while (snapshotApplier == null && Time.realtimeSinceStartup < deadline)
@@ -146,6 +153,7 @@ public class EnvironmentLoader : MonoBehaviour
         RemoteContentVerification.RecordEvent(
             "environment_layout_applied",
             $"address={address} layout={resolvedLayout?.layoutId ?? "<null>"}");
+        RefreshBattlefieldCamera();
     }
 
     bool ValidateEnvironmentContentHash(string address, MLBattlefieldLayout layout, out string failureReason)
@@ -484,6 +492,37 @@ public class EnvironmentLoader : MonoBehaviour
             return string.Empty;
 
         return barracksId.Trim().ToLowerInvariant();
+    }
+
+    static string ResolveExpectedEnvironmentContentHash()
+    {
+        string fromSnapshot = SnapshotApplier.Instance?.LatestMLMatchConfig?.battlefieldLayout?.contentHash;
+        if (!string.IsNullOrWhiteSpace(fromSnapshot))
+            return fromSnapshot.Trim();
+
+        string fromNetwork = NetworkManager.Instance?.LastMLMatchConfig?.battlefieldLayout?.contentHash;
+        return string.IsNullOrWhiteSpace(fromNetwork) ? null : fromNetwork.Trim();
+    }
+
+    static bool ShouldUseAuthoredEnvironmentPreview()
+    {
+#if UNITY_EDITOR
+        if (!Application.isEditor)
+            return false;
+
+        if (NetworkManager.Instance != null)
+            return false;
+
+        return SnapshotApplier.Instance?.HasAuthoritativeBattlefieldLayout() != true;
+#else
+        return false;
+#endif
+    }
+
+    void RefreshBattlefieldCamera()
+    {
+        var gameManager = FindFirstObjectByType<GameManager>(FindObjectsInactive.Include);
+        gameManager?.RefreshBattlefieldCamera();
     }
 
     void EnsureFailureCanvas()

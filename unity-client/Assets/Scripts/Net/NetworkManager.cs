@@ -175,6 +175,15 @@ namespace CastleDefender.Net
 
         void Start() => Connect();
 
+        public void ReconnectForCurrentAuth(string reason = null)
+        {
+            string resolvedReason = string.IsNullOrWhiteSpace(reason) ? "auth change" : reason;
+            Debug.Log($"[NM] Reconnecting socket for {resolvedReason}.");
+            ResetConnectionSessionState(resolvedReason);
+            DisconnectActiveSocket();
+            Connect();
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         public void Connect()
         {
@@ -1067,6 +1076,25 @@ namespace CastleDefender.Net
             _pendingGameplayReadySignal = false;
         }
 
+        void ResetConnectionSessionState(string reason)
+        {
+            Debug.Log($"[NM] Clearing cached session state ({reason}).");
+            IsConnected = false;
+            MySocketId = null;
+            MyLaneIndex = 0;
+            MySide = null;
+            MyRoomCode = null;
+            LastMatchLoadout = null;
+            LastMLMatchConfig = null;
+            PendingLoadoutPhase = null;
+            LastPreparationState = null;
+            LastMLMatchReady = null;
+            LastMLWaveStart = null;
+            _loggedFirstMLSnapshotForCurrentMatch = false;
+            ClearPostGameData();
+            ResetPostGameFlowState(reason);
+        }
+
         void ResetPostGameFlowState(string reason)
         {
             if (_finalGameOverHandledForCurrentMatch || LastMLGameOver != null || LastRematchStatus != null)
@@ -1180,7 +1208,7 @@ namespace CastleDefender.Net
 #endif
         }
 
-        void OnDestroy()
+        void DisconnectActiveSocket()
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
             JSIO_Disconnect();
@@ -1188,6 +1216,11 @@ namespace CastleDefender.Net
             _socket?.Disconnect();
             _socket = null;
 #endif
+        }
+
+        void OnDestroy()
+        {
+            DisconnectActiveSocket();
         }
     }
 }
