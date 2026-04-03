@@ -25,11 +25,11 @@ namespace CastleDefender.Editor
         const string OuterDarknessMaterialPath = "Assets/Materials/Environment/GameMLOuterDarknessField.mat";
         const string ForestVolumeMaterialPath = "Assets/Materials/Environment/GameMLForestVolume.mat";
         const string LanternRoadGlowMaterialPath = "Assets/Materials/Environment/GameMLLanternRoadGlow.mat";
-        const string RoadWashMaterialPath = "Assets/Materials/Environment/GameMLRoadWash.mat";
         const string RoadShoulderMaterialPath = "Assets/Materials/Environment/GameMLRoadShoulder.mat";
         const string RoadMaterialSourcePath = "Assets/Materials/Environment/WinterCobbleEnvironment.mat";
         const string RoadMaterialPath = "Assets/Materials/Environment/GameMLNightRoad.mat";
         const string NightProfilePath = "Assets/PostProcess/GameMLNightRoads.asset";
+        const string RoadShoulderSnowAlbedoPath = "Assets/Winter & Christmas Pack/Winter & Christmas Pack/Textures/Seamless Terrain/Snow_Dirt_Seamless_Texture_Albedo.png";
 
         const string CriticalPreviewName = "GameEnvironment";
         const string OptionalPreviewName = "GameEnvironmentOptional";
@@ -99,8 +99,13 @@ namespace CastleDefender.Editor
         const float FortressBackdropSideDistance = 12f;
         const float FortressBackdropRearDistance = 34f;
         const float FortressBackdropCornerReturnDepth = 18f;
-        const float RoadShoulderWidth = 18f;
-        const float RoadShoulderLengthPadding = 6f;
+        const float RoadShoulderPatchBaseLength = 30f;
+        const float RoadShoulderPatchLengthVariance = 8f;
+        const float RoadShoulderPatchBaseWidth = 9f;
+        const float RoadShoulderPatchWidthVariance = 2.5f;
+        const float RoadShoulderPatchRoadGap = 4.5f;
+        const float RoadShoulderPatchAxisInset = 22f;
+        const float RoadShoulderPatchAxisJitter = 5f;
         const float RoadShoulderInnerAlpha = 0.22f;
         const float RoadShoulderOuterAlpha = 0.38f;
         const float RoadShoulderNoiseStrength = 0.12f;
@@ -119,6 +124,13 @@ namespace CastleDefender.Editor
         const float InnerLanternPointIntensity = 5.2f;
         const float OuterLanternPointRange = 34f;
         const float InnerLanternPointRange = 40f;
+        const float FortressLanternPointIntensity = 5.9f;
+        const float FortressLanternPointRange = 44f;
+        const float FortressLanternRoadInset = 8f;
+        const float FortressLanternEdgeInset = 1.25f;
+        const float FortressLanternMinimumInteriorSpan = 16f;
+        const int FortressLanternMinimumStations = 2;
+        const int FortressLanternMaximumStations = 3;
 
         [MenuItem("Castle Defender/Remote Content/Stage Lean Night Environment Preview")]
         static void StagePreview()
@@ -367,17 +379,14 @@ namespace CastleDefender.Editor
             var outerDarknessMaterial = EnsureOuterDarknessMaterial();
             var forestVolumeMaterial = EnsureForestVolumeMaterial();
             var lanternGlowMaterial = EnsureLanternRoadGlowMaterial();
-            var roadWashMaterial = EnsureRoadWashMaterial();
-            var roadShoulderMaterial = EnsureRoadShoulderMaterial();
-
             var darknessRoot = CreateChild(optionalRoot, "DarknessFields");
             var treeRoot = CreateChild(optionalRoot, "TreeLines");
             var forestRoot = CreateChild(optionalRoot, "ForestVolumes");
             var fortressBackdropRoot = CreateChild(optionalRoot, "FortressBackdrops");
-            var roadShoulderRoot = CreateChild(optionalRoot, "RoadShoulders");
-            var roadWashRoot = CreateChild(optionalRoot, "RoadWash");
             var lanternRoot = CreateChild(optionalRoot, "RoadLanterns");
             var glowRoot = CreateChild(optionalRoot, "RoadLightPools");
+            var fortressLanternRoot = CreateChild(optionalRoot, "FortressLanterns");
+            var fortressGlowRoot = CreateChild(optionalRoot, "FortressLightPools");
 
             var layout = CaptureRoadLayout(criticalRoot);
             float darknessY = layout.MineBounds.center.y - 0.35f;
@@ -401,16 +410,18 @@ namespace CastleDefender.Editor
             PopulateForestQuadrants(forestRoot, forestVolumeMaterial, layout);
             PopulateExteriorForestBands(forestRoot, forestVolumeMaterial, layout);
 
-            foreach (var road in layout.AllRoads)
-                CreateRoadShoulderBands(roadShoulderRoot, road, roadShoulderMaterial);
-
-            foreach (var road in layout.AllRoads)
-                CreateRoadVisibilityWash(roadWashRoot, road, roadWashMaterial);
-
             foreach (var road in layout.OuterRoads)
                 AddLanternsForRoad(glowRoot, lanternRoot, lanternPrefab, lanternGlowMaterial, road, layout.CenterX, layout.CenterZ, outerRoad: true);
             foreach (var road in layout.CenterRoads)
                 AddLanternsForRoad(glowRoot, lanternRoot, lanternPrefab, lanternGlowMaterial, road, layout.CenterX, layout.CenterZ, outerRoad: false);
+
+            AddFortressInteriorLighting(
+                fortressGlowRoot,
+                fortressLanternRoot,
+                criticalRoot,
+                lanternPrefab,
+                lanternGlowMaterial,
+                layout);
 
             StripColliders(optionalRoot);
         }
@@ -580,15 +591,20 @@ namespace CastleDefender.Editor
 
         static bool IsFortressPerimeterRenderer(Transform candidate, Transform fortRoot)
         {
-            for (var current = candidate; current != null; current = current.parent)
+            if (candidate == null || fortRoot == null)
+                return false;
+
+            var topLevelBranch = GetFortressTopLevelBranch(candidate, fortRoot);
+            if (topLevelBranch == null || IsFortressExcludedRootName(topLevelBranch.name))
+                return false;
+
+            for (var current = candidate; current != null && current != fortRoot; current = current.parent)
             {
                 if (IsFortressPerimeterName(current.name))
                     return true;
-                if (current == fortRoot)
-                    break;
             }
 
-            return false;
+            return IsFortressPerimeterRootName(topLevelBranch.name);
         }
 
         static bool IsFortressPerimeterName(string name)
@@ -596,19 +612,96 @@ namespace CastleDefender.Editor
             if (string.IsNullOrWhiteSpace(name))
                 return false;
 
-            return ContainsIgnoreCase(name, "Wall") ||
-                   ContainsIgnoreCase(name, "Gate") ||
-                   ContainsIgnoreCase(name, "Walls") ||
-                   ContainsIgnoreCase(name, "Tower_Front") ||
-                   ContainsIgnoreCase(name, "Tower_Back") ||
-                   ContainsIgnoreCase(name, "Tower_Rear") ||
-                   ContainsIgnoreCase(name, "Tower_Left_Side") ||
-                   ContainsIgnoreCase(name, "Tower_Right_Side");
+            return IsFortressPerimeterRootName(name) ||
+                   ContainsAnyIgnoreCase(
+                       name,
+                       "Gate & Wall",
+                       "Gate & Walls",
+                       "_Wall_Front_",
+                       "_Wall_Back_",
+                       "_Wall_Rear_",
+                       "_Wall_Left_",
+                       "_Wall_Right_",
+                       "_Gate_Front",
+                       "_Gate_Rear",
+                       "_Gate_Left",
+                       "_Gate_Right",
+                       "_Tower_Front_",
+                       "_Tower_Back_",
+                       "_Tower_Rear_",
+                       "_Tower_Left_",
+                       "_Tower_Right_");
+        }
+
+        static Transform GetFortressTopLevelBranch(Transform candidate, Transform fortRoot)
+        {
+            Transform current = candidate;
+            Transform topLevel = null;
+            while (current != null && current != fortRoot)
+            {
+                topLevel = current;
+                current = current.parent;
+            }
+
+            return current == fortRoot ? topLevel : null;
+        }
+
+        static bool IsFortressPerimeterRootName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            return name.Equals("Walls", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Front Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Rear Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Left Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Right Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Front Gate & Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Rear Gate & Walls", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Left Side Gate & Wall", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("Right Side Gate & Wall", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsFortressExcludedRootName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return true;
+
+            return ContainsAnyIgnoreCase(
+                name,
+                "House",
+                "Barracks",
+                "Economy",
+                "Tier",
+                "Advanced",
+                "Purchases",
+                "Upgrades",
+                "LanePath",
+                "Player_Lane",
+                "_Row",
+                "Banner",
+                "Holding",
+                "Tower_lvl",
+                "UpgradableTowers");
         }
 
         static bool ContainsIgnoreCase(string value, string token)
         {
             return value.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        static bool ContainsAnyIgnoreCase(string value, params string[] tokens)
+        {
+            if (string.IsNullOrWhiteSpace(value) || tokens == null)
+                return false;
+
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (!string.IsNullOrWhiteSpace(tokens[i]) && ContainsIgnoreCase(value, tokens[i]))
+                    return true;
+            }
+
+            return false;
         }
 
         static void AddTreesForRoad(Transform parent, GameObject treePrefab, RoadMetrics road, FortressBounds[] fortresses)
@@ -705,7 +798,9 @@ namespace CastleDefender.Editor
             Vector3 adjusted = position;
             for (int i = 0; i < fortresses.Length; i++)
             {
-                var bounds = fortresses[i].Bounds;
+                var bounds = fortresses[i].DarknessBounds.size.sqrMagnitude > 0f
+                    ? fortresses[i].DarknessBounds
+                    : fortresses[i].Bounds;
                 if (!ContainsXZ(bounds, adjusted))
                     continue;
 
@@ -1104,16 +1199,19 @@ namespace CastleDefender.Editor
                 material);
 
             float returnX = frontLimit;
-            float returnZCenter = northSide
-                ? bounds.max.z + (FortressBackdropSideDistance * 0.5f)
-                : bounds.min.z - (FortressBackdropSideDistance * 0.5f);
+            float returnInnerZ = northSide
+                ? bounds.max.z + FortressBackdropEdgeOffset
+                : bounds.min.z - FortressBackdropEdgeOffset;
+            float returnOuterZ = northSide
+                ? z + FortressBackdropCrossPadding
+                : z - FortressBackdropCrossPadding;
             CreateLinearBackdropStack(
                 parent,
                 $"{namePrefix}_Backdrop_{(northSide ? "North" : "South")}_Return",
-                new Vector3(returnX, centerY, returnZCenter),
+                new Vector3(returnX, centerY, (returnInnerZ + returnOuterZ) * 0.5f),
                 (fortIsWest ? Vector3.left : Vector3.right) * FortressBackdropLayerSpacing,
                 fortIsWest ? Quaternion.Euler(0f, 90f, 0f) : Quaternion.Euler(0f, -90f, 0f),
-                FortressBackdropCornerReturnDepth + FortressBackdropSideDistance,
+                Mathf.Abs(returnOuterZ - returnInnerZ),
                 material);
         }
 
@@ -1158,16 +1256,19 @@ namespace CastleDefender.Editor
             float returnZ = fortIsNorth
                 ? bounds.min.z + FortressBackdropRoadRetreat
                 : bounds.max.z - FortressBackdropRoadRetreat;
-            float returnXCenter = eastSide
-                ? bounds.max.x + (FortressBackdropSideDistance * 0.5f)
-                : bounds.min.x - (FortressBackdropSideDistance * 0.5f);
+            float returnInnerX = eastSide
+                ? bounds.max.x + FortressBackdropEdgeOffset
+                : bounds.min.x - FortressBackdropEdgeOffset;
+            float returnOuterX = eastSide
+                ? x + FortressBackdropCrossPadding
+                : x - FortressBackdropCrossPadding;
             CreateLinearBackdropStack(
                 parent,
                 $"{namePrefix}_Backdrop_{(eastSide ? "East" : "West")}_Return",
-                new Vector3(returnXCenter, centerY, returnZ),
+                new Vector3((returnInnerX + returnOuterX) * 0.5f, centerY, returnZ),
                 (fortIsNorth ? Vector3.forward : Vector3.back) * FortressBackdropLayerSpacing,
                 fortIsNorth ? Quaternion.Euler(0f, 180f, 0f) : Quaternion.identity,
-                FortressBackdropCornerReturnDepth + FortressBackdropSideDistance,
+                Mathf.Abs(returnOuterX - returnInnerX),
                 material);
         }
 
@@ -1847,6 +1948,275 @@ namespace CastleDefender.Editor
                 material);
         }
 
+        static void CreateForestCurtainWithFortCutouts(
+            Transform parent,
+            string namePrefix,
+            DarknessDirection direction,
+            float centerY,
+            float edgeCoord,
+            float crossMin,
+            float crossMax,
+            float interiorMin,
+            float interiorMax,
+            float height,
+            FortressBounds[] fortresses,
+            Material material)
+        {
+            if (crossMax <= crossMin || height <= 0f)
+                return;
+
+            var segments = BuildForestCurtainSegments(direction, edgeCoord, crossMin, crossMax, fortresses);
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var segment = segments[i];
+                CreateForestCurtainSegment(
+                    parent,
+                    segments.Count == 1 ? namePrefix : $"{namePrefix}_Segment_{i + 1:00}",
+                    direction,
+                    centerY,
+                    edgeCoord,
+                    segment.Min,
+                    segment.Max,
+                    height,
+                    material);
+
+                if (segment.Min > crossMin + 0.01f)
+                {
+                    CreateForestCurtainEndCap(
+                        parent,
+                        $"{namePrefix}_Cap_Min_{i + 1:00}",
+                        direction,
+                        centerY,
+                        edgeCoord,
+                        segment.Min,
+                        interiorMin,
+                        interiorMax,
+                        height,
+                        material);
+                }
+
+                if (segment.Max < crossMax - 0.01f)
+                {
+                    CreateForestCurtainEndCap(
+                        parent,
+                        $"{namePrefix}_Cap_Max_{i + 1:00}",
+                        direction,
+                        centerY,
+                        edgeCoord,
+                        segment.Max,
+                        interiorMin,
+                        interiorMax,
+                        height,
+                        material);
+                }
+            }
+        }
+
+        static List<Range1D> BuildForestCurtainSegments(
+            DarknessDirection direction,
+            float edgeCoord,
+            float crossMin,
+            float crossMax,
+            FortressBounds[] fortresses)
+        {
+            var exclusions = new List<Range1D>();
+            if (fortresses != null)
+            {
+                for (int i = 0; i < fortresses.Length; i++)
+                {
+                    var expanded = ExpandBoundsXZ(fortresses[i].DarknessBounds, ForestCurtainFortressPadding);
+                    float intervalMin;
+                    float intervalMax;
+                    switch (direction)
+                    {
+                        case DarknessDirection.North:
+                        case DarknessDirection.South:
+                            if (edgeCoord < expanded.min.z || edgeCoord > expanded.max.z)
+                                continue;
+                            intervalMin = Mathf.Max(expanded.min.x, crossMin);
+                            intervalMax = Mathf.Min(expanded.max.x, crossMax);
+                            break;
+                        case DarknessDirection.West:
+                        case DarknessDirection.East:
+                            if (edgeCoord < expanded.min.x || edgeCoord > expanded.max.x)
+                                continue;
+                            intervalMin = Mathf.Max(expanded.min.z, crossMin);
+                            intervalMax = Mathf.Min(expanded.max.z, crossMax);
+                            break;
+                        default:
+                            throw new ArgumentOutOfRangeException(nameof(direction), direction, null);
+                    }
+
+                    if (intervalMax <= intervalMin)
+                        continue;
+
+                    exclusions.Add(new Range1D { Min = intervalMin, Max = intervalMax });
+                }
+            }
+
+            exclusions.Sort((a, b) => a.Min.CompareTo(b.Min));
+
+            var segments = new List<Range1D>();
+            float cursor = crossMin;
+            for (int i = 0; i < exclusions.Count; i++)
+            {
+                var exclusion = exclusions[i];
+                if (exclusion.Max <= cursor)
+                    continue;
+
+                if (exclusion.Min > cursor)
+                    segments.Add(new Range1D { Min = cursor, Max = exclusion.Min });
+
+                cursor = Mathf.Max(cursor, exclusion.Max);
+            }
+
+            if (cursor < crossMax)
+                segments.Add(new Range1D { Min = cursor, Max = crossMax });
+
+            return segments;
+        }
+
+        static void CreateForestCurtainSegment(
+            Transform parent,
+            string name,
+            DarknessDirection direction,
+            float centerY,
+            float edgeCoord,
+            float crossMin,
+            float crossMax,
+            float height,
+            Material material)
+        {
+            float width = crossMax - crossMin;
+            if (width <= 0f)
+                return;
+
+            switch (direction)
+            {
+                case DarknessDirection.North:
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3((crossMin + crossMax) * 0.5f, centerY, edgeCoord),
+                        Quaternion.Euler(0f, 180f, 0f),
+                        width,
+                        height,
+                        material);
+                    break;
+                case DarknessDirection.South:
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3((crossMin + crossMax) * 0.5f, centerY, edgeCoord),
+                        Quaternion.identity,
+                        width,
+                        height,
+                        material);
+                    break;
+                case DarknessDirection.West:
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(edgeCoord, centerY, (crossMin + crossMax) * 0.5f),
+                        Quaternion.Euler(0f, 90f, 0f),
+                        width,
+                        height,
+                        material);
+                    break;
+                case DarknessDirection.East:
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(edgeCoord, centerY, (crossMin + crossMax) * 0.5f),
+                        Quaternion.Euler(0f, -90f, 0f),
+                        width,
+                        height,
+                        material);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(direction), direction, null);
+            }
+        }
+
+        static void CreateForestCurtainEndCap(
+            Transform parent,
+            string name,
+            DarknessDirection direction,
+            float centerY,
+            float edgeCoord,
+            float cutCoord,
+            float interiorMin,
+            float interiorMax,
+            float height,
+            Material material)
+        {
+            switch (direction)
+            {
+                case DarknessDirection.North:
+                {
+                    float depth = Mathf.Min(ForestCurtainEndCapDepth, edgeCoord - interiorMin);
+                    if (depth <= 0f)
+                        return;
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(cutCoord, centerY, edgeCoord - (depth * 0.5f)),
+                        Quaternion.Euler(0f, 90f, 0f),
+                        depth,
+                        height,
+                        material);
+                    break;
+                }
+                case DarknessDirection.South:
+                {
+                    float depth = Mathf.Min(ForestCurtainEndCapDepth, interiorMax - edgeCoord);
+                    if (depth <= 0f)
+                        return;
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(cutCoord, centerY, edgeCoord + (depth * 0.5f)),
+                        Quaternion.Euler(0f, 90f, 0f),
+                        depth,
+                        height,
+                        material);
+                    break;
+                }
+                case DarknessDirection.West:
+                {
+                    float depth = Mathf.Min(ForestCurtainEndCapDepth, interiorMax - edgeCoord);
+                    if (depth <= 0f)
+                        return;
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(edgeCoord + (depth * 0.5f), centerY, cutCoord),
+                        Quaternion.identity,
+                        depth,
+                        height,
+                        material);
+                    break;
+                }
+                case DarknessDirection.East:
+                {
+                    float depth = Mathf.Min(ForestCurtainEndCapDepth, edgeCoord - interiorMin);
+                    if (depth <= 0f)
+                        return;
+                    CreateForestQuad(
+                        parent,
+                        name,
+                        new Vector3(edgeCoord - (depth * 0.5f), centerY, cutCoord),
+                        Quaternion.identity,
+                        depth,
+                        height,
+                        material);
+                    break;
+                }
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(direction), direction, null);
+            }
+        }
+
         static void CreateForestQuad(
             Transform parent,
             string name,
@@ -1948,6 +2318,422 @@ namespace CastleDefender.Editor
                     outerRoad ? OuterLanternPointIntensity : InnerLanternPointIntensity,
                     outerRoad ? OuterLanternPointRange : InnerLanternPointRange);
             }
+        }
+
+        static void AddFortressInteriorLighting(
+            Transform glowParent,
+            Transform lanternParent,
+            Transform criticalRoot,
+            GameObject lanternPrefab,
+            Material glowMaterial,
+            RoadLayout layout)
+        {
+            if (glowParent == null ||
+                lanternParent == null ||
+                criticalRoot == null ||
+                lanternPrefab == null ||
+                glowMaterial == null ||
+                layout == null ||
+                layout.CenterRoads == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < layout.CenterRoads.Length; i++)
+            {
+                var road = layout.CenterRoads[i];
+                if (!TryGetFortressForCenterRoad(criticalRoot, layout, road, out var fortress, out var fortRoot))
+                    continue;
+
+                if (!TryGetFortressInteriorRoadSpan(fortress, road, out var interiorSpan))
+                    continue;
+
+                var stations = CollectFortressLanternStations(fortRoot, road, interiorSpan);
+                if (stations.Count == 0)
+                    continue;
+
+                AddFortressLanternPairs(
+                    glowParent,
+                    lanternParent,
+                    lanternPrefab,
+                    glowMaterial,
+                    fortress.Name.Replace(' ', '_'),
+                    road,
+                    stations);
+            }
+        }
+
+        static bool TryGetFortressForCenterRoad(
+            Transform criticalRoot,
+            RoadLayout layout,
+            RoadMetrics road,
+            out FortressBounds fortress,
+            out Transform fortRoot)
+        {
+            fortress = default;
+            fortRoot = null;
+
+            string fortressName = GetFortressNameForCenterRoad(road.Name);
+            if (string.IsNullOrWhiteSpace(fortressName))
+                return false;
+
+            fortRoot = FindChildRecursive(criticalRoot, fortressName);
+            if (fortRoot == null)
+                throw new InvalidOperationException($"Could not locate fortress root '{fortressName}' for center road '{road.Name}'.");
+
+            for (int i = 0; i < layout.Fortresses.Length; i++)
+            {
+                if (!string.Equals(layout.Fortresses[i].Name, fortressName, StringComparison.Ordinal))
+                    continue;
+
+                fortress = layout.Fortresses[i];
+                return true;
+            }
+
+            throw new InvalidOperationException($"Could not resolve fortress bounds for '{fortressName}'.");
+        }
+
+        static string GetFortressNameForCenterRoad(string roadName)
+        {
+            return roadName switch
+            {
+                "PB_Red_Player_Lane" => "Red Fort",
+                "Yellow_Player_Lane" => "Yellow Fort",
+                "PB_Blue_Player_Lane" => "Blue Fort",
+                "PB_Green_Player_Lane" => "Green Fort",
+                _ => null,
+            };
+        }
+
+        static Bounds GetFortressShellBounds(FortressBounds fortress)
+        {
+            return fortress.DarknessBounds.size.sqrMagnitude > 0f
+                ? fortress.DarknessBounds
+                : fortress.Bounds;
+        }
+
+        static bool TryGetFortressInteriorRoadSpan(FortressBounds fortress, RoadMetrics road, out Range1D span)
+        {
+            span = default;
+
+            var shellBounds = GetFortressShellBounds(fortress);
+            float overlapMin = road.IsHorizontal
+                ? Mathf.Max(road.Bounds.min.x, shellBounds.min.x)
+                : Mathf.Max(road.Bounds.min.z, shellBounds.min.z);
+            float overlapMax = road.IsHorizontal
+                ? Mathf.Min(road.Bounds.max.x, shellBounds.max.x)
+                : Mathf.Min(road.Bounds.max.z, shellBounds.max.z);
+            if (overlapMax <= overlapMin)
+                return false;
+
+            float availableSpan = overlapMax - overlapMin;
+            if (availableSpan < FortressLanternMinimumInteriorSpan)
+                return false;
+
+            float maxInset = Mathf.Max(0f, (availableSpan - FortressLanternMinimumInteriorSpan) * 0.5f);
+            float inset = Mathf.Min(FortressLanternRoadInset, maxInset);
+            span = new Range1D
+            {
+                Min = overlapMin + inset,
+                Max = overlapMax - inset,
+            };
+
+            return span.Max - span.Min >= FortressLanternMinimumInteriorSpan;
+        }
+
+        static List<float> CollectFortressLanternStations(
+            Transform fortRoot,
+            RoadMetrics road,
+            Range1D interiorSpan)
+        {
+            var occupiedRanges = CollectFortressInteriorBuildingRanges(fortRoot, road, interiorSpan);
+            var stations = new List<float>();
+
+            for (int i = 1; i < occupiedRanges.Count; i++)
+            {
+                float gapMin = occupiedRanges[i - 1].Max;
+                float gapMax = occupiedRanges[i].Min;
+                if ((gapMax - gapMin) < 6f)
+                    continue;
+
+                stations.Add((gapMin + gapMax) * 0.5f);
+            }
+
+            int targetCount = Mathf.Clamp(
+                Mathf.RoundToInt((interiorSpan.Max - interiorSpan.Min) / 34f),
+                FortressLanternMinimumStations,
+                FortressLanternMaximumStations);
+            var fallbackStations = BuildEvenlySpacedStations(interiorSpan, targetCount);
+            for (int i = 0; i < fallbackStations.Count; i++)
+            {
+                float fallback = fallbackStations[i];
+                if (stations.Any(existing => Mathf.Abs(existing - fallback) < 4f))
+                    continue;
+
+                stations.Add(fallback);
+            }
+
+            if (stations.Count < targetCount)
+            {
+                for (int i = 0; i < fallbackStations.Count && stations.Count < targetCount; i++)
+                {
+                    float fallback = fallbackStations[i];
+                    if (stations.Any(existing => Mathf.Abs(existing - fallback) < 0.75f))
+                        continue;
+
+                    stations.Add(fallback);
+                }
+            }
+
+            return DownsampleStationCoordinates(stations, targetCount);
+        }
+
+        static List<Range1D> CollectFortressInteriorBuildingRanges(
+            Transform fortRoot,
+            RoadMetrics road,
+            Range1D interiorSpan)
+        {
+            var ranges = new List<Range1D>();
+            float roadCrossCenter = road.IsHorizontal ? road.Bounds.center.z : road.Bounds.center.x;
+            float roadCrossHalf = road.IsHorizontal ? road.Bounds.extents.z : road.Bounds.extents.x;
+            float roadInfluenceHalf = Mathf.Max(16f, roadCrossHalf + 10f);
+
+            foreach (Transform child in fortRoot)
+            {
+                if (ShouldSkipFortressInteriorLightingBranch(child.name))
+                    continue;
+
+                var renderers = child.GetComponentsInChildren<Renderer>(true);
+                if (renderers == null || renderers.Length == 0)
+                    continue;
+
+                var bounds = CaptureCombinedBounds(renderers);
+                float crossMin = road.IsHorizontal ? bounds.min.z : bounds.min.x;
+                float crossMax = road.IsHorizontal ? bounds.max.z : bounds.max.x;
+                if (crossMax < (roadCrossCenter - roadInfluenceHalf) || crossMin > (roadCrossCenter + roadInfluenceHalf))
+                    continue;
+
+                float axisMin = Mathf.Max(interiorSpan.Min, road.IsHorizontal ? bounds.min.x : bounds.min.z);
+                float axisMax = Mathf.Min(interiorSpan.Max, road.IsHorizontal ? bounds.max.x : bounds.max.z);
+                if ((axisMax - axisMin) < 1.5f)
+                    continue;
+
+                ranges.Add(new Range1D
+                {
+                    Min = axisMin,
+                    Max = axisMax,
+                });
+            }
+
+            return MergeRanges(ranges);
+        }
+
+        static bool ShouldSkipFortressInteriorLightingBranch(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return true;
+
+            if (IsFortressPerimeterRootName(name) || IsFortressPerimeterName(name))
+                return true;
+
+            return ContainsAnyIgnoreCase(
+                name,
+                "LanePath",
+                "Player_Lane",
+                "_Row",
+                "Banner",
+                "Holding",
+                "UpgradableTowers",
+                "Tower_lvl",
+                "Purchase Upgrades",
+                "purchase required",
+                "PadAnchor",
+                "Spawn");
+        }
+
+        static List<Range1D> MergeRanges(List<Range1D> ranges)
+        {
+            if (ranges == null || ranges.Count == 0)
+                return new List<Range1D>();
+
+            ranges.Sort((a, b) => a.Min.CompareTo(b.Min));
+            var merged = new List<Range1D> { ranges[0] };
+            for (int i = 1; i < ranges.Count; i++)
+            {
+                var current = ranges[i];
+                var last = merged[merged.Count - 1];
+                if (current.Min <= (last.Max + 1f))
+                {
+                    last.Max = Mathf.Max(last.Max, current.Max);
+                    merged[merged.Count - 1] = last;
+                    continue;
+                }
+
+                merged.Add(current);
+            }
+
+            return merged;
+        }
+
+        static List<float> BuildEvenlySpacedStations(Range1D span, int count)
+        {
+            var stations = new List<float>(Mathf.Max(0, count));
+            if (count <= 0 || span.Max <= span.Min)
+                return stations;
+
+            for (int i = 0; i < count; i++)
+            {
+                float t = count == 1 ? 0.5f : (i + 1f) / (count + 1f);
+                stations.Add(Mathf.Lerp(span.Min, span.Max, t));
+            }
+
+            return stations;
+        }
+
+        static List<float> DownsampleStationCoordinates(List<float> stations, int targetCount)
+        {
+            if (stations == null || stations.Count == 0 || targetCount <= 0)
+                return new List<float>();
+
+            var ordered = stations
+                .Where(value => !float.IsNaN(value) && !float.IsInfinity(value))
+                .OrderBy(value => value)
+                .ToList();
+            if (ordered.Count == 0)
+                return ordered;
+
+            var distinct = new List<float> { ordered[0] };
+            for (int i = 1; i < ordered.Count; i++)
+            {
+                if (Mathf.Abs(ordered[i] - distinct[distinct.Count - 1]) < 2f)
+                    continue;
+
+                distinct.Add(ordered[i]);
+            }
+
+            if (distinct.Count <= targetCount)
+                return distinct;
+
+            var downsampled = new List<float>(targetCount);
+            for (int i = 0; i < targetCount; i++)
+            {
+                float t = targetCount == 1 ? 0.5f : (float)i / (targetCount - 1f);
+                int index = Mathf.RoundToInt(t * (distinct.Count - 1));
+                float candidate = distinct[index];
+                if (downsampled.Count == 0 || Mathf.Abs(candidate - downsampled[downsampled.Count - 1]) >= 2f)
+                    downsampled.Add(candidate);
+            }
+
+            for (int i = 0; i < distinct.Count && downsampled.Count < targetCount; i++)
+            {
+                float candidate = distinct[i];
+                if (downsampled.Any(existing => Mathf.Abs(existing - candidate) < 2f))
+                    continue;
+
+                downsampled.Add(candidate);
+            }
+
+            downsampled.Sort();
+            return downsampled;
+        }
+
+        static void AddFortressLanternPairs(
+            Transform glowParent,
+            Transform lanternParent,
+            GameObject lanternPrefab,
+            Material glowMaterial,
+            string namePrefix,
+            RoadMetrics road,
+            List<float> stations)
+        {
+            float overlayY = road.Bounds.max.y + 0.45f;
+            for (int i = 0; i < stations.Count; i++)
+            {
+                float station = stations[i];
+                if (road.IsHorizontal)
+                {
+                    AddFortressLantern(
+                        glowParent,
+                        lanternParent,
+                        lanternPrefab,
+                        glowMaterial,
+                        $"{namePrefix}_InteriorLantern_{i + 1:00}_South",
+                        $"{namePrefix}_InteriorGlow_{i + 1:00}_South",
+                        new Vector3(station, 0f, road.Bounds.min.z + FortressLanternEdgeInset),
+                        new Vector3(station, overlayY, road.Bounds.center.z),
+                        yaw: 0f,
+                        roadIsHorizontal: true);
+                    AddFortressLantern(
+                        glowParent,
+                        lanternParent,
+                        lanternPrefab,
+                        glowMaterial,
+                        $"{namePrefix}_InteriorLantern_{i + 1:00}_North",
+                        $"{namePrefix}_InteriorGlow_{i + 1:00}_North",
+                        new Vector3(station, 0f, road.Bounds.max.z - FortressLanternEdgeInset),
+                        new Vector3(station, overlayY, road.Bounds.center.z),
+                        yaw: 180f,
+                        roadIsHorizontal: true);
+                    continue;
+                }
+
+                AddFortressLantern(
+                    glowParent,
+                    lanternParent,
+                    lanternPrefab,
+                    glowMaterial,
+                    $"{namePrefix}_InteriorLantern_{i + 1:00}_West",
+                    $"{namePrefix}_InteriorGlow_{i + 1:00}_West",
+                    new Vector3(road.Bounds.min.x + FortressLanternEdgeInset, 0f, station),
+                    new Vector3(road.Bounds.center.x, overlayY, station),
+                    yaw: 90f,
+                    roadIsHorizontal: false);
+                AddFortressLantern(
+                    glowParent,
+                    lanternParent,
+                    lanternPrefab,
+                    glowMaterial,
+                    $"{namePrefix}_InteriorLantern_{i + 1:00}_East",
+                    $"{namePrefix}_InteriorGlow_{i + 1:00}_East",
+                    new Vector3(road.Bounds.max.x - FortressLanternEdgeInset, 0f, station),
+                    new Vector3(road.Bounds.center.x, overlayY, station),
+                    yaw: 270f,
+                    roadIsHorizontal: false);
+            }
+        }
+
+        static void AddFortressLantern(
+            Transform glowParent,
+            Transform lanternParent,
+            GameObject lanternPrefab,
+            Material glowMaterial,
+            string lanternName,
+            string glowName,
+            Vector3 position,
+            Vector3 roadTarget,
+            float yaw,
+            bool roadIsHorizontal)
+        {
+            var lantern = InstantiateNestedPrefab(lanternPrefab, lanternParent, lanternName);
+            lantern.transform.position = position;
+            lantern.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            lantern.transform.localScale = Vector3.one * 3.2f;
+
+            SetRendererShadows(lantern, true, true);
+            ConfigureLanternProjector(lantern.transform, roadTarget, outerRoad: false);
+            CreateLanternRoadGlow(
+                glowParent,
+                glowName,
+                position,
+                roadTarget,
+                roadIsHorizontal,
+                outerRoad: false,
+                glowMaterial);
+                AddWarmPointLight(
+                    lantern.transform,
+                    lanternName,
+                    FortressLanternPointIntensity,
+                    FortressLanternPointRange);
         }
 
         static void ConfigureLanternProjector(Transform lanternTransform, Vector3 roadTarget, bool outerRoad)
@@ -2289,41 +3075,14 @@ namespace CastleDefender.Editor
             return material;
         }
 
-        static Material EnsureRoadWashMaterial()
-        {
-            var material = AssetDatabase.LoadAssetAtPath<Material>(RoadWashMaterialPath);
-            Shader shader = RequireLanternRoadGlowShader();
-
-            if (material == null)
-            {
-                material = new Material(shader)
-                {
-                    name = "GameMLRoadWash",
-                };
-                AssetDatabase.CreateAsset(material, RoadWashMaterialPath);
-            }
-            else if (material.shader != shader)
-            {
-                material.shader = shader;
-            }
-
-            if (material.HasProperty("_Color"))
-                material.SetColor("_Color", new Color(0.52f, 0.57f, 0.66f, 0.3f));
-            if (material.HasProperty("_EdgePower"))
-                material.SetFloat("_EdgePower", 1.42f);
-            if (material.HasProperty("_CenterBoost"))
-                material.SetFloat("_CenterBoost", 1.16f);
-
-            material.renderQueue = (int)RenderQueue.Transparent - 5;
-            EditorUtility.SetDirty(material);
-            AssetDatabase.SaveAssets();
-            return material;
-        }
-
         static Material EnsureRoadShoulderMaterial()
         {
             var material = AssetDatabase.LoadAssetAtPath<Material>(RoadShoulderMaterialPath);
             Shader shader = RequireRoadDarknessBandShader();
+            var snowAlbedo = AssetDatabase.LoadAssetAtPath<Texture2D>(RoadShoulderSnowAlbedoPath);
+
+            if (snowAlbedo == null)
+                throw new InvalidOperationException($"Could not load road shoulder snow texture '{RoadShoulderSnowAlbedoPath}'.");
 
             if (material == null)
             {
@@ -2338,16 +3097,22 @@ namespace CastleDefender.Editor
                 material.shader = shader;
             }
 
+            if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", snowAlbedo);
             if (material.HasProperty("_Color"))
-                material.SetColor("_Color", new Color(0.03f, 0.04f, 0.065f, 1f));
+                material.SetColor("_Color", new Color(0.58f, 0.62f, 0.68f, 1f));
+            if (material.HasProperty("_Brightness"))
+                material.SetFloat("_Brightness", 0.78f);
+            if (material.HasProperty("_TextureScale"))
+                material.SetFloat("_TextureScale", 0.085f);
             if (material.HasProperty("_InnerAlpha"))
-                material.SetFloat("_InnerAlpha", RoadShoulderInnerAlpha);
+                material.SetFloat("_InnerAlpha", 0.13f);
             if (material.HasProperty("_OuterAlpha"))
-                material.SetFloat("_OuterAlpha", RoadShoulderOuterAlpha);
+                material.SetFloat("_OuterAlpha", 0.34f);
             if (material.HasProperty("_NoiseStrength"))
-                material.SetFloat("_NoiseStrength", RoadShoulderNoiseStrength);
+                material.SetFloat("_NoiseStrength", 0.3f);
             if (material.HasProperty("_EndFade"))
-                material.SetFloat("_EndFade", RoadShoulderEndFade);
+                material.SetFloat("_EndFade", 0.22f);
 
             material.renderQueue = (int)RenderQueue.Transparent - 8;
             EditorUtility.SetDirty(material);
@@ -2613,82 +3378,62 @@ namespace CastleDefender.Editor
                 UnityEngine.Object.DestroyImmediate(collider);
         }
 
-        static void CreateRoadVisibilityWash(Transform parent, RoadMetrics road, Material material)
-        {
-            if (parent == null || material == null)
-                return;
-
-            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            quad.name = $"{road.Name}_Wash";
-            quad.transform.SetParent(parent, false);
-            quad.transform.position = new Vector3(
-                road.Bounds.center.x,
-                road.Bounds.max.y + 0.35f,
-                road.Bounds.center.z);
-            quad.transform.rotation = Quaternion.Euler(90f, road.IsHorizontal ? 0f : 90f, 0f);
-            quad.transform.localScale = road.IsHorizontal
-                ? new Vector3(road.Bounds.size.x * 1.04f, Mathf.Max(9f, road.Bounds.size.z * 1.05f), 1f)
-                : new Vector3(road.Bounds.size.z * 1.04f, Mathf.Max(9f, road.Bounds.size.x * 1.05f), 1f);
-
-            var renderer = quad.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.sharedMaterial = material;
-                renderer.shadowCastingMode = ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
-            }
-
-            var collider = quad.GetComponent<Collider>();
-            if (collider != null)
-                UnityEngine.Object.DestroyImmediate(collider);
-        }
-
-        static void CreateRoadShoulderBands(Transform parent, RoadMetrics road, Material material)
+        static void CreateRoadShoulderPatches(Transform parent, RoadMetrics road, Material material)
         {
             if (parent == null || material == null)
                 return;
 
             float overlayY = road.Bounds.max.y + 0.16f;
             float roadLength = road.IsHorizontal ? road.Bounds.size.x : road.Bounds.size.z;
-            float bandLength = roadLength + RoadShoulderLengthPadding;
+            int patchCount = Mathf.Clamp(Mathf.RoundToInt(roadLength / 115f), 2, 3);
+            float axisMin = road.IsHorizontal ? road.Bounds.min.x : road.Bounds.min.z;
+            float axisMax = road.IsHorizontal ? road.Bounds.max.x : road.Bounds.max.z;
+            float maxInset = Mathf.Max(0f, (roadLength - 24f) * 0.5f);
+            float axisInset = Mathf.Min(RoadShoulderPatchAxisInset, maxInset);
 
-            if (road.IsHorizontal)
+            for (int sideIndex = 0; sideIndex < 2; sideIndex++)
             {
-                CreateRoadShoulderQuad(
-                    parent,
-                    $"{road.Name}_Shoulder_North",
-                    new Vector3(road.Bounds.center.x, overlayY, road.Bounds.min.z - (RoadShoulderWidth * 0.5f)),
-                    Quaternion.Euler(90f, 0f, 0f),
-                    bandLength,
-                    RoadShoulderWidth,
-                    material);
-                CreateRoadShoulderQuad(
-                    parent,
-                    $"{road.Name}_Shoulder_South",
-                    new Vector3(road.Bounds.center.x, overlayY, road.Bounds.max.z + (RoadShoulderWidth * 0.5f)),
-                    Quaternion.Euler(90f, 180f, 0f),
-                    bandLength,
-                    RoadShoulderWidth,
-                    material);
-                return;
-            }
+                for (int i = 0; i < patchCount; i++)
+                {
+                    float t = patchCount == 1 ? 0.5f : (i + 1f) / (patchCount + 1f);
+                    float along = Mathf.Lerp(axisMin + axisInset, axisMax - axisInset, t);
+                    float length = RoadShoulderPatchBaseLength + (((i + sideIndex) % 3) * RoadShoulderPatchLengthVariance);
+                    float width = RoadShoulderPatchBaseWidth + (((i + (sideIndex * 2)) % 3) * RoadShoulderPatchWidthVariance);
+                    float alongJitter = (((i + sideIndex) % 3) - 1f) * RoadShoulderPatchAxisJitter;
+                    float sideOffset = RoadShoulderPatchRoadGap + (width * 0.5f) + (((i + sideIndex) % 2) * 1.5f);
+                    float yawJitter = (((i * 2) + sideIndex) - 2f) * 3.25f;
 
-            CreateRoadShoulderQuad(
-                parent,
-                $"{road.Name}_Shoulder_East",
-                new Vector3(road.Bounds.max.x + (RoadShoulderWidth * 0.5f), overlayY, road.Bounds.center.z),
-                Quaternion.Euler(90f, 90f, 0f),
-                bandLength,
-                RoadShoulderWidth,
-                material);
-            CreateRoadShoulderQuad(
-                parent,
-                $"{road.Name}_Shoulder_West",
-                new Vector3(road.Bounds.min.x - (RoadShoulderWidth * 0.5f), overlayY, road.Bounds.center.z),
-                Quaternion.Euler(90f, -90f, 0f),
-                bandLength,
-                RoadShoulderWidth,
-                material);
+                    if (road.IsHorizontal)
+                    {
+                        bool northSide = sideIndex == 0;
+                        CreateRoadShoulderQuad(
+                            parent,
+                            $"{road.Name}_ShoulderPatch_{(northSide ? "North" : "South")}_{i + 1:00}",
+                            new Vector3(
+                                along + alongJitter,
+                                overlayY,
+                                northSide ? road.Bounds.min.z - sideOffset : road.Bounds.max.z + sideOffset),
+                            Quaternion.Euler(90f, (northSide ? 0f : 180f) + yawJitter, 0f),
+                            length,
+                            width,
+                            material);
+                        continue;
+                    }
+
+                    bool westSide = sideIndex == 0;
+                    CreateRoadShoulderQuad(
+                        parent,
+                        $"{road.Name}_ShoulderPatch_{(westSide ? "West" : "East")}_{i + 1:00}",
+                        new Vector3(
+                            westSide ? road.Bounds.min.x - sideOffset : road.Bounds.max.x + sideOffset,
+                            overlayY,
+                            along + alongJitter),
+                        Quaternion.Euler(90f, (westSide ? -90f : 90f) + yawJitter, 0f),
+                        length,
+                        width,
+                        material);
+                }
+            }
         }
 
         static void CreateRoadShoulderQuad(
