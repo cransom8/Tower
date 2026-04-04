@@ -1470,6 +1470,9 @@ function recomputeTeamHpState(game, deps = {}) {
 }
 
 function applyFortressPadDamage(game, lane, padId, damage, deps = {}) {
+  const recordBalanceStructureDamage = typeof deps.recordBalanceStructureDamage === "function"
+    ? deps.recordBalanceStructureDamage
+    : null;
   if (!game || !lane || lane.eliminated || !padId)
     return { damageApplied: 0, destroyed: false, remainingHp: 0 };
 
@@ -1505,6 +1508,8 @@ function applyFortressPadDamage(game, lane, padId, damage, deps = {}) {
       coreStates: buildTownCoreStateSummary(game, deps),
     });
   }
+  if (recordBalanceStructureDamage && damageApplied > 0)
+    recordBalanceStructureDamage(game, lane, padState.buildingType, damageApplied, {});
   return {
     damageApplied,
     destroyed: padState.hp <= 0,
@@ -1751,6 +1756,9 @@ function applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey, dep
     return { ok: false, reason: lockedReason };
 
   const cost = Math.max(0, Math.floor(Number(upgradeDef.cost) || 0));
+  const recordBalanceSpend = typeof deps.recordBalanceSpend === "function"
+    ? deps.recordBalanceSpend
+    : null;
   if (cost <= 0)
     return { ok: false, reason: "Upgrade cost is invalid" };
 
@@ -1768,6 +1776,12 @@ function applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey, dep
     deps.reapplyOwnedCombatUnitsForLane(game, lane);
 
   recomputeTeamHpState(game, deps);
+  if (recordBalanceSpend)
+    recordBalanceSpend(game, lane, "upgrade", cost, {
+      buildingType: padState.buildingType,
+      padId,
+      upgradeKey,
+    });
   return { ok: true };
 }
 
@@ -1787,6 +1801,9 @@ function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
     return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
   if (lane.gold < descriptor.buildCost)
     return { ok: false, reason: "Not enough gold" };
+  const recordBalanceSpend = typeof deps.recordBalanceSpend === "function"
+    ? deps.recordBalanceSpend
+    : null;
 
   lane.gold -= descriptor.buildCost;
   lane.totalBuildSpend += descriptor.buildCost;
@@ -1804,6 +1821,11 @@ function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
     padState.costHistory = [];
   padState.costHistory.push({ cost: descriptor.buildCost });
   recomputeTeamHpState(game, deps);
+  if (recordBalanceSpend)
+    recordBalanceSpend(game, lane, "building", descriptor.buildCost, {
+      buildingType: padState.buildingType,
+      padId,
+    });
   return { ok: true };
 }
 
@@ -1823,6 +1845,9 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
     return { ok: false, reason: descriptor.lockedReason || "Upgrade unavailable" };
   if (lane.gold < descriptor.nextUpgradeCost)
     return { ok: false, reason: "Not enough gold" };
+  const recordBalanceSpend = typeof deps.recordBalanceSpend === "function"
+    ? deps.recordBalanceSpend
+    : null;
 
   const priorBlacksmithBranchDefs = String(padState.buildingType || "").trim().toLowerCase() === "blacksmith"
     && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
@@ -1869,6 +1894,12 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
     if (nextMarketTierDef && nextMarketTierDef.unitKey !== priorMarketTierDef.unitKey)
       deps.upgradeOwnedMarketUnits(game, lane, nextMarketTierDef, deps);
   }
+  if (recordBalanceSpend)
+    recordBalanceSpend(game, lane, "upgrade", descriptor.nextUpgradeCost, {
+      buildingType: padState.buildingType,
+      padId,
+      upgradeKey: `tier_${nextTier}`,
+    });
 
   return { ok: true };
 }

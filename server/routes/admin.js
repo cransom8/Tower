@@ -982,6 +982,65 @@ router.get('/matches/:id/combat-log', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /admin/matches/:id/balance-report
+router.get('/matches/:id/balance-report', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid match ID' });
+  try {
+    const r = await db.query(
+      `SELECT id, mode, started_at, ended_at, wave_stats, balance_summary, balance_flags
+         FROM matches WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Match not found' });
+    const match = r.rows[0];
+    res.json({
+      matchId: match.id,
+      mode: match.mode,
+      startedAt: match.started_at,
+      endedAt: match.ended_at,
+      waveReports: match.wave_stats || [],
+      summary: match.balance_summary || null,
+      flags: match.balance_flags || [],
+      readableLog: match.balance_summary?.readable?.perWaveLog || [],
+      diagnosis: match.balance_summary?.readable?.diagnosis || [],
+    });
+  } catch (err) {
+    log.error('[admin] balance-report route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /admin/balance/reports
+router.get('/balance/reports', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.json({ aggregate: {}, trendRows: [] });
+  const db = require('../db');
+  const { buildMultiMatchBalanceReport } = require('../game/multilane/balanceTelemetry');
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const params = [];
+  const conditions = [`balance_summary IS NOT NULL`];
+  if (req.query.mode && ['classic', 'multilane', '2v2_ranked'].includes(req.query.mode)) {
+    params.push(req.query.mode);
+    conditions.push(`mode = $${params.length}`);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  try {
+    const r = await db.query(
+      `SELECT id, mode, started_at, ended_at, balance_summary, balance_flags
+         FROM matches
+         ${where}
+         ORDER BY started_at DESC
+         LIMIT $${params.length + 1}`,
+      [...params, limit]
+    );
+    res.json(buildMultiMatchBalanceReport(r.rows));
+  } catch (err) {
+    log.error('[admin] balance reports route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /admin/matches/:id/terminate
 router.post('/matches/:id/terminate', requireAdmin, requirePermission('match.terminate'), async (req, res) => {
   if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid match ID' });

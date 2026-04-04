@@ -36,7 +36,10 @@ function createFeatureFlagCache(db) {
     }
 
     try {
-      const result = await db.query("SELECT name, enabled FROM feature_flags");
+      const result = await db.query(
+        "SELECT name, enabled FROM feature_flags",
+        { label: "feature_flags:refresh" }
+      );
       flags.clear();
       for (const row of result.rows)
         flags.set(row.name, !!row.enabled);

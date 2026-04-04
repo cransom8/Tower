@@ -1137,7 +1137,10 @@ function getBarracksSiteCombatTarget(lane, barracksId, deps = {}) {
   };
 }
 
-function applyBarracksSiteDamage(game, lane, barracksId, damage) {
+function applyBarracksSiteDamage(game, lane, barracksId, damage, deps = {}) {
+  const recordBalanceStructureDamage = typeof deps.recordBalanceStructureDamage === "function"
+    ? deps.recordBalanceStructureDamage
+    : null;
   if (!game || !lane || lane.eliminated)
     return { damageApplied: 0, destroyed: false, remainingHp: 0 };
 
@@ -1159,6 +1162,8 @@ function applyBarracksSiteDamage(game, lane, barracksId, damage) {
 
   siteState.hp = Math.max(0, prevHp - appliedDamage);
   const damageApplied = prevHp - siteState.hp;
+  if (recordBalanceStructureDamage && damageApplied > 0)
+    recordBalanceStructureDamage(game, lane, "barracks", damageApplied, {});
   return {
     damageApplied,
     destroyed: siteState.hp <= 0,
@@ -2268,7 +2273,7 @@ function spawnScheduledBarracksRoster(game, lane, barracksId = null, deps = {}) 
   return allowedSpawnEntries.length;
 }
 
-function applyBarracksSiteBuildAction(game, lane, barracksId) {
+function applyBarracksSiteBuildAction(game, lane, barracksId, deps = {}) {
   const descriptor = describeBarracksSite(game, lane, barracksId);
   if (!descriptor)
     return { ok: false, reason: "Unknown barracks" };
@@ -2276,6 +2281,9 @@ function applyBarracksSiteBuildAction(game, lane, barracksId) {
     return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
   if (lane.gold < descriptor.buildCost)
     return { ok: false, reason: "Not enough gold" };
+  const recordBalanceSpend = typeof deps.recordBalanceSpend === "function"
+    ? deps.recordBalanceSpend
+    : null;
 
   const siteState = descriptor.siteState;
   const nextLevel = 1;
@@ -2310,10 +2318,15 @@ function applyBarracksSiteBuildAction(game, lane, barracksId) {
   siteState.costHistory.push({ cost: descriptor.buildCost });
   if (siteState.isBuilt)
     syncLegacyBarracksAggregate(lane);
+  if (recordBalanceSpend)
+    recordBalanceSpend(game, lane, "building", descriptor.buildCost, {
+      buildingType: "barracks",
+      barracksId,
+    });
   return { ok: true };
 }
 
-function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
+function applyBarracksSiteUpgradeAction(game, lane, barracksId, deps = {}) {
   const descriptor = describeBarracksSite(game, lane, barracksId);
   if (!descriptor)
     return { ok: false, reason: "Unknown barracks" };
@@ -2323,6 +2336,9 @@ function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
     return { ok: false, reason: descriptor.lockedReason || "Barracks upgrade unavailable" };
   if (lane.gold < descriptor.upgradeCost)
     return { ok: false, reason: "Not enough gold" };
+  const recordBalanceSpend = typeof deps.recordBalanceSpend === "function"
+    ? deps.recordBalanceSpend
+    : null;
 
   const siteState = descriptor.siteState;
   const currentTick = Math.floor(Number(game && game.tick) || 0);
@@ -2344,6 +2360,12 @@ function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
   if (!Array.isArray(siteState.costHistory))
     siteState.costHistory = [];
   siteState.costHistory.push({ cost: descriptor.upgradeCost });
+  if (recordBalanceSpend)
+    recordBalanceSpend(game, lane, "upgrade", descriptor.upgradeCost, {
+      buildingType: "barracks",
+      barracksId,
+      upgradeKey: `level_${nextLevel}`,
+    });
   return { ok: true };
 }
 
@@ -2451,6 +2473,15 @@ function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1
     + `rosterKey='${rosterKey}' ownedCount=${siteCounts[rosterKey]} totalCost=${totalCost}`
   );
   logBarracksRosterState(lane, `after_buy:${normalizedBarracksId}:${rosterKey}`, deps);
+  if (typeof deps.recordBalanceSpend === "function")
+    deps.recordBalanceSpend(game, lane, "unit", totalCost, {
+      buildingType: "barracks",
+      barracksId: normalizedBarracksId,
+      rosterKey,
+      unitType: rosterEntry.unitTypeKey || rosterEntry.archetypeKey || rosterDef.archetypeKey || rosterKey,
+      count: safeCount,
+      estimatedPowerGain: totalCost,
+    });
   return { ok: true };
 }
 
@@ -2510,6 +2541,14 @@ function buyMarketUnit(game, laneIndex, lane, unitKey, count = 1, deps = {}) {
     `[MarketTrace][ServerBuy] lane=${laneIndex} unitKey='${unitKey}' ` +
     `ownedCount=${marketCounts[unitKey]} totalCost=${totalCost}`
   );
+  if (typeof deps.recordBalanceSpend === "function")
+    deps.recordBalanceSpend(game, lane, "unit", totalCost, {
+      buildingType: "market",
+      unitType: marketEntry.unitTypeKey || marketEntry.archetypeKey || unitKey,
+      rosterKey: unitKey,
+      count: safeCount,
+      estimatedPowerGain: totalCost,
+    });
   return { ok: true };
 }
 
@@ -2545,7 +2584,8 @@ function sellBarracksUnit(laneIndex, lane, rosterKey, barracksId, deps = {}) {
     return { ok: false, reason: "No owned units to sell" };
 
   siteCounts[rosterKey] = currentOwned - 1;
-  lane.gold += getBarracksRosterSellRefund(rosterDef, deps);
+  const refund = getBarracksRosterSellRefund(rosterDef, deps);
+  lane.gold += refund;
   logSpawnAuditLine(deps,
     `[BarracksTrace][ServerBuy] lane=${laneIndex} barracksId='${normalizedBarracksId}' `
     + `rosterKey='${rosterKey}' ownedCount=${siteCounts[rosterKey]}`
@@ -2626,6 +2666,15 @@ function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId, deps = {
     role: heroDef.role || null,
     combatRole: normalizedCombatRole || deps.defaultHeroCombatRole || "sword",
   });
+  if (typeof deps.recordBalanceSpend === "function")
+    deps.recordBalanceSpend(game, lane, "hero", summonCost, {
+      buildingType: "barracks",
+      barracksId: normalizedBarracksId,
+      heroKey: heroDef.heroKey,
+      unitType: heroDef.archetypeKey,
+      count: 1,
+      estimatedPowerGain: summonCost,
+    });
 
   return { ok: true };
 }

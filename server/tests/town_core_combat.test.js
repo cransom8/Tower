@@ -762,4 +762,47 @@ test("wave units can target the center barracks instead of skipping straight to 
   assert.equal(attacker.combatTarget?.padId, centerBarracksTarget.padId, "the wave should be allowed to lock onto the center barracks instead of skipping to the Town Core");
 });
 
+test("wave units retarget from a prelocked Town Core to a nearer center barracks", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const barracksBuilder = createDefender("guardian", {
+    id: "barracks_retarget_builder",
+    posX: -24,
+    posY: 10,
+    guardAnchorX: -24,
+    guardAnchorY: 10,
+  });
+  lane.units.push(barracksBuilder);
+  tick(game, 1);
+  lane.units = lane.units.filter((unit) => unit.id !== barracksBuilder.id);
+
+  const coreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  const centerBarracksTarget = simMl.getBarracksSiteCombatTarget(lane, "center");
+  assert.ok(coreTarget, "expected the Town Core to expose a combat target");
+  assert.ok(centerBarracksTarget, "expected the center barracks to expose a combat target");
+
+  const attacker = createWaveUnit("raider", {
+    id: "barracks_retarget_wave",
+    atkCd: 0,
+    posX: Number(centerBarracksTarget.posX),
+    posY: Number(centerBarracksTarget.posY) + 0.6,
+    pathIdx: Number(centerBarracksTarget.posY) + 0.6,
+    routeWorldX: Number(centerBarracksTarget.posX),
+    routeWorldY: Number(centerBarracksTarget.posY) + 0.6,
+    combatTarget: {
+      unitId: coreTarget.unitId,
+      kind: "fortress_pad",
+      padId: coreTarget.padId,
+      laneIndex: lane.laneIndex,
+    },
+  });
+
+  lane.units.push(attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.kind, "fortress_pad", "the wave should keep a fortress target after reevaluating");
+  assert.equal(attacker.combatTarget?.padId, centerBarracksTarget.padId, "the wave should switch off the Town Core and onto the nearer center barracks");
+});
+
 

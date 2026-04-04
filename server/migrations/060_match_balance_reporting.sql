@@ -1,0 +1,3 @@
+ALTER TABLE matches
+  ADD COLUMN IF NOT EXISTS balance_summary JSONB,
+  ADD COLUMN IF NOT EXISTS balance_flags JSONB;

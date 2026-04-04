@@ -23,6 +23,8 @@ namespace CastleDefender.UI
         const string LegacyRuntimeBarracksPanelHostName = "RuntimeBarracksPanelHost";
         const string ProgressionDockWidgetName = "ProgressionDockWidget";
         const string QuitConfirmationModalName = "QuitConfirmationModal";
+        const string WaveOverviewWidgetPrefsKey = "hud.wave_overview_widget.command_deck_v2";
+        const string MiniMapWidgetPrefsKey = "hud.minimap_widget.top_right_v2";
         const float HudWidgetMinimumFontSize = 12f;
         static readonly string[] WaveBranchBuildingOrder = { "blacksmith", "archery_tower", "temple", "wizard_tower" };
 
@@ -862,11 +864,11 @@ namespace CastleDefender.UI
             var root = new GameObject("WaveStatusWidget", typeof(RectTransform), typeof(Image), typeof(DraggableHudPanel));
             root.transform.SetParent(_canvasRect, false);
             var rect = root.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.5f, 1f);
-            rect.anchorMax = new Vector2(0.5f, 1f);
-            rect.pivot = new Vector2(0.5f, 1f);
-            rect.sizeDelta = new Vector2(560f, 148f);
-            rect.anchoredPosition = new Vector2(0f, -16f);
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.sizeDelta = new Vector2(520f, 160f);
+            rect.anchoredPosition = new Vector2(14f, -14f);
 
             var panelImage = root.GetComponent<Image>();
             panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.94f);
@@ -901,7 +903,7 @@ namespace CastleDefender.UI
             headerRect.anchorMin = new Vector2(0f, 1f);
             headerRect.anchorMax = new Vector2(1f, 1f);
             headerRect.pivot = new Vector2(0.5f, 1f);
-            headerRect.sizeDelta = new Vector2(0f, 42f);
+            headerRect.sizeDelta = new Vector2(0f, 44f);
             headerRect.anchoredPosition = Vector2.zero;
             var headerImage = header.GetComponent<Image>();
             headerImage.color = new Color(0.10f, 0.14f, 0.19f, 0.96f);
@@ -909,36 +911,50 @@ namespace CastleDefender.UI
 
             _waveOverviewTitle = CreateText(header.transform, "WaveLabel", "UPCOMING WAVES", 17, TextAlignmentOptions.Left, Color.white);
             _waveOverviewTitle.rectTransform.anchorMin = new Vector2(0f, 1f);
-            _waveOverviewTitle.rectTransform.anchorMax = new Vector2(0.6f, 1f);
+            _waveOverviewTitle.rectTransform.anchorMax = new Vector2(1f, 1f);
             _waveOverviewTitle.rectTransform.pivot = new Vector2(0f, 1f);
-            _waveOverviewTitle.rectTransform.sizeDelta = new Vector2(0f, 20f);
-            _waveOverviewTitle.rectTransform.anchoredPosition = new Vector2(10f, -6f);
+            _waveOverviewTitle.rectTransform.sizeDelta = new Vector2(-150f, 20f);
+            _waveOverviewTitle.rectTransform.anchoredPosition = new Vector2(12f, -6f);
+            ConfigureSingleLineText(_waveOverviewTitle);
 
             _waveOverviewPhase = CreateText(header.transform, "PhaseLabel", "Wave timer -- | Send --", 12, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
             EnsureMinimumFontSize(_waveOverviewPhase);
+            ConfigureSingleLineText(_waveOverviewPhase);
             _waveOverviewPhase.rectTransform.anchorMin = new Vector2(0f, 0f);
-            _waveOverviewPhase.rectTransform.anchorMax = new Vector2(0.64f, 0f);
+            _waveOverviewPhase.rectTransform.anchorMax = new Vector2(1f, 0f);
             _waveOverviewPhase.rectTransform.pivot = new Vector2(0f, 0f);
-            _waveOverviewPhase.rectTransform.sizeDelta = new Vector2(0f, 20f);
-            _waveOverviewPhase.rectTransform.anchoredPosition = new Vector2(10f, 5f);
+            _waveOverviewPhase.rectTransform.sizeDelta = new Vector2(-150f, 18f);
+            _waveOverviewPhase.rectTransform.anchoredPosition = new Vector2(12f, 7f);
 
             _startWaveButton = CreateHudActionButton(header.transform, "StartWaveButton", "Start Wave", new Color(0.18f, 0.34f, 0.22f, 0.98f), out _startWaveButtonLabel);
             var startWaveRect = _startWaveButton.GetComponent<RectTransform>();
-            startWaveRect.anchorMin = new Vector2(1f, 0.5f);
-            startWaveRect.anchorMax = new Vector2(1f, 0.5f);
-            startWaveRect.pivot = new Vector2(1f, 0.5f);
-            startWaveRect.sizeDelta = new Vector2(122f, 28f);
-            startWaveRect.anchoredPosition = new Vector2(-10f, -4f);
+            startWaveRect.anchorMin = new Vector2(1f, 1f);
+            startWaveRect.anchorMax = new Vector2(1f, 1f);
+            startWaveRect.pivot = new Vector2(1f, 1f);
+            startWaveRect.sizeDelta = new Vector2(128f, 30f);
+            startWaveRect.anchoredPosition = new Vector2(-10f, -8f);
             _startWaveButton.onClick.RemoveAllListeners();
             _startWaveButton.onClick.AddListener(OnStartWavePressed);
 
-            _waveOverviewReady = CreateText(header.transform, "ReadyLabel", "Ready --/--", 12, TextAlignmentOptions.Right, new Color(0.80f, 0.88f, 0.96f, 0.96f));
+            var statusBar = new GameObject("StatusBar", typeof(RectTransform), typeof(Image));
+            statusBar.transform.SetParent(body.transform, false);
+            var statusBarRect = statusBar.GetComponent<RectTransform>();
+            statusBarRect.anchorMin = new Vector2(0f, 1f);
+            statusBarRect.anchorMax = new Vector2(1f, 1f);
+            statusBarRect.pivot = new Vector2(0.5f, 1f);
+            statusBarRect.sizeDelta = new Vector2(0f, 24f);
+            statusBarRect.anchoredPosition = new Vector2(0f, -48f);
+            var statusBarImage = statusBar.GetComponent<Image>();
+            statusBarImage.color = new Color(0.08f, 0.11f, 0.16f, 0.92f);
+            ApplyPanelFrame(statusBar, statusBarImage.color, new Color(0.20f, 0.56f, 0.80f, 0.78f));
+
+            _waveOverviewReady = CreateText(statusBar.transform, "ReadyLabel", "Ready --/--", 11, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.98f));
             EnsureMinimumFontSize(_waveOverviewReady);
-            _waveOverviewReady.rectTransform.anchorMin = new Vector2(0.62f, 0f);
-            _waveOverviewReady.rectTransform.anchorMax = new Vector2(1f, 0f);
-            _waveOverviewReady.rectTransform.pivot = new Vector2(1f, 0f);
-            _waveOverviewReady.rectTransform.sizeDelta = new Vector2(-136f, 20f);
-            _waveOverviewReady.rectTransform.anchoredPosition = new Vector2(-140f, 6f);
+            ConfigureSingleLineText(_waveOverviewReady);
+            _waveOverviewReady.rectTransform.anchorMin = Vector2.zero;
+            _waveOverviewReady.rectTransform.anchorMax = Vector2.one;
+            _waveOverviewReady.rectTransform.offsetMin = new Vector2(10f, 0f);
+            _waveOverviewReady.rectTransform.offsetMax = new Vector2(-10f, 0f);
 
             var queueShelf = new GameObject("QueueShelf", typeof(RectTransform), typeof(Image));
             queueShelf.transform.SetParent(body.transform, false);
@@ -946,14 +962,15 @@ namespace CastleDefender.UI
             queueShelfRect.anchorMin = new Vector2(0f, 1f);
             queueShelfRect.anchorMax = new Vector2(1f, 1f);
             queueShelfRect.pivot = new Vector2(0.5f, 1f);
-            queueShelfRect.sizeDelta = new Vector2(0f, 74f);
-            queueShelfRect.anchoredPosition = new Vector2(0f, -50f);
+            queueShelfRect.sizeDelta = new Vector2(0f, 66f);
+            queueShelfRect.anchoredPosition = new Vector2(0f, -78f);
             var queueShelfImage = queueShelf.GetComponent<Image>();
             queueShelfImage.color = new Color(0.09f, 0.13f, 0.17f, 0.98f);
             ApplyPanelFrame(queueShelf, queueShelfImage.color, new Color(0.98f, 0.68f, 0.30f, 0.96f));
 
-            var queueHeader = CreateText(queueShelf.transform, "QueueHeader", "WAVE QUEUE", 12, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            var queueHeader = CreateText(queueShelf.transform, "QueueHeader", "UPCOMING RAIDERS", 11, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
             EnsureMinimumFontSize(queueHeader);
+            ConfigureSingleLineText(queueHeader);
             queueHeader.rectTransform.anchorMin = new Vector2(0f, 1f);
             queueHeader.rectTransform.anchorMax = new Vector2(1f, 1f);
             queueHeader.rectTransform.pivot = new Vector2(0f, 1f);
@@ -1042,9 +1059,9 @@ namespace CastleDefender.UI
                 toggleLabel,
                 _waveOverviewCollapsedLabel,
                 false,
-                "hud.wave_overview_widget",
-                new Vector2(560f, 148f),
-                new Vector2(82f, 58f));
+                WaveOverviewWidgetPrefsKey,
+                new Vector2(520f, 160f),
+                new Vector2(92f, 60f));
 
             toggle.transform.SetAsLastSibling();
         }
@@ -1059,11 +1076,12 @@ namespace CastleDefender.UI
             var root = new GameObject("MiniMapWidget", typeof(RectTransform), typeof(Image), typeof(DraggableHudPanel), typeof(BattlefieldMiniMapWidget));
             root.transform.SetParent(_canvasRect, false);
             var rect = root.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.5f, 1f);
-            rect.anchorMax = new Vector2(0.5f, 1f);
-            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchorMin = new Vector2(1f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 1f);
             rect.sizeDelta = new Vector2(220f, 220f);
-            rect.anchoredPosition = new Vector2(0f, showWaveStatusWidget ? -172f : -16f);
+            float menuButtonWidth = Mathf.Max(settingsButtonSize + 28f, 74f);
+            rect.anchoredPosition = new Vector2(-(settingsRightInset + menuButtonWidth + 8f), -settingsTopInset);
 
             var rootImage = root.GetComponent<Image>();
             rootImage.sprite = null;
@@ -1121,6 +1139,14 @@ namespace CastleDefender.UI
             mapImage.color = Color.white;
             mapImage.raycastTarget = false;
 
+            var unitDots = new GameObject("UnitDots", typeof(RectTransform));
+            unitDots.transform.SetParent(viewport.transform, false);
+            var unitDotsRect = unitDots.GetComponent<RectTransform>();
+            unitDotsRect.anchorMin = Vector2.zero;
+            unitDotsRect.anchorMax = Vector2.one;
+            unitDotsRect.offsetMin = Vector2.zero;
+            unitDotsRect.offsetMax = Vector2.zero;
+
             var focusIndicator = new GameObject("FocusIndicator", typeof(RectTransform), typeof(Image), typeof(Outline));
             focusIndicator.transform.SetParent(viewport.transform, false);
             var focusIndicatorRect = focusIndicator.GetComponent<RectTransform>();
@@ -1164,7 +1190,7 @@ namespace CastleDefender.UI
                 toggleLabel,
                 collapsedLabel,
                 false,
-                "hud.minimap_widget",
+                MiniMapWidgetPrefsKey,
                 new Vector2(220f, 220f),
                 new Vector2(72f, 48f));
 
@@ -1172,6 +1198,7 @@ namespace CastleDefender.UI
             _miniMapWidget.Configure(
                 panel,
                 viewportRect,
+                unitDotsRect,
                 mapImage,
                 focusIndicatorRect,
                 null,
@@ -1248,6 +1275,7 @@ namespace CastleDefender.UI
             int requiredReadyCount = Mathf.Max(readyState?.requiredReadyCount ?? 0, readyState?.eligibleLaneIndices?.Length ?? 0);
             bool eligible = ContainsLaneIndex(readyState?.eligibleLaneIndices, myLane.laneIndex);
             bool isReady = ContainsLaneIndex(readyState?.readyLaneIndices, myLane.laneIndex);
+            int activeWaveMobCount = CountActiveWaveMobs(snap);
             int remainingWaveMobCount = readyState != null
                 ? Mathf.Max(0, readyState.remainingWaveMobCount)
                 : CountRemainingWaveMobs(snap);
@@ -1257,9 +1285,7 @@ namespace CastleDefender.UI
             if (_waveOverviewReady != null)
             {
                 _waveOverviewReady.text = !currentWaveComplete
-                    ? waveSeconds > 0
-                        ? $"{remainingWaveMobCount} mobs remaining this wave | Next wave in {waveSeconds}s"
-                        : $"{remainingWaveMobCount} mobs remaining this wave"
+                    ? BuildActiveWaveStatusLabel(activeWaveMobCount, remainingWaveMobCount, waveSeconds)
                     : requiredReadyCount > 0
                     ? $"{readyCount}/{requiredReadyCount} lanes ready{(isReady ? " | You are ready" : eligible ? " | Awaiting your vote" : string.Empty)}"
                     : "Wave timer is running";
@@ -1273,7 +1299,12 @@ namespace CastleDefender.UI
                 }
                 else if (!currentWaveComplete)
                 {
-                    SetHudButtonVisual(_startWaveButton, _startWaveButtonLabel, "In Combat", new Color(0.24f, 0.26f, 0.30f, 0.96f), false);
+                    SetHudButtonVisual(
+                        _startWaveButton,
+                        _startWaveButtonLabel,
+                        activeWaveMobCount > 0 ? "In Combat" : "Wave Active",
+                        new Color(0.24f, 0.26f, 0.30f, 0.96f),
+                        false);
                 }
                 else if (!eligible)
                 {
@@ -4353,6 +4384,69 @@ namespace CastleDefender.UI
             }
         }
 
+        static void ConfigureSingleLineText(TMP_Text text)
+        {
+            if (text == null)
+                return;
+
+            text.enableWordWrapping = false;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Ellipsis;
+        }
+
+        static bool HasSavedHudPanelPosition(string prefsKey)
+        {
+            return !string.IsNullOrWhiteSpace(prefsKey)
+                && PlayerPrefs.HasKey($"{prefsKey}.x")
+                && PlayerPrefs.HasKey($"{prefsKey}.y");
+        }
+
+        void ApplyWaveOverviewDockLayout(float leftInset, float rightInset, float topInset, float bottomInset)
+        {
+            if (_canvasRect == null || _waveOverviewWidget == null)
+                return;
+
+            var waveRect = _waveOverviewWidget.transform as RectTransform;
+            if (waveRect == null)
+                return;
+
+            float safeWidth = Mathf.Max(240f, _canvasRect.rect.width - leftInset - rightInset);
+            float rightReserve = showMiniMapWidget
+                ? Mathf.Min(244f, safeWidth * 0.38f)
+                : 0f;
+            float targetWidth = Mathf.Min(540f, Mathf.Max(220f, safeWidth - rightReserve - 28f));
+            float reservedClampWidth = Mathf.Max(0f, safeWidth - targetWidth - 24f);
+            float targetHeight = targetWidth <= 360f ? 172f : 160f;
+
+            _waveOverviewWidget.SetExpandedSize(new Vector2(targetWidth, targetHeight));
+            _waveOverviewWidget.SetCollapsedSize(new Vector2(92f, 60f));
+            _waveOverviewWidget.SetClampMargins(leftInset, topInset, rightInset + reservedClampWidth, bottomInset);
+
+            if (!HasSavedHudPanelPosition(WaveOverviewWidgetPrefsKey))
+                waveRect.anchoredPosition = new Vector2(14f + leftInset, -14f - topInset);
+        }
+
+        void ApplyMiniMapDockLayout(float leftInset, float rightInset, float topInset, float bottomInset)
+        {
+            if (_miniMapWidget == null)
+                return;
+
+            var panel = _miniMapWidget.GetComponent<DraggableHudPanel>();
+            var miniMapRect = _miniMapWidget.transform as RectTransform;
+            if (panel == null || miniMapRect == null)
+                return;
+
+            panel.SetClampMargins(leftInset, topInset, rightInset, bottomInset);
+
+            if (!HasSavedHudPanelPosition(MiniMapWidgetPrefsKey))
+            {
+                float menuButtonWidth = Mathf.Max(settingsButtonSize + 28f, 74f);
+                miniMapRect.anchoredPosition = new Vector2(
+                    -(settingsRightInset + rightInset + menuButtonWidth + 8f),
+                    -(settingsTopInset + topInset));
+            }
+        }
+
         void CreateLinkedStatPair(Transform parent, string name,
             Color leftColor, string leftLabel, out TMP_Text leftValue,
             Color rightColor, string rightLabel, out TMP_Text rightValue)
@@ -5195,6 +5289,24 @@ namespace CastleDefender.UI
             return CountScheduledWaveUnits(lane?.units);
         }
 
+        int CountActiveWaveMobs(MLSnapshot snap)
+        {
+            if (snap?.lanes == null)
+                return 0;
+
+            int total = 0;
+            for (int i = 0; i < snap.lanes.Length; i++)
+            {
+                var lane = snap.lanes[i];
+                if (lane == null || lane.eliminated)
+                    continue;
+
+                total += CountWaveUnits(lane);
+            }
+
+            return total;
+        }
+
         int CountRemainingWaveMobs(MLSnapshot snap)
         {
             if (snap?.lanes == null)
@@ -5212,6 +5324,23 @@ namespace CastleDefender.UI
             }
 
             return total;
+        }
+
+        static string BuildActiveWaveStatusLabel(int activeWaveMobCount, int remainingWaveMobCount, int waveSeconds)
+        {
+            activeWaveMobCount = Mathf.Max(0, activeWaveMobCount);
+            remainingWaveMobCount = Mathf.Max(activeWaveMobCount, remainingWaveMobCount);
+
+            if (remainingWaveMobCount > activeWaveMobCount)
+            {
+                return waveSeconds > 0
+                    ? $"{activeWaveMobCount} on field | {remainingWaveMobCount} left in wave | {waveSeconds}s left"
+                    : $"{activeWaveMobCount} on field | {remainingWaveMobCount} left in wave";
+            }
+
+            return waveSeconds > 0
+                ? $"{activeWaveMobCount} mobs on field | {waveSeconds}s left in wave"
+                : $"{activeWaveMobCount} mobs on field";
         }
 
         static int CountScheduledWaveUnits(MLUnit[] units)
@@ -5377,6 +5506,9 @@ namespace CastleDefender.UI
 
             if (_settingsPanelRoot != null)
                 _settingsPanelRoot.anchoredPosition = new Vector2(-settingsRightInset - rightInset, -settingsTopInset - topInset);
+
+            ApplyWaveOverviewDockLayout(leftInset, rightInset, topInset, bottomInset);
+            ApplyMiniMapDockLayout(leftInset, rightInset, topInset, bottomInset);
 
             if (_settingsOverlayPanelRoot != null)
             {

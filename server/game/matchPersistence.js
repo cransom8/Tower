@@ -1,14 +1,49 @@
 "use strict";
 
+const { performance } = require("node:perf_hooks");
+
+const { attachMatchId } = require("./multilane/balanceTelemetry");
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SLOW_QUERY_THRESHOLD_MS = 300;
+const MAX_QUERY_SUMMARY_CHARS = 180;
+
+function summarizeQueryText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_QUERY_SUMMARY_CHARS);
+}
+
+function roundDurationMs(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(1)) : null;
+}
 
 function createMatchPersistence({ db, log, ratingService, seasonService }) {
+  async function timedClientQuery(client, text, params, label) {
+    const start = performance.now();
+    const result = params === undefined
+      ? await client.query(text)
+      : await client.query(text, params);
+    const ms = performance.now() - start;
+    if (ms > SLOW_QUERY_THRESHOLD_MS) {
+      log.info("[db] slow query", {
+        ms: roundDurationMs(ms),
+        label: label || null,
+        query: summarizeQueryText(text),
+        rowCount: typeof result.rowCount === "number" ? result.rowCount : null,
+      });
+    }
+    return result;
+  }
+
   async function logMatchStart(roomId, mode) {
     if (!db) return null;
     try {
       const result = await db.query(
         "INSERT INTO matches (room_id, mode) VALUES ($1, $2) RETURNING id",
-        [roomId, mode]
+        [roomId, mode],
+        { label: "matches:insert_start" }
       );
       return result.rows[0].id;
     } catch (err) {
@@ -27,8 +62,16 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
     }
 
     const winnerLaneValue = Number.isInteger(winnerLane) && winnerLane >= 0 ? winnerLane : null;
+    const waveStatsWithMatchId = Array.isArray(options.waveStats)
+      ? attachMatchId(options.waveStats, matchId)
+      : null;
+    const balanceSummaryWithMatchId = options.balanceSummary && typeof options.balanceSummary === "object"
+      ? attachMatchId(options.balanceSummary, matchId)
+      : null;
     const combatLogPayload = Array.isArray(options.combatLog) ? JSON.stringify(options.combatLog) : null;
-    const waveStatsPayload = Array.isArray(options.waveStats) ? JSON.stringify(options.waveStats) : null;
+    const waveStatsPayload = waveStatsWithMatchId ? JSON.stringify(waveStatsWithMatchId) : null;
+    const balanceSummaryPayload = balanceSummaryWithMatchId ? JSON.stringify(balanceSummaryWithMatchId) : null;
+    const balanceFlagsPayload = Array.isArray(options.balanceFlags) ? JSON.stringify(options.balanceFlags) : null;
     const validSnapshots = Array.isArray(playerSnapshots)
       ? playerSnapshots.filter((snapshot) => UUID_RE.test(String(snapshot?.playerId || "")))
       : [];
@@ -47,35 +90,43 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
     }
     const client = await db.getClient();
     try {
-      await client.query("BEGIN");
-      const lockResult = await client.query(
+      await timedClientQuery(client, "BEGIN", undefined, "matches:close_begin");
+      const lockResult = await timedClientQuery(
+        client,
         "SELECT finalization_state FROM matches WHERE id = $1 FOR UPDATE",
-        [matchId]
+        [matchId],
+        "matches:close_lock"
       );
       if (!lockResult.rows[0]) {
-        await client.query("ROLLBACK");
+        await timedClientQuery(client, "ROLLBACK", undefined, "matches:close_rollback_missing");
         return { matchId, ratingUpdates: [], finalizationState: "missing_match" };
       }
 
       const currentFinalizationState = lockResult.rows[0].finalization_state;
       if (currentFinalizationState === "completed" || currentFinalizationState === "abandoned") {
-        await client.query("ROLLBACK");
+        await timedClientQuery(client, "ROLLBACK", undefined, "matches:close_rollback_already_finalized");
         return { matchId, ratingUpdates: [], finalizationState: currentFinalizationState };
       }
 
-      await client.query(
+      await timedClientQuery(
+        client,
         "UPDATE matches SET finalization_state = 'processing' WHERE id = $1",
-        [matchId]
+        [matchId],
+        "matches:close_mark_processing"
       );
-      await client.query(
+      await timedClientQuery(
+        client,
         `UPDATE matches
             SET status = 'completed',
                 ended_at = NOW(),
                 winner_lane = $1,
                 combat_log = COALESCE($2::jsonb, combat_log),
-                wave_stats = COALESCE($3::jsonb, wave_stats)
-          WHERE id = $4`,
-        [winnerLaneValue, combatLogPayload, waveStatsPayload, matchId]
+                wave_stats = COALESCE($3::jsonb, wave_stats),
+                balance_summary = COALESCE($4::jsonb, balance_summary),
+                balance_flags = COALESCE($5::jsonb, balance_flags)
+          WHERE id = $6`,
+        [winnerLaneValue, combatLogPayload, waveStatsPayload, balanceSummaryPayload, balanceFlagsPayload, matchId],
+        "matches:close_update_match"
       );
       if (validSnapshots.length > 0) {
         const placeholders = validSnapshots
@@ -85,13 +136,15 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
         for (const { playerId, laneIndex, result } of validSnapshots) {
           params.push(playerId, laneIndex, result);
         }
-        await client.query(
+        await timedClientQuery(
+          client,
           `INSERT INTO match_players (match_id, player_id, lane_index, result)
            VALUES ${placeholders}
            ON CONFLICT (match_id, player_id) DO UPDATE SET
              lane_index = EXCLUDED.lane_index,
              result = EXCLUDED.result`,
-          params
+          params,
+          "matches:close_upsert_players"
         );
       }
 
@@ -123,14 +176,16 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
         }
       }
 
-      await client.query(
+      await timedClientQuery(
+        client,
         "UPDATE matches SET finalization_state = 'completed', finalized_at = NOW() WHERE id = $1",
-        [matchId]
+        [matchId],
+        "matches:close_mark_completed"
       );
-      await client.query("COMMIT");
+      await timedClientQuery(client, "COMMIT", undefined, "matches:close_commit");
       return { matchId, ratingUpdates, finalizationState: "completed" };
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
+      await timedClientQuery(client, "ROLLBACK", undefined, "matches:close_rollback_error").catch(() => {});
       log.error("[match] close failed:", { matchId, err: err.message });
       return { matchId, ratingUpdates: [], finalizationState: "failed" };
     } finally {

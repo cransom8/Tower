@@ -314,6 +314,9 @@ function finalizeCompletedWave(game, deps = {}) {
     return;
 
   const createRoundSnapshotLane = requireDepFunction(deps, "createRoundSnapshotLane");
+  const finalizeBalanceWaveReport = typeof deps.finalizeBalanceWaveReport === "function"
+    ? deps.finalizeBalanceWaveReport
+    : null;
   for (const lane of game.lanes) {
     if (lane.leakCountThisRound > 0 || lane.lifeLossThisRound > 0) {
       lane.wavesLeaked += 1;
@@ -338,6 +341,8 @@ function finalizeCompletedWave(game, deps = {}) {
     roundNumber: game.roundNumber,
     teamHp: Object.assign({}, game.teamHp),
   });
+  if (finalizeBalanceWaveReport)
+    finalizeBalanceWaveReport(game, { cleared: true, defeat: false });
 }
 
 function resetWaveIntervalState(game) {
@@ -390,6 +395,9 @@ function beginScheduledWaveSession(game, waveDef, roundNumber, deps = {}) {
   const waveDurationTicks = getWaveDurationTicks(game, deps);
   const groupIntervalTicks = getWaveGroupIntervalTicks(game, deps);
   const totalGroups = getWaveGroupsPerRound(game, deps);
+  const startBalanceWaveReport = typeof deps.startBalanceWaveReport === "function"
+    ? deps.startBalanceWaveReport
+    : null;
 
   if (game.hasSpawnedWave)
     finalizeCompletedWave(game, deps);
@@ -413,6 +421,8 @@ function beginScheduledWaveSession(game, waveDef, roundNumber, deps = {}) {
     lastGroupSpawnTick: null,
   };
   game.nextWaveTick = game.activeWaveSession.endsAtTick;
+  if (startBalanceWaveReport)
+    startBalanceWaveReport(game, { waveNumber: roundNumber, waveDef: game.activeWaveSession.waveDef });
 
   const waveSizes = {};
   for (const lane of game.lanes) {
@@ -448,6 +458,9 @@ function grantScheduledIncome(game, deps = {}) {
   const getLaneTotalIncome = typeof deps.getLaneTotalIncome === "function"
     ? deps.getLaneTotalIncome
     : ((lane) => Math.max(0, Number(lane && lane.income) || 0));
+  const recordBalanceIncome = typeof deps.recordBalanceIncome === "function"
+    ? deps.recordBalanceIncome
+    : null;
   const interval = Math.max(
     1,
     Math.floor(Number(game.incomeIntervalTicks) || getIncomeIntervalTicks(deps))
@@ -457,8 +470,15 @@ function grantScheduledIncome(game, deps = {}) {
 
   while (game.tick >= game.nextIncomeTick) {
     for (const lane of game.lanes) {
-      if (lane && !lane.eliminated)
+      if (lane && !lane.eliminated) {
+        const passiveIncome = Math.max(0, Number(lane.income) || 0);
+        const totalIncome = getLaneTotalIncome(lane);
         lane.gold += getLaneTotalIncome(lane);
+        if (recordBalanceIncome && passiveIncome > 0)
+          recordBalanceIncome(game, lane, "passive_income", passiveIncome);
+        if (recordBalanceIncome && totalIncome > passiveIncome)
+          recordBalanceIncome(game, lane, "market_income", totalIncome - passiveIncome);
+      }
     }
     game.nextIncomeTick += interval;
   }

@@ -25,6 +25,10 @@ namespace CastleDefender.UI
         Vector2 _dragStartPointer;
         Vector2 _dragStartAnchored;
         Vector2 _defaultAnchoredPosition;
+        float _clampLeftMargin;
+        float _clampTopMargin;
+        float _clampRightMargin;
+        float _clampBottomMargin;
         bool _loadedState;
         bool _isCollapsed;
 
@@ -105,6 +109,15 @@ namespace CastleDefender.UI
         {
             collapsedSize = size;
             ApplyCollapseVisuals();
+            ClampToParent();
+        }
+
+        public void SetClampMargins(float left, float top, float right, float bottom)
+        {
+            _clampLeftMargin = Mathf.Max(0f, left);
+            _clampTopMargin = Mathf.Max(0f, top);
+            _clampRightMargin = Mathf.Max(0f, right);
+            _clampBottomMargin = Mathf.Max(0f, bottom);
             ClampToParent();
         }
 
@@ -212,11 +225,15 @@ namespace CastleDefender.UI
                 (anchorCenter.y - parentPivot.y) * parentSize.y);
 
             Vector2 minPivot = new(
-                -parentSize.x * parentPivot.x + width * widgetRect.pivot.x + margin,
-                -parentSize.y * parentPivot.y + height * widgetRect.pivot.y + margin);
+                -parentSize.x * parentPivot.x + width * widgetRect.pivot.x + margin + _clampLeftMargin,
+                -parentSize.y * parentPivot.y + height * widgetRect.pivot.y + margin + _clampBottomMargin);
             Vector2 maxPivot = new(
-                parentSize.x * (1f - parentPivot.x) - width * (1f - widgetRect.pivot.x) - margin,
-                parentSize.y * (1f - parentPivot.y) - height * (1f - widgetRect.pivot.y) - margin);
+                parentSize.x * (1f - parentPivot.x) - width * (1f - widgetRect.pivot.x) - margin - _clampRightMargin,
+                parentSize.y * (1f - parentPivot.y) - height * (1f - widgetRect.pivot.y) - margin - _clampTopMargin);
+            if (maxPivot.x < minPivot.x)
+                maxPivot.x = minPivot.x;
+            if (maxPivot.y < minPivot.y)
+                maxPivot.y = minPivot.y;
 
             Vector2 pivotLocal = anchorLocal + widgetRect.anchoredPosition;
             pivotLocal.x = Mathf.Clamp(pivotLocal.x, minPivot.x, maxPivot.x);

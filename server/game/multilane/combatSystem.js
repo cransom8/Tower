@@ -24,6 +24,7 @@ const DEFAULT_WAVE_UNIT_STATES = Object.freeze({
 
 const DEFAULT_FORTRESS_BUILDING_DEFS = Object.freeze({});
 const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
+const LIVE_LANE_UNIT_INDEX_CACHE = Symbol("liveLaneUnitIndexCache");
 
 function requireDepFunction(deps, name) {
   const fn = deps && deps[name];
@@ -138,6 +139,41 @@ function getSepDamp(deps = {}) {
 function getSepMaxPush(deps = {}) {
   const value = Number(deps.SEP_MAX_PUSH);
   return Number.isFinite(value) && value > 0 ? value : 0.16;
+}
+
+function getLiveLaneUnitById(lane, unitId, tick = null) {
+  if (!lane || !Array.isArray(lane.units) || !unitId)
+    return null;
+
+  const cacheTick = Number.isInteger(tick) ? tick : null;
+  let cache = lane[LIVE_LANE_UNIT_INDEX_CACHE];
+  if (!cache
+      || cache.tick !== cacheTick
+      || cache.units !== lane.units
+      || cache.unitCount !== lane.units.length) {
+    const byId = new Map();
+    for (let i = 0; i < lane.units.length; i += 1) {
+      const candidate = lane.units[i];
+      if (!candidate || !candidate.id || candidate.hp <= 0)
+        continue;
+      byId.set(candidate.id, candidate);
+    }
+
+    cache = {
+      tick: cacheTick,
+      units: lane.units,
+      unitCount: lane.units.length,
+      byId,
+    };
+    lane[LIVE_LANE_UNIT_INDEX_CACHE] = cache;
+  }
+
+  const unit = cache.byId.get(unitId) || null;
+  if (unit && unit.hp > 0)
+    return unit;
+  if (unit)
+    cache.byId.delete(unitId);
+  return null;
 }
 
 function getLaneAnchorSettledSeparationDistance(deps = {}) {
@@ -768,7 +804,7 @@ function resolveWaveCombatTarget(game, lane, combatTarget, deps = {}) {
     return getFortressPadCombatTarget(targetLane, padState);
   }
 
-  const unit = lane.units.find((candidate) => candidate && candidate.id === combatTarget.unitId && candidate.hp > 0);
+  const unit = getLiveLaneUnitById(lane, combatTarget.unitId, game && game.tick);
   if (!unit) {
     const resolved = findRouteUnitById(
       game,
@@ -1171,6 +1207,9 @@ function findBlockingStructureTarget(game, lane, unit, deps = {}) {
 
 function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
   const combatLog = deps && deps.combatLog;
+  const recordBalanceLeak = typeof deps.recordBalanceLeak === "function"
+    ? deps.recordBalanceLeak
+    : null;
   const getLaneTownCoreHp = requireDepFunction(deps, "getLaneTownCoreHp");
   const getLaneTownCoreMaxHp = requireDepFunction(deps, "getLaneTownCoreMaxHp");
   if (!game || !lane || !unit || unit.hasBreachedTownCore)
@@ -1199,6 +1238,8 @@ function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
       breachOnly: true,
     });
   }
+  if (recordBalanceLeak)
+    recordBalanceLeak(game, lane, unit, townCoreTarget);
 }
 
 function attackFortressPad(game, lane, attacker, target, deps = {}) {
@@ -1496,20 +1537,29 @@ function getSharedTargetTangentialAxis(game, lane, left, right, deps = {}) {
   };
 }
 
-function shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps = {}) {
+function shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps = {}, context = null) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const areRouteUnitsHostile = requireDepFunction(deps, "areRouteUnitsHostile");
   const canLaneControlledUnitSeekCombat = requireDepFunction(deps, "canLaneControlledUnitSeekCombat");
-  if (!getUsePerUnitAnchorSlots(deps))
+  const usePerUnitAnchorSlots = context && typeof context.usePerUnitAnchorSlots === "boolean"
+    ? context.usePerUnitAnchorSlots
+    : getUsePerUnitAnchorSlots(deps);
+  if (!usePerUnitAnchorSlots)
     return false;
   if (!left || !right || !Number.isFinite(distance))
     return false;
   if ((left.combatTargetId && left.combatTargetId === right.id) || (right.combatTargetId && right.combatTargetId === left.id))
     return false;
 
-  const laneControlled = isLaneControlledUnit(left)
+  const leftLaneControlled = context && typeof context.leftLaneControlled === "boolean"
+    ? context.leftLaneControlled
+    : isLaneControlledUnit(left);
+  const rightLaneControlled = context && typeof context.rightLaneControlled === "boolean"
+    ? context.rightLaneControlled
+    : isLaneControlledUnit(right);
+  const laneControlled = leftLaneControlled
     ? left
-    : (isLaneControlledUnit(right) ? right : null);
+    : (rightLaneControlled ? right : null);
   const other = laneControlled === left ? right : left;
   if (!laneControlled || !other)
     return false;
@@ -1528,20 +1578,40 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const shouldLaneControlledUnitFreeRoamInCombat = requireDepFunction(deps, "shouldLaneControlledUnitFreeRoamInCombat");
   const unitMovementModes = getUnitMovementModes(deps);
+  const usePerUnitAnchorSlots = getUsePerUnitAnchorSlots(deps);
+  const sepDamp = getSepDamp(deps);
+  const sepMaxPush = getSepMaxPush(deps);
+  const engageMovementMode = unitMovementModes.COMBAT_ENGAGE;
+  const unitState = new Array(units.length);
+  for (let i = 0; i < units.length; i += 1) {
+    const unit = units[i];
+    const laneControlled = isLaneControlledUnit(unit);
+    unitState[i] = {
+      laneControlled,
+      freeRoamInCombat: laneControlled && shouldLaneControlledUnitFreeRoamInCombat(unit),
+    };
+  }
+
   for (let pass = 0; pass < 2; pass += 1) {
     for (let i = 0; i < units.length; i += 1) {
       for (let j = i + 1; j < units.length; j += 1) {
         const left = units[i];
         const right = units[j];
-        const simpleLaneSpacing = getUsePerUnitAnchorSlots(deps)
-          && (isLaneControlledUnit(left) || isLaneControlledUnit(right));
+        const leftState = unitState[i];
+        const rightState = unitState[j];
+        const simpleLaneSpacing = usePerUnitAnchorSlots
+          && (leftState.laneControlled || rightState.laneControlled);
         let dx = Number(right.posX) - Number(left.posX);
         let dy = Number(right.posY) - Number(left.posY);
         let distance = Math.sqrt((dx * dx) + (dy * dy));
         const activeCombatSpacing = !simpleLaneSpacing
-          || shouldLaneControlledUnitFreeRoamInCombat(left)
-          || shouldLaneControlledUnitFreeRoamInCombat(right)
-          || shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps);
+          || leftState.freeRoamInCombat
+          || rightState.freeRoamInCombat
+          || shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps, {
+            usePerUnitAnchorSlots,
+            leftLaneControlled: leftState.laneControlled,
+            rightLaneControlled: rightState.laneControlled,
+          });
         if (!activeCombatSpacing)
           continue;
 
@@ -1569,7 +1639,7 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
         const separationScale = settledLeft && settledRight
           ? getLaneAnchorSettledSeparationScale(deps)
           : (settledLeft || settledRight ? getLaneAnchorMixedSeparationScale(deps) : 1);
-        const push = Math.min((pairSpacing - distance) * getSepDamp(deps), getSepMaxPush(deps)) * separationScale;
+        const push = Math.min((pairSpacing - distance) * sepDamp, sepMaxPush) * separationScale;
         if (push <= 0.0001)
           continue;
 
@@ -1606,9 +1676,9 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
           positive.posY = Math.max(minY, Math.min(maxY, positive.posY + (lateralAxis.y * push)));
           syncMovedUnitPathState(negative);
           syncMovedUnitPathState(positive);
-          if (negative.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+          if (negative.movementMode !== engageMovementMode)
             clampLaneControlledUnitToCombatLeash(negative, minX, maxX, minY, maxY, null, deps);
-          if (positive.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+          if (positive.movementMode !== engageMovementMode)
             clampLaneControlledUnitToCombatLeash(positive, minX, maxX, minY, maxY, null, deps);
           clampLaneControlledUnitToAnchorDrift(negative, minX, maxX, minY, maxY, deps);
           clampLaneControlledUnitToAnchorDrift(positive, minX, maxX, minY, maxY, deps);
@@ -1618,7 +1688,7 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
         left.posX = Math.max(minX, Math.min(maxX, left.posX - ((dx / distance) * push)));
         left.posY = Math.max(minY, Math.min(maxY, left.posY - ((dy / distance) * push)));
         syncMovedUnitPathState(left);
-        if (left.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+        if (left.movementMode !== engageMovementMode)
           clampLaneControlledUnitToCombatLeash(left, minX, maxX, minY, maxY, null, deps);
         if (!simpleLaneSpacing)
           clampLaneControlledUnitToAnchorDrift(left, minX, maxX, minY, maxY, deps);
@@ -1626,7 +1696,7 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
         right.posX = Math.max(minX, Math.min(maxX, right.posX + ((dx / distance) * push)));
         right.posY = Math.max(minY, Math.min(maxY, right.posY + ((dy / distance) * push)));
         syncMovedUnitPathState(right);
-        if (right.movementMode !== unitMovementModes.COMBAT_ENGAGE)
+        if (right.movementMode !== engageMovementMode)
           clampLaneControlledUnitToCombatLeash(right, minX, maxX, minY, maxY, null, deps);
         if (!simpleLaneSpacing)
           clampLaneControlledUnitToAnchorDrift(right, minX, maxX, minY, maxY, deps);

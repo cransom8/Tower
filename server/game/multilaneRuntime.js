@@ -1,5 +1,7 @@
 "use strict";
 
+const { performance } = require("node:perf_hooks");
+
 const { canUseInLoadout } = require("../unitUsage");
 const {
   getAvailableRaces,
@@ -12,12 +14,16 @@ async function loadDefaultWaveConfig(db) {
   const fallbackPlan = getLockedWavePlan();
   if (!db) return fallbackPlan;
   try {
-    const cr = await db.query(`SELECT id FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`);
+    const cr = await db.query(
+      `SELECT id FROM ml_wave_configs WHERE is_default=TRUE LIMIT 1`,
+      { label: "ml_wave_configs:load_default_config" }
+    );
     if (!cr.rows[0]) return fallbackPlan;
     const wr = await db.query(
       `SELECT wave_number, unit_type, spawn_qty, hp_mult, dmg_mult, speed_mult
        FROM ml_waves WHERE config_id=$1 ORDER BY wave_number`,
-      [cr.rows[0].id]
+      [cr.rows[0].id],
+      { label: "ml_wave_configs:load_default_waves" }
     );
     return wr.rows.length > 0 ? wr.rows : fallbackPlan;
   } catch {
@@ -101,6 +107,82 @@ function createMultilaneRuntime({
 
   function capFirst(value) {
     return String(value || "").charAt(0).toUpperCase() + String(value || "").slice(1);
+  }
+
+  function roundDurationMs(value) {
+    return Number.isFinite(value) ? Number(value.toFixed(1)) : null;
+  }
+
+  function summarizeLiveMatchLoad(game) {
+    let liveUnitCount = 0;
+    let projectileCount = 0;
+    const laneUnitCounts = [];
+    for (const lane of Array.isArray(game && game.lanes) ? game.lanes : []) {
+      let laneLiveUnits = 0;
+      if (Array.isArray(lane && lane.units)) {
+        for (const unit of lane.units) {
+          if (unit && unit.hp > 0)
+            laneLiveUnits += 1;
+        }
+      }
+
+      liveUnitCount += laneLiveUnits;
+      laneUnitCounts.push(laneLiveUnits);
+      if (Array.isArray(lane && lane.projectiles))
+        projectileCount += lane.projectiles.length;
+    }
+
+    return { liveUnitCount, projectileCount, laneUnitCounts };
+  }
+
+  function shouldEmitPerfWarning(entry, kind, nowMs, cooldownMs = 5000) {
+    if (!entry)
+      return false;
+    if (!entry.perfLogAtByKind)
+      entry.perfLogAtByKind = Object.create(null);
+
+    const lastAt = Number(entry.perfLogAtByKind[kind]) || 0;
+    if ((nowMs - lastAt) < cooldownMs)
+      return false;
+
+    entry.perfLogAtByKind[kind] = nowMs;
+    return true;
+  }
+
+  function logTickPerfIfNeeded(entry, roomId, code, localTick, perf) {
+    if (!entry || !entry.game || !perf)
+      return;
+
+    const tickBudgetMs = Math.max(1, Number(simMl && simMl.TICK_MS) || 50);
+    const shouldLog = perf.callbackMs > tickBudgetMs
+      || perf.simTickMs > tickBudgetMs
+      || perf.schedulerDelayMs > Math.max(15, tickBudgetMs * 0.35)
+      || perf.snapshotBuildMs > Math.max(8, tickBudgetMs * 0.25);
+    if (!shouldLog)
+      return;
+
+    const nowMs = Date.now();
+    if (!shouldEmitPerfWarning(entry, "tick_over_budget", nowMs))
+      return;
+
+    const load = summarizeLiveMatchLoad(entry.game);
+    log.warn("[ml-game][perf] tick over budget", {
+      roomId,
+      code,
+      localTick,
+      simTick: entry.game.tick,
+      phase: entry.game.phase,
+      budgetMs: roundDurationMs(tickBudgetMs),
+      callbackMs: roundDurationMs(perf.callbackMs),
+      simTickMs: roundDurationMs(perf.simTickMs),
+      snapshotBuildMs: roundDurationMs(perf.snapshotBuildMs),
+      schedulerDelayMs: roundDurationMs(perf.schedulerDelayMs),
+      snapshotBuilt: !!perf.snapshotBuilt,
+      snapshotEveryNTicks: entry.snapshotEveryNTicks,
+      liveUnitCount: load.liveUnitCount,
+      projectileCount: load.projectileCount,
+      laneUnitCounts: load.laneUnitCounts,
+    });
   }
 
   function buildRematchStatus(room) {
@@ -197,6 +279,9 @@ function createMultilaneRuntime({
 
   function buildOutcomePayload(room, entry) {
     const game = entry.game;
+    const balanceData = simMl && typeof simMl.getFinalizedMatchBalance === "function"
+      ? simMl.getFinalizedMatchBalance(game)
+      : { summary: null, flags: [], diagnosis: null };
     const winnerLane = Number.isInteger(game.officialWinnerLane)
       ? game.officialWinnerLane
       : (Number.isInteger(game.winner) ? game.winner : null);
@@ -222,6 +307,9 @@ function createMultilaneRuntime({
       causeLoss: `Survival ended on Wave ${game.roundNumber}`,
       finalStats: buildFinalStats(room, game),
       waveSnapshots: game.roundSnapshots,
+      balanceSummary: balanceData.summary,
+      balanceFlags: balanceData.flags,
+      balanceDiagnosis: balanceData.diagnosis,
       matchState: game.matchState || (game.phase === "ended" ? "final_game_over" : "active_survival"),
       continuedIntoSurvival: game.continuedIntoSurvival !== false,
       survivalDuration: survivalDurationSec,
@@ -891,6 +979,7 @@ function createMultilaneRuntime({
       partyASize: room.partyASize || 1,
       waveReadyVotes: new Set(),
       waveReadyWaveNumber: getUpcomingWaveNumber(game),
+      perfLogAtByKind: Object.create(null),
     };
     gamesByRoomId.set(roomId, gameEntry);
     for (const sid of room.players) {
@@ -996,7 +1085,8 @@ function createMultilaneRuntime({
                      JOIN skin_catalog s ON s.skin_key = pse.skin_key
                     WHERE pse.player_id = $1
                       AND s.enabled = true`,
-                  [sock.playerId]
+                  [sock.playerId],
+                  { label: "ml:load_equipped_skins" }
                 );
                 game.lanes[laneIdx].equippedSkins = Object.fromEntries(
                   skinRows.rows.map(r => [r.unit_type, r.skin_key])
@@ -1072,15 +1162,27 @@ function createMultilaneRuntime({
     gameEntry.matchIdPromise = logMatchStart(roomId, dbMode);
     const matchIdPromise = gameEntry.matchIdPromise;
     let localTick = 0;
+    let lastTickStartedAt = null;
+    const tickBudgetMs = Math.max(1, Number(simMl.TICK_MS) || 50);
 
     const tickHandle = setInterval(() => {
       const entry = gamesByRoomId.get(roomId);
       if (!entry) return;
+      const tickStartedAt = performance.now();
+      const schedulerDelayMs = lastTickStartedAt == null
+        ? 0
+        : Math.max(0, tickStartedAt - lastTickStartedAt - tickBudgetMs);
+      lastTickStartedAt = tickStartedAt;
+      let simTickMs = 0;
+      let snapshotBuildMs = 0;
+      let snapshotBuilt = false;
       let eliminationStateChanged = false;
 
       const prevLite = entry.botController ? aiRuntime.captureStateLite(entry.game) : null;
       if (entry.botController) entry.botController.onBeforeSimTick(entry.game);
+      const simTickStartedAt = performance.now();
       simMl.mlTick(entry.game);
+      simTickMs = performance.now() - simTickStartedAt;
       if (entry.botController && prevLite) {
         const nextLite = aiRuntime.captureStateLite(entry.game);
         entry.botController.onAfterSimTick(prevLite, nextLite);
@@ -1133,10 +1235,28 @@ function createMultilaneRuntime({
       }
 
       if (localTick % snapshotEveryNTicks === 0) {
-        io.to(roomId).emit("ml_state_snapshot", simMl.createMLSnapshot(entry.game));
+        snapshotBuilt = true;
+        const snapshotBuildStartedAt = performance.now();
+        const snapshot = simMl.createMLSnapshot(entry.game);
+        snapshotBuildMs = performance.now() - snapshotBuildStartedAt;
+        io.to(roomId).emit("ml_state_snapshot", snapshot);
       }
 
+      logTickPerfIfNeeded(entry, roomId, code, localTick, {
+        callbackMs: performance.now() - tickStartedAt,
+        simTickMs,
+        snapshotBuildMs,
+        schedulerDelayMs,
+        snapshotBuilt,
+      });
+
       if (entry.game.phase === "ended") {
+        const balanceData = simMl && typeof simMl.finalizeMatchBalance === "function"
+          ? simMl.finalizeMatchBalance(entry.game, {
+            finalResult: "completed",
+            defeat: entry.game.finalGameOverReason === "all_town_cores_destroyed",
+          })
+          : { waveReports: [], summary: null, flags: [] };
         const finalPayload = buildOutcomePayload(room, entry);
         log.info("[ml-game] final game over", {
           roomId,
@@ -1161,7 +1281,9 @@ function createMultilaneRuntime({
           mode: entry.dbMode,
           partyASize: entry.partyASize,
           combatLog: entry.combatEvents,
-          waveStats: entry.game.roundSnapshots,
+          waveStats: balanceData.waveReports,
+          balanceSummary: balanceData.summary,
+          balanceFlags: balanceData.flags,
         })
           .then(({ ratingUpdates }) => {
             for (const update of ratingUpdates || []) {

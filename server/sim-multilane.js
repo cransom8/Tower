@@ -44,6 +44,7 @@ const spawnSystem = require("./game/multilane/spawnSystem");
 const waveSystem = require("./game/multilane/waveSystem");
 const combatSystem = require("./game/multilane/combatSystem");
 const tickSystem = require("./game/multilane/tickSystem");
+const balanceTelemetry = require("./game/multilane/balanceTelemetry");
 const { getBarracksUpgradeDef } = require("./barracksLevels");
 const {
   createMLSnapshot: buildMLSnapshot,
@@ -852,11 +853,69 @@ function advanceBarracksSiteConstruction(game) {
   return barracksSystem.advanceBarracksSiteConstruction(game);
 }
 
+function ensureBalanceTelemetry(game, options) {
+  return balanceTelemetry.ensureTelemetry(game, options);
+}
+
+function startBalanceWaveReport(game, context) {
+  return balanceTelemetry.startWaveReport(game, context);
+}
+
+function finalizeBalanceWaveReport(game, context) {
+  return balanceTelemetry.finalizeWaveReport(game, context);
+}
+
+function finalizeMatchBalance(game, context) {
+  return balanceTelemetry.finalizeMatch(game, context);
+}
+
+function getFinalizedMatchBalance(game) {
+  return balanceTelemetry.getFinalizedBalanceData(game);
+}
+
+function recordBalanceTick(game) {
+  return balanceTelemetry.recordTick(game);
+}
+
+function recordBalanceIncome(game, lane, source, amount) {
+  return balanceTelemetry.recordIncome(game, lane, source, amount);
+}
+
+function recordBalanceSpend(game, lane, category, amount, context) {
+  return balanceTelemetry.recordSpend(game, lane, category, amount, context);
+}
+
+function recordBalanceUnitSpawned(game, lane, unit) {
+  return balanceTelemetry.recordUnitSpawned(game, lane, unit);
+}
+
+function recordBalanceUnitDeath(game, lane, unit) {
+  return balanceTelemetry.recordUnitDeath(game, lane, unit);
+}
+
+function recordBalanceDamage(game, attackerLane, attacker, targetLane, target, amount, context) {
+  return balanceTelemetry.recordDamage(game, attackerLane, attacker, targetLane, target, amount, context);
+}
+
+function recordBalanceHealing(game, lane, healer, target, amount) {
+  return balanceTelemetry.recordHealing(game, lane, healer, target, amount);
+}
+
+function recordBalanceStructureDamage(game, lane, buildingType, amount, context) {
+  return balanceTelemetry.recordStructureDamage(game, lane, buildingType, amount, context);
+}
+
+function recordBalanceLeak(game, lane, unit, target) {
+  return balanceTelemetry.recordLeak(game, lane, unit, target);
+}
+
 const FORTRESS_SYSTEM_DEPS = Object.freeze({
   getLaneCombatAxes,
   getPadWorldPosition,
   isScheduledWaveUnit,
   shouldKeepUnitAfterLaneDefeat,
+  recordBalanceSpend,
+  recordBalanceStructureDamage,
   resolveLaneAllegianceKey,
   getCurrentBarracksRosterDefinitionForBranch,
   getCurrentMarketRosterDefinitionForLane,
@@ -916,6 +975,8 @@ const CATALOG_SYSTEM_DEPS = Object.freeze({
 
 const BARRACKS_SYSTEM_DEPS = Object.freeze({
   log,
+  recordBalanceSpend,
+  recordBalanceStructureDamage,
   resolveFortPresentationConfig,
   getUnitType,
   resolveTowerDef,
@@ -1029,12 +1090,16 @@ const WAVE_SYSTEM_DEPS = Object.freeze({
   spawnScheduledBarracksRoster,
   spawnWaveUnit: _spawnWaveUnit,
   getLaneTotalIncome,
+  startBalanceWaveReport,
+  finalizeBalanceWaveReport,
+  recordBalanceIncome,
   ENABLE_SPAWN_AUDIT_LOGS,
 });
 
 const COMBAT_SYSTEM_DEPS = Object.freeze({
   log,
   combatLog,
+  recordBalanceLeak,
   syncMovedUnitPathState,
   isLaneControlledUnit,
   getUnitForwardDirection,
@@ -1108,6 +1173,13 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
 const TICK_SYSTEM_DEPS = Object.freeze({
   log,
   combatLog,
+  recordBalanceTick,
+  recordBalanceUnitSpawned,
+  recordBalanceUnitDeath,
+  recordBalanceDamage,
+  recordBalanceHealing,
+  recordBalanceIncome,
+  finalizeBalanceWaveReport,
   grantScheduledIncome,
   runScheduledWaves,
   runScheduledBuildingConstruction,
@@ -1194,6 +1266,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
 
 const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   log,
+  ensureBalanceTelemetry,
   mulberry32,
   getMlRuntimeSettings,
   normalizeAllegianceKey,
@@ -1261,6 +1334,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   },
   ROUTE_TYPES,
   TEAM_HP_START,
+  TICK_HZ,
   INCOME_INTERVAL_TICKS,
   BARRACKS_SEND_TIMER_TICKS,
   WAVE_TIMER_TICKS,
@@ -1350,7 +1424,7 @@ function applyFortressPadDamage(game, lane, padId, damage) {
 }
 
 function applyBarracksSiteDamage(game, lane, barracksId, damage) {
-  return barracksSystem.applyBarracksSiteDamage(game, lane, barracksId, damage);
+  return barracksSystem.applyBarracksSiteDamage(game, lane, barracksId, damage, BARRACKS_SYSTEM_DEPS);
 }
 
 function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart) {
@@ -1545,11 +1619,11 @@ function applyFortressBuildOnPad(game, lane, padId) {
 }
 
 function applyBarracksSiteBuildAction(game, lane, barracksId) {
-  return barracksSystem.applyBarracksSiteBuildAction(game, lane, barracksId);
+  return barracksSystem.applyBarracksSiteBuildAction(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function applyBarracksSiteUpgradeAction(game, lane, barracksId) {
-  return barracksSystem.applyBarracksSiteUpgradeAction(game, lane, barracksId);
+  return barracksSystem.applyBarracksSiteUpgradeAction(game, lane, barracksId, BARRACKS_SYSTEM_DEPS);
 }
 
 function applyFortressUpgrade(game, lane, padId) {
@@ -2433,6 +2507,8 @@ module.exports = {
   applyMLAction,
   mlTick,
   startNextWaveNow,
+  finalizeMatchBalance,
+  getFinalizedMatchBalance,
   createMLSnapshot,
   createMLPublicConfig,
   resolveTowerDef,

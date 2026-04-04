@@ -1,8 +1,10 @@
 using CastleDefender.Game;
 using CastleDefender.Net;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace CastleDefender.UI
@@ -12,6 +14,7 @@ namespace CastleDefender.UI
     {
         [SerializeField] DraggableHudPanel panel;
         [SerializeField] RectTransform mapViewportRect;
+        [SerializeField] RectTransform unitDotRoot;
         [SerializeField] RawImage mapImage;
         [SerializeField] RectTransform focusIndicator;
         [SerializeField] TMP_Text laneLabel;
@@ -19,15 +22,45 @@ namespace CastleDefender.UI
         [SerializeField] Vector2Int renderTextureSize = new(512, 512);
         [SerializeField] float worldPadding = 8f;
         [SerializeField] float cameraHeight = 140f;
+        [SerializeField] Vector2 unitDotSize = new(6f, 6f);
+        [SerializeField] Vector2 townCoreStarSize = new(18f, 18f);
+        [SerializeField] float townCoreStarFontSize = 18f;
+
+        static readonly string[] MinimapHiddenRootNames =
+        {
+            "RoadLanterns",
+            "RoadLightPools",
+            "FortressLanterns",
+            "FortressLightPools",
+        };
+
+        sealed class HiddenRendererState
+        {
+            public Renderer Renderer;
+            public bool WasEnabled;
+        }
+
+        sealed class HiddenLightState
+        {
+            public Light Light;
+            public bool WasEnabled;
+        }
 
         Camera _miniMapCamera;
         RenderTexture _renderTexture;
         Bounds _battlefieldBounds;
         bool _hasBattlefieldBounds;
+        bool _renderSuppressionActive;
+        bool _hiddenVisualsCached;
+        readonly List<Image> _unitDots = new();
+        readonly List<TextMeshProUGUI> _townCoreStars = new();
+        readonly List<HiddenRendererState> _hiddenRenderers = new();
+        readonly List<HiddenLightState> _hiddenLights = new();
 
         public void Configure(
             DraggableHudPanel panelRef,
             RectTransform viewportRect,
+            RectTransform dotRoot,
             RawImage mapTarget,
             RectTransform focusMarker,
             TMP_Text laneText,
@@ -35,6 +68,7 @@ namespace CastleDefender.UI
         {
             panel = panelRef;
             mapViewportRect = viewportRect;
+            unitDotRoot = dotRoot;
             mapImage = mapTarget;
             focusIndicator = focusMarker;
             laneLabel = laneText;
@@ -54,6 +88,8 @@ namespace CastleDefender.UI
         void OnEnable()
         {
             ApplyStaticLabels();
+            RenderPipelineManager.beginCameraRendering += HandleBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering += HandleEndCameraRendering;
         }
 
         void Update()
@@ -64,6 +100,8 @@ namespace CastleDefender.UI
             {
                 SetCameraEnabled(false);
                 SetFocusIndicatorVisible(false);
+                HideUnitDots();
+                HideTownCoreStars();
                 return;
             }
 
@@ -71,6 +109,8 @@ namespace CastleDefender.UI
             {
                 SetCameraEnabled(false);
                 SetFocusIndicatorVisible(false);
+                HideUnitDots();
+                HideTownCoreStars();
                 return;
             }
 
@@ -78,6 +118,8 @@ namespace CastleDefender.UI
             EnsureRenderTexture();
             EnsureMiniMapCamera();
             UpdateMiniMapCameraPose();
+            UpdateUnitDots();
+            UpdateTownCoreStars();
             UpdateFocusIndicator();
             SetCameraEnabled(true);
         }
@@ -85,6 +127,11 @@ namespace CastleDefender.UI
         void OnDisable()
         {
             SetCameraEnabled(false);
+            HideUnitDots();
+            HideTownCoreStars();
+            RestoreMinimapHiddenVisuals();
+            RenderPipelineManager.beginCameraRendering -= HandleBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering -= HandleEndCameraRendering;
         }
 
         void OnDestroy()
@@ -334,8 +381,468 @@ namespace CastleDefender.UI
                 focusIndicator.gameObject.SetActive(visible);
         }
 
+        void HandleBeginCameraRendering(ScriptableRenderContext context, Camera camera)
+        {
+            if (camera != _miniMapCamera)
+                return;
+
+            SuppressMinimapHiddenVisuals();
+        }
+
+        void HandleEndCameraRendering(ScriptableRenderContext context, Camera camera)
+        {
+            if (camera != _miniMapCamera)
+                return;
+
+            RestoreMinimapHiddenVisuals();
+        }
+
+        void SuppressMinimapHiddenVisuals()
+        {
+            if (_renderSuppressionActive)
+                return;
+
+            CacheMinimapHiddenVisuals();
+            _renderSuppressionActive = true;
+
+            for (int i = 0; i < _hiddenRenderers.Count; i++)
+            {
+                var state = _hiddenRenderers[i];
+                if (state.Renderer != null)
+                    state.Renderer.enabled = false;
+            }
+
+            for (int i = 0; i < _hiddenLights.Count; i++)
+            {
+                var state = _hiddenLights[i];
+                if (state.Light != null)
+                    state.Light.enabled = false;
+            }
+        }
+
+        void RestoreMinimapHiddenVisuals()
+        {
+            if (!_renderSuppressionActive)
+                return;
+
+            for (int i = 0; i < _hiddenRenderers.Count; i++)
+            {
+                var state = _hiddenRenderers[i];
+                if (state.Renderer != null)
+                    state.Renderer.enabled = state.WasEnabled;
+            }
+
+            for (int i = 0; i < _hiddenLights.Count; i++)
+            {
+                var state = _hiddenLights[i];
+                if (state.Light != null)
+                    state.Light.enabled = state.WasEnabled;
+            }
+
+            _renderSuppressionActive = false;
+        }
+
+        void CacheMinimapHiddenVisuals()
+        {
+            if (_hiddenVisualsCached)
+                return;
+
+            _hiddenVisualsCached = true;
+            _hiddenRenderers.Clear();
+            _hiddenLights.Clear();
+
+            var roots = FindObjectsByType<Transform>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            for (int i = 0; i < roots.Length; i++)
+            {
+                var root = roots[i];
+                if (root == null || !ShouldHideForMinimap(root.name))
+                    continue;
+
+                var renderers = root.GetComponentsInChildren<Renderer>(true);
+                for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+                {
+                    var renderer = renderers[rendererIndex];
+                    if (renderer == null)
+                        continue;
+
+                    _hiddenRenderers.Add(new HiddenRendererState
+                    {
+                        Renderer = renderer,
+                        WasEnabled = renderer.enabled
+                    });
+                }
+
+                var lights = root.GetComponentsInChildren<Light>(true);
+                for (int lightIndex = 0; lightIndex < lights.Length; lightIndex++)
+                {
+                    var light = lights[lightIndex];
+                    if (light == null)
+                        continue;
+
+                    _hiddenLights.Add(new HiddenLightState
+                    {
+                        Light = light,
+                        WasEnabled = light.enabled
+                    });
+                }
+            }
+        }
+
+        static bool ShouldHideForMinimap(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            for (int i = 0; i < MinimapHiddenRootNames.Length; i++)
+            {
+                if (string.Equals(name, MinimapHiddenRootNames[i], System.StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        void UpdateUnitDots()
+        {
+            if (unitDotRoot == null || mapViewportRect == null || _miniMapCamera == null)
+            {
+                HideUnitDots();
+                return;
+            }
+
+            var snap = SnapshotApplier.Instance?.LatestML;
+            if (snap?.lanes == null || snap.lanes.Length == 0)
+            {
+                HideUnitDots();
+                return;
+            }
+
+            int dotIndex = 0;
+            float width = mapViewportRect.rect.width;
+            float height = mapViewportRect.rect.height;
+            float worldY = _battlefieldBounds.center.y;
+
+            for (int laneIndex = 0; laneIndex < snap.lanes.Length; laneIndex++)
+            {
+                var lane = snap.lanes[laneIndex];
+                if (lane?.units == null)
+                    continue;
+
+                for (int unitIndex = 0; unitIndex < lane.units.Length; unitIndex++)
+                {
+                    var unit = lane.units[unitIndex];
+                    if (!ShouldRenderUnitDot(unit))
+                        continue;
+
+                    if (!TryResolveUnitWorldPosition(unit, lane, worldY, out var worldPos))
+                        continue;
+
+                    Vector3 viewport = _miniMapCamera.WorldToViewportPoint(worldPos);
+                    if (viewport.z < 0f || viewport.x < 0f || viewport.x > 1f || viewport.y < 0f || viewport.y > 1f)
+                        continue;
+
+                    var dot = GetOrCreateUnitDot(dotIndex++);
+                    var dotRect = dot.rectTransform;
+                    dotRect.anchoredPosition = new Vector2(
+                        (viewport.x - 0.5f) * width,
+                        (viewport.y - 0.5f) * height);
+                    dot.color = ResolveUnitDotColor(unit, lane);
+                    dot.gameObject.SetActive(true);
+                }
+            }
+
+            for (int i = dotIndex; i < _unitDots.Count; i++)
+                _unitDots[i].gameObject.SetActive(false);
+        }
+
+        void UpdateTownCoreStars()
+        {
+            if (unitDotRoot == null || mapViewportRect == null || _miniMapCamera == null)
+            {
+                HideTownCoreStars();
+                return;
+            }
+
+            var snapshotApplier = SnapshotApplier.Instance;
+            var snap = snapshotApplier?.LatestML;
+            if (snap?.lanes == null || snap.lanes.Length == 0)
+            {
+                HideTownCoreStars();
+                return;
+            }
+
+            int starIndex = 0;
+            float width = mapViewportRect.rect.width;
+            float height = mapViewportRect.rect.height;
+            float worldY = _battlefieldBounds.center.y;
+
+            for (int laneArrayIndex = 0; laneArrayIndex < snap.lanes.Length; laneArrayIndex++)
+            {
+                var lane = snap.lanes[laneArrayIndex];
+                if (lane == null)
+                    continue;
+
+                int laneIndex = BattlefieldSpaceMapper.IsValidLaneIndex(lane.laneIndex)
+                    ? lane.laneIndex
+                    : laneArrayIndex;
+                var townCorePad = snapshotApplier.GetTownCorePad(laneIndex);
+                if (!ShouldRenderTownCoreStar(townCorePad))
+                    continue;
+
+                if (!TryResolveTownCoreWorldPosition(townCorePad, lane, laneIndex, worldY, out var worldPos))
+                    continue;
+
+                Vector3 viewport = _miniMapCamera.WorldToViewportPoint(worldPos);
+                if (viewport.z < 0f || viewport.x < 0f || viewport.x > 1f || viewport.y < 0f || viewport.y > 1f)
+                    continue;
+
+                var star = GetOrCreateTownCoreStar(starIndex++);
+                var starRect = star.rectTransform;
+                starRect.anchoredPosition = new Vector2(
+                    (viewport.x - 0.5f) * width,
+                    (viewport.y - 0.5f) * height);
+                star.color = ResolveTownCoreStarColor(townCorePad, lane);
+                star.gameObject.SetActive(true);
+            }
+
+            for (int i = starIndex; i < _townCoreStars.Count; i++)
+                _townCoreStars[i].gameObject.SetActive(false);
+        }
+
+        static bool ShouldRenderUnitDot(MLUnit unit)
+        {
+            return unit != null
+                && unit.hp > 0.01f
+                && !string.IsNullOrWhiteSpace(unit.id ?? unit.unitId ?? unit.type);
+        }
+
+        static bool ShouldRenderTownCoreStar(MLFortressPad townCorePad)
+        {
+            return townCorePad != null
+                && townCorePad.hp > 0.01f
+                && !townCorePad.isDestroyed
+                && string.Equals(townCorePad.buildingType, "town_core", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        bool TryResolveUnitWorldPosition(MLUnit unit, MLLaneSnap lane, float worldY, out Vector3 worldPos)
+        {
+            if (unit != null && float.IsFinite(unit.routeWorldX) && float.IsFinite(unit.routeWorldY))
+            {
+                worldPos = new Vector3(unit.routeWorldX, worldY, unit.routeWorldY);
+                return true;
+            }
+
+            int spatialLane = ResolveSpatialLane(unit, lane);
+            if (BattlefieldSpaceMapper.IsValidLaneIndex(spatialLane))
+            {
+                if (float.IsFinite(unit.gridX) && float.IsFinite(unit.gridY))
+                {
+                    worldPos = BattlefieldSpaceMapper.TileToWorld(spatialLane, unit.gridX, unit.gridY);
+                    return true;
+                }
+
+                if (float.IsFinite(unit.anchorCenterX) && float.IsFinite(unit.anchorCenterY))
+                {
+                    worldPos = BattlefieldSpaceMapper.TileToWorld(spatialLane, unit.anchorCenterX, unit.anchorCenterY);
+                    return true;
+                }
+
+                if (float.IsFinite(unit.currentWaypointTargetX) && float.IsFinite(unit.currentWaypointTargetY))
+                {
+                    worldPos = BattlefieldSpaceMapper.TileToWorld(spatialLane, unit.currentWaypointTargetX, unit.currentWaypointTargetY);
+                    return true;
+                }
+
+                if (float.IsFinite(unit.anchorTargetX) && float.IsFinite(unit.anchorTargetY))
+                {
+                    worldPos = BattlefieldSpaceMapper.TileToWorld(spatialLane, unit.anchorTargetX, unit.anchorTargetY);
+                    return true;
+                }
+
+                if (float.IsFinite(unit.normProgress))
+                {
+                    worldPos = BattlefieldSpaceMapper.NormProgressToWorld(spatialLane, Mathf.Clamp01(unit.normProgress));
+                    return true;
+                }
+            }
+
+            worldPos = default;
+            return false;
+        }
+
+        static int ResolveSpatialLane(MLUnit unit, MLLaneSnap lane)
+        {
+            if (lane != null && BattlefieldSpaceMapper.IsValidLaneIndex(lane.laneIndex))
+                return lane.laneIndex;
+
+            if (unit != null)
+            {
+                if (BattlefieldSpaceMapper.IsValidLaneIndex(unit.sourceLaneIndex))
+                    return unit.sourceLaneIndex;
+                if (BattlefieldSpaceMapper.IsValidLaneIndex(unit.ownerLaneIndex))
+                    return unit.ownerLaneIndex;
+                if (BattlefieldSpaceMapper.IsValidLaneIndex(unit.ownerLane))
+                    return unit.ownerLane;
+                if (BattlefieldSpaceMapper.IsValidLaneIndex(unit.laneId))
+                    return unit.laneId;
+            }
+
+            return 0;
+        }
+
+        static bool TryResolveTownCoreWorldPosition(MLFortressPad townCorePad, MLLaneSnap lane, int fallbackLaneIndex, float worldY, out Vector3 worldPos)
+        {
+            int spatialLane = BattlefieldSpaceMapper.IsValidLaneIndex(lane?.laneIndex ?? -1)
+                ? lane.laneIndex
+                : BattlefieldSpaceMapper.IsValidLaneIndex(townCorePad?.ownerLaneIndex ?? -1)
+                    ? townCorePad.ownerLaneIndex
+                    : fallbackLaneIndex;
+            if (!BattlefieldSpaceMapper.IsValidLaneIndex(spatialLane) || townCorePad == null)
+            {
+                worldPos = default;
+                return false;
+            }
+
+            worldPos = BattlefieldSpaceMapper.TileToWorld(spatialLane, townCorePad.gridX, townCorePad.gridY);
+            worldPos.y = worldY;
+            return true;
+        }
+
+        Color ResolveUnitDotColor(MLUnit unit, MLLaneSnap lane)
+        {
+            if (IsDungeonWaveUnit(unit))
+                return new Color(0.74f, 0.34f, 0.92f, 1f);
+
+            string teamKey = BattleTeamUtility.NormalizeServerTeamKey(unit?.allegianceKey);
+            if (string.IsNullOrWhiteSpace(teamKey))
+                teamKey = BattleTeamUtility.NormalizeServerTeamKey(unit?.sourceTeam);
+            if (string.IsNullOrWhiteSpace(teamKey))
+                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.slotColor);
+            if (string.IsNullOrWhiteSpace(teamKey))
+                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.team);
+
+            if (BattleTeamUtility.TryParseServerTeamKey(teamKey, out var team))
+            {
+                var color = BattleTeamUtility.ToColor(team);
+                color.a = 1f;
+                return color;
+            }
+
+            return new Color(0.92f, 0.92f, 0.92f, 1f);
+        }
+
+        Color ResolveTownCoreStarColor(MLFortressPad townCorePad, MLLaneSnap lane)
+        {
+            string teamKey = BattleTeamUtility.NormalizeServerTeamKey(townCorePad?.allegianceKey);
+            if (string.IsNullOrWhiteSpace(teamKey))
+                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.slotColor);
+            if (string.IsNullOrWhiteSpace(teamKey))
+                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.team);
+
+            if (BattleTeamUtility.TryParseServerTeamKey(teamKey, out var team))
+            {
+                var color = BattleTeamUtility.ToColor(team);
+                color.a = 1f;
+                return color;
+            }
+
+            return new Color(0.96f, 0.92f, 0.72f, 1f);
+        }
+
+        static bool IsDungeonWaveUnit(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            if (unit.isWaveUnit)
+                return true;
+
+            string explicitAllegiance = BattleTeamUtility.NormalizeServerTeamKey(unit.allegianceKey);
+            if (string.Equals(explicitAllegiance, "dungeon", System.StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            string spawnSourceType = string.IsNullOrWhiteSpace(unit.spawnSourceType)
+                ? null
+                : unit.spawnSourceType.Trim();
+            return string.Equals(spawnSourceType, "scheduled_wave", System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(spawnSourceType, "dungeon_wave", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        Image GetOrCreateUnitDot(int index)
+        {
+            while (_unitDots.Count <= index)
+            {
+                var dotGo = new GameObject($"UnitDot{_unitDots.Count}", typeof(RectTransform), typeof(Image), typeof(Outline));
+                dotGo.transform.SetParent(unitDotRoot, false);
+                var dotRect = dotGo.GetComponent<RectTransform>();
+                dotRect.anchorMin = new Vector2(0.5f, 0.5f);
+                dotRect.anchorMax = new Vector2(0.5f, 0.5f);
+                dotRect.pivot = new Vector2(0.5f, 0.5f);
+                dotRect.sizeDelta = unitDotSize;
+
+                var dotImage = dotGo.GetComponent<Image>();
+                dotImage.raycastTarget = false;
+
+                var outline = dotGo.GetComponent<Outline>();
+                outline.effectColor = new Color(0f, 0f, 0f, 0.85f);
+                outline.effectDistance = new Vector2(1f, -1f);
+                outline.useGraphicAlpha = true;
+
+                _unitDots.Add(dotImage);
+            }
+
+            return _unitDots[index];
+        }
+
+        TextMeshProUGUI GetOrCreateTownCoreStar(int index)
+        {
+            while (_townCoreStars.Count <= index)
+            {
+                var starGo = new GameObject($"TownCoreStar{_townCoreStars.Count}", typeof(RectTransform), typeof(TextMeshProUGUI), typeof(Outline));
+                starGo.transform.SetParent(unitDotRoot, false);
+                var starRect = starGo.GetComponent<RectTransform>();
+                starRect.anchorMin = new Vector2(0.5f, 0.5f);
+                starRect.anchorMax = new Vector2(0.5f, 0.5f);
+                starRect.pivot = new Vector2(0.5f, 0.5f);
+                starRect.sizeDelta = townCoreStarSize;
+
+                var starText = starGo.GetComponent<TextMeshProUGUI>();
+                starText.raycastTarget = false;
+                starText.text = "★";
+                starText.alignment = TextAlignmentOptions.Center;
+                starText.fontSize = townCoreStarFontSize;
+                starText.enableWordWrapping = false;
+                starText.overflowMode = TextOverflowModes.Overflow;
+                if (TMP_Settings.defaultFontAsset != null)
+                    starText.font = TMP_Settings.defaultFontAsset;
+
+                var outline = starGo.GetComponent<Outline>();
+                outline.effectColor = new Color(0f, 0f, 0f, 0.9f);
+                outline.effectDistance = new Vector2(1f, -1f);
+                outline.useGraphicAlpha = true;
+
+                _townCoreStars.Add(starText);
+            }
+
+            return _townCoreStars[index];
+        }
+
+        void HideUnitDots()
+        {
+            for (int i = 0; i < _unitDots.Count; i++)
+                _unitDots[i].gameObject.SetActive(false);
+        }
+
+        void HideTownCoreStars()
+        {
+            for (int i = 0; i < _townCoreStars.Count; i++)
+                _townCoreStars[i].gameObject.SetActive(false);
+        }
+
         void ReleaseResources()
         {
+            RestoreMinimapHiddenVisuals();
+
             if (_miniMapCamera != null)
             {
                 if (Application.isPlaying)

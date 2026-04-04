@@ -1,7 +1,11 @@
 'use strict';
 
 const { Pool } = require('pg');
+const { performance } = require('node:perf_hooks');
 const log = require('./logger');
+
+const SLOW_QUERY_THRESHOLD_MS = 300;
+const MAX_QUERY_SUMMARY_CHARS = 180;
 
 // SSL: In production, cert validation is enforced by default (rejectUnauthorized: true).
 // Set DATABASE_SSL_REJECT_UNAUTHORIZED=false only in staging/dev environments that use
@@ -20,11 +24,42 @@ pool.on('error', (err) => {
   log.error('[db] unexpected error on idle client', { err: err.message });
 });
 
-async function query(text, params) {
-  const start = Date.now();
-  const res = await pool.query(text, params);
-  const ms = Date.now() - start;
-  if (ms > 300) log.info(`[db] slow query (${ms}ms)`);
+function normalizeQueryArgs(params, options) {
+  if (!Array.isArray(params) && params && typeof params === 'object' && options == null) {
+    if (typeof params.label === 'string' || typeof params.queryName === 'string') {
+      return { params: undefined, options: params };
+    }
+  }
+
+  return { params, options: options || {} };
+}
+
+function summarizeQueryText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_QUERY_SUMMARY_CHARS);
+}
+
+function roundDurationMs(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(1)) : null;
+}
+
+async function query(text, params, options) {
+  const normalized = normalizeQueryArgs(params, options);
+  const start = performance.now();
+  const res = normalized.params === undefined
+    ? await pool.query(text)
+    : await pool.query(text, normalized.params);
+  const ms = performance.now() - start;
+  if (ms > SLOW_QUERY_THRESHOLD_MS) {
+    log.info('[db] slow query', {
+      ms: roundDurationMs(ms),
+      label: normalized.options.label || normalized.options.queryName || null,
+      query: summarizeQueryText(text),
+      rowCount: typeof res.rowCount === 'number' ? res.rowCount : null,
+    });
+  }
   return res;
 }
 

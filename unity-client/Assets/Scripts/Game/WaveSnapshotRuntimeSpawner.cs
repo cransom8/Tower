@@ -169,6 +169,7 @@ namespace CastleDefender.Game
         readonly Dictionary<string, float> _lastUnitVoiceAtBySpeaker = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<UnitVoiceCue, float> _lastUnitVoiceAtByCue = new();
         readonly Dictionary<int, string> _lastLaneCommandVoiceStateByLaneIndex = new();
+        string _battlefieldRouteCacheLayoutSignature;
         string _lastSnapshotSummaryLog;
         float _lastSnapTime = -1f;
         float _lastAnyUnitVoiceAt = float.MinValue;
@@ -367,7 +368,7 @@ namespace CastleDefender.Game
                     _branchMap[lane.laneIndex] = branchCfg;
             }
 
-            RefreshBattlefieldRouteCache(snap);
+            RefreshBattlefieldRouteCache();
             TryPlayLaneCommandVoiceTransition(snap, now);
 
             _seenIds.Clear();
@@ -458,10 +459,25 @@ namespace CastleDefender.Game
                     view.timeSinceSnap = 0f;
                     view.hadSnapshot = true;
                     view.latestSnapshotUnit = unit;
-                    view.animationProfile = UnitAnimationResolver.ResolveForUnit(view.go, unit);
-                    view.combatSfxProfile = UnitCombatSfxLibrary.ResolveForUnit(view.go, unit);
-                    UnitAnimationResolver.PrepareAnimators(view.animators, view.animationProfile, forPortrait: false);
-                    CacheAnimatorParameterSupport(view);
+                    if (!createdNow)
+                    {
+                        bool refreshPresentationProfiles =
+                            !hadPreviousSnapshot
+                            || previousSnapshotUnit == null
+                            || DidSnapshotPresenterIdentityChange(previousSnapshotUnit, unit);
+                        if (refreshPresentationProfiles)
+                        {
+                            var resolvedAnimationProfile = UnitAnimationResolver.ResolveForUnit(view.go, unit);
+                            if (RequiresAnimatorSetupRefresh(view.animationProfile, resolvedAnimationProfile))
+                            {
+                                UnitAnimationResolver.PrepareAnimators(view.animators, resolvedAnimationProfile, forPortrait: false);
+                                CacheAnimatorParameterSupport(view);
+                            }
+
+                            view.animationProfile = resolvedAnimationProfile;
+                            view.combatSfxProfile = UnitCombatSfxLibrary.ResolveForUnit(view.go, unit);
+                        }
+                    }
 
                     if (!view.go.activeSelf && !view.combatant.IsLocallyDefeated)
                         view.go.SetActive(true);
@@ -954,6 +970,7 @@ namespace CastleDefender.Game
             _lastUnitVoiceAtBySpeaker.Clear();
             _lastUnitVoiceAtByCue.Clear();
             _lastAnyUnitVoiceAt = float.MinValue;
+            ResetBattlefieldRouteCache();
             UnitCombatSfxLibrary.ResetPlaybackState();
             DestroyOrphanedRuntimePresenters();
         }
@@ -1106,29 +1123,54 @@ namespace CastleDefender.Game
             return true;
         }
 
-        void RefreshBattlefieldRouteCache(MLSnapshot snap)
+        void RefreshBattlefieldRouteCache()
         {
-            RefreshBattlefieldRouteAnchors();
-            RefreshBattlefieldRouteNodeMap(snap);
-            RefreshBattlefieldRouteSegments();
-        }
-
-        void RefreshBattlefieldRouteAnchors()
-        {
-            _battlefieldTownCoreByLaneKey.Clear();
-            _battlefieldFrontGateByLaneKey.Clear();
-            _battlefieldBarracksByLaneAndId.Clear();
-            _battlefieldFortressCombatWorldByLaneAndPadId.Clear();
-
             var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
             if (layout == null)
             {
+                ResetBattlefieldRouteCache();
                 LogBattlefieldRouteFailureOnce(
                     "layout:missing",
                     "Missing ML battlefieldLayout. Unity route projection requires server-authored layout data.");
                 return;
             }
 
+            string layoutSignature = BuildBattlefieldLayoutSignature(layout);
+            if (string.Equals(_battlefieldRouteCacheLayoutSignature, layoutSignature, StringComparison.Ordinal))
+                return;
+
+            ResetBattlefieldRouteCache(clearSignature: false);
+            _battlefieldRouteCacheLayoutSignature = layoutSignature;
+            RefreshBattlefieldRouteAnchors(layout);
+            RefreshBattlefieldRouteNodeMap(layout);
+            RefreshBattlefieldRouteSegments(layout);
+        }
+
+        void ResetBattlefieldRouteCache(bool clearSignature = true)
+        {
+            _battlefieldTownCoreByLaneKey.Clear();
+            _battlefieldFrontGateByLaneKey.Clear();
+            _battlefieldBarracksByLaneAndId.Clear();
+            _battlefieldFortressCombatWorldByLaneAndPadId.Clear();
+            _battlefieldRouteWorldPolylineBySegment.Clear();
+            _battlefieldRouteSpacePolylineBySegment.Clear();
+            _battlefieldRouteNodeLaneByNode.Clear();
+            if (clearSignature)
+                _battlefieldRouteCacheLayoutSignature = null;
+        }
+
+        static string BuildBattlefieldLayoutSignature(MLBattlefieldLayout layout)
+        {
+            if (layout == null)
+                return "<null>";
+
+            return
+                $"{layout.layoutId ?? "<null>"}|{layout.contentHash ?? "<null>"}|" +
+                $"{layout.lanes?.Length ?? 0}|{layout.routeNodes?.Length ?? 0}|{layout.routeSegments?.Length ?? 0}";
+        }
+
+        void RefreshBattlefieldRouteAnchors(MLBattlefieldLayout layout)
+        {
             if (layout.lanes == null || layout.lanes.Length == 0)
             {
                 LogBattlefieldRouteFailureOnce(
@@ -1218,15 +1260,8 @@ namespace CastleDefender.Game
             }
         }
 
-        void RefreshBattlefieldRouteSegments()
+        void RefreshBattlefieldRouteSegments(MLBattlefieldLayout layout)
         {
-            _battlefieldRouteWorldPolylineBySegment.Clear();
-            _battlefieldRouteSpacePolylineBySegment.Clear();
-
-            var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
-            if (layout == null)
-                return;
-
             if (layout.routeSegments == null || layout.routeSegments.Length == 0)
             {
                 LogBattlefieldRouteFailureOnce(
@@ -1787,11 +1822,8 @@ namespace CastleDefender.Game
                 out worldPos);
         }
 
-        void RefreshBattlefieldRouteNodeMap(MLSnapshot snap)
+        void RefreshBattlefieldRouteNodeMap(MLBattlefieldLayout layout)
         {
-            _battlefieldRouteNodeLaneByNode.Clear();
-
-            var layout = SnapshotApplier.Instance?.GetBattlefieldLayout();
             if (layout == null || layout.routeNodes == null)
                 return;
 
@@ -3077,6 +3109,34 @@ namespace CastleDefender.Game
             Quaternion desired = Quaternion.LookRotation(delta.normalized, Vector3.up);
             float turnT = 1f - Mathf.Exp(-Mathf.Max(0.01f, turnSharpness) * dt);
             target.rotation = Quaternion.Slerp(target.rotation, desired, turnT);
+        }
+
+        static bool DidSnapshotPresenterIdentityChange(MLUnit previous, MLUnit current)
+        {
+            if (previous == null || current == null)
+                return true;
+
+            return previous.isHero != current.isHero
+                || !string.Equals(previous.archetypeKey, current.archetypeKey, StringComparison.Ordinal)
+                || !string.Equals(previous.catalogUnitKey, current.catalogUnitKey, StringComparison.Ordinal)
+                || !string.Equals(previous.skinKey, current.skinKey, StringComparison.Ordinal)
+                || !string.Equals(previous.type, current.type, StringComparison.Ordinal)
+                || !string.Equals(previous.unitTypeKey, current.unitTypeKey, StringComparison.Ordinal)
+                || !string.Equals(previous.heroKey, current.heroKey, StringComparison.Ordinal);
+        }
+
+        static bool RequiresAnimatorSetupRefresh(
+            UnitAnimationResolver.ResolvedProfile currentProfile,
+            UnitAnimationResolver.ResolvedProfile nextProfile)
+        {
+            if (currentProfile == null || nextProfile == null)
+                return true;
+
+            return !string.Equals(currentProfile.ProfileId, nextProfile.ProfileId, StringComparison.Ordinal)
+                || currentProfile.RuntimeController != nextProfile.RuntimeController
+                || currentProfile.OverrideExistingControllers != nextProfile.OverrideExistingControllers
+                || currentProfile.ApplyRootMotion != nextProfile.ApplyRootMotion
+                || !Mathf.Approximately(currentProfile.AnimatorSpeedMultiplier, nextProfile.AnimatorSpeedMultiplier);
         }
 
         static void CacheAnimatorParameterSupport(WaveView view)

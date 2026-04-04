@@ -356,6 +356,9 @@ function createMLGame(playerCount, options, deps = {}) {
   const recomputeTeamHpState = requireDepFunction(deps, "recomputeTeamHpState");
   const mulberry32 = requireDepFunction(deps, "mulberry32");
   const normalizeAllegianceKey = requireDepFunction(deps, "normalizeAllegianceKey");
+  const ensureBalanceTelemetry = typeof deps.ensureBalanceTelemetry === "function"
+    ? deps.ensureBalanceTelemetry
+    : null;
   const safePlayerCount = Math.max(0, Math.floor(Number(playerCount) || 0));
   const opt = normalizeGameOptions(options, deps);
   const battlefieldTopology = getBattlefieldTopology(safePlayerCount, opt.laneTeams, deps);
@@ -500,6 +503,8 @@ function createMLGame(playerCount, options, deps = {}) {
       seedStartingCombatTestMilitia(game, lane, opt.startingCombatMilitiaCount);
   }
   recomputeTeamHpState(game);
+  if (ensureBalanceTelemetry)
+    ensureBalanceTelemetry(game, { mode: "multilane", tickHz: Math.max(1, Math.floor(Number(deps.TICK_HZ) || 20)) });
   return game;
 }
 

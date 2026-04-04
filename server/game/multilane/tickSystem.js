@@ -73,6 +73,9 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
   const resolveSpawnSourceTypeFromUnit = requireDepFunction(deps, "resolveSpawnSourceTypeFromUnit");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
   const resolveAbilityHook = requireDepFunction(deps, "resolveAbilityHook");
+  const recordBalanceUnitSpawned = typeof deps.recordBalanceUnitSpawned === "function"
+    ? deps.recordBalanceUnitSpawned
+    : null;
   const gridWidth = getGridWidth(deps);
 
   while (Array.isArray(lane.spawnQueue) && lane.spawnQueue.length > 0) {
@@ -129,6 +132,8 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
       );
     }
     lane.units.push(unit);
+    if (recordBalanceUnitSpawned)
+      recordBalanceUnitSpawned(game, lane, unit);
     if (unit.abilities && unit.abilities.length > 0)
       resolveAbilityHook(game, lane, unit, "onSpawn", {});
   }
@@ -414,6 +419,18 @@ function processLane(game, lane, deps = {}) {
   const applySeparation2D = requireDepFunction(deps, "applySeparation2D");
   const resolveProjectile = requireDepFunction(deps, "resolveProjectile");
   const resolveAbilityHook = requireDepFunction(deps, "resolveAbilityHook");
+  const recordBalanceUnitDeath = typeof deps.recordBalanceUnitDeath === "function"
+    ? deps.recordBalanceUnitDeath
+    : null;
+  const recordBalanceIncome = typeof deps.recordBalanceIncome === "function"
+    ? deps.recordBalanceIncome
+    : null;
+  const recordBalanceDamage = typeof deps.recordBalanceDamage === "function"
+    ? deps.recordBalanceDamage
+    : null;
+  const recordBalanceHealing = typeof deps.recordBalanceHealing === "function"
+    ? deps.recordBalanceHealing
+    : null;
   const isScheduledWaveUnit = requireDepFunction(deps, "isScheduledWaveUnit");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
 
@@ -493,9 +510,16 @@ function processLane(game, lane, deps = {}) {
         }
       }
 
-      if (!unit.combatTarget) {
+      const canReevaluateStructureTarget = !resolvedCombatTarget || resolvedCombatTarget.kind !== "unit";
+      if (canReevaluateStructureTarget) {
         const blockingTarget = findBlockingStructureTarget(game, lane, unit);
-        if (blockingTarget) {
+        const currentStructureTargetId = resolvedCombatTarget && resolvedCombatTarget.kind === "fortress_pad"
+          ? String(resolvedCombatTarget.padId || resolvedCombatTarget.unitId || "")
+          : "";
+        const nextStructureTargetId = blockingTarget
+          ? String(blockingTarget.padId || blockingTarget.unitId || "")
+          : "";
+        if (blockingTarget && currentStructureTargetId !== nextStructureTargetId) {
           if (blockingTarget.buildingType === "town_core")
             markTownCoreBreach(game, lane, unit, blockingTarget);
           unit.blockedByStructure = true;
@@ -508,6 +532,10 @@ function processLane(game, lane, deps = {}) {
             laneIndex: Number.isInteger(blockingTarget.laneIndex) ? blockingTarget.laneIndex : lane.laneIndex,
           }, game.tick);
           resolvedCombatTarget = resolveWaveCombatTarget(game, lane, unit.combatTarget);
+        } else if (!blockingTarget && !unit.combatTarget) {
+          unit.blockedByStructure = false;
+          unit.blockedByStructureId = null;
+          unit.blockedByStructureType = null;
         }
       }
     }
@@ -534,6 +562,8 @@ function processLane(game, lane, deps = {}) {
             const healAmount = Math.max(1, Math.round(Number(unit.healAmountOverride) || Number(supportProfile.healAmount) || 1));
             const maxHp = Math.max(1, Number(healTarget.maxHp) || Number(healTarget.hp) || 1);
             healTarget.hp = Math.min(maxHp, (Number(healTarget.hp) || 0) + healAmount);
+            if (recordBalanceHealing)
+              recordBalanceHealing(game, lane, unit, healTarget, healAmount);
             const chainHealExtraTargets = Math.max(0, Math.floor(Number(unit.chainHealExtraTargets) || 0));
             if (chainHealExtraTargets > 0) {
               const chainTargets = findAdditionalChainHealTargets(
@@ -548,6 +578,8 @@ function processLane(game, lane, deps = {}) {
               for (const extraTarget of chainTargets) {
                 const extraMaxHp = Math.max(1, Number(extraTarget.maxHp) || Number(extraTarget.hp) || 1);
                 extraTarget.hp = Math.min(extraMaxHp, (Number(extraTarget.hp) || 0) + healAmount);
+                if (recordBalanceHealing)
+                  recordBalanceHealing(game, lane, unit, extraTarget, healAmount);
               }
             }
             unit.attackPulse = (unit.attackPulse || 0) + 1;
@@ -599,7 +631,9 @@ function processLane(game, lane, deps = {}) {
         if (inCombatContact) {
           if (unit.atkCd <= 0) {
             const attackStats = resolveUnitAttackStats(unit, deps);
-            applyDirectUnitDamage(targetUnit, attackStats.damage);
+            const appliedDamage = applyDirectUnitDamage(targetUnit, attackStats.damage);
+            if (recordBalanceDamage && appliedDamage > 0)
+              recordBalanceDamage(game, lane, unit, targetLane || lane, targetUnit, appliedDamage);
             const splashExtraTargets = Math.max(0, Math.floor(Number(unit.splashExtraTargets) || 0));
             if (splashExtraTargets > 0) {
               const splashTargets = findAdditionalSplashTargets(
@@ -612,8 +646,11 @@ function processLane(game, lane, deps = {}) {
                 Math.max(0.5, Number(unit.splashRadius) || 1.5),
                 deps
               );
-              for (const splashTarget of splashTargets)
-                applyDirectUnitDamage(splashTarget, attackStats.damage);
+              for (const splashTarget of splashTargets) {
+                const splashDamage = applyDirectUnitDamage(splashTarget, attackStats.damage);
+                if (recordBalanceDamage && splashDamage > 0)
+                  recordBalanceDamage(game, lane, unit, targetLane || lane, splashTarget, splashDamage);
+              }
             }
             unit.attackPulse = (unit.attackPulse || 0) + 1;
             if (targetUnit.hp <= 0) {
@@ -783,6 +820,24 @@ function processLane(game, lane, deps = {}) {
       continue;
     }
     const { dead, hit } = resolveProjectile(game, lane, projectile);
+    if (recordBalanceDamage && hit.length > 0) {
+      const attackerUnit = projectile.sourceKind === "unit"
+        ? (lane.units || []).find((unit) => unit && unit.id === projectile.sourceId) || { type: projectile.projectileType || "projectile" }
+        : { type: projectile.projectileType || "tower" };
+      const attackerTeam = projectile.sourceKind === "tower"
+        ? "player"
+        : attackerUnit && (attackerUnit.isWaveUnit || String(attackerUnit.spawnSourceType || "").trim().toLowerCase() === "dungeon_wave")
+          ? "enemy"
+          : "player";
+      for (const hitId of hit) {
+        const hitUnit = (lane.units || []).find((unit) => unit && unit.id === hitId);
+        if (hitUnit)
+          recordBalanceDamage(game, lane, attackerUnit, lane, hitUnit, projectile.dmg || 0, {
+            projectileType: projectile.projectileType || null,
+            attackerTeam,
+          });
+      }
+    }
     for (const id of dead)
       killedById.add(id);
     if (projectile.abilities && projectile.abilities.length > 0 && hit.length > 0) {
@@ -804,10 +859,14 @@ function processLane(game, lane, deps = {}) {
   for (const unit of lane.units || []) {
     if (unit.hp > 0)
       continue;
+    if (recordBalanceUnitDeath)
+      recordBalanceUnitDeath(game, lane, unit);
     if (unit.abilities && unit.abilities.length > 0)
       resolveAbilityHook(game, lane, unit, "onDeath", {});
     if (isScheduledWaveUnit(unit)) {
       lane.gold += unit.bounty || 1;
+      if (recordBalanceIncome)
+        recordBalanceIncome(game, lane, "kill_reward", unit.bounty || 1);
       combatLog.logEvent(game, "wave_unit_killed", {
         unitId: unit.id,
         unitType: unit.type,
@@ -824,6 +883,9 @@ function finalizeTick(game, deps = {}) {
   const log = deps && deps.log;
   const createRoundSnapshotLane = requireDepFunction(deps, "createRoundSnapshotLane");
   const buildTownCoreStateSummary = requireDepFunction(deps, "buildTownCoreStateSummary");
+  const finalizeBalanceWaveReport = typeof deps.finalizeBalanceWaveReport === "function"
+    ? deps.finalizeBalanceWaveReport
+    : null;
 
   if (game.phase !== "playing")
     return;
@@ -854,6 +916,8 @@ function finalizeTick(game, deps = {}) {
         coreStates: game.finalGameOverDebug.coreStates,
       });
     }
+    if (finalizeBalanceWaveReport)
+      finalizeBalanceWaveReport(game, { defeat: true, cleared: false });
     game.phase = "ended";
     game.matchState = "final_game_over";
     game.winner = Number.isInteger(game.officialWinnerLane) ? game.officialWinnerLane : null;
@@ -866,6 +930,9 @@ function mlTick(game, deps = {}) {
   const runScheduledBuildingConstruction = requireDepFunction(deps, "runScheduledBuildingConstruction");
   const runScheduledBarracksSends = requireDepFunction(deps, "runScheduledBarracksSends");
   const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
+  const recordBalanceTick = typeof deps.recordBalanceTick === "function"
+    ? deps.recordBalanceTick
+    : null;
 
   if (!game || game.phase !== "playing")
     return;
@@ -885,6 +952,9 @@ function mlTick(game, deps = {}) {
 
   for (const lane of game.lanes || [])
     processLane(game, lane, deps);
+
+  if (recordBalanceTick)
+    recordBalanceTick(game);
 
   finalizeTick(game, deps);
 }
