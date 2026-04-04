@@ -58,6 +58,26 @@ function normalizeLaneLayoutKey(slot, deps = {}) {
 }
 
 function resolvePerimeterControlPoint(fromWorld, toWorld, mineCenterWorld) {
+  const alignedCornerCandidates = [
+    createWorldPoint(Number(fromWorld.x), Number(toWorld.y)),
+    createWorldPoint(Number(toWorld.x), Number(fromWorld.y)),
+  ];
+  const xDelta = Math.abs(Number(fromWorld.x) - Number(toWorld.x));
+  const yDelta = Math.abs(Number(fromWorld.y) - Number(toWorld.y));
+  if (xDelta > 0.001 && yDelta > 0.001) {
+    const rankedCandidates = alignedCornerCandidates
+      .map((candidate) => ({
+        candidate,
+        distanceToMine: Math.hypot(
+          Number(candidate.x) - Number(mineCenterWorld.x),
+          Number(candidate.y) - Number(mineCenterWorld.y)
+        ),
+      }))
+      .sort((left, right) => right.distanceToMine - left.distanceToMine);
+    if (rankedCandidates.length > 0)
+      return rankedCandidates[0].candidate;
+  }
+
   const midpoint = {
     x: (Number(fromWorld.x) + Number(toWorld.x)) * 0.5,
     y: (Number(fromWorld.y) + Number(toWorld.y)) * 0.5,
@@ -234,14 +254,6 @@ function buildAuthoredSegmentWorldPoints(
     return [
       createWorldPoint(fromWorld.x, fromWorld.y),
       createWorldPoint(frontGatePoint.x, frontGatePoint.y),
-      createWorldPoint(toWorld.x, toWorld.y),
-    ];
-  }
-
-  if (segmentId === "A_C" || segmentId === "C_A" || segmentId === "B_D" || segmentId === "D_B") {
-    return [
-      createWorldPoint(fromWorld.x, fromWorld.y),
-      createWorldPoint(mineWorldPoint.x, mineWorldPoint.y),
       createWorldPoint(toWorld.x, toWorld.y),
     ];
   }

@@ -286,6 +286,8 @@ public static class BuildTTRTSUnitPrefabs
                 return false;
             }
 
+            HeroPresentationTweaks.ApplyHeroFootGlowIfNeeded(instance);
+
             var savedPrefab = PrefabUtility.SaveAsPrefabAsset(instance, prefabAssetPath);
             if (savedPrefab == null)
             {

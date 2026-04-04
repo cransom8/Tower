@@ -1785,6 +1785,7 @@ function syncLaneCommandAssignments(game, deps = {}) {
     return;
 
   normalizeLegacyDefenderUnits(game, deps);
+  const laneCommandStates = getLaneCommandStates(deps);
 
   for (const lane of game.lanes) {
     if (!lane)
@@ -1906,12 +1907,45 @@ function syncLaneCommandAssignments(game, deps = {}) {
     }
   }
 
+  const liveLaneControlledEntriesBySourceLane = new Map();
+  for (const lane of game.lanes) {
+    if (!lane || !Array.isArray(lane.units))
+      continue;
+
+    for (const unit of lane.units) {
+      if (!isLaneControlledUnit(unit, deps) || unit.hp <= 0 || !Number.isInteger(unit.sourceLaneIndex))
+        continue;
+
+      let entries = liveLaneControlledEntriesBySourceLane.get(unit.sourceLaneIndex);
+      if (!entries) {
+        entries = [];
+        liveLaneControlledEntriesBySourceLane.set(unit.sourceLaneIndex, entries);
+      }
+      entries.push({ lane, unit });
+    }
+  }
+
+  const laneCommandAnchorCache = new Map();
+  function getCachedLaneCommandAnchor(ownerLane, commandState = null) {
+    if (!ownerLane || !Number.isInteger(ownerLane.laneIndex))
+      return null;
+
+    const cacheKey = `${ownerLane.laneIndex}:${commandState || "__default__"}`;
+    if (laneCommandAnchorCache.has(cacheKey))
+      return laneCommandAnchorCache.get(cacheKey);
+
+    const anchorState = commandState
+      ? sampleLaneCommandAnchor(game, ownerLane, { commandState }, deps)
+      : sampleLaneCommandAnchor(game, ownerLane, null, deps);
+    laneCommandAnchorCache.set(cacheKey, anchorState);
+    return anchorState;
+  }
+
   for (const ownerLane of game.lanes) {
     if (!ownerLane)
       continue;
 
-    const laneCommandStates = getLaneCommandStates(deps);
-    const anchorState = sampleLaneCommandAnchor(game, ownerLane, null, deps);
+    const anchorState = getCachedLaneCommandAnchor(ownerLane, null);
     const ownerCommandState = anchorState ? anchorState.commandState : getLaneCommandState(ownerLane, deps);
     ownerLane.combatEnabled = !!(anchorState && anchorState.combatEnabled);
     ownerLane.engagementRadius = anchorState ? anchorState.engagementRadius : 0;
@@ -1932,38 +1966,37 @@ function syncLaneCommandAssignments(game, deps = {}) {
 
     const commandEntriesByState = new Map();
     const retreatingMarketEntries = [];
-    for (const lane of game.lanes) {
-      for (const unit of lane.units || []) {
-        if (!isLaneControlledUnit(unit, deps) || unit.sourceLaneIndex !== ownerLane.laneIndex || unit.hp <= 0)
+    const sourceEntries = liveLaneControlledEntriesBySourceLane.get(ownerLane.laneIndex) || [];
+    for (const entry of sourceEntries) {
+      const lane = entry.lane;
+      const unit = entry.unit;
+      unit.combatRole = resolveUnitCombatRole(unit, deps);
+      if (unit.isMarketWorker) {
+        if (ownerCommandState === laneCommandStates.RETREAT) {
+          retreatingMarketEntries.push(entry);
+        } else {
+          unit.assignedSlotIndex = null;
+          unit.anchorTargetX = null;
+          unit.anchorTargetY = null;
+          unit.anchorTargetProgress = null;
+          unit.anchorFacingX = null;
+          unit.anchorFacingY = null;
+          unit.anchorLateralX = null;
+          unit.anchorLateralY = null;
+          unit.anchorCenterX = null;
+          unit.anchorCenterY = null;
+          unit.anchorHoldRadius = 0;
+          unit.anchorLeashRadius = 0;
+          unit.currentWaypointTargetX = null;
+          unit.currentWaypointTargetY = null;
+          unit.currentWaypointTargetKind = null;
           continue;
-        unit.combatRole = resolveUnitCombatRole(unit, deps);
-        if (unit.isMarketWorker) {
-          if (ownerCommandState === laneCommandStates.RETREAT) {
-            retreatingMarketEntries.push({ lane, unit });
-          } else {
-            unit.assignedSlotIndex = null;
-            unit.anchorTargetX = null;
-            unit.anchorTargetY = null;
-            unit.anchorTargetProgress = null;
-            unit.anchorFacingX = null;
-            unit.anchorFacingY = null;
-            unit.anchorLateralX = null;
-            unit.anchorLateralY = null;
-            unit.anchorCenterX = null;
-            unit.anchorCenterY = null;
-            unit.anchorHoldRadius = 0;
-            unit.anchorLeashRadius = 0;
-            unit.currentWaypointTargetX = null;
-            unit.currentWaypointTargetY = null;
-            unit.currentWaypointTargetKind = null;
-            continue;
-          }
         }
-        const unitCommandState = getLaneCommandStateForUnit(game, unit, deps);
-        if (!commandEntriesByState.has(unitCommandState))
-          commandEntriesByState.set(unitCommandState, []);
-        commandEntriesByState.get(unitCommandState).push({ lane, unit });
       }
+      const unitCommandState = getLaneCommandStateForUnit(game, unit, deps);
+      if (!commandEntriesByState.has(unitCommandState))
+        commandEntriesByState.set(unitCommandState, []);
+      commandEntriesByState.get(unitCommandState).push(entry);
     }
 
     for (const entries of commandEntriesByState.values())
@@ -2033,7 +2066,7 @@ function syncLaneCommandAssignments(game, deps = {}) {
       if (!Array.isArray(entries) || entries.length <= 0)
         continue;
 
-      const barracksAnchorState = sampleLaneCommandAnchor(game, ownerLane, { commandState }, deps);
+      const barracksAnchorState = getCachedLaneCommandAnchor(ownerLane, commandState);
       const currentWaypointTarget = buildAnchorWaypointTarget(barracksAnchorState);
       const commandSlots = entries.map((entry, unitIndex) => {
         const slot = buildLaneAnchorSlot(barracksAnchorState, entry.unit, unitIndex, entries.length, deps);

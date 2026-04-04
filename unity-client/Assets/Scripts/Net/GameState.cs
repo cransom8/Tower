@@ -616,6 +616,7 @@ namespace CastleDefender.Net
         public string branchKey;
         public string branchLabel;
         public string buildState;
+        public string lifecycleState;
         public int    tier;
         public int    maxTier;
         public string currentTierName;
@@ -630,6 +631,7 @@ namespace CastleDefender.Net
         public int    constructionTimerTotalTicks;
         public float  constructionProgress01;
         public bool   isDestroyed;
+        public bool   isUnderRepair;
         public bool   canBuild;
         public bool   canUpgrade;
         public int    buildCost;
@@ -737,6 +739,7 @@ namespace CastleDefender.Net
         public int    level;
         public int    maxLevel;
         public string buildState;
+        public string lifecycleState;
         public bool   isConstructing;
         public string constructionKind;
         public int    constructionTargetLevel;
@@ -745,6 +748,7 @@ namespace CastleDefender.Net
         public int    constructionTimerTotalTicks;
         public float  constructionProgress01;
         public bool   isDestroyed;
+        public bool   isUnderRepair;
         public bool   canBuild;
         public bool   canUpgrade;
         public int    buildCost;

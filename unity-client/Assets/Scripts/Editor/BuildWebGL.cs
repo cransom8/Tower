@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using UnityEditor;
@@ -10,6 +11,7 @@ public static class BuildWebGL
     const string TempBuildFolderName = "WebGLBuild_Auto";
     const string OutputBaseName = "WebGLBuild";
     const string BootstrapScenePath = "Assets/Scenes/Bootstrap.unity";
+    const string ServerClientRelativePath = "server/client";
 
     [MenuItem("Castle Defender/Build/Build WebGL Release")]
     public static void BuildReleaseMenu() => BuildRelease();
@@ -17,7 +19,8 @@ public static class BuildWebGL
     public static void BuildRelease()
     {
         string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-        string outputDirectory = ResolveServerClientPath();
+        string repoRoot = Path.GetFullPath(Path.Combine(unityProjectRoot, ".."));
+        string outputDirectory = ResolveServerClientPath(repoRoot);
         string tempBuildDirectory = Path.Combine(unityProjectRoot, TempBuildFolderName);
 
         if (Directory.Exists(tempBuildDirectory))
@@ -81,22 +84,28 @@ public static class BuildWebGL
         }
     }
 
-    static string ResolveServerClientPath()
+    static string ResolveServerClientPath(string repoRoot)
     {
-        string[] candidates =
-        {
-            Path.GetFullPath(Path.Combine(Application.dataPath, "../../../server/client")),
-            Path.GetFullPath(Path.Combine(Application.dataPath, "../../server/client")),
-        };
+        string resolvedRepoRoot = Path.GetFullPath(repoRoot);
+        string outputDirectory = Path.GetFullPath(Path.Combine(resolvedRepoRoot, ServerClientRelativePath));
 
-        foreach (string candidate in candidates)
-        {
-            string parent = Path.GetDirectoryName(candidate);
-            if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
-                return candidate;
-        }
+        if (!IsSubPathOf(outputDirectory, resolvedRepoRoot))
+            throw new BuildFailedException($"Refusing to write WebGL build outside repo root. Repo: '{resolvedRepoRoot}', Output: '{outputDirectory}'.");
 
-        return candidates[0];
+        string parentDirectory = Path.GetDirectoryName(outputDirectory);
+        if (string.IsNullOrEmpty(parentDirectory) || !Directory.Exists(parentDirectory))
+            throw new BuildFailedException($"Expected server client parent directory not found at '{parentDirectory}'.");
+
+        return outputDirectory;
+    }
+
+    static bool IsSubPathOf(string candidatePath, string rootPath)
+    {
+        string normalizedCandidate = Path.GetFullPath(candidatePath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string normalizedRoot = Path.GetFullPath(rootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return normalizedCandidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     static void CopyDirectory(string sourceDir, string destinationDir)

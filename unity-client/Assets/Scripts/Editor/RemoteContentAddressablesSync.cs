@@ -598,7 +598,23 @@ namespace CastleDefender.Editor
                 serialized.FindProperty("m_LoadPath.m_Id")?.SetValueIfPresent(RemoteLoadPathProfileId);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(bundledSchema);
+                NormalizeSchemaName(group, _contentUpdateSchemaType, $"{groupName}_ContentUpdateGroupSchema");
                 EditorUtility.SetDirty(group as UnityEngine.Object);
+            }
+
+            void NormalizeSchemaName(object group, Type schemaType, string expectedName)
+            {
+                if (group == null || schemaType == null || _getSchemaMethod == null || string.IsNullOrWhiteSpace(expectedName))
+                    return;
+
+                var schema = _getSchemaMethod.Invoke(group, new object[] { schemaType }) as UnityEngine.Object;
+                if (schema == null)
+                    return;
+
+                var serialized = new SerializedObject(schema);
+                serialized.FindProperty("m_Name")?.SetValueIfPresent(expectedName);
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(schema);
             }
         }
 

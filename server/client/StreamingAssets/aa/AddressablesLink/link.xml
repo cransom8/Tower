@@ -1,11 +1,25 @@
 <linker>
   <assembly fullname="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="CannonSplash" preserve="all" />
+    <type fullname="CastleDefender.Game.BarracksSiteView" preserve="all" />
+    <type fullname="CastleDefender.Game.BuildingVisualCatalog" preserve="all" />
+    <type fullname="CastleDefender.Game.FortressPadAnchor" preserve="all" />
+    <type fullname="CastleDefender.Game.FortressSelectionController" preserve="all" />
     <type fullname="CastleDefender.Game.GameManager" preserve="all" />
+    <type fullname="CastleDefender.Game.GameplayPresentationRoot" preserve="all" />
     <type fullname="CastleDefender.Game.ProjectileSystem" preserve="all" />
+    <type fullname="CastleDefender.Game.SnapshotBuildingVisualBridge" preserve="all" />
+    <type fullname="CastleDefender.Game.TeamColorMaterialProfile" preserve="all" />
+    <type fullname="CastleDefender.Game.TieredBuildingVisual" preserve="all" />
+    <type fullname="CastleDefender.Game.TTRTSUnitProportionScaler" preserve="all" />
+    <type fullname="CastleDefender.Game.UnitAnimationBinding" preserve="all" />
+    <type fullname="CastleDefender.Game.UnitAnimationProfile" preserve="all" />
+    <type fullname="CastleDefender.Game.UnitCombatSfxBinding" preserve="all" />
     <type fullname="CastleDefender.Game.UnitPrefabRegistry" preserve="all" />
+    <type fullname="CastleDefender.Game.WaveSpawnAnchor" preserve="all" />
+    <type fullname="CastleDefender.UI.BarracksPanel" preserve="all" />
     <type fullname="CastleDefender.UI.CmdBar" preserve="all" />
-    <type fullname="CastleDefender.UI.FloatingSettingsPanel" preserve="all" />
+    <type fullname="CastleDefender.UI.DraggableHudPanel" preserve="all" />
     <type fullname="CastleDefender.UI.InfoBar" preserve="all" />
     <type fullname="CastleDefender.UI.LoadoutPhaseManager" preserve="all" />
     <type fullname="CastleDefender.UI.LobbyUI" preserve="all" />
@@ -13,15 +27,20 @@
     <type fullname="CastleDefender.UI.MobileMatchHud" preserve="all" />
     <type fullname="CastleDefender.UI.MyStatsHudWidget" preserve="all" />
     <type fullname="CastleDefender.UI.PostGameSceneController" preserve="all" />
-    <type fullname="CastleDefender.UI.WaveStatusHudWidget" preserve="all" />
     <type fullname="EnvironmentLoader" preserve="all" />
     <type fullname="FloatingText" preserve="all" />
     <type fullname="GoldPop" preserve="all" />
     <type fullname="HitEffect" preserve="all" />
+    <type fullname="OptionalEnvironmentLoader" preserve="all" />
     <type fullname="PostProcessController" preserve="all" />
     <type fullname="ScrollingUVs" preserve="all" />
-    <type fullname="WinterChristmasVillage.ChristmasLights" preserve="all" />
+    <type fullname="SingleEventSystem" preserve="all" />
+    <type fullname="CastleDefender.Game.TeamColorMaterialProfile/Target" preserve="nothing" serialized="true" />
+    <type fullname="CastleDefender.Game.UnitAnimationStateAliases" preserve="nothing" serialized="true" />
+    <type fullname="CastleDefender.Game.UnitAnimationTransitionSettings" preserve="nothing" serialized="true" />
+    <type fullname="CastleDefender.Game.BuildingVisualCatalog/ChainEntry" preserve="nothing" serialized="true" />
     <type fullname="CastleDefender.Game.UnitPrefabRegistry/Entry" preserve="nothing" serialized="true" />
+    <type fullname="CastleDefender.Game.UnitPrefabRegistry/SkinEntry" preserve="nothing" serialized="true" />
   </assembly>
   <assembly fullname="CastleDefender.Net, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="CastleDefender.Net.LoadingScreen" preserve="all" />
@@ -29,6 +48,15 @@
   </assembly>
   <assembly fullname="Unity.Addressables, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" preserve="all">
     <type fullname="UnityEngine.AddressableAssets.Addressables" preserve="all" />
+  </assembly>
+  <assembly fullname="Unity.ProBuilder, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
+    <type fullname="UnityEngine.ProBuilder.ProBuilderMesh" preserve="all" />
+    <type fullname="UnityEngine.ProBuilder.Shapes.ProBuilderShape" preserve="all" />
+    <type fullname="UnityEngine.ProBuilder.AutoUnwrapSettings" preserve="nothing" serialized="true" />
+    <type fullname="UnityEngine.ProBuilder.Face" preserve="nothing" serialized="true" />
+    <type fullname="UnityEngine.ProBuilder.Shapes.Cube" preserve="nothing" serialized="true" />
+    <type fullname="UnityEngine.ProBuilder.SharedVertex" preserve="nothing" serialized="true" />
+    <type fullname="UnityEngine.ProBuilder.UnwrapParameters" preserve="nothing" serialized="true" />
   </assembly>
   <assembly fullname="Unity.RenderPipelines.Core.Runtime, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="UnityEngine.Rendering.Volume" preserve="all" />
@@ -87,6 +115,7 @@
     <type fullname="UnityEngine.RenderSettings" preserve="all" />
     <type fullname="UnityEngine.Shader" preserve="all" />
     <type fullname="UnityEngine.SkinnedMeshRenderer" preserve="all" />
+    <type fullname="UnityEngine.Sprite" preserve="all" />
     <type fullname="UnityEngine.Texture2D" preserve="all" />
     <type fullname="UnityEngine.Transform" preserve="all" />
     <type fullname="UnityEngine.RenderingLayerMask" preserve="nothing" serialized="true" />
@@ -96,6 +125,10 @@
   <assembly fullname="UnityEngine.ParticleSystemModule, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="UnityEngine.ParticleSystem" preserve="all" />
     <type fullname="UnityEngine.ParticleSystemRenderer" preserve="all" />
+  </assembly>
+  <assembly fullname="UnityEngine.PhysicsModule, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
+    <type fullname="UnityEngine.BoxCollider" preserve="all" />
+    <type fullname="UnityEngine.MeshCollider" preserve="all" />
   </assembly>
   <assembly fullname="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="UnityEngine.Font" preserve="all" />
@@ -107,12 +140,13 @@
     <type fullname="UnityEngine.UI.CanvasScaler" preserve="all" />
     <type fullname="UnityEngine.UI.ContentSizeFitter" preserve="all" />
     <type fullname="UnityEngine.UI.GraphicRaycaster" preserve="all" />
-    <type fullname="UnityEngine.UI.GridLayoutGroup" preserve="all" />
     <type fullname="UnityEngine.UI.HorizontalLayoutGroup" preserve="all" />
     <type fullname="UnityEngine.UI.Image" preserve="all" />
     <type fullname="UnityEngine.UI.LayoutElement" preserve="all" />
+    <type fullname="UnityEngine.UI.Mask" preserve="all" />
     <type fullname="UnityEngine.UI.Outline" preserve="all" />
     <type fullname="UnityEngine.UI.RectMask2D" preserve="all" />
+    <type fullname="UnityEngine.UI.ScrollRect" preserve="all" />
     <type fullname="UnityEngine.UI.Shadow" preserve="all" />
     <type fullname="UnityEngine.UI.VerticalLayoutGroup" preserve="all" />
     <type fullname="UnityEngine.UI.AnimationTriggers" preserve="nothing" serialized="true" />
@@ -121,6 +155,7 @@
     <type fullname="UnityEngine.UI.MaskableGraphic/CullStateChangedEvent" preserve="nothing" serialized="true" />
     <type fullname="UnityEngine.UI.Navigation" preserve="nothing" serialized="true" />
     <type fullname="UnityEngine.UI.SpriteState" preserve="nothing" serialized="true" />
+    <type fullname="UnityEngine.UI.ScrollRect/ScrollRectEvent" preserve="nothing" serialized="true" />
   </assembly>
   <assembly fullname="UnityEngine.UIModule, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="UnityEngine.Canvas" preserve="all" />

@@ -240,17 +240,17 @@ MonoBehaviour:
     tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
   - key: tt_paladin
     prefab: {fileID: 190608, guid: 675bfa49ad0f04c47b900d8546860383, type: 3}
-    scale: 1
+    scale: 1.1
     tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
     tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
   - key: tt_commander
     prefab: {fileID: 134188, guid: a9733678a87478b4689672067b7718fb, type: 3}
-    scale: 1
+    scale: 1.1
     tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
     tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
   - key: tt_king
     prefab: {fileID: 169662, guid: 3c54df43aea316143beec51be2902cac, type: 3}
-    scale: 1
+    scale: 1.1
     tintMine: {r: 0.2, g: 0.8, b: 0.7, a: 1}
     tintEnemy: {r: 0.9, g: 0.25, b: 0.25, a: 1}
   - key: tt_mounted_scout
@@ -348,15 +348,15 @@ MonoBehaviour:
   - skinKey: tt_paladin
     unitType: tt_paladin
     prefab: {fileID: 190608, guid: 675bfa49ad0f04c47b900d8546860383, type: 3}
-    scale: 1
+    scale: 1.1
   - skinKey: tt_commander
     unitType: tt_commander
     prefab: {fileID: 134188, guid: a9733678a87478b4689672067b7718fb, type: 3}
-    scale: 1
+    scale: 1.1
   - skinKey: tt_king
     unitType: tt_king
     prefab: {fileID: 169662, guid: 3c54df43aea316143beec51be2902cac, type: 3}
-    scale: 1
+    scale: 1.1
   - skinKey: tt_mounted_scout
     unitType: tt_mounted_scout
     prefab: {fileID: 151392, guid: 3444512bc6a211a4fbc66458b13748ed, type: 3}

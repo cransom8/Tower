@@ -78,6 +78,14 @@ namespace CastleDefender.Editor
         public const string TT_BUILDING_TOWER_A = TT_BUILDINGS_ROOT + "/Tower_A.FBX";
         public const string TT_BUILDING_TOWER_B = TT_BUILDINGS_ROOT + "/Tower_B.FBX";
         public const string TT_BUILDING_TOWER_C = TT_BUILDINGS_ROOT + "/Tower_C.FBX";
+        public const string TT_CONSTRUCTION_HOUSE_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/House_0.FBX";
+        public const string TT_CONSTRUCTION_HOUSE_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/House_1.FBX";
+        public const string TT_CONSTRUCTION_TOWN_HALL_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/TownHall_0.FBX";
+        public const string TT_CONSTRUCTION_TOWN_HALL_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/TownHall_1.FBX";
+        public const string TT_CONSTRUCTION_KEEP_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Keep_0.FBX";
+        public const string TT_CONSTRUCTION_KEEP_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Keep_1.FBX";
+        public const string TT_CONSTRUCTION_CASTLE_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Castle_0.FBX";
+        public const string TT_CONSTRUCTION_CASTLE_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Castle_1.FBX";
         public const string TT_CONSTRUCTION_BARRACKS_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Barracks_0.FBX";
         public const string TT_CONSTRUCTION_BARRACKS_1 = TT_BUILDING_CONSTRUCTION_ROOT + "/Barracks_1.FBX";
         public const string TT_CONSTRUCTION_BLACKSMITH_0 = TT_BUILDING_CONSTRUCTION_ROOT + "/Blacksmith_0.FBX";

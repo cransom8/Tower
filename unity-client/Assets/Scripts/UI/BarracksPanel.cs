@@ -28,7 +28,21 @@ namespace CastleDefender.UI
         const float PanelBaseHeight = 860f;
         const float PanelViewportWidthRatio = 0.94f;
         const float PanelViewportHeightRatio = 0.95f;
+        const float MinimumPanelFontSize = 12f;
         const string MilitiaRosterKey = "militia";
+        static readonly Color ObsidianRootColor = new(0.04f, 0.04f, 0.05f, 0.99f);
+        static readonly Color ObsidianSurfaceColor = new(0.07f, 0.07f, 0.09f, 0.98f);
+        static readonly Color ObsidianElevatedColor = new(0.12f, 0.12f, 0.14f, 0.98f);
+        static readonly Color GunmetalColor = new(0.20f, 0.22f, 0.26f, 0.98f);
+        static readonly Color GunmetalSoftColor = new(0.15f, 0.16f, 0.19f, 0.96f);
+        static readonly Color SilverAccentColor = new(0.78f, 0.81f, 0.86f, 0.98f);
+        static readonly Color SilverTextColor = new(0.89f, 0.91f, 0.94f, 0.98f);
+        static readonly Color MutedSilverTextColor = new(0.74f, 0.77f, 0.82f, 0.96f);
+        static readonly Color GoldAccentColor = new(0.95f, 0.79f, 0.42f, 0.98f);
+        static readonly Color GoldSurfaceColor = new(0.33f, 0.24f, 0.10f, 0.98f);
+        static readonly Color GoldSurfaceBrightColor = new(0.44f, 0.33f, 0.14f, 0.98f);
+        static readonly Color GoldTextColor = new(0.98f, 0.92f, 0.76f, 1f);
+        static readonly Color DisabledSurfaceColor = new(0.22f, 0.22f, 0.24f, 0.88f);
         static readonly string[] TownCorePreferredBuildingOrder =
         {
             "blacksmith",
@@ -97,8 +111,18 @@ namespace CastleDefender.UI
             public Color TextColor;
         }
 
+        sealed class PanelRowStatData
+        {
+            public string Label;
+            public string Value;
+            public Color BackgroundColor;
+            public Color LabelColor;
+            public Color ValueColor;
+        }
+
         sealed class PanelRowActionData
         {
+            public string ObjectName;
             public string Label;
             public UnityEngine.Events.UnityAction Action;
             public bool Interactable;
@@ -107,6 +131,7 @@ namespace CastleDefender.UI
 
         sealed class PanelRowTemplateData
         {
+            public string ObjectName;
             public string Eyebrow;
             public string Title;
             public string StatusText;
@@ -117,6 +142,7 @@ namespace CastleDefender.UI
             public bool Highlighted;
             public float MinHeight;
             public readonly List<PanelRowPillData> Pills = new();
+            public readonly List<PanelRowStatData> Stats = new();
             public PanelRowActionData PrimaryAction;
             public PanelRowActionData SecondaryAction;
         }
@@ -222,6 +248,14 @@ namespace CastleDefender.UI
                 && IsBarracksFocused(barracksId);
         }
 
+        public bool IsShowingFocusedPad(string padId)
+        {
+            return PanelBarracks != null
+                && PanelBarracks.activeInHierarchy
+                && !string.IsNullOrWhiteSpace(padId)
+                && string.Equals(_focusedPadId, padId, System.StringComparison.OrdinalIgnoreCase);
+        }
+
         public Button GetFocusedBarracksHeaderActionButton()
         {
             return BtnConfirm != null && BtnConfirm.gameObject.activeInHierarchy
@@ -234,7 +268,10 @@ namespace CastleDefender.UI
             if (PanelBarracks == null || !PanelBarracks.activeInHierarchy || string.IsNullOrWhiteSpace(rosterKey))
                 return null;
 
-            string buttonName = BuildFocusedBarracksActionObjectName(quantity >= 10 ? "BuyTen" : "Buy", rosterKey);
+            string actionKey = quantity >= 10
+                ? "BuyTen"
+                : "Buy";
+            string buttonName = BuildFocusedBarracksActionObjectName(actionKey, rosterKey);
             return FindNamedButton(PanelBarracks.transform, buttonName);
         }
 
@@ -249,6 +286,30 @@ namespace CastleDefender.UI
                 return target as RectTransform;
 
             return FindNamedTransform(PanelBarracks.transform, cardName) as RectTransform;
+        }
+
+        public Button GetTownCoreBarracksPrimaryActionButton(string barracksId)
+        {
+            if (PanelBarracks == null || !PanelBarracks.activeInHierarchy || string.IsNullOrWhiteSpace(barracksId))
+                return null;
+
+            return FindNamedButton(PanelBarracks.transform, BuildTownCoreBarracksActionObjectName("Primary", barracksId));
+        }
+
+        public Button GetTownCorePadPrimaryActionButton(string padId)
+        {
+            if (PanelBarracks == null || !PanelBarracks.activeInHierarchy || string.IsNullOrWhiteSpace(padId))
+                return null;
+
+            return FindNamedButton(PanelBarracks.transform, BuildTownCorePadActionObjectName("Primary", padId));
+        }
+
+        public Button GetFocusedMarketBuyButton(string unitKey)
+        {
+            if (PanelBarracks == null || !PanelBarracks.activeInHierarchy || string.IsNullOrWhiteSpace(unitKey))
+                return null;
+
+            return FindNamedButton(PanelBarracks.transform, BuildFocusedMarketActionObjectName("Buy", unitKey));
         }
 
         public void ShowProgression()
@@ -340,11 +401,10 @@ namespace CastleDefender.UI
             var panelImage = PanelBarracks.GetComponent<Image>();
             if (panelImage == null)
                 panelImage = PanelBarracks.AddComponent<Image>();
-            ClassicRpgUiRuntime.ApplyPanel(
-                panelImage,
-                ClassicRpgPanelSkin.PortraitBackdrop,
-                true,
-                new Color(0.06f, 0.09f, 0.14f, 0.96f));
+            panelImage.sprite = null;
+            panelImage.type = Image.Type.Simple;
+            panelImage.preserveAspect = false;
+            panelImage.color = ObsidianRootColor;
             EnsureRuntimePanelSurface();
 
             TxtTitle = EnsureRuntimeLabel(
@@ -354,7 +414,7 @@ namespace CastleDefender.UI
                 new Vector2(0.54f, 0.978f),
                 24f,
                 FontStyles.Bold,
-                Color.white,
+                GoldTextColor,
                 TextAlignmentOptions.Left);
             TxtTitle.textWrappingMode = TextWrappingModes.NoWrap;
             TxtTitle.overflowMode = TextOverflowModes.Ellipsis;
@@ -366,7 +426,7 @@ namespace CastleDefender.UI
                 new Vector2(0.95f, 0.913f),
                 15f,
                 FontStyles.Normal,
-                new Color(0.86f, 0.90f, 0.95f, 0.98f),
+                SilverTextColor,
                 TextAlignmentOptions.Left);
             TxtBenefits.textWrappingMode = TextWrappingModes.NoWrap;
             TxtBenefits.overflowMode = TextOverflowModes.Ellipsis;
@@ -378,7 +438,7 @@ namespace CastleDefender.UI
                 new Vector2(0.95f, 0.863f),
                 14f,
                 FontStyles.Bold,
-                new Color(0.98f, 0.90f, 0.52f, 1f),
+                GoldTextColor,
                 TextAlignmentOptions.Left);
             TxtCost.textWrappingMode = TextWrappingModes.NoWrap;
             TxtCost.overflowMode = TextOverflowModes.Ellipsis;
@@ -390,7 +450,7 @@ namespace CastleDefender.UI
                 new Vector2(0.95f, 0.82f),
                 13f,
                 FontStyles.Normal,
-                new Color(0.82f, 0.88f, 0.95f, 0.95f),
+                MutedSilverTextColor,
                 TextAlignmentOptions.Left);
             TxtAffordance.textWrappingMode = TextWrappingModes.NoWrap;
             TxtAffordance.overflowMode = TextOverflowModes.Ellipsis;
@@ -412,7 +472,7 @@ namespace CastleDefender.UI
             {
                 var confirmImage = BtnConfirm.GetComponent<Image>();
                 if (confirmImage != null)
-                    confirmImage.color = new Color(0.20f, 0.29f, 0.18f, 0.98f);
+                    confirmImage.color = GoldSurfaceColor;
             }
 
             SetHeaderSummaryVisible(!_usingMinimalFocusedHeader);
@@ -434,11 +494,26 @@ namespace CastleDefender.UI
                     shadow,
                     ClassicRpgPanelSkin.Shadow,
                     false,
-                    new Color(1f, 1f, 1f, 0.28f));
+                    new Color(1f, 1f, 1f, 0.22f));
                 shadow.rectTransform.anchorMin = Vector2.zero;
                 shadow.rectTransform.anchorMax = Vector2.one;
                 shadow.rectTransform.offsetMin = new Vector2(-24f, -26f);
                 shadow.rectTransform.offsetMax = new Vector2(24f, 20f);
+            }
+
+            var surface = ClassicRpgUiRuntime.EnsureChildImage(PanelBarracks.transform, "RuntimePanelSurface");
+            if (surface != null)
+            {
+                surface.transform.SetSiblingIndex(shadow != null ? 1 : 0);
+                surface.raycastTarget = false;
+                surface.sprite = null;
+                surface.type = Image.Type.Simple;
+                surface.preserveAspect = false;
+                surface.color = ObsidianSurfaceColor;
+                surface.rectTransform.anchorMin = Vector2.zero;
+                surface.rectTransform.anchorMax = Vector2.one;
+                surface.rectTransform.offsetMin = new Vector2(18f, 18f);
+                surface.rectTransform.offsetMax = new Vector2(-18f, -18f);
             }
 
             var frame = ClassicRpgUiRuntime.EnsureChildImage(PanelBarracks.transform, "RuntimePanelFrame");
@@ -450,7 +525,7 @@ namespace CastleDefender.UI
                     frame,
                     ClassicRpgPanelSkin.Frame,
                     true,
-                    new Color(0.92f, 0.86f, 0.74f, 0.38f));
+                    new Color(0.86f, 0.86f, 0.88f, 0.42f));
                 frame.type = Image.Type.Sliced;
                 frame.fillCenter = false;
                 frame.rectTransform.anchorMin = Vector2.zero;
@@ -528,7 +603,7 @@ namespace CastleDefender.UI
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
             label.font = TMP_Settings.defaultFontAsset;
-            label.fontSize = fontSize;
+            label.fontSize = Mathf.Max(MinimumPanelFontSize, fontSize);
             label.fontStyle = fontStyle;
             label.color = color;
             label.alignment = alignment;
@@ -675,6 +750,7 @@ namespace CastleDefender.UI
                 case "build_on_pad":
                 case "upgrade_building":
                 case "purchase_building_upgrade":
+                case "repair_all_buildings":
                 case "upgrade_barracks":
                 case "build_barracks_site":
                 case "upgrade_barracks_site":
@@ -797,7 +873,7 @@ namespace CastleDefender.UI
         bool UseMinimalFocusedHeader(MLLaneSnap lane = null)
         {
             lane ??= SnapshotApplier.Instance?.MyLane;
-            return IsTownCoreCommandView(lane) || GetFocusedBarracksSite(lane) != null;
+            return GetFocusedPad(lane) != null || GetFocusedBarracksSite(lane) != null;
         }
 
         void OpenPanel()
@@ -844,7 +920,9 @@ namespace CastleDefender.UI
                 -(GetPanelSidePadding() + GetFrameContentSideGutter()),
                 -(GetContentTopInset() + GetFrameContentTopGutter()));
 
-            scrollImage.color = new Color(0.03f, 0.04f, 0.07f, 0.18f);
+            scrollImage.sprite = null;
+            scrollImage.type = Image.Type.Simple;
+            scrollImage.color = new Color(0.05f, 0.05f, 0.06f, 0.76f);
             scrollImage.raycastTarget = true;
 
             _scrollRect.horizontal = false;
@@ -932,12 +1010,9 @@ namespace CastleDefender.UI
             scrollbarRt.pivot = new Vector2(1f, 0.5f);
             scrollbarRt.anchoredPosition = new Vector2(-viewportInset, 0f);
             scrollbarRt.sizeDelta = new Vector2(scrollbarWidth, 0f);
-            scrollbarTrack.color = new Color(0.08f, 0.10f, 0.14f, 0.96f);
-            ClassicRpgUiRuntime.ApplyPanel(
-                scrollbarTrack,
-                ClassicRpgPanelSkin.PortraitBackdrop,
-                true,
-                scrollbarTrack.color);
+            scrollbarTrack.sprite = null;
+            scrollbarTrack.type = Image.Type.Simple;
+            scrollbarTrack.color = GunmetalSoftColor;
 
             var slidingAreaTransform = scrollbarGo.transform.Find("SlidingArea");
             GameObject slidingAreaGo;
@@ -975,7 +1050,7 @@ namespace CastleDefender.UI
             handleRt.anchorMax = Vector2.one;
             handleRt.offsetMin = Vector2.zero;
             handleRt.offsetMax = Vector2.zero;
-            handleImage.color = new Color(0.90f, 0.76f, 0.30f, 0.98f);
+            handleImage.color = GoldAccentColor;
             ClassicRpgUiRuntime.ApplyPanel(
                 handleImage,
                 ClassicRpgPanelSkin.Frame,
@@ -1103,7 +1178,7 @@ namespace CastleDefender.UI
             if (label == null)
                 return;
 
-            label.fontSize = fontSize;
+            label.fontSize = Mathf.Max(MinimumPanelFontSize, fontSize);
             label.alignment = TextAlignmentOptions.Left;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
@@ -1115,7 +1190,7 @@ namespace CastleDefender.UI
             if (label == null)
                 return;
 
-            label.fontSize = GetHeaderButtonFontSize();
+            label.fontSize = Mathf.Max(MinimumPanelFontSize, GetHeaderButtonFontSize());
             label.alignment = TextAlignmentOptions.Center;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
@@ -1237,7 +1312,7 @@ namespace CastleDefender.UI
         float GetContentTopInset()
         {
             if (_usingMinimalFocusedHeader)
-                return GetPanelTopPadding() + GetHeaderButtonHeight() + GetHeaderToContentGap() + GetFrameContentTopGutter();
+                return GetPanelTopPadding() + GetFrameContentTopGutter();
 
             float infoHeight = GetHeaderInfoRowHeight();
             return
@@ -1312,7 +1387,10 @@ namespace CastleDefender.UI
                         : new Color(1f, 0.88f, 0.55f, 0.98f);
                 }
 
-                SyncFocusedBarracksHeaderAction(lane, focusedBarracks);
+                if (_usingMinimalFocusedHeader)
+                    HideHeaderActionButton();
+                else
+                    SyncFocusedBarracksHeaderAction(lane, focusedBarracks);
                 return;
             }
 
@@ -1415,9 +1493,16 @@ namespace CastleDefender.UI
             }
             else if (focusedPad != null)
             {
-                CreateFocusedPadSection(lane);
                 if (string.Equals(focusedPad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    CreateFocusedPadSection(lane);
                     CreateFocusedMarketRosterSection(lane, focusedPad);
+                    CreateFocusedPadUpgradeSections(lane, focusedPad);
+                }
+                else
+                {
+                    CreateFocusedPadSection(lane);
+                }
             }
             else
             {
@@ -1629,7 +1714,7 @@ namespace CastleDefender.UI
 
         void CreateFocusedMarketRosterSection(MLLaneSnap lane, MLFortressPad pad)
         {
-            CreateSectionHeader("Market Income");
+            CreateSectionHeader("Market Contracts");
             if (lane == null || pad == null)
             {
                 CreateInfoCard("Market data is not available yet.");
@@ -1650,28 +1735,7 @@ namespace CastleDefender.UI
             }
 
             var nextEntry = GetNextMarketRosterEntry(lane, currentEntry);
-            var card = CreateCardContainer();
-            TintCard(card, pad.canUpgrade
-                ? new Color(0.18f, 0.26f, 0.15f, 0.98f)
-                : new Color(0.14f, 0.20f, 0.24f, 0.98f));
-            CreateCardTitle(card, $"{currentEntry.displayName}  Market Tier {Mathf.Max(1, currentEntry.tier)}");
-
-            CreateRosterPortrait(
-                card,
-                new[] { currentEntry.portraitKey, currentEntry.skinKey, currentEntry.catalogUnitKey, currentEntry.unitTypeKey, currentEntry.archetypeKey, currentEntry.unitKey },
-                $"{currentEntry.unitKey}:{currentEntry.archetypeKey}:{currentEntry.presentationKey}:{currentEntry.skinKey}:{currentEntry.unitTypeKey}",
-                IsCompactPanelLayout() ? (IsTightPanelLayout() ? 76f : 96f) : 128f);
-
-            CreateBodyText(card, BuildFocusedMarketEntryBody(currentEntry, nextEntry, pad));
-
-            var actions = CreateActionRow(card);
-            CreateActionButton(
-                actions,
-                BuildFocusedMarketBuyLabel(lane, pad, currentEntry),
-                () => ExecuteFocusedMarketBuy(currentEntry),
-                CanBuyMarketWorker(lane, pad, currentEntry));
-            if (pad.canUpgrade && nextEntry != null)
-                CreateActionButton(actions, $"Upgrade to {nextEntry.displayName}", null, false, minWidth: 170f, highlighted: true);
+            CreatePanelTemplateRow(_contentRoot, BuildFocusedMarketEntryRowData(lane, pad, currentEntry, nextEntry));
         }
 
         void CreateFocusedBarracksHeroSection(MLLaneSnap lane, MLBarracksSite site)
@@ -2251,76 +2315,15 @@ namespace CastleDefender.UI
                 return;
             }
 
-            CreateSectionHeader("Selected Building");
-            var card = CreateCardContainer();
-            TintCard(card, ResolvePadCardTint(pad));
-            CreateCardTitle(card, $"{pad.buildingName}  {HumanizeBuildState(pad.buildState)}");
-            if (!string.IsNullOrWhiteSpace(pad.upgradePanelDescription))
+            if (string.Equals(pad.buildingType, "market", System.StringComparison.OrdinalIgnoreCase))
             {
-                CreateInlineText(
-                    card,
-                    "PadRoleDescription",
-                    pad.upgradePanelDescription,
-                    IsCompactPanelLayout() ? 10.5f : 11.5f,
-                    new Color(0.95f, 0.90f, 0.78f, 0.98f),
-                    FontStyles.Bold,
-                    TextAlignmentOptions.Left);
-            }
-            CreateBodyText(card, BuildFocusedPadCardBody(lane, pad, lane.barracksRoster, lane.heroRoster));
-
-            bool hasGuidedUnlock = TryGetGuidedUnlockForPad(pad, out var guidedAction, out string guidedHelperText);
-            if (hasGuidedUnlock && !string.IsNullOrWhiteSpace(guidedHelperText))
-            {
-                CreateInlineText(
-                    card,
-                    "GuidedUnlockHint",
-                    guidedHelperText,
-                    IsCompactPanelLayout() ? 10f : 11f,
-                    new Color(0.98f, 0.92f, 0.70f, 0.98f),
-                    FontStyles.Bold,
-                    TextAlignmentOptions.Left);
+                CreateSectionHeader("Market");
+                CreatePanelTemplateRow(_contentRoot, BuildFocusedMarketSummaryRowData(lane, pad));
+                return;
             }
 
-            var actions = CreateActionRow(card);
-            if (string.Equals(pad.buildingType, "town_core", System.StringComparison.OrdinalIgnoreCase))
-            {
-                if (pad.canUpgrade)
-                {
-                    CreateActionButton(actions, $"Upgrade {pad.upgradeCost}g", () =>
-                    {
-                        _statusMessage = $"Upgrading {pad.buildingName}...";
-                        ActionSender.UpgradeBuilding(pad.padId, pad.buildingType);
-                        RefreshHeader(force: true);
-                    }, CanSpendGold(lane, pad.upgradeCost), highlighted: guidedAction == GuidedPadAction.Upgrade);
-                }
-                else
-                {
-                    string label = pad.isBuilt && pad.buildState == "max_tier" ? "Max Tier" : "Command Center";
-                    CreateActionButton(actions, label, null, false, minWidth: 144f);
-                }
-            }
-            else if (!pad.isBuilt || pad.canBuild || pad.canUpgrade)
-            {
-                CreateActionButton(actions, "Open Town Core", () => OpenTownCore(lane), true, minWidth: 144f, highlighted: guidedAction != GuidedPadAction.None);
-            }
-            else if (SupportsBarracksPurchaseFlow(lane, pad))
-            {
-                CreateActionButton(actions, "Open Barracks", null, false, minWidth: 144f);
-            }
-            else
-            {
-                string label = pad.isBuilt && pad.buildState == "max_tier" ? "Max Tier" : "View";
-                CreateActionButton(actions, label, null, false);
-            }
-
-            if (!string.IsNullOrWhiteSpace(pad.lockedReason))
-            {
-                CreateActionButton(actions, "Why", () =>
-                {
-                    _statusMessage = $"{pad.buildingName}: {pad.lockedReason}";
-                    RefreshHeader(force: true);
-                }, true, highlighted: guidedAction == GuidedPadAction.Explain);
-            }
+            CreateSectionHeader(string.IsNullOrWhiteSpace(pad.buildingName) ? "Building" : pad.buildingName);
+            CreatePanelTemplateRow(_contentRoot, BuildFocusedPadSummaryRowData(lane, pad));
 
             CreateFocusedPadUpgradeSections(lane, pad);
 
@@ -2371,6 +2374,7 @@ namespace CastleDefender.UI
             string tierName = ResolveBuildingTierName("town_core", Mathf.Max(1, townCorePad.tier), townCorePad.currentTierName);
             var row = new PanelRowTemplateData
             {
+                ObjectName = BuildTownCorePadRowObjectName(townCorePad.padId),
                 Eyebrow = "TOWN CORE",
                 Title = $"Town Core - {tierName}",
                 StatusText = ResolveTownCorePadStatusLabel(townCorePad),
@@ -2380,8 +2384,8 @@ namespace CastleDefender.UI
                     townCorePad.canUpgrade,
                     townCorePad.isBuilt),
                 Description = BuildTownCoreCommandSummary(lane, townCorePad, builtBarracks, totalBarracks, builtBuildings, totalBuildings),
-                BackgroundColor = new Color(0.10f, 0.16f, 0.22f, 0.98f),
-                AccentColor = new Color(0.95f, 0.76f, 0.34f, 0.96f),
+                BackgroundColor = new Color(0.10f, 0.10f, 0.12f, 0.98f),
+                AccentColor = GoldAccentColor,
                 Highlighted = false,
                 MinHeight = IsCompactPanelLayout() ? 148f : 168f,
             };
@@ -2392,10 +2396,10 @@ namespace CastleDefender.UI
 
             string nextUnlockPill = BuildTownCoreNextUnlockPill(townCorePad);
             if (!string.IsNullOrWhiteSpace(nextUnlockPill))
-                row.Pills.Add(CreatePanelRowPill(nextUnlockPill, new Color(0.25f, 0.24f, 0.12f, 0.98f), new Color(0.98f, 0.94f, 0.74f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(nextUnlockPill, GoldSurfaceColor, GoldTextColor));
 
-            row.Pills.Add(CreatePanelRowPill($"Barracks {builtBarracks}/{totalBarracks}", new Color(0.18f, 0.24f, 0.33f, 0.98f), new Color(0.88f, 0.93f, 0.98f, 0.98f)));
-            row.Pills.Add(CreatePanelRowPill($"Branches {builtBuildings}/{totalBuildings}", new Color(0.16f, 0.30f, 0.20f, 0.98f), new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+            row.Pills.Add(CreatePanelRowPill($"Barracks {builtBarracks}/{totalBarracks}", GunmetalColor, SilverTextColor));
+            row.Pills.Add(CreatePanelRowPill($"Branches {builtBuildings}/{totalBuildings}", GunmetalSoftColor, SilverTextColor));
 
             if (townCorePad.canUpgrade)
             {
@@ -2409,7 +2413,7 @@ namespace CastleDefender.UI
                     _statusMessage = $"Upgrading {townCorePad.buildingName}...";
                     ActionSender.UpgradeBuilding(townCorePad.padId, townCorePad.buildingType);
                     RefreshHeader(force: true);
-                }, canAfford, highlighted: true);
+                }, canAfford, highlighted: true, objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId));
             }
             else
             {
@@ -2418,7 +2422,7 @@ namespace CastleDefender.UI
                     : string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase)
                         ? "Upgrading"
                         : ResolveTownCorePadStatusLabel(townCorePad);
-                row.PrimaryAction = CreatePanelRowAction(disabledLabel, null, false);
+                row.PrimaryAction = CreatePanelRowAction(disabledLabel, null, false, objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId));
             }
 
             return row;
@@ -2432,13 +2436,14 @@ namespace CastleDefender.UI
             bool highlighted = string.Equals(_guidedUnlockBarracksId, NormalizeBarracksId(site.barracksId), System.StringComparison.OrdinalIgnoreCase);
             var row = new PanelRowTemplateData
             {
+                ObjectName = BuildTownCoreBarracksRowObjectName(site.barracksId),
                 Eyebrow = "BARRACKS",
                 Title = ResolveBarracksDisplayName(site),
                 StatusText = ResolveTownCoreBarracksStatusLabel(site),
                 StatusColor = ResolveTownCoreStatusPillColor(site.buildState, site.canBuild, site.canUpgrade, site.isBuilt),
                 Description = BuildTownCoreBarracksBody(lane, site),
                 BackgroundColor = highlighted
-                    ? new Color(0.24f, 0.19f, 0.10f, 0.98f)
+                    ? new Color(0.18f, 0.15f, 0.10f, 0.98f)
                     : ResolveBarracksOverviewCardTint(site),
                 AccentColor = ResolveTownCoreAccentColor("barracks"),
                 Highlighted = highlighted,
@@ -2447,33 +2452,54 @@ namespace CastleDefender.UI
 
             string tierPill = BuildTownCoreBarracksTierPill(site);
             if (!string.IsNullOrWhiteSpace(tierPill))
-                row.Pills.Add(CreatePanelRowPill(tierPill, new Color(0.20f, 0.25f, 0.31f, 0.98f), new Color(0.90f, 0.94f, 0.98f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(tierPill, GunmetalColor, SilverTextColor));
 
             string gatePill = BuildTownCoreBarracksGatePill(lane, site);
             if (!string.IsNullOrWhiteSpace(gatePill))
-                row.Pills.Add(CreatePanelRowPill(gatePill, new Color(0.28f, 0.20f, 0.10f, 0.98f), new Color(0.97f, 0.86f, 0.62f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(gatePill, GoldSurfaceColor, GoldTextColor));
 
             string costPill = BuildTownCoreBarracksCostPill(site);
             if (!string.IsNullOrWhiteSpace(costPill))
-                row.Pills.Add(CreatePanelRowPill(costPill, new Color(0.16f, 0.30f, 0.20f, 0.98f), new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(costPill, GoldSurfaceBrightColor, GoldTextColor));
 
-            if (!site.isBuilt && site.canBuild)
+            if (site.isConstructing)
+            {
+                row.PrimaryAction = CreatePanelRowAction(
+                    BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site)),
+                    null,
+                    false,
+                    objectName: BuildTownCoreBarracksActionObjectName("Primary", site.barracksId));
+            }
+            else if (!site.isBuilt && site.canBuild)
             {
                 bool canAfford = CanSpendGold(lane, site.buildCost);
                 int missingGold = lane != null ? Mathf.Max(0, site.buildCost - Mathf.FloorToInt(lane.gold)) : 0;
                 string label = canAfford
                     ? $"Purchase {Mathf.Max(0, site.buildCost)}g"
                     : $"Need {missingGold}g";
-                row.PrimaryAction = CreatePanelRowAction(label, () => ExecuteFocusedBarracksBuild(site), canAfford, highlighted: true);
+                row.PrimaryAction = CreatePanelRowAction(
+                    label,
+                    () => ExecuteFocusedBarracksBuild(site),
+                    canAfford,
+                    highlighted: true,
+                    objectName: BuildTownCoreBarracksActionObjectName("Primary", site.barracksId));
             }
             else if (site.isBuilt)
             {
-                row.PrimaryAction = CreatePanelRowAction("Open Barracks", () => OpenOverviewBarracks(lane, site), true);
+                row.PrimaryAction = CreatePanelRowAction(
+                    "Open Barracks",
+                    () => OpenOverviewBarracks(lane, site),
+                    true,
+                    objectName: BuildTownCoreBarracksActionObjectName("Primary", site.barracksId));
                 row.SecondaryAction = BuildTownCoreBarracksSecondaryAction(lane, site);
             }
             else
             {
-                row.PrimaryAction = CreatePanelRowAction("Locked", null, false);
+                row.PrimaryAction = CreatePanelRowAction(
+                    "Locked",
+                    null,
+                    false,
+                    objectName: BuildTownCoreBarracksActionObjectName("Primary", site.barracksId));
             }
 
             return row;
@@ -2495,19 +2521,22 @@ namespace CastleDefender.UI
                     label,
                     canAfford ? () => ExecuteFocusedBarracksUpgrade(site) : null,
                     canAfford,
-                    highlighted: true);
+                    highlighted: true,
+                    objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
             }
 
             if (string.Equals(site.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
-                return CreatePanelRowAction("Upgrading", null, false);
+                return CreatePanelRowAction("Upgrading", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
+            if (string.Equals(site.buildState, "under_repair", System.StringComparison.OrdinalIgnoreCase))
+                return CreatePanelRowAction("Under Repair", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
             if (string.Equals(site.buildState, "destroyed", System.StringComparison.OrdinalIgnoreCase))
-                return CreatePanelRowAction("Destroyed", null, false);
+                return CreatePanelRowAction("Destroyed", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
             if (site.level >= Mathf.Max(1, site.maxLevel))
-                return CreatePanelRowAction("Max Level", null, false);
+                return CreatePanelRowAction("Max Level", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
             if (!string.IsNullOrWhiteSpace(site.lockedReason))
-                return CreatePanelRowAction("Upgrade Locked", null, false);
+                return CreatePanelRowAction("Upgrade Locked", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
 
-            return CreatePanelRowAction("Upgrade", null, false);
+            return CreatePanelRowAction("Upgrade", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
         }
 
         PanelRowTemplateData BuildTownCorePadRowData(MLLaneSnap lane, MLFortressBuildingConfig config, MLFortressPad pad)
@@ -2529,6 +2558,7 @@ namespace CastleDefender.UI
                 && string.Equals(_guidedUnlockPadId, pad?.padId, System.StringComparison.OrdinalIgnoreCase);
             var row = new PanelRowTemplateData
             {
+                ObjectName = pad != null ? BuildTownCorePadRowObjectName(pad.padId) : null,
                 Eyebrow = "BUILDING BRANCH",
                 Title = displayName,
                 StatusText = ResolveTownCorePadStatusLabel(pad),
@@ -2539,7 +2569,7 @@ namespace CastleDefender.UI
                     pad != null && pad.isBuilt),
                 Description = BuildTownCorePadBody(lane, pad, config, lane.barracksRoster, lane.heroRoster),
                 BackgroundColor = highlighted
-                    ? new Color(0.24f, 0.19f, 0.10f, 0.98f)
+                    ? new Color(0.18f, 0.15f, 0.10f, 0.98f)
                     : ResolveTownCoreCardColor(pad),
                 AccentColor = ResolveTownCoreAccentColor(buildingType),
                 Highlighted = highlighted,
@@ -2548,15 +2578,15 @@ namespace CastleDefender.UI
 
             string tierPill = BuildTownCorePadTierPill(pad, config);
             if (!string.IsNullOrWhiteSpace(tierPill))
-                row.Pills.Add(CreatePanelRowPill(tierPill, new Color(0.20f, 0.25f, 0.31f, 0.98f), new Color(0.90f, 0.94f, 0.98f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(tierPill, GunmetalColor, SilverTextColor));
 
             string gatePill = BuildTownCorePadGatePill(lane, pad, config);
             if (!string.IsNullOrWhiteSpace(gatePill))
-                row.Pills.Add(CreatePanelRowPill(gatePill, new Color(0.28f, 0.20f, 0.10f, 0.98f), new Color(0.97f, 0.86f, 0.62f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(gatePill, GoldSurfaceColor, GoldTextColor));
 
             string costPill = BuildTownCorePadCostPill(pad, config);
             if (!string.IsNullOrWhiteSpace(costPill))
-                row.Pills.Add(CreatePanelRowPill(costPill, new Color(0.16f, 0.30f, 0.20f, 0.98f), new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+                row.Pills.Add(CreatePanelRowPill(costPill, GoldSurfaceBrightColor, GoldTextColor));
 
             if (pad != null && !pad.isBuilt && pad.canBuild)
             {
@@ -2570,16 +2600,16 @@ namespace CastleDefender.UI
                     _statusMessage = $"Building {pad.buildingName}...";
                     ActionSender.BuildOnPad(pad.padId);
                     RefreshHeader(force: true);
-                }, canAfford, highlighted: true);
+                }, canAfford, highlighted: true, objectName: BuildTownCorePadActionObjectName("Primary", pad.padId));
             }
             else if (pad != null && pad.isBuilt)
             {
-                row.PrimaryAction = CreatePanelRowAction("Open Branch", () => OpenOverviewPad(lane, pad), true);
+                row.PrimaryAction = CreatePanelRowAction("Open Branch", () => OpenOverviewPad(lane, pad), true, objectName: BuildTownCorePadActionObjectName("Primary", pad.padId));
                 row.SecondaryAction = BuildTownCorePadSecondaryAction(lane, pad);
             }
             else
             {
-                row.PrimaryAction = CreatePanelRowAction("Locked", null, false);
+                row.PrimaryAction = CreatePanelRowAction("Locked", null, false, objectName: pad != null ? BuildTownCorePadActionObjectName("Primary", pad.padId) : null);
             }
 
             return row;
@@ -2608,19 +2638,22 @@ namespace CastleDefender.UI
                         }
                         : null,
                     canAfford,
-                    highlighted: true);
+                    highlighted: true,
+                    objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
             }
 
             if (string.Equals(pad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
-                return CreatePanelRowAction("Upgrading", null, false);
+                return CreatePanelRowAction("Upgrading", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
+            if (string.Equals(pad.buildState, "under_repair", System.StringComparison.OrdinalIgnoreCase))
+                return CreatePanelRowAction("Under Repair", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
             if (string.Equals(pad.buildState, "destroyed", System.StringComparison.OrdinalIgnoreCase))
-                return CreatePanelRowAction("Destroyed", null, false);
+                return CreatePanelRowAction("Destroyed", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
             if (pad.tier >= Mathf.Max(1, pad.maxTier))
-                return CreatePanelRowAction("Max Tier", null, false);
+                return CreatePanelRowAction("Max Tier", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
             if (!string.IsNullOrWhiteSpace(pad.lockedReason))
-                return CreatePanelRowAction("Upgrade Locked", null, false);
+                return CreatePanelRowAction("Upgrade Locked", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
 
-            return CreatePanelRowAction("Upgrade", null, false);
+            return CreatePanelRowAction("Upgrade", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
         }
 
         void CreateFocusedPadUpgradeSections(MLLaneSnap lane, MLFortressPad pad)
@@ -2690,10 +2723,10 @@ namespace CastleDefender.UI
                         ? "Need Gold"
                         : "Locked";
             Color statusColor = isPurchasedOneTime
-                ? new Color(0.24f, 0.48f, 0.24f, 0.98f)
+                ? SilverAccentColor
                 : upgrade.canPurchase
-                    ? new Color(0.44f, 0.31f, 0.11f, 0.98f)
-                    : new Color(0.23f, 0.28f, 0.34f, 0.98f);
+                    ? GoldSurfaceColor
+                    : GunmetalColor;
             var row = new PanelRowTemplateData
             {
                 Eyebrow = upgrade.isRepeatable ? "REPEATABLE" : "ONE-TIME",
@@ -2702,8 +2735,8 @@ namespace CastleDefender.UI
                 StatusColor = statusColor,
                 Description = BuildFocusedPadUpgradeDescription(upgrade),
                 BackgroundColor = upgrade.isRepeatable
-                    ? new Color(0.15f, 0.20f, 0.24f, 0.98f)
-                    : new Color(0.19f, 0.16f, 0.12f, 0.98f),
+                    ? ObsidianSurfaceColor
+                    : ObsidianElevatedColor,
                 AccentColor = ResolveTownCoreAccentColor(pad.buildingType),
                 MinHeight = IsCompactPanelLayout() ? 142f : 156f,
             };
@@ -2712,16 +2745,16 @@ namespace CastleDefender.UI
             {
                 row.Pills.Add(CreatePanelRowPill(
                     upgrade.affectedLabel,
-                    new Color(0.20f, 0.25f, 0.31f, 0.98f),
-                    new Color(0.90f, 0.94f, 0.98f, 0.98f)));
+                    GunmetalColor,
+                    SilverTextColor));
             }
 
             if (!string.IsNullOrWhiteSpace(upgrade.currentBonusText))
             {
                 row.Pills.Add(CreatePanelRowPill(
                     $"Current {upgrade.currentBonusText}",
-                    new Color(0.18f, 0.30f, 0.20f, 0.98f),
-                    new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+                    GoldSurfaceBrightColor,
+                    GoldTextColor));
             }
 
             if (upgrade.cost > 0)
@@ -2789,6 +2822,375 @@ namespace CastleDefender.UI
             return builder.ToString();
         }
 
+        PanelRowTemplateData BuildFocusedPadSummaryRowData(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (lane == null || pad == null)
+                return null;
+
+            bool hasGuidedUnlock = TryGetGuidedUnlockForPad(pad, out var guidedAction, out string guidedHelperText);
+            var row = new PanelRowTemplateData
+            {
+                ObjectName = BuildFocusedPadRowObjectName(pad.padId),
+                Eyebrow = "BUILDING BRANCH",
+                Title = string.IsNullOrWhiteSpace(pad.displayName) ? pad.buildingName : pad.displayName,
+                StatusText = ResolveTownCorePadStatusLabel(pad),
+                StatusColor = ResolveTownCoreStatusPillColor(pad.buildState, pad.canBuild, pad.canUpgrade, pad.isBuilt),
+                Description = BuildFocusedPadSummaryDescription(lane, pad, guidedHelperText),
+                BackgroundColor = ResolvePadCardTint(pad),
+                AccentColor = ResolveTownCoreAccentColor(pad.buildingType),
+                Highlighted = hasGuidedUnlock,
+                MinHeight = IsCompactPanelLayout() ? 150f : 168f,
+            };
+
+            string tierPill = BuildTownCorePadTierPill(pad, null);
+            if (!string.IsNullOrWhiteSpace(tierPill))
+                row.Pills.Add(CreatePanelRowPill(tierPill, GunmetalColor, SilverTextColor));
+
+            string healthPill = BuildFocusedPadHealthPill(pad);
+            if (!string.IsNullOrWhiteSpace(healthPill))
+                row.Pills.Add(CreatePanelRowPill(healthPill, GunmetalSoftColor, SilverTextColor));
+
+            string costPill = BuildTownCorePadCostPill(pad, null);
+            if (!string.IsNullOrWhiteSpace(costPill))
+                row.Pills.Add(CreatePanelRowPill(costPill, GoldSurfaceBrightColor, GoldTextColor));
+
+            string unlockPill = BuildFocusedPadUnlockPill(lane, pad);
+            if (!string.IsNullOrWhiteSpace(unlockPill))
+                row.Pills.Add(CreatePanelRowPill(unlockPill, GoldSurfaceColor, GoldTextColor));
+
+            row.PrimaryAction = BuildFocusedPadPrimaryAction(lane, pad, guidedAction);
+            row.SecondaryAction = BuildFocusedPadSecondaryAction(lane, pad, guidedAction);
+            return row;
+        }
+
+        string BuildFocusedPadSummaryDescription(MLLaneSnap lane, MLFortressPad pad, string guidedHelperText)
+        {
+            if (pad == null)
+                return "No building pad selected.";
+
+            var lines = new List<string>();
+            if (!string.IsNullOrWhiteSpace(pad.upgradePanelDescription))
+                lines.Add(pad.upgradePanelDescription);
+
+            string body = BuildFocusedPadCardBody(lane, pad, lane?.barracksRoster, lane?.heroRoster);
+            if (!string.IsNullOrWhiteSpace(body))
+                lines.Add(body);
+
+            if (!string.IsNullOrWhiteSpace(guidedHelperText))
+                lines.Add(guidedHelperText);
+
+            return string.Join("\n", lines);
+        }
+
+        string BuildFocusedPadHealthPill(MLFortressPad pad)
+        {
+            if (pad == null || pad.maxHp <= 0f || !pad.isBuilt)
+                return null;
+
+            return $"Health {Mathf.RoundToInt(Mathf.Max(0f, pad.hp))}/{Mathf.RoundToInt(Mathf.Max(0f, pad.maxHp))}";
+        }
+
+        string BuildFocusedPadUnlockPill(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (pad == null)
+                return null;
+
+            if (SupportsBarracksPurchaseFlow(lane, pad) && pad.isBuilt)
+                return "Use Units At Barracks";
+
+            if (pad.canUpgrade)
+            {
+                string nextTierName = ResolveBuildingTierName(
+                    pad.buildingType,
+                    pad.nextTier > 0 ? pad.nextTier : Mathf.Max(1, pad.tier + 1),
+                    pad.nextTierName);
+                return string.IsNullOrWhiteSpace(nextTierName) ? "Upgrade Ready" : $"Next {nextTierName}";
+            }
+
+            return null;
+        }
+
+        PanelRowActionData BuildFocusedPadPrimaryAction(MLLaneSnap lane, MLFortressPad pad, GuidedPadAction guidedAction)
+        {
+            if (pad == null)
+                return null;
+
+            if (!pad.isBuilt || pad.canBuild || pad.canUpgrade)
+            {
+                return CreatePanelRowAction(
+                    "Open Town Core",
+                    lane != null ? () => OpenTownCore(lane) : null,
+                    lane != null,
+                    highlighted: guidedAction != GuidedPadAction.None,
+                    objectName: BuildFocusedPadActionObjectName("Primary", pad.padId));
+            }
+
+            if (SupportsBarracksPurchaseFlow(lane, pad))
+            {
+                return CreatePanelRowAction(
+                    "Open Barracks",
+                    null,
+                    false,
+                    objectName: BuildFocusedPadActionObjectName("Primary", pad.padId));
+            }
+
+            string label = pad.isBuilt && string.Equals(pad.buildState, "max_tier", System.StringComparison.OrdinalIgnoreCase)
+                ? "Max Tier"
+                : "View";
+            return CreatePanelRowAction(
+                label,
+                null,
+                false,
+                objectName: BuildFocusedPadActionObjectName("Primary", pad.padId));
+        }
+
+        PanelRowActionData BuildFocusedPadSecondaryAction(MLLaneSnap lane, MLFortressPad pad, GuidedPadAction guidedAction)
+        {
+            if (pad == null)
+                return null;
+
+            if (TryBuildLumberMillRepairAction(lane, pad, out string repairLabel, out bool repairEnabled, out _))
+            {
+                return CreatePanelRowAction(
+                    repairLabel,
+                    repairEnabled ? () => ExecuteLumberMillRepairAll(lane, pad) : null,
+                    repairEnabled,
+                    highlighted: repairEnabled,
+                    objectName: BuildFocusedPadActionObjectName("Repair", pad.padId));
+            }
+
+            if (!string.IsNullOrWhiteSpace(pad.lockedReason))
+            {
+                return CreatePanelRowAction(
+                    "Why",
+                    () =>
+                    {
+                        _statusMessage = $"{pad.buildingName}: {pad.lockedReason}";
+                        RefreshHeader(force: true);
+                    },
+                    true,
+                    highlighted: guidedAction == GuidedPadAction.Explain,
+                    objectName: BuildFocusedPadActionObjectName("Why", pad.padId));
+            }
+
+            return null;
+        }
+
+        PanelRowTemplateData BuildFocusedMarketSummaryRowData(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (pad == null)
+                return null;
+
+            var currentEntry = GetCurrentMarketRosterEntry(lane);
+            var nextEntry = GetNextMarketRosterEntry(lane, currentEntry);
+            var row = new PanelRowTemplateData
+            {
+                Eyebrow = "MARKET",
+                Title = pad.buildingName,
+                StatusText = ResolveTownCorePadStatusLabel(pad),
+                StatusColor = ResolveTownCoreStatusPillColor(pad.buildState, pad.canBuild, pad.canUpgrade, pad.isBuilt),
+                Description = BuildFocusedPadCardBody(
+                    lane,
+                    pad,
+                    lane != null ? lane.barracksRoster : null,
+                    lane != null ? lane.heroRoster : null),
+                BackgroundColor = ResolvePadCardTint(pad),
+                AccentColor = ResolveTownCoreAccentColor("market"),
+                MinHeight = IsCompactPanelLayout() ? 150f : 168f,
+            };
+
+            string tierPill = BuildTownCorePadTierPill(pad, null);
+            if (!string.IsNullOrWhiteSpace(tierPill))
+                row.Pills.Add(CreatePanelRowPill(tierPill, GunmetalColor, SilverTextColor));
+
+            string marketFood = BuildMarketFoodLabel(lane, pad);
+            if (!string.IsNullOrWhiteSpace(marketFood))
+                row.Pills.Add(CreatePanelRowPill(marketFood, GunmetalSoftColor, SilverTextColor));
+
+            if (currentEntry != null)
+            {
+                row.Pills.Add(CreatePanelRowPill(currentEntry.displayName, GoldSurfaceColor, GoldTextColor));
+                row.Pills.Add(CreatePanelRowPill($"+{Mathf.Max(0, currentEntry.economyLapGold)}g each", GoldSurfaceBrightColor, GoldTextColor));
+            }
+            else if (!pad.isBuilt && pad.buildCost > 0)
+            {
+                row.Pills.Add(CreatePanelRowPill($"{Mathf.Max(0, pad.buildCost)}g", GoldSurfaceBrightColor, GoldTextColor));
+            }
+
+            if (nextEntry != null
+                && (currentEntry == null
+                    || !string.Equals(nextEntry.unitKey, currentEntry.unitKey, System.StringComparison.OrdinalIgnoreCase)))
+            {
+                row.Pills.Add(CreatePanelRowPill($"Next {nextEntry.displayName}", GunmetalColor, SilverTextColor));
+            }
+
+            if (!pad.isBuilt || pad.canBuild || pad.canUpgrade)
+            {
+                row.PrimaryAction = CreatePanelRowAction(
+                    "Open Town Core",
+                    lane != null ? () => OpenTownCore(lane) : null,
+                    lane != null,
+                    highlighted: true,
+                    objectName: BuildFocusedMarketActionObjectName("TownCore", nextEntry != null ? nextEntry.unitKey : currentEntry?.unitKey));
+            }
+            else if (currentEntry != null)
+            {
+                bool canBuy = CanBuyMarketWorker(lane, pad, currentEntry);
+                row.PrimaryAction = CreatePanelRowAction(
+                    BuildFocusedMarketBuyLabel(lane, pad, currentEntry),
+                    canBuy ? () => ExecuteFocusedMarketBuy(currentEntry) : null,
+                    canBuy,
+                    highlighted: true,
+                    objectName: BuildFocusedMarketActionObjectName("Buy", currentEntry.unitKey));
+            }
+            else
+            {
+                row.PrimaryAction = CreatePanelRowAction(
+                    "No Contracts",
+                    null,
+                    false,
+                    objectName: BuildFocusedMarketActionObjectName("Buy"));
+            }
+
+            row.SecondaryAction = BuildFocusedMarketSummarySecondaryAction(lane, pad, currentEntry, nextEntry);
+            return row;
+        }
+
+        PanelRowActionData BuildFocusedMarketSummarySecondaryAction(MLLaneSnap lane, MLFortressPad pad, MLMarketRosterEntry currentEntry, MLMarketRosterEntry nextEntry)
+        {
+            if (pad == null)
+                return null;
+
+            if (pad.canUpgrade)
+            {
+                return CreatePanelRowAction(
+                    nextEntry != null ? $"Upgrade {nextEntry.displayName}" : "Open Town Core",
+                    lane != null ? () => OpenTownCore(lane) : null,
+                    lane != null,
+                    highlighted: true,
+                    objectName: BuildFocusedMarketActionObjectName("Upgrade", nextEntry != null ? nextEntry.unitKey : currentEntry?.unitKey));
+            }
+
+            if (nextEntry != null
+                && (currentEntry == null
+                    || !string.Equals(nextEntry.unitKey, currentEntry.unitKey, System.StringComparison.OrdinalIgnoreCase)))
+            {
+                return CreatePanelRowAction(
+                    $"Next {nextEntry.displayName}",
+                    null,
+                    false,
+                    objectName: BuildFocusedMarketActionObjectName("Next", nextEntry.unitKey));
+            }
+
+            if (!string.IsNullOrWhiteSpace(pad.lockedReason))
+            {
+                return CreatePanelRowAction(
+                    "Why",
+                    () =>
+                    {
+                        _statusMessage = $"{pad.buildingName}: {pad.lockedReason}";
+                        RefreshHeader(force: true);
+                    },
+                    true,
+                    objectName: BuildFocusedMarketActionObjectName("Why", currentEntry?.unitKey));
+            }
+
+            return null;
+        }
+
+        PanelRowTemplateData BuildFocusedMarketEntryRowData(MLLaneSnap lane, MLFortressPad pad, MLMarketRosterEntry entry, MLMarketRosterEntry nextEntry)
+        {
+            if (entry == null)
+                return null;
+
+            string blockedReason = GetMarketBuyBlockedReason(lane, pad, entry);
+            bool canBuy = CanBuyMarketWorker(lane, pad, entry);
+            string statusText;
+            Color statusColor;
+            if (pad == null || !pad.isBuilt)
+            {
+                statusText = "Open Town Core";
+                statusColor = GunmetalColor;
+            }
+            else if (pad.canUpgrade && nextEntry != null)
+            {
+                statusText = "Upgrade Ready";
+                statusColor = GoldSurfaceColor;
+            }
+            else if (string.IsNullOrWhiteSpace(blockedReason))
+            {
+                statusText = "Ready";
+                statusColor = GoldSurfaceBrightColor;
+            }
+            else if (blockedReason.IndexOf("Need", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                statusText = blockedReason.EndsWith("g", System.StringComparison.OrdinalIgnoreCase) ? "Need Gold" : blockedReason;
+                statusColor = GoldSurfaceColor;
+            }
+            else if (blockedReason.IndexOf("Cap", System.StringComparison.OrdinalIgnoreCase) >= 0
+                || blockedReason.IndexOf("Slot", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                statusText = blockedReason;
+                statusColor = GunmetalColor;
+            }
+            else
+            {
+                statusText = blockedReason;
+                statusColor = GunmetalSoftColor;
+            }
+
+            var row = new PanelRowTemplateData
+            {
+                Eyebrow = "MARKET CONTRACT",
+                Title = $"{entry.displayName} Tier {Mathf.Max(1, entry.tier)}",
+                StatusText = statusText,
+                StatusColor = statusColor,
+                Description = BuildFocusedMarketEntryBody(entry, nextEntry, pad),
+                BackgroundColor = pad != null && pad.canUpgrade
+                    ? new Color(0.16f, 0.14f, 0.10f, 0.98f)
+                    : new Color(0.11f, 0.12f, 0.15f, 0.98f),
+                AccentColor = ResolveTownCoreAccentColor("market"),
+                MinHeight = IsCompactPanelLayout() ? 142f : 156f,
+            };
+
+            row.Pills.Add(CreatePanelRowPill($"Owned x{Mathf.Max(0, entry.ownedCount)}", GunmetalColor, SilverTextColor));
+            row.Pills.Add(CreatePanelRowPill($"Cost {Mathf.Max(0, entry.buyCost)}g", GoldSurfaceBrightColor, GoldTextColor));
+
+            string marketFood = BuildMarketFoodLabel(lane, pad);
+            if (!string.IsNullOrWhiteSpace(marketFood))
+                row.Pills.Add(CreatePanelRowPill(marketFood, GunmetalSoftColor, SilverTextColor));
+
+            row.Pills.Add(CreatePanelRowPill($"+{Mathf.Max(0, entry.economyLapGold)}g each", GoldSurfaceColor, GoldTextColor));
+
+            row.PrimaryAction = CreatePanelRowAction(
+                BuildFocusedMarketBuyLabel(lane, pad, entry),
+                canBuy ? () => ExecuteFocusedMarketBuy(entry) : null,
+                canBuy,
+                highlighted: true,
+                objectName: BuildFocusedMarketActionObjectName("Buy", entry.unitKey));
+
+            if (pad != null && pad.canUpgrade)
+            {
+                row.SecondaryAction = CreatePanelRowAction(
+                    nextEntry != null ? $"Upgrade {nextEntry.displayName}" : "Open Town Core",
+                    lane != null ? () => OpenTownCore(lane) : null,
+                    lane != null,
+                    highlighted: true,
+                    objectName: BuildFocusedMarketActionObjectName("Upgrade", nextEntry != null ? nextEntry.unitKey : entry.unitKey));
+            }
+            else if (nextEntry != null
+                && !string.Equals(nextEntry.unitKey, entry.unitKey, System.StringComparison.OrdinalIgnoreCase))
+            {
+                row.SecondaryAction = CreatePanelRowAction(
+                    $"Next {nextEntry.displayName}",
+                    null,
+                    false,
+                    objectName: BuildFocusedMarketActionObjectName("Next", nextEntry.unitKey));
+            }
+
+            return row;
+        }
+
         PanelRowTemplateData BuildFocusedBarracksSummaryRowData(MLLaneSnap lane, MLBarracksSite site)
         {
             if (site == null)
@@ -2802,8 +3204,8 @@ namespace CastleDefender.UI
                 StatusColor = ResolveTownCoreStatusPillColor(site.buildState, site.canBuild, site.canUpgrade, site.isBuilt),
                 Description = BuildFocusedBarracksOverview(lane, site),
                 BackgroundColor = site.isBuilt
-                    ? new Color(0.14f, 0.21f, 0.18f, 0.98f)
-                    : new Color(0.16f, 0.17f, 0.22f, 0.98f),
+                    ? new Color(0.14f, 0.12f, 0.10f, 0.98f)
+                    : ObsidianElevatedColor,
                 AccentColor = ResolveTownCoreAccentColor("barracks"),
                 MinHeight = IsCompactPanelLayout() ? 144f : 158f,
             };
@@ -2819,31 +3221,31 @@ namespace CastleDefender.UI
             {
                 row.Pills.Add(CreatePanelRowPill(
                     BuildFocusedBarracksCostText(site),
-                    new Color(0.18f, 0.24f, 0.33f, 0.98f),
-                    new Color(0.88f, 0.93f, 0.98f, 0.98f)));
+                    GunmetalColor,
+                    SilverTextColor));
                 row.Pills.Add(CreatePanelRowPill(
                     BuildFocusedBarracksRequirementText(site),
-                    new Color(0.28f, 0.20f, 0.10f, 0.98f),
-                    new Color(0.97f, 0.86f, 0.62f, 0.98f)));
+                    GoldSurfaceColor,
+                    GoldTextColor));
             }
             else
             {
                 row.Pills.Add(CreatePanelRowPill(
                     $"Level {Mathf.Max(1, site.level)}/{Mathf.Max(1, site.maxLevel)}",
-                    new Color(0.18f, 0.24f, 0.33f, 0.98f),
-                    new Color(0.88f, 0.93f, 0.98f, 0.98f)));
+                    GunmetalColor,
+                    SilverTextColor));
                 row.Pills.Add(CreatePanelRowPill(
                     $"Owned {CountOwnedUnits(site.roster)}",
-                    new Color(0.16f, 0.30f, 0.20f, 0.98f),
-                    new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+                    GoldSurfaceBrightColor,
+                    GoldTextColor));
                 row.Pills.Add(CreatePanelRowPill(
                     BuildBarracksFoodLabel(site),
-                    new Color(0.25f, 0.22f, 0.12f, 0.98f),
-                    new Color(0.99f, 0.92f, 0.72f, 0.98f)));
+                    GoldSurfaceColor,
+                    GoldTextColor));
                 row.Pills.Add(CreatePanelRowPill(
                     $"Active {CountActiveUnitsForBarracks(lane, site)}",
-                    new Color(0.20f, 0.22f, 0.30f, 0.98f),
-                    new Color(0.92f, 0.94f, 1f, 0.98f)));
+                    GunmetalSoftColor,
+                    SilverTextColor));
 
                 int sendIntervalSeconds = GetFocusedBarracksSpawnIntervalSeconds(site);
                 if (sendIntervalSeconds >= 0)
@@ -2868,11 +3270,14 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return null;
 
+            bool isMilitia = string.Equals(entry.rosterKey, MilitiaRosterKey, System.StringComparison.OrdinalIgnoreCase);
             bool highlighted = !string.IsNullOrWhiteSpace(_guidedUnlockUnitKey)
                 && string.Equals(_guidedUnlockUnitKey, entry.rosterKey, System.StringComparison.OrdinalIgnoreCase);
+            bool hasStats = TryBuildFocusedBarracksUnitStatTiles(entry, out var statTiles);
+            bool needsGuidance = !site.isBuilt || !entry.unlocked;
             var row = new PanelRowTemplateData
             {
-                Eyebrow = "UNIT",
+                Eyebrow = BuildFocusedBarracksUnitEyebrow(entry),
                 Title = entry.displayName,
                 StatusText = ResolveFocusedBarracksUnitRowStatusLabel(lane, site, entry),
                 StatusColor = ResolveFocusedBarracksUnitRowStatusColor(lane, site, entry),
@@ -2882,45 +3287,23 @@ namespace CastleDefender.UI
                     : ResolveFocusedBarracksCardTint(entry),
                 AccentColor = ResolveTownCoreAccentColor(!string.IsNullOrWhiteSpace(entry.productionBuildingType) ? entry.productionBuildingType : entry.unlockBuildingType),
                 Highlighted = highlighted,
-                MinHeight = IsCompactPanelLayout() ? 146f : 158f,
+                MinHeight = hasStats
+                    ? IsCompactPanelLayout()
+                        ? (needsGuidance ? 194f : 176f)
+                        : (needsGuidance ? 210f : 188f)
+                    : (IsCompactPanelLayout() ? 146f : 158f),
             };
 
-            string meta = BuildFocusedBarracksEntryMeta(entry);
-            if (!string.IsNullOrWhiteSpace(meta))
-            {
-                row.Pills.Add(CreatePanelRowPill(
-                    meta,
-                    new Color(0.20f, 0.25f, 0.31f, 0.98f),
-                    new Color(0.90f, 0.94f, 0.98f, 0.98f)));
-            }
+            row.Pills.Add(CreateFocusedBarracksSummaryPill($"Cost {Mathf.Max(0, entry.buyCost)}g"));
+            row.Pills.Add(CreateFocusedBarracksSummaryPill($"Food {ResolveBarracksEntryFoodCost(entry)}"));
+            row.Pills.Add(CreateFocusedBarracksSummaryPill($"Owned x{Mathf.Max(0, entry.ownedCount)}"));
+            row.Pills.Add(CreateFocusedBarracksSummaryPill(
+                site.isBuilt
+                    ? $"Active x{CountActiveUnitsForRosterEntry(lane, site, entry)}"
+                    : "Preview"));
 
-            row.Pills.Add(CreatePanelRowPill(
-                $"Cost {Mathf.Max(0, entry.buyCost)}g",
-                new Color(0.16f, 0.30f, 0.20f, 0.98f),
-                new Color(0.86f, 0.95f, 0.86f, 0.98f)));
-            row.Pills.Add(CreatePanelRowPill(
-                $"Food {ResolveBarracksEntryFoodCost(entry)}",
-                new Color(0.25f, 0.22f, 0.12f, 0.98f),
-                new Color(0.99f, 0.92f, 0.72f, 0.98f)));
-            row.Pills.Add(CreatePanelRowPill(
-                $"Owned x{Mathf.Max(0, entry.ownedCount)}",
-                new Color(0.18f, 0.24f, 0.33f, 0.98f),
-                new Color(0.88f, 0.93f, 0.98f, 0.98f)));
-
-            if (site.isBuilt)
-            {
-                row.Pills.Add(CreatePanelRowPill(
-                    $"Active x{CountActiveUnitsForRosterEntry(lane, site, entry)}",
-                    new Color(0.20f, 0.22f, 0.30f, 0.98f),
-                    new Color(0.92f, 0.94f, 1f, 0.98f)));
-            }
-            else
-            {
-                row.Pills.Add(CreatePanelRowPill(
-                    "Preview",
-                    new Color(0.28f, 0.20f, 0.10f, 0.98f),
-                    new Color(0.97f, 0.86f, 0.62f, 0.98f)));
-            }
+            if (hasStats)
+                row.Stats.AddRange(statTiles);
 
             if (!site.isBuilt)
             {
@@ -2945,11 +3328,31 @@ namespace CastleDefender.UI
                     BuildFocusedBarracksBuyLabel(lane, site, entry),
                     canBuy ? () => ExecuteFocusedBarracksBuy(site, entry) : null,
                     canBuy,
-                    highlighted: true);
+                    highlighted: true,
+                    objectName: BuildFocusedBarracksActionObjectName("Buy", entry.rosterKey));
             }
 
-            row.SecondaryAction = BuildFocusedBarracksSellAction(site, entry);
+            row.SecondaryAction = BuildFocusedBarracksSecondaryAction(lane, site, entry, isMilitia);
             return row;
+        }
+
+        PanelRowActionData BuildFocusedBarracksSecondaryAction(MLLaneSnap lane, MLBarracksSite site, MLBarracksRosterEntry entry, bool isMilitia)
+        {
+            if (site == null || entry == null)
+                return null;
+
+            bool canSell = site.isBuilt && entry.ownedCount > 0 && CanEditBarracks();
+            if (isMilitia && !canSell)
+            {
+                bool canSingleBuy = CanBuyBarracksRosterEntry(lane, site, entry);
+                return CreatePanelRowAction(
+                    BuildFocusedBarracksBuyLabel(lane, site, entry),
+                    canSingleBuy ? () => ExecuteFocusedBarracksBuy(site, entry) : null,
+                    canSingleBuy,
+                    objectName: BuildFocusedBarracksActionObjectName("Buy", entry.rosterKey));
+            }
+
+            return BuildFocusedBarracksSellAction(site, entry);
         }
 
         PanelRowActionData BuildFocusedBarracksSellAction(MLBarracksSite site, MLBarracksRosterEntry entry)
@@ -2961,7 +3364,8 @@ namespace CastleDefender.UI
             return CreatePanelRowAction(
                 BuildFocusedBarracksSellLabel(site, entry),
                 canSell ? () => ExecuteFocusedBarracksSell(site, entry) : null,
-                canSell);
+                canSell,
+                objectName: BuildFocusedBarracksActionObjectName("Sell", entry.rosterKey));
         }
 
         PanelRowTemplateData BuildFocusedBarracksHeroRowData(MLLaneSnap lane, MLBarracksSite site, MLHeroRosterEntry hero)
@@ -2986,8 +3390,8 @@ namespace CastleDefender.UI
             {
                 row.Pills.Add(CreatePanelRowPill(
                     hero.unlockBuildingTierName,
-                    new Color(0.20f, 0.25f, 0.31f, 0.98f),
-                    new Color(0.90f, 0.94f, 0.98f, 0.98f)));
+                    GunmetalColor,
+                    SilverTextColor));
             }
 
             if (!string.IsNullOrWhiteSpace(hero.summonSourceBuildingName))
@@ -3000,12 +3404,12 @@ namespace CastleDefender.UI
 
             row.Pills.Add(CreatePanelRowPill(
                 $"Cost {Mathf.Max(0, hero.summonCost)}g",
-                new Color(0.16f, 0.30f, 0.20f, 0.98f),
-                new Color(0.86f, 0.95f, 0.86f, 0.98f)));
+                GoldSurfaceBrightColor,
+                GoldTextColor));
             row.Pills.Add(CreatePanelRowPill(
                 $"Active {Mathf.Max(0, hero.activeCount)}/{Mathf.Max(1, hero.activeLimit)}",
-                new Color(0.20f, 0.22f, 0.30f, 0.98f),
-                new Color(0.92f, 0.94f, 1f, 0.98f)));
+                GunmetalSoftColor,
+                SilverTextColor));
 
             string heroState = (hero.state ?? string.Empty).Trim().ToLowerInvariant();
             if (site == null || !site.isBuilt || string.Equals(heroState, "locked", System.StringComparison.Ordinal))
@@ -3034,33 +3438,15 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return "Unit data unavailable.";
 
-            var lines = new List<string>();
-            string meta = BuildFocusedBarracksEntryMeta(entry);
-            if (!string.IsNullOrWhiteSpace(meta))
-                lines.Add(meta);
-
             if (!site.isBuilt)
-            {
-                lines.Add("Purchase this barracks in Town Core first. This row stays visible here so the lane roster is readable before it goes live.");
-                return string.Join("\n", lines);
-            }
+                return "Purchase this barracks in Town Core first. This row stays visible here so the lane roster is readable before it goes live.";
 
             if (!entry.unlocked)
-            {
-                lines.Add(BuildLockedUnitRedirectHint(entry));
-                return string.Join("\n", lines);
-            }
+                return BuildLockedUnitRedirectHint(entry);
 
-            lines.Add(
-                $"Buy {Mathf.Max(0, entry.buyCost)}g. Food {ResolveBarracksEntryFoodCost(entry)} each. " +
-                $"{BuildBarracksFoodLabel(site)}. Owned x{Mathf.Max(0, entry.ownedCount)}. Active x{CountActiveUnitsForRosterEntry(lane, site, entry)}.");
-            if (TryGetUnitCardStats(entry, out var unit))
-            {
-                lines.Add(
-                    $"ATK {FormatStatNumber(unit.attack_damage)}   HP {FormatStatNumber(unit.hp)}   DEF {HumanizeCombatType(unit.armor_type)}   ARMOR {Mathf.Max(0f, unit.damage_reduction_pct):0.#}%");
-            }
-
-            return string.Join("\n", lines);
+            return TryGetUnitCardStats(entry, out _)
+                ? string.Empty
+                : "Stat data unavailable for this unit.";
         }
 
         string BuildFocusedBarracksHeroRowBody(MLLaneSnap lane, MLBarracksSite site, MLHeroRosterEntry hero)
@@ -3103,15 +3489,15 @@ namespace CastleDefender.UI
         Color ResolveFocusedBarracksUnitRowStatusColor(MLLaneSnap lane, MLBarracksSite site, MLBarracksRosterEntry entry)
         {
             if (site == null || entry == null)
-                return new Color(0.22f, 0.24f, 0.28f, 0.96f);
+                return GunmetalColor;
 
             if (!site.isBuilt || !entry.unlocked)
-                return new Color(0.33f, 0.22f, 0.10f, 0.98f);
+                return GoldSurfaceColor;
 
             if (!string.IsNullOrWhiteSpace(GetBarracksBuyBlockedReason(lane, site, entry)))
-                return new Color(0.17f, 0.22f, 0.30f, 0.98f);
+                return GunmetalSoftColor;
 
-            return new Color(0.12f, 0.28f, 0.20f, 0.98f);
+            return GoldSurfaceBrightColor;
         }
 
         void CreateTownCoreSummaryCard(MLLaneSnap lane, MLFortressPad townCorePad, IReadOnlyList<MLBarracksSite> orderedBarracks, IReadOnlyList<string> buildingTypes)
@@ -3450,6 +3836,7 @@ namespace CastleDefender.UI
 
         Button CreateTownCorePrimaryActionButton(
             Transform parent,
+            string objectName,
             string label,
             UnityEngine.Events.UnityAction action,
             bool interactable,
@@ -3462,6 +3849,8 @@ namespace CastleDefender.UI
                 interactable,
                 minWidth: GetTownCorePrimaryActionColumnWidth(),
                 highlighted: highlighted);
+            if (button != null && !string.IsNullOrWhiteSpace(objectName))
+                button.gameObject.name = objectName;
             var layout = button != null ? button.GetComponent<LayoutElement>() : null;
             if (layout != null)
             {
@@ -3479,7 +3868,7 @@ namespace CastleDefender.UI
                 text.fontStyle = FontStyles.Bold;
                 text.alignment = TextAlignmentOptions.Center;
                 text.enableAutoSizing = true;
-                text.fontSizeMin = IsCompactPanelLayout() ? 10f : 12f;
+                text.fontSizeMin = 12f;
                 text.fontSizeMax = IsCompactPanelLayout() ? 15f : 18f;
                 text.textWrappingMode = TextWrappingModes.NoWrap;
                 text.overflowMode = TextOverflowModes.Ellipsis;
@@ -3498,10 +3887,31 @@ namespace CastleDefender.UI
             };
         }
 
-        static PanelRowActionData CreatePanelRowAction(string label, UnityEngine.Events.UnityAction action, bool interactable, bool highlighted = false)
+        static PanelRowPillData CreateFocusedBarracksSummaryPill(string text)
+        {
+            return CreatePanelRowPill(
+                text,
+                new Color(0.16f, 0.17f, 0.20f, 0.96f),
+                SilverTextColor);
+        }
+
+        static PanelRowStatData CreatePanelRowStat(string label, string value, Color backgroundColor, Color labelColor, Color valueColor)
+        {
+            return new PanelRowStatData
+            {
+                Label = label,
+                Value = value,
+                BackgroundColor = backgroundColor,
+                LabelColor = labelColor,
+                ValueColor = valueColor,
+            };
+        }
+
+        static PanelRowActionData CreatePanelRowAction(string label, UnityEngine.Events.UnityAction action, bool interactable, bool highlighted = false, string objectName = null)
         {
             return new PanelRowActionData
             {
+                ObjectName = objectName,
                 Label = label,
                 Action = action,
                 Interactable = interactable,
@@ -3530,6 +3940,8 @@ namespace CastleDefender.UI
                 data.BackgroundColor,
                 data.AccentColor,
                 data.Highlighted);
+            if (!string.IsNullOrWhiteSpace(data.ObjectName))
+                row.name = data.ObjectName;
 
             var rowLayout = row.GetComponent<LayoutElement>();
             float resolvedMinHeight = data.MinHeight;
@@ -3562,6 +3974,9 @@ namespace CastleDefender.UI
                 }
             }
 
+            if (data.Stats.Count > 0)
+                CreatePanelRowStatGrid(detailColumn, data.Stats);
+
             if (!string.IsNullOrWhiteSpace(data.Description))
                 CreateBodyText(detailColumn, data.Description);
 
@@ -3569,6 +3984,7 @@ namespace CastleDefender.UI
             {
                 CreateTownCorePrimaryActionButton(
                     actionColumn,
+                    data.PrimaryAction.ObjectName,
                     data.PrimaryAction.Label,
                     data.PrimaryAction.Action,
                     data.PrimaryAction.Interactable,
@@ -3579,6 +3995,7 @@ namespace CastleDefender.UI
             {
                 CreateTownCorePrimaryActionButton(
                     actionColumn,
+                    data.SecondaryAction.ObjectName,
                     data.SecondaryAction.Label,
                     data.SecondaryAction.Action,
                     data.SecondaryAction.Interactable,
@@ -3586,6 +4003,69 @@ namespace CastleDefender.UI
             }
 
             return row;
+        }
+
+        void CreatePanelRowStatGrid(Transform parent, IReadOnlyList<PanelRowStatData> stats)
+        {
+            if (parent == null || stats == null || stats.Count == 0)
+                return;
+
+            var statBlock = CreateVerticalBlock(parent, "TemplateStats", 6f);
+            for (int i = 0; i < stats.Count; i += 2)
+            {
+                var statRow = CreateHorizontalFillBlock(statBlock, $"TemplateStatRow{i / 2}", 6f);
+                CreatePanelRowStatTile(statRow, stats[i]);
+                if (i + 1 < stats.Count)
+                    CreatePanelRowStatTile(statRow, stats[i + 1]);
+            }
+        }
+
+        void CreatePanelRowStatTile(Transform parent, PanelRowStatData stat)
+        {
+            if (parent == null || stat == null || (string.IsNullOrWhiteSpace(stat.Label) && string.IsNullOrWhiteSpace(stat.Value)))
+                return;
+
+            var tile = new GameObject("TemplateStatTile", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            tile.transform.SetParent(parent, false);
+
+            var image = tile.GetComponent<Image>();
+            image.color = stat.BackgroundColor;
+
+            var layout = tile.GetComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(8, 8, 6, 6);
+            layout.spacing = 2f;
+            layout.childAlignment = TextAnchor.MiddleLeft;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childForceExpandWidth = true;
+
+            var element = tile.GetComponent<LayoutElement>();
+            element.flexibleWidth = 1f;
+            element.minHeight = IsCompactPanelLayout() ? 50f : 56f;
+            element.preferredHeight = element.minHeight;
+
+            var label = CreateInlineText(
+                tile.transform,
+                "Label",
+                stat.Label,
+                12f,
+                stat.LabelColor,
+                FontStyles.Bold,
+                TextAlignmentOptions.Left);
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+
+            var value = CreateInlineText(
+                tile.transform,
+                "Value",
+                stat.Value,
+                IsCompactPanelLayout() ? 12f : 13f,
+                stat.ValueColor,
+                FontStyles.Bold,
+                TextAlignmentOptions.Left);
+            value.textWrappingMode = TextWrappingModes.NoWrap;
+            value.overflowMode = TextOverflowModes.Ellipsis;
         }
 
         static void ApplyTownCoreCardFrame(GameObject target, Color backgroundColor, Color accentColor)
@@ -3708,6 +4188,7 @@ namespace CastleDefender.UI
                 TextAlignmentOptions.Center,
                 textColor,
                 allowWrap: false);
+            label.fontSize = 12f;
             label.fontStyle = FontStyles.Bold;
         }
 
@@ -3731,7 +4212,11 @@ namespace CastleDefender.UI
                 return "Barracks data unavailable.";
 
             var lines = new List<string>();
-            if (!site.isBuilt)
+            if (site.isConstructing)
+            {
+                lines.Add($"{BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site))}. The barracks roster unlocks when construction finishes.");
+            }
+            else if (!site.isBuilt)
             {
                 lines.Add(site.canBuild
                     ? lane != null && lane.gold < site.buildCost
@@ -3904,6 +4389,7 @@ namespace CastleDefender.UI
                 "upgrade_available" => "Upgrade Ready",
                 "constructing" => "Constructing",
                 "upgrading" => "Upgrading",
+                "under_repair" => "Under Repair",
                 "destroyed" => "Destroyed",
                 "max_tier" => "Max Tier",
                 "locked" => "Locked",
@@ -3925,6 +4411,7 @@ namespace CastleDefender.UI
             {
                 "constructing" => "Constructing",
                 "upgrading" => "Upgrading",
+                "under_repair" => "Under Repair",
                 "destroyed" => "Destroyed",
                 "locked" => "Locked",
                 _ => site.isBuilt ? "Built" : "Locked",
@@ -3934,18 +4421,19 @@ namespace CastleDefender.UI
         static Color ResolveTownCoreStatusPillColor(string buildState, bool canBuild, bool canUpgrade, bool isBuilt)
         {
             if (!isBuilt && canBuild)
-                return new Color(0.40f, 0.30f, 0.10f, 0.98f);
+                return GoldSurfaceColor;
             if (canUpgrade)
-                return new Color(0.18f, 0.40f, 0.24f, 0.98f);
+                return GoldSurfaceBrightColor;
 
             return buildState switch
             {
-                "constructing" => new Color(0.44f, 0.31f, 0.12f, 0.98f),
-                "upgrading" => new Color(0.20f, 0.44f, 0.28f, 0.98f),
+                "constructing" => GoldSurfaceColor,
+                "upgrading" => GoldSurfaceBrightColor,
+                "under_repair" => new Color(0.38f, 0.29f, 0.13f, 0.98f),
                 "destroyed" => new Color(0.52f, 0.18f, 0.16f, 0.98f),
-                "locked" => new Color(0.24f, 0.27f, 0.32f, 0.98f),
+                "locked" => GunmetalColor,
                 "max_tier" => new Color(0.52f, 0.40f, 0.16f, 0.98f),
-                _ => new Color(0.18f, 0.30f, 0.42f, 0.98f),
+                _ => GunmetalSoftColor,
             };
         }
 
@@ -3953,24 +4441,19 @@ namespace CastleDefender.UI
         {
             return (buildingType ?? string.Empty).Trim().ToLowerInvariant() switch
             {
-                "barracks" => new Color(0.95f, 0.76f, 0.34f, 0.96f),
-                "blacksmith" => new Color(0.82f, 0.50f, 0.26f, 0.96f),
-                "archery_tower" => new Color(0.54f, 0.74f, 0.38f, 0.96f),
-                "wizard_tower" => new Color(0.56f, 0.58f, 0.92f, 0.96f),
-                "temple" => new Color(0.58f, 0.82f, 0.74f, 0.96f),
-                "market" => new Color(0.95f, 0.72f, 0.34f, 0.96f),
-                "stable" => new Color(0.77f, 0.61f, 0.38f, 0.96f),
-                "workshop" => new Color(0.78f, 0.58f, 0.42f, 0.96f),
-                "library" => new Color(0.66f, 0.78f, 0.92f, 0.96f),
-                "lumber_mill" => new Color(0.58f, 0.76f, 0.54f, 0.96f),
-                "wall" => new Color(0.80f, 0.78f, 0.68f, 0.96f),
-                _ => new Color(0.70f, 0.74f, 0.86f, 0.96f),
+                "barracks" => GoldAccentColor,
+                "blacksmith" => GoldAccentColor,
+                "market" => GoldAccentColor,
+                "stable" => GoldAccentColor,
+                "workshop" => GoldAccentColor,
+                "wall" => SilverAccentColor,
+                _ => SilverAccentColor,
             };
         }
 
         static Color ResolveTownCoreCardColor(MLFortressPad pad)
         {
-            return pad != null ? ResolvePadCardTint(pad) : new Color(0.12f, 0.14f, 0.18f, 0.96f);
+            return pad != null ? ResolvePadCardTint(pad) : ObsidianElevatedColor;
         }
 
         string ResolveTownCoreRequirementLabel(string tierName, int requiredTier, bool includeVerb = true)
@@ -5966,6 +6449,147 @@ namespace CastleDefender.UI
             return $"{primary}  Send {Mathf.Max(0, sendSeconds)}s  Wave {Mathf.Max(0, waveSeconds)}s.";
         }
 
+        static bool IsRepairEligiblePad(MLFortressPad pad)
+        {
+            return pad != null
+                && pad.isBuilt
+                && !pad.isConstructing
+                && !string.Equals(pad.buildingType, "town_core", System.StringComparison.OrdinalIgnoreCase)
+                && pad.maxHp > 0f
+                && pad.hp < pad.maxHp;
+        }
+
+        static bool IsRepairEligibleBarracksSite(MLBarracksSite site)
+        {
+            return site != null
+                && site.isBuilt
+                && !site.isConstructing
+                && site.maxHp > 0f
+                && site.hp < site.maxHp;
+        }
+
+        static int GetRepairAllEligibleCount(MLLaneSnap lane)
+        {
+            if (lane == null)
+                return 0;
+
+            int total = 0;
+            if (lane.fortressPads != null)
+            {
+                for (int i = 0; i < lane.fortressPads.Length; i++)
+                {
+                    if (IsRepairEligiblePad(lane.fortressPads[i]))
+                        total += 1;
+                }
+            }
+
+            if (lane.barracksSites != null)
+            {
+                for (int i = 0; i < lane.barracksSites.Length; i++)
+                {
+                    if (IsRepairEligibleBarracksSite(lane.barracksSites[i]))
+                        total += 1;
+                }
+            }
+
+            return total;
+        }
+
+        static int GetRepairAllMissingHp(MLLaneSnap lane)
+        {
+            if (lane == null)
+                return 0;
+
+            int total = 0;
+            if (lane.fortressPads != null)
+            {
+                for (int i = 0; i < lane.fortressPads.Length; i++)
+                {
+                    var pad = lane.fortressPads[i];
+                    if (!IsRepairEligiblePad(pad))
+                        continue;
+                    total += Mathf.Max(0, Mathf.RoundToInt(pad.maxHp - pad.hp));
+                }
+            }
+
+            if (lane.barracksSites != null)
+            {
+                for (int i = 0; i < lane.barracksSites.Length; i++)
+                {
+                    var site = lane.barracksSites[i];
+                    if (!IsRepairEligibleBarracksSite(site))
+                        continue;
+                    total += Mathf.Max(0, Mathf.RoundToInt(site.maxHp - site.hp));
+                }
+            }
+
+            return total;
+        }
+
+        string BuildLumberMillRepairSummary(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (lane == null || pad == null || !string.Equals(pad.buildingType, "lumber_mill", System.StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
+
+            int eligibleCount = GetRepairAllEligibleCount(lane);
+            if (eligibleCount <= 0)
+                return "Repair All: no damaged non-Town-Core buildings.";
+
+            int totalMissingHp = GetRepairAllMissingHp(lane);
+            int availableGold = Mathf.Max(0, Mathf.FloorToInt(lane.gold));
+            int spendNow = Mathf.Min(totalMissingHp, availableGold);
+            return
+                $"Repair All: {eligibleCount} target{(eligibleCount == 1 ? string.Empty : "s")}, " +
+                $"{totalMissingHp} HP missing, {spendNow}g ready.";
+        }
+
+        bool TryBuildLumberMillRepairAction(MLLaneSnap lane, MLFortressPad pad, out string label, out bool enabled, out string lockedReason)
+        {
+            label = string.Empty;
+            enabled = false;
+            lockedReason = null;
+
+            if (pad == null || !string.Equals(pad.buildingType, "lumber_mill", System.StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (pad.isConstructing)
+            {
+                label = "Constructing";
+                lockedReason = "Lumber Mill construction is still in progress.";
+                return true;
+            }
+
+            if (!pad.isBuilt)
+            {
+                label = "Build Lumber Mill";
+                lockedReason = "Build the Lumber Mill first.";
+                return true;
+            }
+
+            int totalMissingHp = GetRepairAllMissingHp(lane);
+            if (totalMissingHp <= 0)
+            {
+                label = "No Repairs";
+                lockedReason = "All eligible buildings are already at full HP.";
+                return true;
+            }
+
+            int availableGold = lane != null ? Mathf.Max(0, Mathf.FloorToInt(lane.gold)) : 0;
+            int spendNow = Mathf.Min(totalMissingHp, availableGold);
+            if (spendNow <= 0)
+            {
+                label = "Need Gold";
+                lockedReason = "Repair All needs gold.";
+                return true;
+            }
+
+            enabled = true;
+            label = spendNow >= totalMissingHp
+                ? $"Repair All {totalMissingHp}g"
+                : $"Repair {spendNow}/{totalMissingHp}g";
+            return true;
+        }
+
         string BuildFocusedPadCardBody(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
@@ -6003,6 +6627,10 @@ namespace CastleDefender.UI
                 if (!string.IsNullOrWhiteSpace(marketNextPreview))
                     marketText += $"\n{marketNextPreview}";
 
+                string lumberMillRepairSummary = BuildLumberMillRepairSummary(lane, pad);
+                if (!string.IsNullOrWhiteSpace(lumberMillRepairSummary))
+                    marketText += $"\n{lumberMillRepairSummary}";
+
                 if (!string.IsNullOrWhiteSpace(pad.lockedReason))
                     marketText += $"\nRequirement: {pad.lockedReason}";
 
@@ -6017,6 +6645,10 @@ namespace CastleDefender.UI
             string nextPreview = BuildNextUpgradePreview(lane, pad, roster, heroRoster);
             if (!string.IsNullOrWhiteSpace(nextPreview))
                 text += $"\n{nextPreview}";
+
+            string repairSummary = BuildLumberMillRepairSummary(lane, pad);
+            if (!string.IsNullOrWhiteSpace(repairSummary))
+                text += $"\n{repairSummary}";
 
             if (!string.IsNullOrWhiteSpace(pad.lockedReason))
                 text += $"\nRequirement: {pad.lockedReason}";
@@ -6169,6 +6801,69 @@ namespace CastleDefender.UI
                 : $"{buildingName}  •  {tierName}";
         }
 
+        string BuildFocusedBarracksUnitEyebrow(MLBarracksRosterEntry entry)
+        {
+            if (entry == null)
+                return "UNIT";
+
+            bool displayUnlockSource = !string.IsNullOrWhiteSpace(entry.unlockBuildingType)
+                && !string.Equals(entry.unlockBuildingType, entry.productionBuildingType, System.StringComparison.OrdinalIgnoreCase);
+            string buildingName = displayUnlockSource
+                ? entry.unlockBuildingName
+                : entry.productionBuildingName;
+            if (string.IsNullOrWhiteSpace(buildingName))
+                buildingName = displayUnlockSource ? entry.productionBuildingName : entry.unlockBuildingName;
+
+            string buildingType = displayUnlockSource ? entry.unlockBuildingType : entry.productionBuildingType;
+            int displayTier = displayUnlockSource
+                ? Mathf.Max(1, entry.requiredBuildingTier)
+                : Mathf.Max(1, entry.tier);
+            string tierName = ResolveBuildingTierName(buildingType, displayTier, $"Tier {displayTier}");
+            if (string.IsNullOrWhiteSpace(buildingName))
+                return tierName;
+
+            return string.Equals(buildingName, tierName, System.StringComparison.OrdinalIgnoreCase)
+                ? tierName
+                : $"{buildingName} - {tierName}";
+        }
+
+        bool TryBuildFocusedBarracksUnitStatTiles(MLBarracksRosterEntry entry, out List<PanelRowStatData> stats)
+        {
+            stats = null;
+            if (!TryGetUnitCardStats(entry, out var unit) || unit == null)
+                return false;
+
+            stats = new List<PanelRowStatData>
+            {
+                CreatePanelRowStat(
+                    "ATTACK",
+                    $"{HumanizeCombatType(unit.damage_type)} {FormatStatNumber(unit.attack_damage)} @ {Mathf.Max(0.01f, unit.attack_speed):0.##}/s",
+                    new Color(0.19f, 0.13f, 0.10f, 0.98f),
+                    new Color(0.98f, 0.88f, 0.76f, 0.98f),
+                    Color.white),
+                CreatePanelRowStat(
+                    "HEALTH",
+                    $"{FormatStatNumber(unit.hp)} HP",
+                    new Color(0.14f, 0.16f, 0.19f, 0.98f),
+                    SilverTextColor,
+                    Color.white),
+                CreatePanelRowStat(
+                    "DEFENSE",
+                    $"{HumanizeCombatType(unit.armor_type)} | {Mathf.Max(0f, unit.damage_reduction_pct):0.#}%",
+                    new Color(0.11f, 0.15f, 0.19f, 0.98f),
+                    new Color(0.84f, 0.91f, 0.97f, 0.98f),
+                    Color.white),
+                CreatePanelRowStat(
+                    "REACH",
+                    $"{FormatStatNumber(unit.range)} rng | {FormatStatNumber(Mathf.Max(0f, unit.path_speed))} mv",
+                    new Color(0.14f, 0.12f, 0.18f, 0.98f),
+                    new Color(0.89f, 0.86f, 0.97f, 0.98f),
+                    Color.white),
+            };
+
+            return true;
+        }
+
         static int GetRosterBuildingSortIndex(MLBarracksRosterEntry entry)
         {
             switch ((entry?.productionBuildingType ?? string.Empty).Trim().ToLowerInvariant())
@@ -6224,17 +6919,17 @@ namespace CastleDefender.UI
         static Color ResolveBarracksOverviewCardTint(MLBarracksSite site)
         {
             if (site == null)
-                return new Color(0.15f, 0.16f, 0.20f, 0.98f);
+                return ObsidianElevatedColor;
 
             if (site.isBuilt)
                 return site.canUpgrade
-                    ? new Color(0.14f, 0.24f, 0.18f, 0.98f)
-                    : new Color(0.12f, 0.18f, 0.24f, 0.98f);
+                    ? new Color(0.18f, 0.16f, 0.11f, 0.98f)
+                    : new Color(0.11f, 0.12f, 0.14f, 0.98f);
 
             if (site.canBuild)
-                return new Color(0.26f, 0.22f, 0.10f, 0.98f);
+                return new Color(0.16f, 0.13f, 0.10f, 0.98f);
 
-            return new Color(0.15f, 0.16f, 0.20f, 0.98f);
+            return ObsidianElevatedColor;
         }
 
         static int GetRoleSortIndex(MLBarracksRosterEntry entry)
@@ -6322,26 +7017,26 @@ namespace CastleDefender.UI
         static Color ResolvePadCardTint(MLFortressPad pad)
         {
             if (pad == null)
-                return new Color(0.11f, 0.14f, 0.20f, 0.95f);
+                return new Color(0.10f, 0.11f, 0.14f, 0.95f);
 
             switch (pad.buildState)
             {
                 case "available_to_build":
-                    return new Color(0.26f, 0.22f, 0.10f, 0.98f);
+                    return new Color(0.16f, 0.13f, 0.10f, 0.98f);
                 case "constructing":
-                    return new Color(0.26f, 0.19f, 0.09f, 0.98f);
+                    return new Color(0.17f, 0.13f, 0.10f, 0.98f);
                 case "upgrading":
-                    return new Color(0.18f, 0.24f, 0.12f, 0.98f);
+                    return new Color(0.18f, 0.15f, 0.11f, 0.98f);
                 case "upgrade_available":
-                    return new Color(0.14f, 0.24f, 0.18f, 0.98f);
+                    return new Color(0.18f, 0.16f, 0.11f, 0.98f);
                 case "destroyed":
                     return new Color(0.24f, 0.11f, 0.09f, 0.98f);
                 case "locked":
-                    return new Color(0.15f, 0.16f, 0.20f, 0.98f);
+                    return ObsidianElevatedColor;
                 case "max_tier":
-                    return new Color(0.22f, 0.20f, 0.11f, 0.98f);
+                    return new Color(0.16f, 0.14f, 0.10f, 0.98f);
                 default:
-                    return new Color(0.12f, 0.18f, 0.24f, 0.98f);
+                    return new Color(0.11f, 0.12f, 0.15f, 0.98f);
             }
         }
 
@@ -6352,6 +7047,7 @@ namespace CastleDefender.UI
                 case "available_to_build": return "Available To Build";
                 case "constructing": return "Constructing";
                 case "upgrading": return "Upgrading";
+                case "under_repair": return "Under Repair";
                 case "upgrade_available": return "Upgrade Available";
                 case "destroyed": return "Destroyed";
                 case "max_tier": return "Max Tier";
@@ -6498,6 +7194,51 @@ namespace CastleDefender.UI
             return $"FocusedBarracksCard_{SanitizeUiNameToken(rosterKey)}";
         }
 
+        static string BuildTownCoreBarracksRowObjectName(string barracksId)
+        {
+            return $"TownCoreBarracksRow_{SanitizeUiNameToken(NormalizeBarracksId(barracksId))}";
+        }
+
+        static string BuildTownCoreBarracksActionObjectName(string actionKey, string barracksId)
+        {
+            string safeAction = SanitizeUiNameToken(actionKey);
+            string safeBarracksId = SanitizeUiNameToken(NormalizeBarracksId(barracksId));
+            return $"TownCoreBarracksAction_{safeAction}_{safeBarracksId}";
+        }
+
+        static string BuildTownCorePadRowObjectName(string padId)
+        {
+            return $"TownCorePadRow_{SanitizeUiNameToken(padId)}";
+        }
+
+        static string BuildTownCorePadActionObjectName(string actionKey, string padId)
+        {
+            string safeAction = SanitizeUiNameToken(actionKey);
+            string safePadId = SanitizeUiNameToken(padId);
+            return $"TownCorePadAction_{safeAction}_{safePadId}";
+        }
+
+        static string BuildFocusedPadRowObjectName(string padId)
+        {
+            return $"FocusedPadRow_{SanitizeUiNameToken(padId)}";
+        }
+
+        static string BuildFocusedPadActionObjectName(string actionKey, string padId)
+        {
+            string safeAction = SanitizeUiNameToken(actionKey);
+            string safePadId = SanitizeUiNameToken(padId);
+            return $"FocusedPadAction_{safeAction}_{safePadId}";
+        }
+
+        static string BuildFocusedMarketActionObjectName(string actionKey, string unitKey = null)
+        {
+            string safeAction = SanitizeUiNameToken(actionKey);
+            string safeUnitKey = string.IsNullOrWhiteSpace(unitKey)
+                ? string.Empty
+                : $"_{SanitizeUiNameToken(unitKey)}";
+            return $"FocusedMarketAction_{safeAction}{safeUnitKey}";
+        }
+
         static string SanitizeUiNameToken(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -6606,7 +7347,7 @@ namespace CastleDefender.UI
             go.transform.SetParent(parent, false);
             var tmp = go.GetComponent<TextMeshProUGUI>();
             tmp.font = TMP_Settings.defaultFontAsset;
-            tmp.fontSize = fontSize;
+            tmp.fontSize = Mathf.Max(MinimumPanelFontSize, fontSize);
             tmp.fontStyle = fontStyle;
             tmp.color = color;
             tmp.alignment = alignment;
@@ -7041,22 +7782,21 @@ namespace CastleDefender.UI
         static Color ResolveFocusedBarracksCardTint(MLBarracksRosterEntry entry)
         {
             if (entry == null)
-                return new Color(0.12f, 0.15f, 0.20f, 0.96f);
+                return new Color(0.10f, 0.11f, 0.14f, 0.96f);
 
             if (!entry.unlocked)
-                return new Color(0.18f, 0.16f, 0.18f, 0.96f);
+                return new Color(0.15f, 0.14f, 0.15f, 0.96f);
 
             Color baseColor = entry.productionBuildingType switch
             {
-                "blacksmith" => new Color(0.27f, 0.18f, 0.14f, 0.98f),
-                "temple" => new Color(0.16f, 0.25f, 0.19f, 0.98f),
-                "wizard_tower" => new Color(0.18f, 0.18f, 0.31f, 0.98f),
-                "archery_tower" => new Color(0.16f, 0.24f, 0.16f, 0.98f),
-                _ => new Color(0.12f, 0.15f, 0.22f, 0.96f),
+                "blacksmith" => new Color(0.16f, 0.13f, 0.10f, 0.98f),
+                "barracks" => new Color(0.16f, 0.13f, 0.10f, 0.98f),
+                "market" => new Color(0.16f, 0.13f, 0.10f, 0.98f),
+                _ => new Color(0.11f, 0.12f, 0.15f, 0.96f),
             };
 
             return entry.ownedCount > 0
-                ? Color.Lerp(baseColor, new Color(0.10f, 0.30f, 0.20f, 0.98f), 0.28f)
+                ? Color.Lerp(baseColor, GoldSurfaceColor, 0.18f)
                 : baseColor;
         }
 
@@ -7157,8 +7897,8 @@ namespace CastleDefender.UI
 
             var image = strip.GetComponent<Image>();
             image.color = entry.ownedCount > 0
-                ? new Color(0.18f, 0.27f, 0.21f, 0.98f)
-                : new Color(0.14f, 0.17f, 0.22f, 0.96f);
+                ? new Color(0.17f, 0.15f, 0.11f, 0.98f)
+                : new Color(0.14f, 0.15f, 0.18f, 0.96f);
 
             var label = CreateInlineText(
                 strip.transform,
@@ -7263,23 +8003,23 @@ namespace CastleDefender.UI
         Color ResolveFocusedBarracksStateStripColor(MLLaneSnap lane, MLBarracksSite site, MLBarracksRosterEntry entry)
         {
             if (site == null || entry == null)
-                return new Color(0.22f, 0.24f, 0.28f, 0.96f);
+                return GunmetalColor;
 
             if (!site.isBuilt || !entry.unlocked)
-                return new Color(0.33f, 0.22f, 0.10f, 0.98f);
+                return GoldSurfaceColor;
 
             if (!string.IsNullOrWhiteSpace(GetBarracksBuyBlockedReason(lane, site, entry)))
-                return new Color(0.17f, 0.22f, 0.30f, 0.98f);
+                return GunmetalSoftColor;
 
-            return new Color(0.12f, 0.28f, 0.20f, 0.98f);
+            return GoldSurfaceBrightColor;
         }
 
         Color ResolveFocusedBarracksStateTextColor(MLLaneSnap lane, MLBarracksSite site, MLBarracksRosterEntry entry)
         {
             if (site != null && entry != null && site.isBuilt && entry.unlocked && string.IsNullOrWhiteSpace(GetBarracksBuyBlockedReason(lane, site, entry)))
-                return new Color(0.92f, 1f, 0.92f, 1f);
+                return GoldTextColor;
 
-            return new Color(1f, 0.94f, 0.82f, 1f);
+            return SilverTextColor;
         }
 
         string BuildFocusedBarracksBuyLabel(MLLaneSnap lane, MLBarracksSite site, MLBarracksRosterEntry entry)
@@ -7426,6 +8166,16 @@ namespace CastleDefender.UI
             RefreshHeader(force: true);
         }
 
+        void ExecuteLumberMillRepairAll(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (lane == null || pad == null)
+                return;
+
+            _statusMessage = $"Lumber Mill repairing {GetRepairAllEligibleCount(lane)} damaged structure{(GetRepairAllEligibleCount(lane) == 1 ? string.Empty : "s")}...";
+            ActionSender.RepairAllBuildings(pad.padId);
+            RefreshHeader(force: true);
+        }
+
         void ExecuteFocusedBarracksSell(MLBarracksSite site, MLBarracksRosterEntry entry)
         {
             if (site == null || entry == null)
@@ -7489,8 +8239,8 @@ namespace CastleDefender.UI
             rect.offsetMin = new Vector2(6f, IsCompactPanelLayout() ? 2f : 4f);
             rect.offsetMax = new Vector2(-6f, IsCompactPanelLayout() ? -2f : -4f);
             label.enableAutoSizing = true;
-            label.fontSizeMin = IsCompactPanelLayout() ? 8f : 8.5f;
-            label.fontSizeMax = IsCompactPanelLayout() ? 10f : 11.5f;
+            label.fontSizeMin = 12f;
+            label.fontSizeMax = IsCompactPanelLayout() ? 12f : 13f;
             label.textWrappingMode = TextWrappingModes.NoWrap;
             label.overflowMode = TextOverflowModes.Ellipsis;
         }
@@ -7692,9 +8442,9 @@ namespace CastleDefender.UI
             var image = go.GetComponent<Image>();
             image.color = interactable
                 ? highlighted
-                    ? new Color(0.62f, 0.44f, 0.10f, 0.98f)
-                    : new Color(0.18f, 0.43f, 0.27f, 0.95f)
-                : new Color(0.22f, 0.22f, 0.24f, 0.85f);
+                    ? GoldSurfaceBrightColor
+                    : GunmetalColor
+                : DisabledSurfaceColor;
 
             var button = go.GetComponent<Button>();
             button.interactable = interactable;
@@ -7719,8 +8469,8 @@ namespace CastleDefender.UI
             tmp.color = interactable
                 ? highlighted
                     ? new Color(0.12f, 0.09f, 0.04f, 1f)
-                    : Color.white
-                : new Color(0.72f, 0.72f, 0.72f, 0.95f);
+                    : SilverTextColor
+                : MutedSilverTextColor;
             tmp.text = label;
             ClassicRpgUiRuntime.ApplyButton(
                 button,
@@ -7728,7 +8478,7 @@ namespace CastleDefender.UI
                     ? ClassicRpgButtonSkin.MiniBrown
                     : highlighted
                         ? ClassicRpgButtonSkin.MiniGold
-                        : ClassicRpgButtonSkin.MiniGreen,
+                        : ClassicRpgButtonSkin.MiniBrown,
                 tmp,
                 label);
             return button;

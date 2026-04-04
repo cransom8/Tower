@@ -1,3 +1,4 @@
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -8,6 +9,8 @@ namespace CastleDefender.UI
     [DisallowMultipleComponent]
     public class MyStatsHudWidget : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
     {
+        public event Action<HudPanelLayoutChangeKind> LayoutCommitted;
+
         [SerializeField] RectTransform widgetRect;
         [SerializeField] RectTransform bodyRoot;
         [SerializeField] RectTransform collapsedRoot;
@@ -33,6 +36,17 @@ namespace CastleDefender.UI
         Vector2 _defaultAnchoredPosition;
         bool _loadedState;
         bool _isCollapsed;
+
+        public RectTransform WidgetRect
+        {
+            get
+            {
+                if (widgetRect == null)
+                    widgetRect = GetComponent<RectTransform>();
+
+                return widgetRect;
+            }
+        }
 
         public void Configure(
             Canvas canvas,
@@ -125,12 +139,24 @@ namespace CastleDefender.UI
                 badgeGlow.color = meterColor;
         }
 
+        public void SetAnchoredPosition(Vector2 anchoredPosition, bool persist = false)
+        {
+            if (WidgetRect == null)
+                return;
+
+            widgetRect.anchoredPosition = anchoredPosition;
+            ClampToParent();
+            if (persist)
+                SaveState();
+        }
+
         public void ToggleCollapsed()
         {
             _isCollapsed = !_isCollapsed;
             ApplyCollapseVisuals();
             ClampToParent();
             SaveState();
+            LayoutCommitted?.Invoke(HudPanelLayoutChangeKind.CollapseChanged);
         }
 
         public void OnBeginDrag(PointerEventData eventData)
@@ -156,6 +182,7 @@ namespace CastleDefender.UI
         public void OnEndDrag(PointerEventData eventData)
         {
             SaveState();
+            LayoutCommitted?.Invoke(HudPanelLayoutChangeKind.DragEnded);
         }
 
         void CacheParent()
@@ -196,8 +223,8 @@ namespace CastleDefender.UI
 
             if (widgetRect != null)
             {
-                widgetRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, _isCollapsed ? 58f : 230f);
-                widgetRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, _isCollapsed ? 58f : 150f);
+                widgetRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, _isCollapsed ? 58f : 220f);
+                widgetRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, _isCollapsed ? 58f : 80f);
             }
         }
 

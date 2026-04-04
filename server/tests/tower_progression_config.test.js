@@ -81,7 +81,7 @@ test("public multilane config exposes shared walls and turret progression withou
   assert.equal(padCountsByType.lumber_mill, 1, "lumber mill should have one fortress pad");
   assert.equal(padCountsByType.wall, 20, "authored fortress shell should expose twenty wall pads");
   assert.equal(padCountsByType.gate, 4, "authored fortress shell should expose four gate pads");
-  assert.equal(padCountsByType.turret, 17, "authored fortress shell should expose seventeen tower hardpoints");
+  assert.equal(padCountsByType.turret, 14, "authored fortress shell should expose fourteen tower hardpoints");
   assert.equal(padCountsByType.tower_archer || 0, 0, "legacy tower_archer conversion pads should remain absent");
 });
 

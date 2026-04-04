@@ -78,6 +78,8 @@ MonoBehaviour:
   - {fileID: 11400000, guid: dcf5a28e1f43fa14e9d77066ed172811, type: 2}
   - {fileID: 11400000, guid: f797151507e94354e810822c30e8a6e6, type: 2}
   - {fileID: 11400000, guid: f6a2269345ae16348b63945bd559cc96, type: 2}
+  - {fileID: 11400000, guid: 8b5a705bc133cbf44870b30ff4ca030a, type: 2}
+  - {fileID: 11400000, guid: 260105e0f2dcdbd41b861de61ddd1fa9, type: 2}
   m_BuildSettings:
     m_LogResourceManagerExceptions: 1
     m_BundleBuildPath: Temp/com.unity.addressables/AssetBundles
@@ -173,6 +175,8 @@ MonoBehaviour:
     - tt_mounted_king
     - giant_rat
     - fantasy_wolf
+    - shared
+    - skin-shared
   m_SchemaTemplates: []
   m_GroupTemplateObjects:
   - {fileID: 11400000, guid: 6f3c7d2740ebece46bcf3cb48fdd252c, type: 2}

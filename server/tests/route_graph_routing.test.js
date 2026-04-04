@@ -161,9 +161,82 @@ function createMarketWorker(overrides = {}) {
   };
 }
 
+function createDefender(overrides = {}) {
+  const sourceLaneIndex = overrides.sourceLaneIndex ?? 0;
+  const sourceTeam = overrides.sourceTeam ?? "red";
+  return {
+    ...createAttacker({
+      ...overrides,
+      id: overrides.id || "route_defender",
+      ownerLaneIndex: overrides.ownerLaneIndex ?? sourceLaneIndex,
+      ownerLane: overrides.ownerLane ?? sourceLaneIndex,
+      targetLaneIndex: overrides.targetLaneIndex ?? sourceLaneIndex,
+      laneId: overrides.laneId ?? sourceLaneIndex,
+      sourceLaneIndex,
+      sourceTeam,
+      sourceBarracksId: overrides.sourceBarracksId ?? "center",
+      sourceBarracksKey: overrides.sourceBarracksKey ?? overrides.sourceBarracksId ?? "center",
+      spawnSourceType: "barracks_roster",
+      allegianceKey: overrides.allegianceKey ?? sourceTeam,
+      isWaveUnit: false,
+      stance: overrides.stance ?? "DEFEND",
+    }),
+    isWaveUnit: false,
+    isDefender: true,
+    baseDmg: overrides.baseDmg ?? 0,
+    atkCd: overrides.atkCd ?? 999,
+    atkCdTicks: overrides.atkCdTicks ?? 999,
+    guardAnchorX: overrides.guardAnchorX ?? overrides.posX ?? 0,
+    guardAnchorY: overrides.guardAnchorY ?? overrides.posY ?? 0,
+  };
+}
+
 function tick(game, count = 1) {
   for (let i = 0; i < count; i += 1)
     simMl.mlTick(game);
+}
+
+function laneSnapshot(game, laneIndex = 0) {
+  return simMl.createMLSnapshot(game).lanes[laneIndex];
+}
+
+function findPad(snapshotLane, padId) {
+  return (snapshotLane && snapshotLane.fortressPads || []).find((pad) => pad && pad.padId === padId) || null;
+}
+
+function advanceUntil(game, predicate, maxTicks = 4000) {
+  for (let tickIndex = 0; tickIndex < maxTicks; tickIndex += 1) {
+    if (predicate())
+      return;
+    simMl.mlTick(game);
+  }
+
+  assert.fail("Timed out waiting for multilane state to settle");
+}
+
+function finishPadConstruction(game, laneIndex, padId) {
+  advanceUntil(game, () => {
+    const pad = findPad(laneSnapshot(game, laneIndex), padId);
+    return !!(pad && !pad.isConstructing);
+  });
+}
+
+function act(game, laneIndex, type, data) {
+  const result = simMl.applyMLAction(game, laneIndex, { type, data });
+  assert.equal(result.ok, true, result.reason || `expected '${type}' to succeed`);
+  return result;
+}
+
+function upgradeTownCoreToTier(game, laneIndex, targetTier) {
+  let lane = laneSnapshot(game, laneIndex);
+  let townCore = findPad(lane, "town_core_pad");
+  assert.ok(townCore, "expected the Town Core pad to exist");
+  while ((townCore && townCore.tier) < targetTier) {
+    act(game, laneIndex, "upgrade_building", { padId: "town_core_pad" });
+    finishPadConstruction(game, laneIndex, "town_core_pad");
+    lane = laneSnapshot(game, laneIndex);
+    townCore = findPad(lane, "town_core_pad");
+  }
 }
 
 function issueLaneCommand(game, laneIndex, type, data = {}) {
@@ -428,6 +501,56 @@ test("battlefield layout emits authored world-space fortress positions instead o
   assert.ok(Number(yellowLane.townCore.x) > 60, "yellow town core should be emitted in authored world space");
 });
 
+test("battlefield layout perimeter segments follow the town-core box corners", () => {
+  const config = simMl.createMLPublicConfig({
+    playerCount: 4,
+    laneTeams: ["red", "yellow", "blue", "green"],
+  });
+
+  const laneByKey = new Map(
+    config.battlefieldLayout.lanes
+      .filter((lane) => lane && lane.laneKey)
+      .map((lane) => [lane.laneKey, lane])
+  );
+  const segmentById = new Map(
+    config.battlefieldLayout.routeSegments
+      .filter((segment) => segment && segment.segmentId)
+      .map((segment) => [segment.segmentId, segment])
+  );
+
+  const redLane = laneByKey.get("red");
+  const yellowLane = laneByKey.get("yellow");
+  const blueLane = laneByKey.get("blue");
+  const greenLane = laneByKey.get("green");
+  assert.ok(redLane && yellowLane && blueLane && greenLane, "expected all four battlefield lanes in the layout payload");
+
+  const topLeftCorner = { x: Number(redLane.townCore.x), y: Number(greenLane.townCore.y) };
+  const topRightCorner = { x: Number(yellowLane.townCore.x), y: Number(greenLane.townCore.y) };
+  const bottomRightCorner = { x: Number(yellowLane.townCore.x), y: Number(blueLane.townCore.y) };
+  const bottomLeftCorner = { x: Number(redLane.townCore.x), y: Number(blueLane.townCore.y) };
+
+  assert.deepEqual(segmentById.get("A_D")?.points, [
+    { x: Number(redLane.townCore.x), y: Number(redLane.townCore.y) },
+    topLeftCorner,
+    { x: Number(greenLane.townCore.x), y: Number(greenLane.townCore.y) },
+  ]);
+  assert.deepEqual(segmentById.get("D_B")?.points, [
+    { x: Number(greenLane.townCore.x), y: Number(greenLane.townCore.y) },
+    topRightCorner,
+    { x: Number(yellowLane.townCore.x), y: Number(yellowLane.townCore.y) },
+  ]);
+  assert.deepEqual(segmentById.get("B_C")?.points, [
+    { x: Number(yellowLane.townCore.x), y: Number(yellowLane.townCore.y) },
+    bottomRightCorner,
+    { x: Number(blueLane.townCore.x), y: Number(blueLane.townCore.y) },
+  ]);
+  assert.deepEqual(segmentById.get("C_A")?.points, [
+    { x: Number(blueLane.townCore.x), y: Number(blueLane.townCore.y) },
+    bottomLeftCorner,
+    { x: Number(redLane.townCore.x), y: Number(redLane.townCore.y) },
+  ]);
+});
+
 test("battlefield layout content hash matches the authored environment footprint across player counts", () => {
   const twoPlayerConfig = simMl.createMLPublicConfig({
     playerCount: 2,
@@ -559,7 +682,7 @@ test("route initialization reflects the active lane-command contract for every b
   assert.equal(attackUnit.pathContractType, "barracks_loop");
   assert.equal(attackUnit.stance, "ATTACK");
   assert.equal(attackUnit.routeTargetNode, "C");
-  assert.deepEqual(attackUnit.routeSegments, ["ALFT_A", "A_B", "B_C", "C_D", "D_A"]);
+  assert.deepEqual(attackUnit.routeSegments, ["ALFT_A", "A_D", "D_B", "B_C", "C_A"]);
 
   const reverseAttackUnit = createAttacker({
     id: "attack_reverse_outer_unit",
@@ -571,7 +694,7 @@ test("route initialization reflects the active lane-command contract for every b
   assert.equal(reverseAttackUnit.pathContractType, "barracks_loop");
   assert.equal(reverseAttackUnit.stance, "ATTACK");
   assert.equal(reverseAttackUnit.routeTargetNode, "C");
-  assert.deepEqual(reverseAttackUnit.routeSegments, ["ARGT_A", "A_D", "D_C", "C_B", "B_A"]);
+  assert.deepEqual(reverseAttackUnit.routeSegments, ["ARGT_A", "A_C", "C_B", "B_D", "D_A"]);
 });
 
 test("barracks route initialization preserves lateral travel spread before units reach the anchor", () => {
@@ -784,6 +907,67 @@ test("nearby hostile structures are targeted by proximity instead of the current
     nearbyHostileLane.laneIndex,
     "once no hostile units are nearby, the closest hostile structure should be selected even when it is off the current objective lane."
   );
+});
+
+test("waves do not tunnel through intact front defenses to chase defenders deeper inside the fortress", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  primeDefendAnchor(game, lane);
+  upgradeTownCoreToTier(game, lane.laneIndex, 2);
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+  const defenderInteriorY = Number(lane.outsideGateAnchor.y) + 10.5;
+  const breachLimitY = defenderInteriorY - 2;
+
+  const defender = createDefender({
+    id: "fortress_inner_guard",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    posX: Number(lane.outsideGateAnchor.x),
+    posY: defenderInteriorY,
+    pathIdx: defenderInteriorY,
+    guardAnchorX: Number(lane.outsideGateAnchor.x),
+    guardAnchorY: defenderInteriorY,
+  });
+  const attacker = createAttacker({
+    id: "blocked_wave_chaser",
+    ownerLane: -1,
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    sourceBarracksKey: null,
+    spawnSourceType: "dungeon_wave",
+    allegianceKey: "dungeon",
+    baseSpeed: 0.9,
+    atkCd: 0,
+  });
+  assert.equal(simMl.initializeMovingUnitRouteState(game, lane, attacker, { x: 5, y: 0 }).ok, true);
+
+  lane.units.push(defender, attacker);
+
+  let sawStructureBlock = false;
+  for (let step = 0; step < 40; step += 1) {
+    tick(game, 1);
+    const liveAttacker = lane.units.find((unit) => unit.id === attacker.id);
+    const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
+    assert.ok(liveAttacker, "expected the dungeon wave to remain alive during the gate approach");
+    assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to still be intact during the interception window");
+    assert.ok(
+      Number(liveAttacker.posY) < breachLimitY,
+      "the wave should not cross the intact front defense line just because it sees a defender deeper inside"
+    );
+    if (liveAttacker.combatTarget?.kind === "fortress_pad")
+      sawStructureBlock = true;
+    assert.notEqual(
+      liveAttacker.combatTarget?.unitId,
+      defender.id,
+      "the wave should not lock onto a deeper defender while an intact structure still blocks the assault path"
+    );
+  }
+
+  assert.equal(sawStructureBlock, true, "expected the wave to be held on a fortress structure target before it could chase the inner defender");
 });
 
 test("route units engage hostile movers on shared center routes instead of passing through", () => {

@@ -7,6 +7,9 @@ namespace CastleDefender.Game
     {
         public const float UnitBillboardScaleFactor = 0.24f;
         public const float BuildingHudScaleFactor = 3.10f;
+        const float BuildingHudReferencePerspectiveFov = 41f;
+        const float BuildingHudReferencePerspectiveDepth = 42f;
+        const float BuildingHudMaxZoomMultiplier = 3f;
         static readonly Vector3 UnitBarLocalScale = new(1.15f, 1.85f, 1f);
         static readonly Color DefaultFillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
         static readonly Color DefaultFrameColor = new(0.88f, 0.96f, 1f, 0.72f);
@@ -49,7 +52,31 @@ namespace CastleDefender.Game
             if (hudRoot == null)
                 return;
 
-            hudRoot.localScale = Vector3.one * BuildingHudScaleFactor;
+            hudRoot.localScale = Vector3.one * ResolveBuildingHudScale(Camera.main, hudRoot.position);
+        }
+
+        static float ResolveBuildingHudScale(Camera cam, Vector3 worldPosition)
+        {
+            if (cam == null || cam.orthographic)
+                return BuildingHudScaleFactor;
+
+            float referenceFovTangent = Mathf.Tan(BuildingHudReferencePerspectiveFov * 0.5f * Mathf.Deg2Rad);
+            float currentFovTangent = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            if (referenceFovTangent <= 0.0001f || currentFovTangent <= 0.0001f)
+                return BuildingHudScaleFactor;
+
+            float forwardDepth = Vector3.Dot(worldPosition - cam.transform.position, cam.transform.forward);
+            if (forwardDepth <= 0.001f)
+                forwardDepth = Vector3.Distance(cam.transform.position, worldPosition);
+
+            float zoomMultiplier = currentFovTangent / referenceFovTangent;
+            float depthMultiplier = Mathf.Max(1f, forwardDepth / BuildingHudReferencePerspectiveDepth);
+            float combinedMultiplier = Mathf.Clamp(
+                zoomMultiplier * depthMultiplier,
+                1f,
+                BuildingHudMaxZoomMultiplier);
+
+            return BuildingHudScaleFactor * combinedMultiplier;
         }
 
         public static void ApplyFill(Transform fill, Image image, float hp01)

@@ -44,13 +44,19 @@ namespace CastleDefender.Editor
             public string cardId;
         }
 
+        sealed class ConstructionStageSpec
+        {
+            public int targetTier;
+            public string[] stageModelPaths = Array.Empty<string>();
+        }
+
         sealed class ChainSpec
         {
             public string key;
             public string buildingType;
             public string displayName;
             public TieredBuildingVisual.VisualMode mode;
-            public string[] constructionStageModelPaths = Array.Empty<string>();
+            public ConstructionStageSpec[] constructionStages = Array.Empty<ConstructionStageSpec>();
             public float portraitYaw = DefaultPortraitYaw;
             public float portraitFrameFill = DefaultPortraitFrameFill;
             public float portraitCanvasFill = DefaultPortraitCanvasFill;
@@ -132,7 +138,13 @@ namespace CastleDefender.Editor
                     buildingType = "town_core",
                     displayName = "Civic",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStageModelPaths = Array.Empty<string>(),
+                    constructionStages = new[]
+                    {
+                        ConstructionStages(1, EditorPaths.TT_CONSTRUCTION_HOUSE_0, EditorPaths.TT_CONSTRUCTION_HOUSE_1),
+                        ConstructionStages(2, EditorPaths.TT_CONSTRUCTION_TOWN_HALL_0, EditorPaths.TT_CONSTRUCTION_TOWN_HALL_1),
+                        ConstructionStages(3, EditorPaths.TT_CONSTRUCTION_KEEP_0, EditorPaths.TT_CONSTRUCTION_KEEP_1),
+                        ConstructionStages(4, EditorPaths.TT_CONSTRUCTION_CASTLE_0, EditorPaths.TT_CONSTRUCTION_CASTLE_1),
+                    },
                     portraitYaw = 150f,
                     portraitFrameFill = 0.90f,
                     portraitCanvasFill = 0.92f,
@@ -163,7 +175,7 @@ namespace CastleDefender.Editor
                     buildingType = "wall",
                     displayName = "Walls",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStageModelPaths = ResolveConstructionStageModelPaths("wall"),
+                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("wall")),
                     portraitYaw = 150f,
                     portraitFrameFill = 0.92f,
                     portraitCanvasFill = 0.92f,
@@ -183,7 +195,7 @@ namespace CastleDefender.Editor
                     buildingType = "gate",
                     displayName = "Gates",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStageModelPaths = ResolveConstructionStageModelPaths("gate"),
+                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("gate")),
                     portraitYaw = 150f,
                     portraitFrameFill = 0.90f,
                     portraitCanvasFill = 0.92f,
@@ -203,7 +215,7 @@ namespace CastleDefender.Editor
                     buildingType = "turret",
                     displayName = "Turrets",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStageModelPaths = ResolveConstructionStageModelPaths("turret"),
+                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("turret")),
                     portraitYaw = 150f,
                     portraitFrameFill = 0.90f,
                     portraitCanvasFill = 0.92f,
@@ -223,7 +235,7 @@ namespace CastleDefender.Editor
                     buildingType = "tower_archer",
                     displayName = "Turrets",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStageModelPaths = ResolveConstructionStageModelPaths("tower_archer"),
+                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("tower_archer")),
                     portraitYaw = 150f,
                     portraitFrameFill = 0.90f,
                     portraitCanvasFill = 0.92f,
@@ -248,7 +260,7 @@ namespace CastleDefender.Editor
                 buildingType = buildingType,
                 displayName = displayName,
                 mode = TieredBuildingVisual.VisualMode.AdditiveLayers,
-                constructionStageModelPaths = ResolveConstructionStageModelPaths(buildingType),
+                constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths(buildingType)),
                 portraitYaw = 150f,
                 portraitFrameFill = 0.88f,
                 portraitCanvasFill = 0.90f,
@@ -262,6 +274,26 @@ namespace CastleDefender.Editor
                     new TierSpec { label = $"{displayName} Tier 3", sourceModelPath = modelPath, accentStyle = AccentStyle.StandardTier3, cardId = $"buildings_{cardKey}_tier3" },
                 },
             };
+        }
+
+        static ConstructionStageSpec ConstructionStages(int targetTier, params string[] stageModelPaths)
+        {
+            return new ConstructionStageSpec
+            {
+                targetTier = Mathf.Max(1, targetTier),
+                stageModelPaths = stageModelPaths ?? Array.Empty<string>(),
+            };
+        }
+
+        static ConstructionStageSpec[] RepeatConstructionStages(int maxTier, string[] stageModelPaths)
+        {
+            if (stageModelPaths == null || stageModelPaths.Length <= 0 || maxTier <= 0)
+                return Array.Empty<ConstructionStageSpec>();
+
+            var results = new ConstructionStageSpec[maxTier];
+            for (int tier = 1; tier <= maxTier; tier++)
+                results[tier - 1] = ConstructionStages(tier, stageModelPaths);
+            return results;
         }
 
         static string[] ResolveConstructionStageModelPaths(string buildingType)
@@ -473,7 +505,7 @@ namespace CastleDefender.Editor
             var portraitFrameRenderers = new List<Renderer>();
             var teamColorTargets = new List<TeamColorMaterialProfile.Target>();
             var higherTierRoots = new List<GameObject>();
-            var constructionStageRoots = new List<GameObject>();
+            var constructionVisualSets = new List<BuildingLifecycleVisual.ConstructionVisualSet>();
             var hammerAsset = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TT_HAMMER);
             var burningSmallFxAsset = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TT_BUILDING_BURNING_SMALL_FX);
             var burningFxAsset = AssetDatabase.LoadAssetAtPath<GameObject>(EditorPaths.TT_BUILDING_BURNING_FX);
@@ -547,31 +579,55 @@ namespace CastleDefender.Editor
                     portraitFrameRenderers.ToArray(),
                     TierTintMultipliers);
 
-                for (int stageIndex = 0; stageIndex < chain.constructionStageModelPaths.Length; stageIndex++)
+                for (int constructionSetIndex = 0; constructionSetIndex < chain.constructionStages.Length; constructionSetIndex++)
                 {
-                    string sourceModelPath = chain.constructionStageModelPaths[stageIndex];
-                    if (string.IsNullOrWhiteSpace(sourceModelPath))
+                    var constructionSet = chain.constructionStages[constructionSetIndex];
+                    if (constructionSet == null || constructionSet.stageModelPaths == null || constructionSet.stageModelPaths.Length <= 0)
                         continue;
 
-                    var constructionRoot = new GameObject($"ConstructionStage_{stageIndex + 1}");
-                    constructionRoot.transform.SetParent(root.transform, false);
-                    constructionRoot.SetActive(false);
+                    var stageRoots = new List<GameObject>();
+                    var constructionGroupRoot = new GameObject($"ConstructionTargetTier_{Mathf.Max(1, constructionSet.targetTier)}");
+                    constructionGroupRoot.transform.SetParent(root.transform, false);
+                    constructionGroupRoot.SetActive(false);
 
-                    var stageModel = InstantiateAssetAsChild(sourceModelPath, constructionRoot.transform);
-                    if (stageModel == null)
+                    for (int stageIndex = 0; stageIndex < constructionSet.stageModelPaths.Length; stageIndex++)
                     {
-                        Object.DestroyImmediate(constructionRoot);
+                        string sourceModelPath = constructionSet.stageModelPaths[stageIndex];
+                        if (string.IsNullOrWhiteSpace(sourceModelPath))
+                            continue;
+
+                        var constructionRoot = new GameObject($"ConstructionStage_{stageIndex + 1}");
+                        constructionRoot.transform.SetParent(constructionGroupRoot.transform, false);
+                        constructionRoot.SetActive(false);
+
+                        var stageModel = InstantiateAssetAsChild(sourceModelPath, constructionRoot.transform);
+                        if (stageModel == null)
+                        {
+                            Object.DestroyImmediate(constructionRoot);
+                            continue;
+                        }
+
+                        ApplyNeutralBuildingMaterial(stageModel, trimMaterials.baseNeutral);
+                        stageRoots.Add(constructionRoot);
+                    }
+
+                    if (stageRoots.Count <= 0)
+                    {
+                        Object.DestroyImmediate(constructionGroupRoot);
                         continue;
                     }
 
-                    ApplyNeutralBuildingMaterial(stageModel, trimMaterials.baseNeutral);
-                    constructionStageRoots.Add(constructionRoot);
+                    constructionVisualSets.Add(new BuildingLifecycleVisual.ConstructionVisualSet
+                    {
+                        targetTier = Mathf.Max(1, constructionSet.targetTier),
+                        stageRoots = stageRoots.ToArray(),
+                    });
                 }
 
                 var lifecycleVisual = root.GetComponent<BuildingLifecycleVisual>() ?? root.AddComponent<BuildingLifecycleVisual>();
                 lifecycleVisual.ConfigureForEditor(
                     tieredVisual,
-                    constructionStageRoots.ToArray(),
+                    constructionVisualSets.ToArray(),
                     hammerAsset,
                     burningSmallFxAsset,
                     burningFxAsset,

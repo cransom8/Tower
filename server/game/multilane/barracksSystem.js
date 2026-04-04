@@ -8,6 +8,7 @@ const {
 } = require("../../barracksLevels");
 const {
   FORTRESS_BUILD_STATES,
+  BUILDING_LIFECYCLE_STATES,
   FORTRESS_BUILDING_DEFS,
   getBuildingTierDisplayName,
   getBuildingBranchLabel,
@@ -19,6 +20,13 @@ const {
   getLaneBuildingUpgradePurchaseCount,
   hasLaneBuildingUpgrade,
 } = require("./fortressSystem");
+const {
+  resolveBuildingLifecycleState,
+  resolveLifecycleStateAfterDamage,
+  resolveLifecycleStateAfterRepair,
+  resolveLifecycleStateAfterConstructionStart,
+  resolveLifecycleStateAfterConstructionComplete,
+} = require("./buildingLifecycle");
 
 const TICK_HZ = 20;
 const BARRACKS_CONSTRUCTION_KINDS = Object.freeze({
@@ -632,6 +640,57 @@ function getBarracksSiteConstructionState(siteState, game = null) {
   };
 }
 
+function getBarracksSiteLifecycleState(siteState, game = null) {
+  if (!siteState)
+    return null;
+
+  const construction = getBarracksSiteConstructionState(siteState, game);
+  const lifecycleState = resolveBuildingLifecycleState({
+    lifecycleState: siteState.lifecycleState,
+    built: !!siteState.isBuilt,
+    constructionInProgress: !!construction && !siteState.isBuilt,
+    hp: siteState.hp,
+    maxHp: siteState.maxHp,
+  });
+  siteState.lifecycleState = lifecycleState;
+  return lifecycleState;
+}
+
+function applyBarracksSiteRepair(game, lane, barracksId, repairAmount) {
+  if (!game || !lane)
+    return { hpRestored: 0, hp: 0, maxHp: 0, lifecycleState: null };
+
+  const siteState = getBarracksSiteState(lane, barracksId, game);
+  if (!siteState)
+    return { hpRestored: 0, hp: 0, maxHp: 0, lifecycleState: null };
+
+  const construction = getBarracksSiteConstructionState(siteState, game);
+  const maxHp = Math.max(0, Math.floor(Number(siteState.maxHp) || 0));
+  const currentHp = Math.max(0, Math.floor(Number(siteState.hp) || 0));
+  const requestedRepair = Math.max(0, Math.floor(Number(repairAmount) || 0));
+  if (!siteState.isBuilt || construction || maxHp <= 0 || requestedRepair <= 0 || currentHp >= maxHp) {
+    return {
+      hpRestored: 0,
+      hp: currentHp,
+      maxHp,
+      lifecycleState: getBarracksSiteLifecycleState(siteState, game),
+    };
+  }
+
+  siteState.hp = Math.min(maxHp, currentHp + requestedRepair);
+  siteState.lifecycleState = resolveLifecycleStateAfterRepair({
+    built: true,
+    hp: siteState.hp,
+    maxHp,
+  });
+  return {
+    hpRestored: Math.max(0, Math.floor(Number(siteState.hp) || 0) - currentHp),
+    hp: Math.max(0, Math.floor(Number(siteState.hp) || 0)),
+    maxHp,
+    lifecycleState: getBarracksSiteLifecycleState(siteState, game),
+  };
+}
+
 function startBarracksSiteConstruction(game, siteState, targetLevel, kind = BARRACKS_CONSTRUCTION_KINDS.build) {
   if (!siteState)
     return null;
@@ -658,6 +717,8 @@ function startBarracksSiteConstruction(game, siteState, targetLevel, kind = BARR
   siteState.constructionTargetLevel = safeTargetLevel;
   siteState.constructionTotalTicks = totalTicks;
   siteState.constructionEndTick = currentTick + totalTicks;
+  if (safeKind === BARRACKS_CONSTRUCTION_KINDS.build)
+    siteState.lifecycleState = resolveLifecycleStateAfterConstructionStart(!!siteState.isBuilt, siteState.lifecycleState);
   return getBarracksSiteConstructionState(siteState, game);
 }
 
@@ -679,6 +740,13 @@ function createBarracksSiteState(siteDef, options = {}) {
     barracksId: siteDef.barracksId,
     isBuilt: built,
     level,
+    lifecycleState: resolveBuildingLifecycleState({
+      lifecycleState: options.lifecycleState || (built ? BUILDING_LIFECYCLE_STATES.active : null),
+      built,
+      constructionInProgress: Math.max(0, Math.floor(Number(options.constructionTargetLevel) || 0)) > 0 && !built,
+      hp,
+      maxHp,
+    }),
     hp,
     maxHp,
     nextSendTick: built
@@ -757,6 +825,7 @@ function ensureBarracksSiteStates(lane, game) {
         nextSendTick: current.nextSendTick,
         commandState: current.commandState || lane.commandState || "DEFEND",
         costHistory: current.costHistory,
+        lifecycleState: current.lifecycleState,
         constructionKind: current.constructionKind,
         constructionTargetLevel: current.constructionTargetLevel,
         constructionEndTick: current.constructionEndTick,
@@ -841,14 +910,16 @@ function describeBarracksSite(game, lane, barracksId) {
   const construction = getBarracksSiteConstructionState(siteState, game);
   const built = !!siteState.isBuilt;
   const level = built ? normalizeBarracksSiteLevel(siteState.level) : 0;
-  const destroyed = built && Math.max(0, Math.floor(Number(siteState.hp) || 0)) <= 0;
+  const lifecycleState = getBarracksSiteLifecycleState(siteState, game);
+  const destroyed = lifecycleState === BUILDING_LIFECYCLE_STATES.destroyed;
+  const underRepair = lifecycleState === BUILDING_LIFECYCLE_STATES.underRepair;
   const maxLevel = getBarracksSiteMaxLevel();
   const nextLevel = built ? Math.min(maxLevel, level + 1) : 1;
   const targetLevel = construction ? construction.targetLevel : nextLevel;
   const townCoreTier = getTownCoreTier(lane);
   const requiredTownCoreTier = getBarracksSiteRequiredTownCoreTier(siteDef, targetLevel);
   const canBuild = !built && !construction && townCoreTier >= requiredTownCoreTier;
-  const canUpgrade = built && !construction && !destroyed && level < maxLevel && townCoreTier >= requiredTownCoreTier;
+  const canUpgrade = built && !construction && !destroyed && !underRepair && level < maxLevel && townCoreTier >= requiredTownCoreTier;
 
   let buildState = FORTRESS_BUILD_STATES.locked;
   if (destroyed) {
@@ -857,6 +928,8 @@ function describeBarracksSite(game, lane, barracksId) {
     buildState = construction.kind === BARRACKS_CONSTRUCTION_KINDS.upgrade
       ? FORTRESS_BUILD_STATES.upgrading
       : FORTRESS_BUILD_STATES.constructing;
+  } else if (underRepair) {
+    buildState = FORTRESS_BUILD_STATES.underRepair;
   } else if (!built) {
     buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
   } else if (level >= maxLevel) {
@@ -874,6 +947,8 @@ function describeBarracksSite(game, lane, barracksId) {
       : "Construction in progress";
   } else if (destroyed) {
     lockedReason = "Destroyed";
+  } else if (underRepair) {
+    lockedReason = "Under repair";
   } else if (!built && !canBuild) {
     lockedReason = `Requires Town Core: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
   } else if (built && level < maxLevel && !canUpgrade) {
@@ -929,7 +1004,9 @@ function describeBarracksSite(game, lane, barracksId) {
     maxLevel,
     targetLevel,
     construction,
+    lifecycleState,
     destroyed,
+    underRepair,
     buildState,
     canBuild,
     canUpgrade,
@@ -1161,6 +1238,12 @@ function applyBarracksSiteDamage(game, lane, barracksId, damage, deps = {}) {
     return { damageApplied: 0, destroyed: false, remainingHp: prevHp };
 
   siteState.hp = Math.max(0, prevHp - appliedDamage);
+  siteState.lifecycleState = resolveLifecycleStateAfterDamage(siteState.lifecycleState, {
+    built: !!siteState.isBuilt,
+    constructionInProgress: false,
+    hp: siteState.hp,
+    maxHp: siteState.maxHp,
+  });
   const damageApplied = prevHp - siteState.hp;
   if (recordBalanceStructureDamage && damageApplied > 0)
     recordBalanceStructureDamage(game, lane, "barracks", damageApplied, {});
@@ -1518,6 +1601,7 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
     level: descriptor.level,
     maxLevel: descriptor.maxLevel,
     buildState: descriptor.buildState,
+    lifecycleState: descriptor.lifecycleState,
     isConstructing: !!construction,
     constructionKind: construction ? construction.kind : null,
     constructionTargetLevel: construction ? construction.targetLevel : descriptor.level,
@@ -1529,6 +1613,7 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
     constructionTimerTotalTicks: construction ? construction.totalTicks : 0,
     constructionProgress01: construction ? construction.progress01 : 0,
     isDestroyed: !!descriptor.destroyed,
+    isUnderRepair: !!descriptor.underRepair,
     canBuild: descriptor.canBuild,
     canUpgrade: descriptor.canUpgrade,
     buildCost: descriptor.buildCost,
@@ -2311,6 +2396,7 @@ function applyBarracksSiteBuildAction(game, lane, barracksId, deps = {}) {
     siteState.level = nextLevel;
     siteState.maxHp = getBarracksSiteBaseMaxHp();
     siteState.hp = siteState.maxHp;
+    siteState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
     siteState.nextSendTick = getCurrentBarracksTick(game) + getBarracksSiteSendIntervalTicks(nextLevel);
   }
   if (!Array.isArray(siteState.costHistory))
@@ -2354,6 +2440,7 @@ function applyBarracksSiteUpgradeAction(game, lane, barracksId, deps = {}) {
     siteState.level = nextLevel;
     siteState.maxHp = Math.max(getBarracksSiteBaseMaxHp(), Math.floor(Number(siteState.maxHp) || 0));
     siteState.hp = siteState.maxHp;
+    siteState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
     siteState.nextSendTick = currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval));
     syncLegacyBarracksAggregate(lane);
   }
@@ -2397,6 +2484,7 @@ function advanceBarracksSiteConstruction(game) {
       siteState.level = nextLevel;
       siteState.maxHp = getBarracksSiteBaseMaxHp();
       siteState.hp = siteState.maxHp;
+      siteState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
       siteState.nextSendTick = wasBuilt && previousLevel > 0
         ? currentTick + Math.max(1, Math.min(currentRemaining || nextInterval, nextInterval))
         : currentTick + nextInterval;
@@ -2766,6 +2854,7 @@ module.exports = {
   getBarracksSiteSendIntervalTicks,
   getBarracksSiteConstructionDurationTicks,
   getBarracksSiteConstructionState,
+  getBarracksSiteLifecycleState,
   createBarracksSiteState,
   createBarracksSiteStates,
   syncLegacyBarracksAggregate,
@@ -2789,6 +2878,7 @@ module.exports = {
   getMarketRosterLockedReason,
   getBarracksSiteCombatTarget,
   applyBarracksSiteDamage,
+  applyBarracksSiteRepair,
   isHeroUnlockedForLane,
   getHeroCooldownReadyTick,
   countActiveHeroDeployments,

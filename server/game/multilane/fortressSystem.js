@@ -2,6 +2,14 @@
 
 const { getMaxBarracksLevel } = require("../../barracksLevels");
 const { logSpawnAuditInfo: logVerboseAuditInfo } = require("./spawnAuditLogging");
+const {
+  BUILDING_LIFECYCLE_STATES,
+  resolveBuildingLifecycleState,
+  resolveLifecycleStateAfterDamage,
+  resolveLifecycleStateAfterRepair,
+  resolveLifecycleStateAfterConstructionStart,
+  resolveLifecycleStateAfterConstructionComplete,
+} = require("./buildingLifecycle");
 
 const DEFAULT_TEAM_HP_START = 20;
 const FRONT_GATE_COMBAT_OFFSET = 10.2;
@@ -13,6 +21,7 @@ const FORTRESS_BUILD_STATES = Object.freeze({
   constructing: "constructing",
   upgrading: "upgrading",
   destroyed: "destroyed",
+  underRepair: "under_repair",
   upgradeAvailable: "upgrade_available",
   maxTier: "max_tier",
 });
@@ -269,9 +278,6 @@ const FORTRESS_TURRET_PAD_LAYOUT = Object.freeze([
   Object.freeze({ key: "front_left", displayName: "Front Left Tower", gridX: -2, gridY: 13, combatOffsetX: -5.0, combatOffsetY: 13.5 }),
   Object.freeze({ key: "front_left_05", displayName: "Front Left Tower 05", gridX: 0, gridY: 12, combatOffsetX: -2.5, combatOffsetY: 14.5 }),
   Object.freeze({ key: "front_right", displayName: "Front Right Tower", gridX: 6, gridY: 13, combatOffsetX: 5.0, combatOffsetY: 13.5 }),
-  Object.freeze({ key: "core_03", displayName: "Inner Tower 03", gridX: 1, gridY: 21, combatOffsetX: -2.5, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "core_04", displayName: "Inner Tower 04", gridX: 3, gridY: 21, combatOffsetX: 0.0, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "core_05", displayName: "Inner Tower 05", gridX: 5, gridY: 21, combatOffsetX: 2.5, combatOffsetY: 4.0 }),
   Object.freeze({ key: "front_gate_left", displayName: "Front Gate Tower Left", gridX: 1, gridY: 14, combatOffsetX: -2.5, combatOffsetY: 12.0 }),
   Object.freeze({ key: "front_gate_right", displayName: "Front Gate Tower Right", gridX: 5, gridY: 14, combatOffsetX: 2.5, combatOffsetY: 12.0 }),
   Object.freeze({ key: "back_left_03", displayName: "Back Left Tower 03", gridX: -2, gridY: 27, combatOffsetX: -5.0, combatOffsetY: -3.0 }),
@@ -612,6 +618,9 @@ function createFortressPadState(padDef, teamHpStart = DEFAULT_TEAM_HP_START) {
       ? Number(padDef.combatOffsetY)
       : null,
     tier,
+    lifecycleState: tier > 0
+      ? BUILDING_LIFECYCLE_STATES.active
+      : null,
     maxHp,
     hp: maxHp,
     costHistory: tier > 0 ? [] : null,
@@ -817,6 +826,62 @@ function getFortressConstructionState(padState, game = null) {
   };
 }
 
+function getFortressPadLifecycleState(padState, game = null) {
+  if (!padState)
+    return null;
+
+  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+  const construction = getFortressConstructionState(padState, game);
+  const lifecycleState = resolveBuildingLifecycleState({
+    lifecycleState: padState.lifecycleState,
+    built: currentTier > 0,
+    constructionInProgress: !!construction && currentTier <= 0,
+    hp: padState.hp,
+    maxHp: padState.maxHp,
+  });
+  padState.lifecycleState = lifecycleState;
+  return lifecycleState;
+}
+
+function applyFortressPadRepair(game, lane, padId, repairAmount, deps = {}) {
+  if (!game || !lane || !padId)
+    return { hpRestored: 0, hp: 0, maxHp: 0, lifecycleState: null };
+
+  const padState = getFortressPadState(lane, padId);
+  if (!padState)
+    return { hpRestored: 0, hp: 0, maxHp: 0, lifecycleState: null };
+
+  const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+  const construction = getFortressConstructionState(padState, game);
+  const maxHp = Math.max(0, Math.floor(Number(padState.maxHp) || 0));
+  const currentHp = Math.max(0, Math.floor(Number(padState.hp) || 0));
+  const requestedRepair = Math.max(0, Math.floor(Number(repairAmount) || 0));
+  if (currentTier <= 0 || construction || maxHp <= 0 || requestedRepair <= 0 || currentHp >= maxHp) {
+    return {
+      hpRestored: 0,
+      hp: currentHp,
+      maxHp,
+      lifecycleState: getFortressPadLifecycleState(padState, game),
+    };
+  }
+
+  padState.hp = Math.min(maxHp, currentHp + requestedRepair);
+  padState.lifecycleState = resolveLifecycleStateAfterRepair({
+    built: true,
+    hp: padState.hp,
+    maxHp,
+  });
+  if (String(padState.buildingType || "").trim().toLowerCase() === "town_core")
+    recomputeTeamHpState(game, deps);
+
+  return {
+    hpRestored: Math.max(0, Math.floor(Number(padState.hp) || 0) - currentHp),
+    hp: Math.max(0, Math.floor(Number(padState.hp) || 0)),
+    maxHp,
+    lifecycleState: getFortressPadLifecycleState(padState, game),
+  };
+}
+
 function startFortressConstruction(game, padState, targetTier, kind = FORTRESS_CONSTRUCTION_KINDS.build) {
   if (!padState)
     return null;
@@ -843,6 +908,10 @@ function startFortressConstruction(game, padState, targetTier, kind = FORTRESS_C
   padState.constructionTargetTier = safeTargetTier;
   padState.constructionTotalTicks = totalTicks;
   padState.constructionEndTick = currentTick + totalTicks;
+  if (safeKind === FORTRESS_CONSTRUCTION_KINDS.build) {
+    const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+    padState.lifecycleState = resolveLifecycleStateAfterConstructionStart(currentTier > 0, padState.lifecycleState);
+  }
 
   return getFortressConstructionState(padState, game);
 }
@@ -880,6 +949,7 @@ function advanceFortressConstruction(game, deps = {}) {
       padState.tier = construction.targetTier;
       padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, construction.targetTier);
       padState.hp = padState.maxHp;
+      padState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
       clearFortressConstructionState(padState);
 
       if (priorBlacksmithBranchDefs
@@ -1102,8 +1172,10 @@ function ensureTownCorePadState(lane, game = null) {
   }
 
   const currentTier = Math.max(0, Math.floor(Number(corePad.tier) || 0));
-  if (currentTier > 0)
+  if (currentTier > 0) {
+    corePad.lifecycleState = getFortressPadLifecycleState(corePad, game);
     return corePad;
+  }
 
   const restoredMaxHp = resolveFortressBuildingMaxHp(
     "town_core",
@@ -1116,6 +1188,7 @@ function ensureTownCorePadState(lane, game = null) {
   if (!Array.isArray(corePad.costHistory))
     corePad.costHistory = [];
   clearFortressConstructionState(corePad);
+  corePad.lifecycleState = BUILDING_LIFECYCLE_STATES.active;
   console.warn(
     `[TownCoreValidation] Restored Town Core for lane ${lane.laneIndex ?? "unknown"} because its pad state was invalid.`
   );
@@ -1187,7 +1260,9 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
   const maxTier = getFortressMaxTier(padState.buildingType);
   const built = currentTier > 0;
-  const destroyed = built && Math.max(0, Math.floor(Number(padState.hp) || 0)) <= 0;
+  const lifecycleState = getFortressPadLifecycleState(padState, _game);
+  const destroyed = lifecycleState === BUILDING_LIFECYCLE_STATES.destroyed;
+  const underRepair = lifecycleState === BUILDING_LIFECYCLE_STATES.underRepair;
   const nextTier = Math.min(maxTier, currentTier + 1);
   const targetTier = construction
     ? construction.targetTier
@@ -1205,6 +1280,7 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   const canUpgrade = built
     && !construction
     && !destroyed
+    && !underRepair
     && currentTier < maxTier
     && townCoreTier >= requiredTownCoreTier
     && !dependencyLockedReason;
@@ -1216,6 +1292,8 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     buildState = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
       ? FORTRESS_BUILD_STATES.upgrading
       : FORTRESS_BUILD_STATES.constructing;
+  } else if (underRepair) {
+    buildState = FORTRESS_BUILD_STATES.underRepair;
   } else if (!built) {
     buildState = canBuild ? FORTRESS_BUILD_STATES.availableToBuild : FORTRESS_BUILD_STATES.locked;
   } else if (currentTier >= maxTier) {
@@ -1233,6 +1311,8 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
       : "Construction in progress";
   } else if (destroyed) {
     lockedReason = "Destroyed";
+  } else if (underRepair) {
+    lockedReason = "Under repair";
   } else if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
     lockedReason = dependencyLockedReason
       ? `Requires ${dependencyLockedReason}`
@@ -1253,7 +1333,9 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     maxTier,
     targetTier,
     construction,
+    lifecycleState,
     destroyed,
+    underRepair,
     buildCost: getFortressBuildCost(actionBuildingType),
     nextUpgradeCost: built && currentTier < maxTier
       ? getFortressUpgradeCost(actionBuildingType, nextTier, deps)
@@ -1315,6 +1397,7 @@ function applySharedDefenseGroupAction(game, lane, padState, deps = {}, kind = F
       groupPad.tier = targetTier;
       groupPad.maxHp = resolveFortressPadMaxHp(game, lane, groupPad, targetTier);
       groupPad.hp = groupPad.maxHp;
+      groupPad.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
     }
   }
 
@@ -1489,6 +1572,12 @@ function applyFortressPadDamage(game, lane, padId, damage, deps = {}) {
     return { damageApplied: 0, destroyed: false, remainingHp: prevHp };
 
   padState.hp = Math.max(0, prevHp - appliedDamage);
+  padState.lifecycleState = resolveLifecycleStateAfterDamage(padState.lifecycleState, {
+    built: Math.max(0, Math.floor(Number(padState.tier) || 0)) > 0,
+    constructionInProgress: false,
+    hp: padState.hp,
+    maxHp: padState.maxHp,
+  });
   const damageApplied = prevHp - padState.hp;
   if (padState.buildingType === "town_core" && damageApplied > 0)
     lane.lifeLossThisRound += damageApplied;
@@ -1561,6 +1650,9 @@ function buildBuildingUpgradeLockedReason(game, lane, padState, descriptor, upgr
 
   if (descriptor.destroyed)
     return `${descriptor.buildingDef.displayName} is destroyed.`;
+
+  if (descriptor.underRepair)
+    return `${descriptor.buildingDef.displayName} is under repair.`;
 
   if (descriptor.currentTier <= 0)
     return `Build ${descriptor.buildingDef.displayName} first.`;
@@ -1692,6 +1784,7 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
     branchKey: buildingDef.branchKey || padState.buildingType,
     branchLabel: getBuildingBranchLabel(padState.buildingType),
     buildState: descriptor.buildState,
+    lifecycleState: descriptor.lifecycleState,
     tier: currentTier,
     maxTier: descriptor.maxTier,
     currentTierName: getBuildingTierDisplayName(padState.buildingType, currentTier),
@@ -1711,6 +1804,7 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
     constructionTimerTotalTicks: construction ? construction.totalTicks : 0,
     constructionProgress01: construction ? construction.progress01 : 0,
     isDestroyed: !!descriptor.destroyed,
+    isUnderRepair: !!descriptor.underRepair,
     canBuild: descriptor.canBuild,
     canUpgrade: descriptor.canUpgrade,
     buildCost: descriptor.buildCost,
@@ -1816,6 +1910,7 @@ function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
     padState.tier = 1;
     padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, 1);
     padState.hp = padState.maxHp;
+    padState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
   }
   if (!Array.isArray(padState.costHistory))
     padState.costHistory = [];
@@ -1870,6 +1965,7 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
     padState.tier = nextTier;
     padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, nextTier);
     padState.hp = padState.maxHp;
+    padState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
   }
   if (!Array.isArray(padState.costHistory))
     padState.costHistory = [];
@@ -1908,6 +2004,7 @@ module.exports = {
   DEFAULT_TEAM_HP_START,
   FRONT_GATE_COMBAT_OFFSET,
   FORTRESS_BUILD_STATES,
+  BUILDING_LIFECYCLE_STATES,
   FORTRESS_CONSTRUCTION_KINDS,
   FORTRESS_BUILDING_DEFS,
   BUILDING_UPGRADE_DEFS,
@@ -1946,12 +2043,14 @@ module.exports = {
   getFortressDependencyLockedReason,
   getFortressUpgradeCost,
   describeFortressPad,
+  getFortressPadLifecycleState,
   getFortressPadCombatTarget,
   getLaneTownCoreCombatTarget,
   buildTownCoreStateSummary,
   markLaneDefeated,
   recomputeTeamHpState,
   applyFortressPadDamage,
+  applyFortressPadRepair,
   getLaneWallArcherTurretDefenseProfile,
   createFortressPadSnapshot,
   applyFortressBuildOnPad,

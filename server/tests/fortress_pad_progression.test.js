@@ -142,7 +142,7 @@ test("public multilane config exposes the new branch pads and authored defense p
   assert.equal(padCountsByType.lumber_mill, 1);
   assert.equal(padCountsByType.wall, 20);
   assert.equal(padCountsByType.gate, 4);
-  assert.equal(padCountsByType.turret, 17);
+  assert.equal(padCountsByType.turret, 14);
   assert.equal(padCountsByType.tower_archer || 0, 0);
 });
 

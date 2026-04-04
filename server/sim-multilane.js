@@ -51,6 +51,7 @@ const {
   createMLPublicConfig: buildMLPublicConfig,
 } = require("./sim-multilane-serialization");
 const {
+  BUILDING_LIFECYCLE_STATES,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,
 } = fortressSystem;
@@ -694,6 +695,15 @@ const getLaneWallArcherTurretDefenseProfile = bindSystemMethod(
   fortressSystem,
   "getLaneWallArcherTurretDefenseProfile"
 );
+const getFortressPadLifecycleState = bindSystemMethod(
+  fortressSystem,
+  "getFortressPadLifecycleState"
+);
+const applyFortressPadRepair = bindSystemMethodWithDeps(
+  fortressSystem,
+  "applyFortressPadRepair",
+  () => FORTRESS_SYSTEM_DEPS
+);
 const createBarracksRosterCounts = bindSystemMethod(
   barracksSystem,
   "createBarracksRosterCounts"
@@ -780,6 +790,10 @@ const getBarracksSiteState = bindSystemMethod(
   barracksSystem,
   "getBarracksSiteState"
 );
+const getBarracksSiteLifecycleState = bindSystemMethod(
+  barracksSystem,
+  "getBarracksSiteLifecycleState"
+);
 const describeBarracksSite = bindSystemMethod(barracksSystem, "describeBarracksSite");
 const getBarracksSiteLockedReason = bindSystemMethod(
   barracksSystem,
@@ -788,6 +802,10 @@ const getBarracksSiteLockedReason = bindSystemMethod(
 const isBarracksSiteAvailable = bindSystemMethod(
   barracksSystem,
   "isBarracksSiteAvailable"
+);
+const applyBarracksSiteRepair = bindSystemMethod(
+  barracksSystem,
+  "applyBarracksSiteRepair"
 );
 const getBarracksRosterLockedReason = bindSystemMethod(
   barracksSystem,
@@ -1203,10 +1221,12 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   isLaneControlledUnitInRegroupWindow,
   canLaneControlledUnitSeekCombat,
   getWaveUnitPreferredTarget,
+  isRouteUnitTargetBlockedByStructure,
   shouldSwitchCombatTarget,
   assignUnitCombatTarget,
   findBlockingStructureTarget,
   markTownCoreBreach,
+  getRouteUnitTargetPressureCount,
   findFriendlyHealTarget,
   getUnitAttackRange,
   dist2D,
@@ -1279,6 +1299,8 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   createBuildingUpgradeState,
   createBarracksSiteStates,
   ensureBarracksSiteStates,
+  getBarracksSiteState,
+  getBarracksSiteLifecycleState,
   createBarracksSiteRosterCounts,
   createMarketRosterCounts,
   seedStartingCombatTestMilitia,
@@ -1296,9 +1318,12 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   syncLaneCommandAssignments,
   applyFortressBuildOnPad,
   getFortressPadByBuildingType,
+  getFortressPadLifecycleState,
+  applyFortressPadRepair,
   applyFortressUpgrade,
   applyFortressBuildingUpgradePurchase,
   normalizeBarracksSiteId,
+  applyBarracksSiteRepair,
   applyBarracksSiteBuildAction,
   applyBarracksSiteUpgradeAction,
   deployBarracksHero,
@@ -1333,6 +1358,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
     );
   },
   ROUTE_TYPES,
+  BUILDING_LIFECYCLE_STATES,
   TEAM_HP_START,
   TICK_HZ,
   INCOME_INTERVAL_TICKS,
@@ -2286,6 +2312,17 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
 
 function getWaveUnitPreferredTarget(game, lane, unit) {
   return combatSystem.getWaveUnitPreferredTarget(game, lane, unit, COMBAT_SYSTEM_DEPS);
+}
+
+function isRouteUnitTargetBlockedByStructure(game, lane, unit, targetDescriptor, blockingTarget) {
+  return combatSystem.isRouteUnitTargetBlockedByStructure(
+    game,
+    lane,
+    unit,
+    targetDescriptor,
+    blockingTarget,
+    COMBAT_SYSTEM_DEPS
+  );
 }
 
 function hasImmediateFollowThroughCombatTarget(game, lane, unit) {

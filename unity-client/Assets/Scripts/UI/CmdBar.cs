@@ -58,6 +58,15 @@ namespace CastleDefender.UI
         static readonly Color CommandButtonActive = new(0.18f, 0.55f, 0.46f, 0.98f);
         static readonly Color CommandButtonInactive = new(0.14f, 0.20f, 0.27f, 0.98f);
         static readonly Color CommandButtonDisabled = new(0.18f, 0.18f, 0.20f, 0.72f);
+        static readonly BarracksActivityIconKind[] ActivityIconOrder =
+        {
+            BarracksActivityIconKind.Shield,
+            BarracksActivityIconKind.Infantry,
+            BarracksActivityIconKind.Archer,
+            BarracksActivityIconKind.Priest,
+            BarracksActivityIconKind.Mage,
+            BarracksActivityIconKind.Hero,
+        };
 
         readonly Dictionary<string, Texture2D> _portraitCache = new(StringComparer.OrdinalIgnoreCase);
         readonly HashSet<string> _capturePending = new(StringComparer.OrdinalIgnoreCase);
@@ -83,6 +92,7 @@ namespace CastleDefender.UI
         bool _loadoutMissingLogged;
         bool _panelCollapsed;
         string _lastActivitySignature;
+        Rect _lastSafeArea = new(-1f, -1f, -1f, -1f);
 
         void Start()
         {
@@ -113,6 +123,9 @@ namespace CastleDefender.UI
 
         void Update()
         {
+            if (ApplyRuntimeSafeAreaLayout())
+                UpdateRuntimePanelSizing(immediate: true);
+
             RefreshButtonPortraits();
             RefreshActivityPanel(false);
             RefreshActivityPortraits();
@@ -134,8 +147,43 @@ namespace CastleDefender.UI
         {
             yield return new WaitForSeconds(MissingLoadoutErrorDelaySeconds);
             if (_loadoutKeys.Length > 0 || _loadoutMissingLogged) yield break;
+
+            if (ShouldUseEditorPreviewWithoutAuthoritativeMatch())
+                yield break;
+
             _loadoutMissingLogged = true;
             Debug.LogError($"[CmdBar] No authoritative match loadout arrived for '{name}' in scene '{gameObject.scene.name}'.");
+        }
+
+        static bool ShouldUseEditorPreviewWithoutAuthoritativeMatch()
+        {
+#if UNITY_EDITOR
+            if (!Application.isEditor)
+                return false;
+
+            if (SnapshotApplier.Instance?.LatestMLMatchConfig?.loadout?.Length > 0)
+                return false;
+
+            if (SnapshotApplier.Instance?.LatestMLMatchReady?.laneAssignments?.Length > 0)
+                return false;
+
+            var network = NetworkManager.Instance;
+            if (network == null)
+                return true;
+
+            if (network.LastMatchLoadout?.Length > 0)
+                return false;
+
+            if (network.LastMLMatchReady?.laneAssignments?.Length > 0)
+                return false;
+
+            if (network.LastMLMatchConfig?.loadout?.Length > 0)
+                return false;
+
+            return true;
+#else
+            return false;
+#endif
         }
 
         void ApplyMatchLoadout(LoadoutEntry[] loadout)
@@ -195,7 +243,7 @@ namespace CastleDefender.UI
             _runtimeHeaderRoot.anchoredPosition = Vector2.zero;
             _runtimeHeaderRoot.sizeDelta = new Vector2(0f, 36f);
 
-            _titleLabel = EnsureText(_runtimeHeaderRoot, "Title", "Barracks Activity", 18f, FontStyles.Bold);
+            _titleLabel = EnsureText(_runtimeHeaderRoot, "Title", GetResponsivePanelTitle(), 18f, FontStyles.Bold);
             _titleLabel.alignment = TextAlignmentOptions.Left;
             _titleLabel.enableAutoSizing = true;
             _titleLabel.fontSizeMin = 12f;
@@ -206,7 +254,7 @@ namespace CastleDefender.UI
             _titleLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
             _titleLabel.rectTransform.pivot = new Vector2(0f, 0.5f);
             _titleLabel.rectTransform.offsetMin = new Vector2(10f, 6f);
-            _titleLabel.rectTransform.offsetMax = new Vector2(-(CollapseToggleWidth + 10f), -6f);
+            _titleLabel.rectTransform.offsetMax = new Vector2(-(GetCollapseToggleWidth() + 10f), -6f);
 
             _collapseButton = EnsureButton(_runtimeHeaderRoot, "CollapseButton");
             var collapseImage = _collapseButton.targetGraphic as Image;
@@ -224,8 +272,8 @@ namespace CastleDefender.UI
             collapseRect.anchorMin = new Vector2(1f, 0.5f);
             collapseRect.anchorMax = new Vector2(1f, 0.5f);
             collapseRect.pivot = new Vector2(1f, 0.5f);
-            collapseRect.sizeDelta = new Vector2(CollapseToggleWidth, 28f);
-            collapseRect.anchoredPosition = new Vector2(-6f, 0f);
+            collapseRect.sizeDelta = new Vector2(GetCollapseToggleWidth(), 28f);
+            collapseRect.anchoredPosition = new Vector2(-GetCollapseToggleInset(), 0f);
             _collapseButtonLabel = EnsureText(_collapseButton.transform, "Label", "<", 18f, FontStyles.Bold);
             _collapseButtonLabel.alignment = TextAlignmentOptions.Center;
             Stretch(_collapseButtonLabel.rectTransform, Vector2.zero, Vector2.zero);
@@ -269,6 +317,7 @@ namespace CastleDefender.UI
             _emptyStateLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
 
             for (int i = 0; i < BarracksOrder.Length; i++) EnsureSection(BarracksOrder[i]);
+            EnsureDefaultActivityRows();
             UpdateRuntimePanelSizing(immediate: true);
             RefreshResponsiveSectionLayout();
         }
@@ -294,18 +343,20 @@ namespace CastleDefender.UI
             var rootLayout = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
             rootLayout.flexibleWidth = 1f;
 
-            var header = EnsureText(root, "Header", BarracksActivityUtility.GetBarracksHeader(id), 16f, FontStyles.Bold);
+            var header = EnsureText(root, "Header", GetResponsiveBarracksHeader(id), 16f, FontStyles.Bold);
             header.alignment = TextAlignmentOptions.Left;
             header.enableAutoSizing = true;
             header.fontSizeMin = 11f;
             header.fontSizeMax = 16f;
             header.overflowMode = TextOverflowModes.Ellipsis;
+            ConfigureSectionTextLayout(header, 22f);
 
             var ordersLabel = EnsureText(root, "OrdersLabel", "Lane Orders", 11f, FontStyles.Normal);
             ordersLabel.alignment = TextAlignmentOptions.Left;
             ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
             ordersLabel.textWrappingMode = TextWrappingModes.NoWrap;
             ordersLabel.overflowMode = TextOverflowModes.Ellipsis;
+            ConfigureSectionTextLayout(ordersLabel, 14f);
 
             var controls = EnsureChildRect(root, "Controls");
             var controlsLayout = controls.gameObject.GetComponent<VerticalLayoutGroup>() ?? controls.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -329,6 +380,7 @@ namespace CastleDefender.UI
             troopsLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
             troopsLabel.textWrappingMode = TextWrappingModes.NoWrap;
             troopsLabel.overflowMode = TextOverflowModes.Ellipsis;
+            ConfigureSectionTextLayout(troopsLabel, 14f);
 
             var rows = EnsureChildRect(root, "Rows");
             var rowsLayout = rows.gameObject.GetComponent<VerticalLayoutGroup>() ?? rows.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -355,35 +407,30 @@ namespace CastleDefender.UI
             var snapshot = applier != null ? applier.LatestML : null;
             int ownerLaneIndex = applier != null ? applier.MyLaneIndex : -1;
             var ownerLane = FindLane(snapshot, ownerLaneIndex);
+            bool hasValidSnapshot = snapshot != null && ownerLaneIndex >= 0 && ownerLane != null;
+
+            if (!hasValidSnapshot)
+            {
+                EnsureDefaultActivityRows();
+                if (_emptyStateLabel != null)
+                    _emptyStateLabel.gameObject.SetActive(false);
+                return;
+            }
+
             var buckets = BarracksActivityUtility.CollectAllBarracksActivity(snapshot, ownerLaneIndex);
-            bool anyRows = false;
             for (int i = 0; i < buckets.Count; i++)
             {
                 var bucket = buckets[i];
                 var section = EnsureSection(bucket.BarracksId);
-                section.Header.text = bucket.DisplayName;
+                section.Header.text = GetResponsiveBarracksHeader(bucket.BarracksId);
                 UpdateSectionControls(section, ownerLaneIndex, ownerLane);
-                anyRows |= bucket.Rows.Count > 0;
             }
 
             string signature = BuildActivitySignature(snapshot, ownerLaneIndex, ownerLane, buckets);
             if (!force && string.Equals(signature, _lastActivitySignature, StringComparison.Ordinal))
             {
-                if (_emptyStateLabel == null) return;
-                if (snapshot == null || ownerLaneIndex < 0)
-                {
-                    _emptyStateLabel.text = "Waiting for match snapshot...";
-                    _emptyStateLabel.gameObject.SetActive(true);
-                }
-                else if (!anyRows)
-                {
-                    _emptyStateLabel.text = "No active barracks deployments.";
-                    _emptyStateLabel.gameObject.SetActive(true);
-                }
-                else
-                {
+                if (_emptyStateLabel != null)
                     _emptyStateLabel.gameObject.SetActive(false);
-                }
                 return;
             }
 
@@ -396,21 +443,8 @@ namespace CastleDefender.UI
                 ApplyResponsiveSectionLayout(section);
             }
 
-            if (_emptyStateLabel == null) return;
-            if (snapshot == null || ownerLaneIndex < 0)
-            {
-                _emptyStateLabel.text = "Waiting for match snapshot...";
-                _emptyStateLabel.gameObject.SetActive(true);
-            }
-            else if (!anyRows)
-            {
-                _emptyStateLabel.text = "No active barracks deployments.";
-                _emptyStateLabel.gameObject.SetActive(true);
-            }
-            else
-            {
+            if (_emptyStateLabel != null)
                 _emptyStateLabel.gameObject.SetActive(false);
-            }
         }
 
         string BuildActivitySignature(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane, List<BarracksActivityBucket> buckets)
@@ -437,12 +471,12 @@ namespace CastleDefender.UI
 
         void SetSectionRows(BarracksSectionView section, BarracksActivityBucket bucket, int ownerLaneIndex)
         {
-            for (int i = section.RowsRoot.childCount - 1; i >= 0; i--)
-                Destroy(section.RowsRoot.GetChild(i).gameObject);
+            DetachAndDestroyChildren(section.RowsRoot);
             section.RowViews.Clear();
 
+            var displayRows = BuildDisplayRows(bucket);
             int cardsPerRow = GetCardsPerRow();
-            for (int i = 0; i < bucket.Rows.Count; i += cardsPerRow)
+            for (int i = 0; i < displayRows.Count; i += cardsPerRow)
             {
                 var pairRoot = EnsureChildRect(section.RowsRoot, $"pair_{i}");
                 var pairLayout = pairRoot.gameObject.GetComponent<HorizontalLayoutGroup>() ?? pairRoot.gameObject.AddComponent<HorizontalLayoutGroup>();
@@ -458,12 +492,67 @@ namespace CastleDefender.UI
                 for (int column = 0; column < cardsPerRow; column++)
                 {
                     int rowIndex = i + column;
-                    if (rowIndex < bucket.Rows.Count)
-                        section.RowViews.Add(CreateActivityRow(pairRoot, bucket.Rows[rowIndex], ownerLaneIndex, bucket.BarracksId));
-                    else
-                        CreateActivityCardSpacer(pairRoot, GetUnitCardHeight());
+                    if (rowIndex < displayRows.Count)
+                        section.RowViews.Add(CreateActivityRow(pairRoot, displayRows[rowIndex], ownerLaneIndex, bucket.BarracksId));
                 }
             }
+        }
+
+        static void DetachAndDestroyChildren(Transform parent)
+        {
+            if (parent == null)
+                return;
+
+            for (int i = parent.childCount - 1; i >= 0; i--)
+            {
+                var child = parent.GetChild(i);
+                child.SetParent(null, false);
+                Destroy(child.gameObject);
+            }
+        }
+
+        void EnsureDefaultActivityRows()
+        {
+            foreach (var section in _sections.Values)
+            {
+                if (section == null || section.RowsRoot == null || section.RowsRoot.childCount > 0)
+                    continue;
+
+                var bucket = new BarracksActivityBucket(
+                    section.BarracksId,
+                    BarracksActivityUtility.GetBarracksHeader(section.BarracksId));
+                SetSectionRows(section, bucket, -1);
+                ApplyResponsiveSectionLayout(section);
+            }
+        }
+
+        List<BarracksActivityDisplayRow> BuildDisplayRows(BarracksActivityBucket bucket)
+        {
+            var groupedCounts = new Dictionary<BarracksActivityIconKind, int>();
+            if (bucket?.Rows != null)
+            {
+                for (int i = 0; i < bucket.Rows.Count; i++)
+                {
+                    var row = bucket.Rows[i];
+                    if (row == null || row.Count <= 0)
+                        continue;
+
+                    var iconKind = ResolveActivityIconKind(row);
+                    groupedCounts.TryGetValue(iconKind, out int currentCount);
+                    groupedCounts[iconKind] = currentCount + Mathf.Max(0, row.Count);
+                }
+            }
+
+            var displayRows = new List<BarracksActivityDisplayRow>(ActivityIconOrder.Length);
+            for (int i = 0; i < ActivityIconOrder.Length; i++)
+            {
+                var iconKind = ActivityIconOrder[i];
+                groupedCounts.TryGetValue(iconKind, out int count);
+
+                displayRows.Add(new BarracksActivityDisplayRow(iconKind, count, i));
+            }
+
+            return displayRows;
         }
 
         void UpdateSectionControls(BarracksSectionView section, int ownerLaneIndex, MLLaneSnap ownerLane)
@@ -479,11 +568,11 @@ namespace CastleDefender.UI
                     : "DEFEND";
 
             if (section.OrdersLabel != null)
-                section.OrdersLabel.text = canIssueOrders ? "Barracks Orders" : "Orders Unavailable";
+                section.OrdersLabel.text = GetResponsiveOrdersLabel(canIssueOrders);
             if (section.ControlsRoot != null)
                 section.ControlsRoot.gameObject.SetActive(true);
             if (section.TroopsLabel != null)
-                section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Troops" : "Active Troops";
+                section.TroopsLabel.text = GetResponsiveTroopsLabel(commandState, canIssueOrders);
 
             ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, () => ActionSender.SetBarracksAttack(section.BarracksId));
             ConfigureCommandButton(
@@ -523,22 +612,26 @@ namespace CastleDefender.UI
             buttonView.Button.colors = colors;
         }
 
-        BarracksActivityRowView CreateActivityRow(Transform parent, BarracksActivityRow row, int ownerLaneIndex, string barracksId)
+        BarracksActivityRowView CreateActivityRow(Transform parent, BarracksActivityDisplayRow row, int ownerLaneIndex, string barracksId)
         {
-            var root = EnsureChildRect(parent, $"{row.StableKey}_row");
+            var root = EnsureChildRect(parent, $"{row.IconKind}_row");
             var image = root.gameObject.GetComponent<Image>() ?? root.gameObject.AddComponent<Image>();
             var button = root.gameObject.GetComponent<Button>() ?? root.gameObject.AddComponent<Button>();
+            bool interactable = ownerLaneIndex >= 0;
             button.transition = Selectable.Transition.ColorTint;
             var colors = button.colors;
-            colors.normalColor = new Color(0.14f, 0.20f, 0.27f, 0.98f);
-            colors.highlightedColor = new Color(0.20f, 0.29f, 0.38f, 1f);
-            colors.pressedColor = new Color(0.10f, 0.16f, 0.22f, 1f);
+            colors.normalColor = ResolveActivityCardColor(row.IconKind);
+            colors.highlightedColor = Color.Lerp(colors.normalColor, Color.white, 0.14f);
+            colors.pressedColor = Color.Lerp(colors.normalColor, Color.black, 0.16f);
+            colors.disabledColor = colors.normalColor;
             colors.selectedColor = colors.highlightedColor;
             button.colors = colors;
             button.targetGraphic = image;
             image.color = colors.normalColor;
             button.onClick.RemoveAllListeners();
-            button.onClick.AddListener(() => FortressSelectionController.OpenBarracksSite(ownerLaneIndex, barracksId));
+            if (interactable)
+                button.onClick.AddListener(() => FortressSelectionController.OpenBarracksSite(ownerLaneIndex, barracksId));
+            button.interactable = interactable;
 
             var layoutElement = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
             float cardHeight = GetUnitCardHeight();
@@ -547,70 +640,59 @@ namespace CastleDefender.UI
             layoutElement.flexibleWidth = 1f;
             layoutElement.minWidth = 0f;
 
-            var layout = root.gameObject.GetComponent<VerticalLayoutGroup>() ?? root.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = IsCompactPanel() ? new RectOffset(4, 4, 4, 4) : new RectOffset(6, 6, 6, 6);
-            layout.spacing = IsCompactPanel() ? 2f : 4f;
-            layout.childAlignment = TextAnchor.UpperCenter;
-            layout.childForceExpandWidth = true;
-            layout.childForceExpandHeight = false;
-            layout.childControlWidth = true;
-            layout.childControlHeight = true;
-
-            var portraitFrame = EnsureChildRect(root, "PortraitFrame");
-            var portraitFrameImage = portraitFrame.gameObject.GetComponent<Image>() ?? portraitFrame.gameObject.AddComponent<Image>();
-            portraitFrameImage.color = new Color(0.08f, 0.12f, 0.18f, 1f);
-            if (portraitFrame.gameObject.GetComponent<Mask>() == null) portraitFrame.gameObject.AddComponent<Mask>().showMaskGraphic = false;
-            var portraitLayout = portraitFrame.gameObject.GetComponent<LayoutElement>() ?? portraitFrame.gameObject.AddComponent<LayoutElement>();
+            var iconFrame = EnsureChildRect(root, "IconFrame");
+            iconFrame.anchorMin = new Vector2(0.5f, 0.5f);
+            iconFrame.anchorMax = new Vector2(0.5f, 0.5f);
+            iconFrame.pivot = new Vector2(0.5f, 0.5f);
             float portraitSize = GetPortraitSize();
-            portraitLayout.minWidth = portraitSize;
-            portraitLayout.preferredWidth = portraitSize;
-            portraitLayout.minHeight = portraitSize;
-            portraitLayout.preferredHeight = portraitSize;
+            iconFrame.sizeDelta = new Vector2(portraitSize, portraitSize);
+            iconFrame.anchoredPosition = Vector2.zero;
+            var iconFrameImage = iconFrame.gameObject.GetComponent<Image>() ?? iconFrame.gameObject.AddComponent<Image>();
+            iconFrameImage.color = new Color(0.08f, 0.12f, 0.18f, 0.98f);
 
-            var portrait = EnsureRawPortrait(portraitFrame);
-            portrait.texture = null;
-            portrait.color = new Color(1f, 1f, 1f, 0f);
+            var icon = EnsureChildRect(iconFrame, "Icon");
+            Stretch(icon, new Vector2(4f, 4f), new Vector2(-4f, -4f));
+            var iconImage = icon.gameObject.GetComponent<Image>() ?? icon.gameObject.AddComponent<Image>();
+            iconImage.raycastTarget = false;
+            iconImage.preserveAspect = true;
+            iconImage.sprite = ResolveActivityIconSprite(row.IconKind);
+            iconImage.color = iconImage.sprite != null ? Color.white : new Color(1f, 1f, 1f, 0f);
 
-            var textRoot = EnsureChildRect(root, "Text");
-            var textLayout = textRoot.gameObject.GetComponent<LayoutElement>() ?? textRoot.gameObject.AddComponent<LayoutElement>();
-            textLayout.flexibleWidth = 1f;
-            textLayout.minWidth = 0f;
-            var textGroup = textRoot.gameObject.GetComponent<VerticalLayoutGroup>() ?? textRoot.gameObject.AddComponent<VerticalLayoutGroup>();
-            textGroup.spacing = 0f;
-            textGroup.childAlignment = TextAnchor.UpperCenter;
-            textGroup.childForceExpandWidth = true;
-            textGroup.childForceExpandHeight = false;
-            textGroup.childControlWidth = true;
-            textGroup.childControlHeight = true;
+            var fallback = EnsureText(iconFrame, "FallbackLabel", BuildActivityIconFallbackLabel(row.IconKind), IsCompactPanel() ? 8.5f : 9.5f, FontStyles.Bold);
+            fallback.alignment = TextAlignmentOptions.Center;
+            fallback.color = new Color(0.95f, 0.90f, 0.72f, 0.96f);
+            fallback.rectTransform.anchorMin = Vector2.zero;
+            fallback.rectTransform.anchorMax = Vector2.one;
+            fallback.rectTransform.offsetMin = new Vector2(3f, 3f);
+            fallback.rectTransform.offsetMax = new Vector2(-3f, -3f);
+            fallback.gameObject.SetActive(iconImage.sprite == null);
 
-            var name = EnsureText(textRoot, "Name", row.DisplayName, IsCompactPanel() ? 10f : 11f, FontStyles.Bold);
-            name.alignment = TextAlignmentOptions.Center;
-            name.color = new Color(0.96f, 0.98f, 1f, 1f);
-            name.enableAutoSizing = true;
-            name.fontSizeMin = IsCompactPanel() ? 7f : 9f;
-            name.fontSizeMax = IsCompactPanel() ? 10f : 11f;
-            name.textWrappingMode = GetCardsPerRow() == 1 ? TextWrappingModes.Normal : TextWrappingModes.NoWrap;
-            name.overflowMode = GetCardsPerRow() == 1 ? TextOverflowModes.Truncate : TextOverflowModes.Ellipsis;
-
-            var subtitle = EnsureText(textRoot, "Subtitle", row.IsHero ? "Hero" : "Troop", 8f, FontStyles.Normal);
-            subtitle.alignment = TextAlignmentOptions.Center;
-            subtitle.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            subtitle.textWrappingMode = TextWrappingModes.NoWrap;
-            subtitle.overflowMode = TextOverflowModes.Ellipsis;
-            subtitle.gameObject.SetActive(!IsCompactPanel());
-
-            var count = EnsureText(portraitFrame, "Count", $"x{Mathf.Max(0, row.Count)}", IsCompactPanel() ? 12f : 14f, FontStyles.Bold);
-            count.alignment = TextAlignmentOptions.BottomRight;
+            bool compactCard = IsCompactPanel() && GetCardsPerRow() > 1;
+            var count = EnsureText(root, "Count", GetActivityCountLabel(row.Count), compactCard ? 9.5f : 14f, FontStyles.Bold);
+            count.alignment = compactCard ? TextAlignmentOptions.Center : TextAlignmentOptions.BottomRight;
             count.color = new Color(0.96f, 0.92f, 0.74f, 1f);
-            count.enableAutoSizing = true;
-            count.fontSizeMin = IsCompactPanel() ? 9f : 11f;
-            count.fontSizeMax = IsCompactPanel() ? 12f : 14f;
-            count.rectTransform.anchorMin = Vector2.zero;
-            count.rectTransform.anchorMax = Vector2.one;
-            count.rectTransform.offsetMin = new Vector2(4f, 4f);
-            count.rectTransform.offsetMax = new Vector2(-4f, -4f);
+            count.enableAutoSizing = !compactCard;
+            count.fontSizeMin = compactCard ? 8f : (IsCompactPanel() ? 9f : 11f);
+            count.fontSizeMax = compactCard ? 9.5f : (IsCompactPanel() ? 12f : 14f);
 
-            return new BarracksActivityRowView(root, portrait, row.UnitTypeKey);
+            if (compactCard)
+            {
+                count.rectTransform.anchorMin = new Vector2(1f, 0f);
+                count.rectTransform.anchorMax = new Vector2(1f, 0f);
+                count.rectTransform.pivot = new Vector2(1f, 0f);
+                count.rectTransform.anchoredPosition = new Vector2(-3f, 3f);
+                count.rectTransform.sizeDelta = new Vector2(16f, 11f);
+            }
+            else
+            {
+                count.rectTransform.anchorMin = Vector2.zero;
+                count.rectTransform.anchorMax = Vector2.one;
+                count.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+                count.rectTransform.offsetMin = new Vector2(4f, 4f);
+                count.rectTransform.offsetMax = new Vector2(-4f, -4f);
+            }
+
+            return new BarracksActivityRowView(root, null, null);
         }
 
         void RefreshActivityPortraits()
@@ -896,19 +978,37 @@ namespace CastleDefender.UI
             return new BarracksCommandButtonView(button, text);
         }
 
-        static void CreateActivityCardSpacer(Transform parent, float cardHeight)
+        static void ConfigureSectionTextLayout(TMP_Text text, float preferredHeight)
         {
-            var spacer = EnsureChildRect(parent, "Spacer");
-            var layout = spacer.gameObject.GetComponent<LayoutElement>() ?? spacer.gameObject.AddComponent<LayoutElement>();
+            if (text == null)
+                return;
+
+            var rect = text.rectTransform;
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.anchoredPosition = Vector2.zero;
+            rect.sizeDelta = new Vector2(0f, preferredHeight);
+
+            var layout = text.GetComponent<LayoutElement>() ?? text.gameObject.AddComponent<LayoutElement>();
             layout.flexibleWidth = 1f;
-            layout.minHeight = cardHeight;
-            layout.preferredHeight = cardHeight;
+            layout.minWidth = 0f;
+            layout.preferredWidth = 0f;
+            layout.minHeight = preferredHeight;
+            layout.preferredHeight = preferredHeight;
         }
 
         void RefreshResponsiveSectionLayout()
         {
+            if (_titleLabel != null)
+                _titleLabel.text = GetResponsivePanelTitle();
+
             foreach (var section in _sections.Values)
+            {
+                if (section?.Header != null)
+                    section.Header.text = GetResponsiveBarracksHeader(section.BarracksId);
                 ApplyResponsiveSectionLayout(section);
+            }
         }
 
         void ApplyResponsiveSectionLayout(BarracksSectionView section)
@@ -927,14 +1027,36 @@ namespace CastleDefender.UI
 
             if (section.Header != null)
             {
-                section.Header.fontSizeMin = compact ? 9f : 11f;
+                section.Header.fontSizeMin = compact ? 10f : 11f;
                 section.Header.fontSizeMax = compact ? 13f : 16f;
+                var headerLayout = section.Header.GetComponent<LayoutElement>();
+                if (headerLayout != null)
+                {
+                    headerLayout.minHeight = compact ? 20f : 22f;
+                    headerLayout.preferredHeight = compact ? 20f : 22f;
+                }
             }
 
             if (section.OrdersLabel != null)
+            {
                 section.OrdersLabel.fontSize = compact ? 10f : 11f;
+                var ordersLayout = section.OrdersLabel.GetComponent<LayoutElement>();
+                if (ordersLayout != null)
+                {
+                    ordersLayout.minHeight = compact ? 14f : 14f;
+                    ordersLayout.preferredHeight = compact ? 14f : 14f;
+                }
+            }
             if (section.TroopsLabel != null)
+            {
                 section.TroopsLabel.fontSize = compact ? 10f : 11f;
+                var troopsLayout = section.TroopsLabel.GetComponent<LayoutElement>();
+                if (troopsLayout != null)
+                {
+                    troopsLayout.minHeight = compact ? 14f : 14f;
+                    troopsLayout.preferredHeight = compact ? 14f : 14f;
+                }
+            }
 
             float commandButtonHeight = GetCommandButtonHeight();
             ApplyResponsiveCommandButtonLayout(section.AttackButton, compact, commandButtonHeight);
@@ -978,15 +1100,113 @@ namespace CastleDefender.UI
 
         int GetCardsPerRow()
         {
+            if (IsCompactPanel())
+                return 2;
+
             float width = _runtimeRoot != null && _runtimeRoot.rect.width > 0f ? _runtimeRoot.rect.width : ResolveExpandedWidth();
             return width >= 210f ? 2 : 1;
         }
 
         float GetCommandButtonHeight() => IsCompactPanel() ? 32f : 38f;
 
-        float GetUnitCardHeight() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 60f : 68f) : (IsCompactPanel() ? 64f : 74f);
+        float GetUnitCardHeight() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 48f : 56f) : (IsCompactPanel() ? 42f : 60f);
 
-        float GetPortraitSize() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 34f : 40f) : (IsCompactPanel() ? 40f : 48f);
+        float GetPortraitSize() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 28f : 34f) : (IsCompactPanel() ? 22f : 40f);
+
+        static BarracksActivityIconKind ResolveActivityIconKind(BarracksActivityRow row)
+        {
+            if (row != null && row.IsHero)
+                return BarracksActivityIconKind.Hero;
+
+            string summary = string.Join(
+                " ",
+                row?.Role ?? string.Empty,
+                row?.RoleLabel ?? string.Empty,
+                row?.ProductionBuildingType ?? string.Empty,
+                row?.DisplayName ?? string.Empty,
+                row?.UnitTypeKey ?? string.Empty,
+                row?.StableKey ?? string.Empty).ToLowerInvariant();
+
+            if (summary.Contains("mage")
+                || summary.Contains("wizard")
+                || summary.Contains("sorcer")
+                || summary.Contains("warlock")
+                || summary.Contains("arcane")
+                || summary.Contains("wizard_tower")
+                || summary.Contains("spell"))
+            {
+                return BarracksActivityIconKind.Mage;
+            }
+
+            if (summary.Contains("priest")
+                || summary.Contains("cleric")
+                || summary.Contains("bishop")
+                || summary.Contains("monk")
+                || summary.Contains("healer")
+                || summary.Contains("temple")
+                || summary.Contains("support"))
+            {
+                return BarracksActivityIconKind.Priest;
+            }
+
+            if (summary.Contains("archer")
+                || summary.Contains("crossbow")
+                || summary.Contains("bow")
+                || summary.Contains("ranged")
+                || summary.Contains("archery"))
+            {
+                return BarracksActivityIconKind.Archer;
+            }
+
+            if (summary.Contains("shield")
+                || summary.Contains("guardian")
+                || summary.Contains("paladin")
+                || summary.Contains("defender"))
+            {
+                return BarracksActivityIconKind.Shield;
+            }
+
+            return BarracksActivityIconKind.Infantry;
+        }
+
+        static string BuildActivityIconFallbackLabel(BarracksActivityIconKind iconKind) => iconKind switch
+        {
+            BarracksActivityIconKind.Shield => "SH",
+            BarracksActivityIconKind.Infantry => "INF",
+            BarracksActivityIconKind.Archer => "ARC",
+            BarracksActivityIconKind.Priest => "PRI",
+            BarracksActivityIconKind.Mage => "MAG",
+            BarracksActivityIconKind.Hero => "HR",
+            _ => "TRP",
+        };
+
+        static Color ResolveActivityCardColor(BarracksActivityIconKind iconKind) => iconKind switch
+        {
+            BarracksActivityIconKind.Shield => new Color(0.12f, 0.21f, 0.28f, 0.98f),
+            BarracksActivityIconKind.Infantry => new Color(0.25f, 0.17f, 0.12f, 0.98f),
+            BarracksActivityIconKind.Archer => new Color(0.15f, 0.24f, 0.17f, 0.98f),
+            BarracksActivityIconKind.Priest => new Color(0.16f, 0.24f, 0.22f, 0.98f),
+            BarracksActivityIconKind.Mage => new Color(0.18f, 0.16f, 0.30f, 0.98f),
+            BarracksActivityIconKind.Hero => new Color(0.33f, 0.23f, 0.08f, 0.98f),
+            _ => new Color(0.14f, 0.20f, 0.27f, 0.98f),
+        };
+
+        static Sprite ResolveActivityIconSprite(BarracksActivityIconKind iconKind)
+        {
+            var theme = ClassicRpgUiRuntime.Theme;
+            if (theme == null)
+                return null;
+
+            return iconKind switch
+            {
+                BarracksActivityIconKind.Shield => theme.ActivityShieldIcon,
+                BarracksActivityIconKind.Infantry => theme.ActivityInfantryIcon,
+                BarracksActivityIconKind.Archer => theme.ActivityArcherIcon,
+                BarracksActivityIconKind.Priest => theme.ActivityPriestIcon,
+                BarracksActivityIconKind.Mage => theme.ActivityMageIcon,
+                _ => null,
+            };
+        }
 
         void TogglePanelCollapsed()
         {
@@ -1039,6 +1259,7 @@ namespace CastleDefender.UI
             {
                 ApplyPanelWidth(targetWidth);
                 ApplyPanelVisualState();
+                RefreshResponsiveSectionLayout();
                 return;
             }
 
@@ -1052,36 +1273,86 @@ namespace CastleDefender.UI
 
         float ResolveExpandedWidth()
         {
-            float referenceWidth = Screen.width;
-            var parentRect = transform as RectTransform;
-            if (parentRect != null && parentRect.rect.width > 0f)
-                return Mathf.Max(MinExpandedWidth, parentRect.rect.width);
+            RectTransform canvasRect = ResolveCanvasRect();
+            float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
+                ? canvasRect.rect.width
+                : Mathf.Max(1f, Screen.width);
+            bool compact = IsSmallScreen();
 
-            bool compact = referenceWidth <= SmallScreenThreshold;
-            if (RespectSafeArea)
-                referenceWidth = Mathf.Min(referenceWidth, Screen.safeArea.width > 0f ? Screen.safeArea.width : referenceWidth);
+            float safeAreaWidth = canvasWidth;
+            if (RespectSafeArea && Screen.width > 0f)
+            {
+                float safeAreaPixels = Screen.safeArea.width > 0f ? Screen.safeArea.width : Screen.width;
+                safeAreaWidth = safeAreaPixels * (canvasWidth / Screen.width);
+            }
 
             float width = compact
-                ? referenceWidth * MobileWidthPercentOfSafeArea
-                : referenceWidth * WidthPercentOfScreen;
+                ? safeAreaWidth * MobileWidthPercentOfSafeArea
+                : canvasWidth * WidthPercentOfScreen;
             float min = compact ? MobileMinExpandedWidth : MinExpandedWidth;
             float max = compact ? MobileMaxExpandedWidth : MaxExpandedWidth;
-            return Mathf.Clamp(width, min, max);
+            return Mathf.Clamp(width, compact ? Mathf.Max(min, 132f) : min, max);
         }
 
         float ResolveCollapsedWidth()
         {
-            float referenceWidth = Screen.width;
-            var parentRect = transform as RectTransform;
-            if (parentRect != null && parentRect.rect.width > 0f)
-                referenceWidth = parentRect.rect.width;
-            return referenceWidth <= SmallScreenThreshold ? MobileCollapsedWidth : CollapsedWidth;
+            RectTransform canvasRect = ResolveCanvasRect();
+            float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
+                ? canvasRect.rect.width
+                : Mathf.Max(1f, Screen.width);
+            float collapsedWidth = IsSmallScreen() ? MobileCollapsedWidth : CollapsedWidth;
+            return Mathf.Min(canvasWidth, collapsedWidth);
         }
 
         void ApplyPanelWidth(float width)
         {
             if (_runtimeRoot != null)
                 _runtimeRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, Mathf.Max(0f, width));
+        }
+
+        bool ApplyRuntimeSafeAreaLayout(bool force = false)
+        {
+            if (_runtimeRoot == null)
+                return false;
+
+            Rect safeArea = Screen.safeArea;
+            if (!force && safeArea == _lastSafeArea)
+                return false;
+
+            _lastSafeArea = safeArea;
+
+            float leftInset = 0f;
+            float topInset = 0f;
+            float bottomInset = 0f;
+
+            if (RespectSafeArea && Screen.width > 0 && Screen.height > 0)
+            {
+                RectTransform canvasRect = ResolveCanvasRect();
+                float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
+                    ? canvasRect.rect.width
+                    : Screen.width;
+                float canvasHeight = canvasRect != null && canvasRect.rect.height > 0f
+                    ? canvasRect.rect.height
+                    : Screen.height;
+                float widthScale = canvasWidth / Screen.width;
+                float heightScale = canvasHeight / Screen.height;
+
+                leftInset = safeArea.xMin * widthScale;
+                topInset = (Screen.height - safeArea.yMax) * heightScale;
+                bottomInset = safeArea.yMin * heightScale;
+            }
+
+            _runtimeRoot.anchoredPosition = new Vector2(leftInset, 0f);
+
+            Vector2 offsetMin = _runtimeRoot.offsetMin;
+            offsetMin.y = bottomInset;
+            _runtimeRoot.offsetMin = offsetMin;
+
+            Vector2 offsetMax = _runtimeRoot.offsetMax;
+            offsetMax.y = -topInset;
+            _runtimeRoot.offsetMax = offsetMax;
+
+            return true;
         }
 
         void ApplyPanelVisualState()
@@ -1103,7 +1374,7 @@ namespace CastleDefender.UI
             }
 
             if (_runtimeHeaderRoot != null)
-                _runtimeHeaderRoot.sizeDelta = new Vector2(0f, expanded ? 36f : Mathf.Max(CollapseToggleHeight, 64f));
+                _runtimeHeaderRoot.sizeDelta = new Vector2(0f, expanded ? 36f : Mathf.Max(GetCollapseToggleHeight(), 64f));
 
             if (_collapseButton != null)
             {
@@ -1114,14 +1385,34 @@ namespace CastleDefender.UI
                     collapseRect.anchorMax = expanded ? new Vector2(1f, 0.5f) : new Vector2(0.5f, 0.5f);
                     collapseRect.pivot = expanded ? new Vector2(1f, 0.5f) : new Vector2(0.5f, 0.5f);
                     collapseRect.sizeDelta = expanded
-                        ? new Vector2(CollapseToggleWidth, 28f)
-                        : new Vector2(Mathf.Max(ResolveCollapsedWidth() - 6f, 12f), CollapseToggleHeight);
-                    collapseRect.anchoredPosition = expanded ? new Vector2(-CollapseToggleInset, 0f) : Vector2.zero;
+                        ? new Vector2(GetCollapseToggleWidth(), 28f)
+                        : new Vector2(Mathf.Max(ResolveCollapsedWidth() - 6f, 12f), GetCollapseToggleHeight());
+                    collapseRect.anchoredPosition = expanded ? new Vector2(-GetCollapseToggleInset(), 0f) : Vector2.zero;
                 }
             }
 
             if (_collapseButtonLabel != null)
                 _collapseButtonLabel.text = expanded ? "<" : ">";
+        }
+
+        bool IsSmallScreen() => Screen.width <= SmallScreenThreshold;
+
+        float GetCollapseToggleWidth() => IsSmallScreen() ? MobileCollapseToggleWidth : CollapseToggleWidth;
+
+        float GetCollapseToggleHeight() => IsSmallScreen() ? MobileCollapseToggleHeight : CollapseToggleHeight;
+
+        float GetCollapseToggleInset() => IsSmallScreen() ? MobileCollapseToggleInset : CollapseToggleInset;
+
+        RectTransform ResolveCanvasRect()
+        {
+            var canvas = GetComponentInParent<Canvas>();
+            if (canvas == null)
+                canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+                return transform as RectTransform;
+
+            var rootCanvas = canvas.rootCanvas != null ? canvas.rootCanvas : canvas;
+            return rootCanvas.GetComponent<RectTransform>() ?? canvas.GetComponent<RectTransform>() ?? (transform as RectTransform);
         }
 
         static Button EnsureButton(Transform parent, string name)
@@ -1158,6 +1449,44 @@ namespace CastleDefender.UI
             : string.Equals(commandState, "DEFEND", StringComparison.OrdinalIgnoreCase)
                 ? "Defend"
                 : "Attack";
+
+        string GetResponsivePanelTitle() => IsCompactPanel() ? "Barracks" : "Barracks Activity";
+
+        string GetResponsiveBarracksHeader(string barracksId)
+        {
+            if (!IsCompactPanel())
+                return BarracksActivityUtility.GetBarracksHeader(barracksId);
+
+            return BarracksActivityUtility.NormalizeBarracksId(barracksId) switch
+            {
+                "center" => "Center",
+                "left" => "Left",
+                "right" => "Right",
+                _ => "Barracks",
+            };
+        }
+
+        string GetResponsiveOrdersLabel(bool canIssueOrders)
+        {
+            if (IsCompactPanel())
+                return "Orders";
+
+            return canIssueOrders ? "Barracks Orders" : "Orders Unavailable";
+        }
+
+        string GetResponsiveTroopsLabel(string commandState, bool canIssueOrders)
+        {
+            if (IsCompactPanel())
+                return "Troops";
+
+            return canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Troops" : "Active Troops";
+        }
+
+        string GetActivityCountLabel(int count)
+        {
+            int safeCount = Mathf.Max(0, count);
+            return IsCompactPanel() && GetCardsPerRow() > 1 ? safeCount.ToString() : $"x{safeCount}";
+        }
 
         static float EstimateLaneHoldProgress(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane)
         {
@@ -1379,9 +1708,36 @@ namespace CastleDefender.UI
         public string StableKey;
         public string DisplayName;
         public string UnitTypeKey;
+        public string Role;
+        public string RoleLabel;
+        public string ProductionBuildingType;
         public bool IsHero;
         public int Count;
         public int SortIndex;
+    }
+
+    internal enum BarracksActivityIconKind
+    {
+        Shield,
+        Infantry,
+        Archer,
+        Priest,
+        Mage,
+        Hero,
+    }
+
+    internal sealed class BarracksActivityDisplayRow
+    {
+        public BarracksActivityDisplayRow(BarracksActivityIconKind iconKind, int count, int sortIndex)
+        {
+            IconKind = iconKind;
+            Count = count;
+            SortIndex = sortIndex;
+        }
+
+        public BarracksActivityIconKind IconKind { get; }
+        public int Count { get; }
+        public int SortIndex { get; }
     }
 
     internal static class BarracksActivityUtility
@@ -1521,6 +1877,9 @@ namespace CastleDefender.UI
                         unit.catalogUnitKey,
                         !string.IsNullOrWhiteSpace(unit.type) ? unit.type : (hero != null ? hero.unitTypeKey : null),
                         unit.skinKey),
+                    Role = hero != null ? hero.role : null,
+                    RoleLabel = hero != null ? hero.roleLabel : null,
+                    ProductionBuildingType = hero != null ? hero.summonSourceBuildingType : null,
                     IsHero = true,
                     SortIndex = hero != null ? hero.sortIndex : int.MaxValue - 1,
                 };
@@ -1539,6 +1898,9 @@ namespace CastleDefender.UI
                     unit.catalogUnitKey,
                     !string.IsNullOrWhiteSpace(unit.type) ? unit.type : (roster != null ? roster.unitTypeKey : null),
                     unit.skinKey),
+                Role = roster != null ? roster.role : null,
+                RoleLabel = roster != null ? roster.roleLabel : null,
+                ProductionBuildingType = roster != null ? roster.productionBuildingType : null,
                 IsHero = false,
                 SortIndex = roster != null ? roster.sortIndex : int.MaxValue,
             };

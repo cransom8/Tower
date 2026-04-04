@@ -298,6 +298,10 @@ namespace CastleDefender.UI
                 var animator = _stagedAnimators[i];
                 if (animator == null)
                     continue;
+                // Building prefabs can intentionally keep upgrade/construction variants inactive.
+                // Portrait baking should ignore those hidden animators instead of erroring.
+                if (!animator.gameObject.activeInHierarchy)
+                    continue;
 
                 _ = animator.GetComponent<SnapshotAnimationEventRelay>()
                     ?? animator.gameObject.AddComponent<SnapshotAnimationEventRelay>();

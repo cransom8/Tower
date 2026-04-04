@@ -558,7 +558,68 @@ function findFriendlyHealTarget(game, lane, unit, supportProfile, deps = {}) {
   return best;
 }
 
-function getRouteUnitTargetPressureCount(game, seeker, targetEntity, deps = {}) {
+function getCurrentCombatTargetUnitId(unit) {
+  if (!unit)
+    return null;
+  if (unit.combatTarget && unit.combatTarget.unitId)
+    return unit.combatTarget.unitId;
+  return unit.combatTargetId || null;
+}
+
+function buildRouteUnitTargetPressureIndex(game, deps = {}) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
+  const resolveRouteUnitFactionKey = requireDepFunction(deps, "resolveRouteUnitFactionKey");
+  const byFactionAndTarget = new Map();
+
+  for (const allyLane of game && game.lanes || []) {
+    if (!allyLane || !Array.isArray(allyLane.units))
+      continue;
+
+    for (const ally of allyLane.units) {
+      if (!ally || ally.hp <= 0 || !isLaneControlledUnit(ally))
+        continue;
+
+      const allyFaction = resolveRouteUnitFactionKey(game, ally);
+      const allyTargetId = getCurrentCombatTargetUnitId(ally);
+      if (!allyFaction || !allyTargetId)
+        continue;
+
+      let targetCounts = byFactionAndTarget.get(allyFaction);
+      if (!targetCounts) {
+        targetCounts = new Map();
+        byFactionAndTarget.set(allyFaction, targetCounts);
+      }
+      targetCounts.set(allyTargetId, (targetCounts.get(allyTargetId) || 0) + 1);
+    }
+  }
+
+  return {
+    byFactionAndTarget,
+    factionKeys: Array.from(byFactionAndTarget.keys()),
+    friendlyFactionKeysByFaction: new Map(),
+  };
+}
+
+function getFriendlyPressureFactionKeys(pressureIndex, seekerFaction, areAllegiancesHostile) {
+  if (!pressureIndex || !seekerFaction)
+    return [];
+
+  const cached = pressureIndex.friendlyFactionKeysByFaction.get(seekerFaction);
+  if (cached)
+    return cached;
+
+  const friendlyFactionKeys = [];
+  for (const factionKey of pressureIndex.factionKeys) {
+    if (!factionKey || areAllegiancesHostile(seekerFaction, factionKey))
+      continue;
+    friendlyFactionKeys.push(factionKey);
+  }
+
+  pressureIndex.friendlyFactionKeysByFaction.set(seekerFaction, friendlyFactionKeys);
+  return friendlyFactionKeys;
+}
+
+function getRouteUnitTargetPressureCount(game, seeker, targetEntity, deps = {}, context = null) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const resolveRouteUnitFactionKey = requireDepFunction(deps, "resolveRouteUnitFactionKey");
   const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
@@ -566,6 +627,31 @@ function getRouteUnitTargetPressureCount(game, seeker, targetEntity, deps = {}) 
     return 0;
 
   const seekerFaction = resolveRouteUnitFactionKey(game, seeker);
+  const pressureIndex = context && context.routeTargetPressureIndex
+    ? context.routeTargetPressureIndex
+    : null;
+  const targetId = targetEntity && targetEntity.id
+    ? targetEntity.id
+    : null;
+  if (pressureIndex && targetId) {
+    let pressure = 0;
+    const friendlyFactionKeys = getFriendlyPressureFactionKeys(
+      pressureIndex,
+      seekerFaction,
+      areAllegiancesHostile
+    );
+    for (const factionKey of friendlyFactionKeys) {
+      const targetCounts = pressureIndex.byFactionAndTarget.get(factionKey);
+      if (!targetCounts)
+        continue;
+      pressure += targetCounts.get(targetId) || 0;
+    }
+
+    if (getCurrentCombatTargetUnitId(seeker) === targetId)
+      pressure -= 1;
+    return Math.max(0, pressure);
+  }
+
   let pressure = 0;
   for (const allyLane of game.lanes || []) {
     if (!allyLane || !Array.isArray(allyLane.units))
@@ -610,7 +696,7 @@ function shouldUseLaneControlledSurroundSlots(attacker, target, deps = {}) {
   );
 }
 
-function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAttackRange = false, deps = {}) {
+function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAttackRange = false, deps = {}, context = null) {
   const liveTarget = target && target.entity
     ? target.entity
     : target;
@@ -629,7 +715,8 @@ function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAtta
       liveTarget,
       stopDistance,
       { appendAttackerIfMissing: true },
-      deps
+      deps,
+      context
     );
     const slotDistance = Math.hypot(
       Number(unit.posX) - Number(slotPoint.x),
@@ -646,7 +733,7 @@ function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAtta
   if (requireAttackRange || !requireDepFunction(deps, "isLaneControlledUnit")(unit) || !liveTarget)
     return approachDistance;
 
-  const pressure = getRouteUnitTargetPressureCount(game, unit, liveTarget, deps);
+  const pressure = getRouteUnitTargetPressureCount(game, unit, liveTarget, deps, context);
   const penalty = Number(deps.ROUTE_TARGET_PRESSURE_DISTANCE_PENALTY);
   return approachDistance + (pressure * (Number.isFinite(penalty) ? penalty : 0.4));
 }
@@ -663,11 +750,17 @@ function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget, d
   const currentTargetEntity = currentTarget && currentTarget.entity
     ? currentTarget.entity
     : currentTarget;
+  const currentDistance = getResolvedCombatTargetDistance(unit, currentTarget);
+  const currentStopDistance = getUnitStopDistance(unit, currentTargetEntity, deps);
+  const currentTargetInDirectRange = Number.isFinite(currentDistance)
+    && Number.isFinite(currentStopDistance)
+    && currentDistance <= currentStopDistance + getContactSlotTolerance(deps);
+  if (currentTargetInDirectRange)
+    return false;
   const currentTargetInContact = !!(lane && currentTargetEntity && isUnitInCombatContact(lane, unit, currentTargetEntity, deps));
   if (currentTargetInContact)
     return false;
 
-  const currentDistance = getResolvedCombatTargetDistance(unit, currentTarget);
   const nextDistance = getResolvedCombatTargetDistance(unit, nextTarget);
   if (!Number.isFinite(currentDistance))
     return true;
@@ -874,29 +967,99 @@ function resolveContactFrame(attacker, target, deps = {}) {
   };
 }
 
-function getContactSlotPoint(lane, attacker, target, stopDistance, options = null, deps = {}) {
+function buildLaneContactSlotOccupancyIndex(lane, deps = {}) {
   const resolveLaneControlledUnitSortKey = requireDepFunction(deps, "resolveLaneControlledUnitSortKey");
-  const appendAttackerIfMissing = !!(options && options.appendAttackerIfMissing);
-  const attackers = lane.units
-    .filter((unit) => unit
-      && unit.hp > 0
-      && !unit.isDefender
-      && unit.combatTarget
-      && unit.combatTarget.unitId === target.id)
-    .sort((left, right) => resolveLaneControlledUnitSortKey(left).localeCompare(resolveLaneControlledUnitSortKey(right)));
+  const occupancyByTarget = new Map();
+  if (!lane || !Array.isArray(lane.units))
+    return occupancyByTarget;
 
-  const attackerIndex = attackers.findIndex((unit) => unit.id === attacker.id);
+  for (const unit of lane.units) {
+    if (!unit || unit.hp <= 0 || unit.isDefender || !unit.combatTarget || !unit.combatTarget.unitId)
+      continue;
+
+    const targetId = unit.combatTarget.unitId;
+    let occupancy = occupancyByTarget.get(targetId);
+    if (!occupancy) {
+      occupancy = {
+        attackers: [],
+        indexById: null,
+        sumX: 0,
+        sumY: 0,
+      };
+      occupancyByTarget.set(targetId, occupancy);
+    }
+
+    occupancy.attackers.push(unit);
+    occupancy.sumX += Number(unit.posX) || 0;
+    occupancy.sumY += Number(unit.posY) || 0;
+  }
+
+  for (const occupancy of occupancyByTarget.values()) {
+    occupancy.attackers.sort((left, right) => resolveLaneControlledUnitSortKey(left).localeCompare(resolveLaneControlledUnitSortKey(right)));
+    const indexById = new Map();
+    for (let i = 0; i < occupancy.attackers.length; i += 1)
+      indexById.set(occupancy.attackers[i].id, i);
+    occupancy.indexById = indexById;
+  }
+
+  return occupancyByTarget;
+}
+
+function getContactSlotOccupancySnapshot(lane, target, deps = {}, context = null) {
+  const targetId = target && target.id
+    ? target.id
+    : null;
+  if (!targetId) {
+    return {
+      attackers: [],
+      indexById: new Map(),
+      sumX: 0,
+      sumY: 0,
+    };
+  }
+
+  const laneCache = context && context.contactSlotOccupancyByLane instanceof WeakMap
+    ? context.contactSlotOccupancyByLane
+    : null;
+  if (!laneCache) {
+    const occupancyByTarget = buildLaneContactSlotOccupancyIndex(lane, deps);
+    return occupancyByTarget.get(targetId) || {
+      attackers: [],
+      indexById: new Map(),
+      sumX: 0,
+      sumY: 0,
+    };
+  }
+
+  let occupancyByTarget = laneCache.get(lane);
+  if (!occupancyByTarget) {
+    occupancyByTarget = buildLaneContactSlotOccupancyIndex(lane, deps);
+    laneCache.set(lane, occupancyByTarget);
+  }
+
+  return occupancyByTarget.get(targetId) || {
+    attackers: [],
+    indexById: new Map(),
+    sumX: 0,
+    sumY: 0,
+  };
+}
+
+function getContactSlotPoint(lane, attacker, target, stopDistance, options = null, deps = {}, context = null) {
+  const appendAttackerIfMissing = !!(options && options.appendAttackerIfMissing);
+  const occupancy = getContactSlotOccupancySnapshot(lane, target, deps, context);
+  const attackers = occupancy.attackers;
+
+  const attackerIndex = occupancy.indexById.has(attacker.id)
+    ? occupancy.indexById.get(attacker.id)
+    : -1;
   const slotIndex = Math.max(0, attackerIndex >= 0 ? attackerIndex : (appendAttackerIfMissing ? attackers.length : 0));
   const effectiveAttackerCount = appendAttackerIfMissing && attackerIndex < 0
     ? attackers.length + 1
     : attackers.length;
   const radius = Math.max(0.75, getUnitContactRadius(attacker, deps) + getUnitContactRadius(target, deps));
-  const centroid = attackers.reduce((sum, unit) => ({
-    x: sum.x + (Number(unit.posX) || 0),
-    y: sum.y + (Number(unit.posY) || 0),
-  }), { x: 0, y: 0 });
-  const centroidX = attackers.length > 0 ? centroid.x / attackers.length : Number(attacker.posX) || Number(target.posX) || 0;
-  const centroidY = attackers.length > 0 ? centroid.y / attackers.length : Number(attacker.posY) || Number(target.posY) || 0;
+  const centroidX = attackers.length > 0 ? occupancy.sumX / attackers.length : Number(attacker.posX) || Number(target.posX) || 0;
+  const centroidY = attackers.length > 0 ? occupancy.sumY / attackers.length : Number(attacker.posY) || Number(target.posY) || 0;
   let baseAngle = Math.atan2(centroidY - Number(target.posY), centroidX - Number(target.posX));
   if (!Number.isFinite(baseAngle)) {
     const frame = resolveContactFrame(attacker, target, deps);
@@ -925,11 +1088,11 @@ function getContactSlotPoint(lane, attacker, target, stopDistance, options = nul
   };
 }
 
-function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance, options = null, deps = {}) {
+function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance, options = null, deps = {}, context = null) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const shouldLaneControlledUnitFreeRoamInCombat = requireDepFunction(deps, "shouldLaneControlledUnitFreeRoamInCombat");
   const getLaneControlledSharedCombatAnchor = requireDepFunction(deps, "getLaneControlledSharedCombatAnchor");
-  const desiredPoint = getContactSlotPoint(lane, attacker, target, stopDistance, options, deps);
+  const desiredPoint = getContactSlotPoint(lane, attacker, target, stopDistance, options, deps, context);
   if (!isLaneControlledUnit(attacker))
     return desiredPoint;
   if (shouldLaneControlledUnitFreeRoamInCombat(attacker))
@@ -1031,27 +1194,60 @@ function isRouteUnitInsideFortressInterior(lane, target, deps = {}) {
     && distanceToCore <= getFortressInteriorAssaultRadius(deps);
 }
 
-function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}) {
+function updateBestHostileRouteUnitTarget(currentBest, candidate, laneIndex, distance, preferenceScore) {
+  if (!candidate || !Number.isFinite(distance) || !Number.isFinite(preferenceScore))
+    return currentBest;
+  if (!currentBest
+      || distance < currentBest.distance - 0.0001
+      || (Math.abs(distance - currentBest.distance) <= 0.0001
+        && preferenceScore < currentBest.preferenceScore)) {
+    return {
+      entity: candidate,
+      laneIndex,
+      distance,
+      preferenceScore,
+    };
+  }
+  return currentBest;
+}
+
+function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const getLaneCommandStateForUnit = requireDepFunction(deps, "getLaneCommandStateForUnit");
   const getLaneCommandAnchorStateForUnit = requireDepFunction(deps, "getLaneCommandAnchorStateForUnit");
   const canEngageRouteUnitTarget = requireDepFunction(deps, "canEngageRouteUnitTarget");
   const isTargetInsideHomeFortressEmergencyZone = requireDepFunction(deps, "isTargetInsideHomeFortressEmergencyZone");
+  const summary = {
+    attackRange: null,
+    engageRange: null,
+    fortressInterior: null,
+    directEngagement: null,
+  };
   if (!game || !lane || !unit)
-    return null;
+    return summary;
 
-  const directEngagementOnly = !!(options && options.directEngagementOnly);
-  const fortressInteriorOnly = !!(options && options.fortressInteriorOnly);
+  const unitIsLaneControlled = isLaneControlledUnit(unit);
   const laneCommandStates = getLaneCommandStates(deps);
-  const defendSeek = isLaneControlledUnit(unit)
+  const defendSeek = unitIsLaneControlled
     && getLaneCommandStateForUnit(game, unit) === laneCommandStates.DEFEND;
   const defendAnchorState = defendSeek
     ? getLaneCommandAnchorStateForUnit(game, unit)
     : null;
-  let best = null;
-  let bestLaneIndex = -1;
-  let bestDist = Infinity;
-  let bestPreferenceScore = Infinity;
+  const contactSlotTolerance = getContactSlotTolerance(deps);
+  const baseEngagementRange = getUnitEngagementRange(unit, deps);
+  const directEngagementRange = baseEngagementRange + contactSlotTolerance;
+  const fortressInteriorRange = Math.max(baseEngagementRange, getFortressInteriorAssaultRadius(deps)) + contactSlotTolerance;
+  const defendSeekRange = Math.max(
+    baseEngagementRange,
+    (Number(defendAnchorState && defendAnchorState.engagementRadius) || getLaneCommandDefenseRadius(deps))
+      + getRouteSlotRowSpacing(deps)
+  ) + contactSlotTolerance;
+  const scoreContext = {
+    routeTargetPressureIndex: unitIsLaneControlled
+      ? buildRouteUnitTargetPressureIndex(game, deps)
+      : null,
+    contactSlotOccupancyByLane: new WeakMap(),
+  };
 
   for (const candidateLane of game.lanes || []) {
     if (!candidateLane || !Array.isArray(candidateLane.units))
@@ -1063,59 +1259,117 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
 
       const dx = Number(candidate.posX) - Number(unit.posX);
       const dy = Number(candidate.posY) - Number(unit.posY);
-      const dist = Math.sqrt((dx * dx) + (dy * dy));
+      const distance = Math.sqrt((dx * dx) + (dy * dy));
+      if (!Number.isFinite(distance))
+        continue;
+
       const emergencyInteriorTarget = defendSeek
         && isTargetInsideHomeFortressEmergencyZone(game, unit, candidate);
       const fortressInteriorTarget = isRouteUnitInsideFortressInterior(candidateLane, candidate, deps);
-      if (fortressInteriorOnly && !fortressInteriorTarget)
-        continue;
-      const baseEngagementRange = getUnitEngagementRange(unit, deps);
-      const rangeLimit = requireAttackRange
-        ? getUnitStopDistance(unit, candidate, deps) + getContactSlotTolerance(deps)
-        : (directEngagementOnly
-          ? baseEngagementRange
-          : (fortressInteriorOnly
-            ? Math.max(baseEngagementRange, getFortressInteriorAssaultRadius(deps))
-          : (emergencyInteriorTarget
-            ? Math.max(baseEngagementRange, getFortressInteriorAssaultRadius(deps))
-            : (defendSeek
-              ? Math.max(
-                baseEngagementRange,
-                (Number(defendAnchorState && defendAnchorState.engagementRadius) || getLaneCommandDefenseRadius(deps)) + getRouteSlotRowSpacing(deps)
-              )
-              : baseEngagementRange)))) + getContactSlotTolerance(deps);
-      if (dist > rangeLimit)
+      const attackRangeLimit = getUnitStopDistance(unit, candidate, deps) + contactSlotTolerance;
+      const engageRangeLimit = emergencyInteriorTarget
+        ? fortressInteriorRange
+        : (defendSeek ? defendSeekRange : directEngagementRange);
+      const inAttackRange = distance <= attackRangeLimit;
+      const inDirectEngagementRange = distance <= directEngagementRange;
+      const inEngageRange = distance <= engageRangeLimit;
+      const inFortressInteriorRange = fortressInteriorTarget && distance <= fortressInteriorRange;
+      if (!inAttackRange && !inDirectEngagementRange && !inEngageRange && !inFortressInteriorRange)
         continue;
 
-      const preferenceScore = getRouteUnitTargetPreferenceScore(game, candidateLane, unit, candidate, requireAttackRange, deps);
-      if (requireAttackRange
-          && isLaneControlledUnit(unit)
-          && shouldUseLaneControlledSurroundSlots(unit, candidate, deps)
-          && preferenceScore > getCombatSlotArrivalTolerance(unit, candidate, deps) + getContactSlotTolerance(deps)) {
-        continue;
+      let attackPreferenceScore = null;
+      let generalPreferenceScore = null;
+
+      if (inAttackRange) {
+        attackPreferenceScore = getRouteUnitTargetPreferenceScore(
+          game,
+          candidateLane,
+          unit,
+          candidate,
+          true,
+          deps,
+          scoreContext
+        );
+        if (unitIsLaneControlled
+            && shouldUseLaneControlledSurroundSlots(unit, candidate, deps)
+            && attackPreferenceScore > getCombatSlotArrivalTolerance(unit, candidate, deps) + contactSlotTolerance) {
+          attackPreferenceScore = null;
+        }
       }
 
-      if (dist < bestDist || (Math.abs(dist - bestDist) <= 0.0001 && preferenceScore < bestPreferenceScore)) {
-        best = candidate;
-        bestLaneIndex = candidateLane.laneIndex;
-        bestDist = dist;
-        bestPreferenceScore = preferenceScore;
+      if (inDirectEngagementRange || inEngageRange || inFortressInteriorRange) {
+        generalPreferenceScore = getRouteUnitTargetPreferenceScore(
+          game,
+          candidateLane,
+          unit,
+          candidate,
+          false,
+          deps,
+          scoreContext
+        );
+      }
+
+      if (Number.isFinite(attackPreferenceScore)) {
+        summary.attackRange = updateBestHostileRouteUnitTarget(
+          summary.attackRange,
+          candidate,
+          candidateLane.laneIndex,
+          distance,
+          attackPreferenceScore
+        );
+      }
+      if (inDirectEngagementRange && Number.isFinite(generalPreferenceScore)) {
+        summary.directEngagement = updateBestHostileRouteUnitTarget(
+          summary.directEngagement,
+          candidate,
+          candidateLane.laneIndex,
+          distance,
+          generalPreferenceScore
+        );
+      }
+      if (inEngageRange && Number.isFinite(generalPreferenceScore)) {
+        summary.engageRange = updateBestHostileRouteUnitTarget(
+          summary.engageRange,
+          candidate,
+          candidateLane.laneIndex,
+          distance,
+          generalPreferenceScore
+        );
+      }
+      if (inFortressInteriorRange && Number.isFinite(generalPreferenceScore)) {
+        summary.fortressInterior = updateBestHostileRouteUnitTarget(
+          summary.fortressInterior,
+          candidate,
+          candidateLane.laneIndex,
+          distance,
+          generalPreferenceScore
+        );
       }
     }
   }
 
-  return best
-    ? {
-      entity: best,
-      laneIndex: bestLaneIndex,
-      distance: bestDist,
-      preferenceScore: bestPreferenceScore,
-    }
-    : null;
+  return summary;
+}
+
+function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}) {
+  if (!game || !lane || !unit)
+    return null;
+
+  const directEngagementOnly = !!(options && options.directEngagementOnly);
+  const fortressInteriorOnly = !!(options && options.fortressInteriorOnly);
+  const summary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+  if (requireAttackRange)
+    return summary.attackRange;
+  if (directEngagementOnly)
+    return summary.directEngagement;
+  if (fortressInteriorOnly)
+    return summary.fortressInterior;
+  return summary.engageRange;
 }
 
 function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
-  const routeUnitInAttackRange = findHostileRouteUnitTarget(game, lane, unit, true, null, deps);
+  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+  const routeUnitInAttackRange = targetSummary.attackRange;
   if (routeUnitInAttackRange) {
     return {
       kind: "unit",
@@ -1126,7 +1380,7 @@ function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
     };
   }
 
-  const routeUnitInEngageRange = findHostileRouteUnitTarget(game, lane, unit, false, null, deps);
+  const routeUnitInEngageRange = targetSummary.engageRange;
   if (routeUnitInEngageRange) {
     return {
       kind: "unit",
@@ -1137,14 +1391,7 @@ function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
     };
   }
 
-  const fortressInteriorTarget = findHostileRouteUnitTarget(
-    game,
-    lane,
-    unit,
-    false,
-    { fortressInteriorOnly: true },
-    deps
-  );
+  const fortressInteriorTarget = targetSummary.fortressInterior;
   if (fortressInteriorTarget) {
     return {
       kind: "unit",
@@ -1158,6 +1405,64 @@ function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
   return null;
 }
 
+function isRouteUnitTargetBlockedByStructure(game, lane, unit, targetDescriptor, blockingTarget, deps = {}) {
+  const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
+  const getLaneTownCoreCombatTarget = requireDepFunction(deps, "getLaneTownCoreCombatTarget");
+  const defensiveStructureTypes = new Set(["town_core", "wall", "gate", "turret"]);
+  if (!game || !lane || !unit || !targetDescriptor || targetDescriptor.kind !== "unit" || !targetDescriptor.entity)
+    return false;
+
+  const targetLaneIndex = Number.isInteger(targetDescriptor.laneIndex)
+    ? targetDescriptor.laneIndex
+    : lane.laneIndex;
+  const blockingLaneIndex = blockingTarget && Number.isInteger(blockingTarget.laneIndex)
+    ? blockingTarget.laneIndex
+    : targetLaneIndex;
+  if (Number.isInteger(targetLaneIndex)
+      && Number.isInteger(blockingLaneIndex)
+      && targetLaneIndex !== blockingLaneIndex) {
+    return false;
+  }
+
+  const targetLane = Number.isInteger(targetLaneIndex)
+    ? (getLaneByIndex(game, targetLaneIndex) || lane)
+    : lane;
+  const townCoreTarget = getLaneTownCoreCombatTarget(targetLane);
+  if (!townCoreTarget)
+    return false;
+
+  const targetEntity = targetDescriptor.entity;
+  const targetCoreDistance = Math.hypot(
+    Number(targetEntity.posX) - Number(townCoreTarget.posX),
+    Number(targetEntity.posY) - Number(townCoreTarget.posY)
+  );
+  if (!Number.isFinite(targetCoreDistance))
+    return false;
+
+  const candidateStructures = [];
+  if (blockingTarget)
+    candidateStructures.push(blockingTarget);
+  for (const candidate of getLaneBlockingStructureTargets(targetLane, unit, deps)) {
+    const buildingType = String(candidate && (candidate.buildingType || candidate.type) || "").trim().toLowerCase();
+    if (!candidate || !defensiveStructureTypes.has(buildingType))
+      continue;
+    candidateStructures.push(candidate);
+  }
+
+  for (const candidate of candidateStructures) {
+    const blockerCoreDistance = Math.hypot(
+      Number(candidate.posX) - Number(townCoreTarget.posX),
+      Number(candidate.posY) - Number(townCoreTarget.posY)
+    );
+    if (!Number.isFinite(blockerCoreDistance))
+      continue;
+    if (targetCoreDistance + 0.5 < blockerCoreDistance)
+      return true;
+  }
+
+  return false;
+}
+
 function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const canLaneControlledUnitSeekCombat = requireDepFunction(deps, "canLaneControlledUnitSeekCombat");
@@ -1166,11 +1471,8 @@ function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}) {
   if (!canLaneControlledUnitSeekCombat(game, unit))
     return false;
 
-  const routeUnitInAttackRange = findHostileRouteUnitTarget(game, lane, unit, true, null, deps);
-  if (routeUnitInAttackRange)
-    return true;
-
-  return !!findHostileRouteUnitTarget(game, lane, unit, false, { directEngagementOnly: true }, deps);
+  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+  return !!(targetSummary.attackRange || targetSummary.directEngagement);
 }
 
 function getLaneBlockingStructureTargets(lane, unit = null, deps = {}) {
@@ -1412,30 +1714,42 @@ function getUnitAnchorLateralAxis(unit) {
   };
 }
 
-function getPairSpacing(left, right, fallback, deps = {}) {
+function getPairSpacing(left, right, fallback, deps = {}, context = null) {
+  const leftContactRadius = Number.isFinite(Number(context && context.leftContactRadius))
+    ? Number(context.leftContactRadius)
+    : getUnitContactRadius(left, deps);
+  const rightContactRadius = Number.isFinite(Number(context && context.rightContactRadius))
+    ? Number(context.rightContactRadius)
+    : getUnitContactRadius(right, deps);
   let spacing = Math.max(
     fallback,
-    getUnitContactRadius(left, deps) + getUnitContactRadius(right, deps)
+    leftContactRadius + rightContactRadius
   );
 
-  const leftTargetId = left && left.combatTarget && left.combatTarget.unitId
-    ? left.combatTarget.unitId
-    : (left ? left.combatTargetId : null);
-  const rightTargetId = right && right.combatTarget && right.combatTarget.unitId
-    ? right.combatTarget.unitId
-    : (right ? right.combatTargetId : null);
+  const leftTargetId = context && context.leftTargetId !== undefined
+    ? context.leftTargetId
+    : getCurrentCombatTargetUnitId(left);
+  const rightTargetId = context && context.rightTargetId !== undefined
+    ? context.rightTargetId
+    : getCurrentCombatTargetUnitId(right);
+  const leftAttackRange = Number.isFinite(Number(context && context.leftAttackRange))
+    ? Number(context.leftAttackRange)
+    : getUnitAttackRange(left, deps);
+  const rightAttackRange = Number.isFinite(Number(context && context.rightAttackRange))
+    ? Number(context.rightAttackRange)
+    : getUnitAttackRange(right, deps);
   const sharedTargetSpacing = !!(
     getUsePerUnitAnchorSlots(deps)
     && leftTargetId
     && rightTargetId
     && leftTargetId === rightTargetId
-    && getUnitAttackRange(left, deps) <= 2.0
-    && getUnitAttackRange(right, deps) <= 2.0
+    && leftAttackRange <= 2.0
+    && rightAttackRange <= 2.0
   );
   if (sharedTargetSpacing) {
     spacing = Math.max(
       spacing,
-      getUnitContactRadius(left, deps) + getUnitContactRadius(right, deps) + 0.20
+      leftContactRadius + rightContactRadius + 0.20
     );
   }
 
@@ -1611,6 +1925,87 @@ function shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps
   return distance <= collisionWakeDistance;
 }
 
+function getSpatialBucketCellCoordinate(value, cellSize) {
+  return Math.floor((Number(value) || 0) / cellSize);
+}
+
+function getSpatialBucketKey(cellX, cellY) {
+  return `${cellX},${cellY}`;
+}
+
+function buildSeparationSpatialIndex(units, cellSize) {
+  const buckets = new Map();
+  const unitCells = new Array(units.length);
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index];
+    const cellX = getSpatialBucketCellCoordinate(unit && unit.posX, cellSize);
+    const cellY = getSpatialBucketCellCoordinate(unit && unit.posY, cellSize);
+    const key = getSpatialBucketKey(cellX, cellY);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = new Set();
+      buckets.set(key, bucket);
+    }
+    bucket.add(index);
+    unitCells[index] = { cellX, cellY, key };
+  }
+  return { buckets, unitCells };
+}
+
+function updateSeparationSpatialIndexUnit(index, units, cellSize, spatialIndex) {
+  const unit = units[index];
+  const nextCellX = getSpatialBucketCellCoordinate(unit && unit.posX, cellSize);
+  const nextCellY = getSpatialBucketCellCoordinate(unit && unit.posY, cellSize);
+  const nextKey = getSpatialBucketKey(nextCellX, nextCellY);
+  const previousCell = spatialIndex.unitCells[index];
+  if (previousCell
+      && previousCell.cellX === nextCellX
+      && previousCell.cellY === nextCellY
+      && previousCell.key === nextKey) {
+    return;
+  }
+
+  if (previousCell) {
+    const previousBucket = spatialIndex.buckets.get(previousCell.key);
+    if (previousBucket) {
+      previousBucket.delete(index);
+      if (previousBucket.size === 0)
+        spatialIndex.buckets.delete(previousCell.key);
+    }
+  }
+
+  let nextBucket = spatialIndex.buckets.get(nextKey);
+  if (!nextBucket) {
+    nextBucket = new Set();
+    spatialIndex.buckets.set(nextKey, nextBucket);
+  }
+  nextBucket.add(index);
+  spatialIndex.unitCells[index] = { cellX: nextCellX, cellY: nextCellY, key: nextKey };
+}
+
+function collectSeparationNeighborIndices(index, units, cellSize, spatialIndex, checkedIndices) {
+  const cell = spatialIndex.unitCells[index];
+  if (!cell)
+    return [];
+
+  const neighbors = [];
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      const bucket = spatialIndex.buckets.get(getSpatialBucketKey(cell.cellX + dx, cell.cellY + dy));
+      if (!bucket)
+        continue;
+      for (const otherIndex of bucket) {
+        if (otherIndex <= index || checkedIndices.has(otherIndex))
+          continue;
+        neighbors.push(otherIndex);
+      }
+    }
+  }
+
+  neighbors.sort((left, right) => left - right);
+  return neighbors;
+}
+
 function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY, deps = {}) {
   const syncMovedUnitPathState = requireDepFunction(deps, "syncMovedUnitPathState");
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
@@ -1621,18 +2016,36 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
   const sepMaxPush = getSepMaxPush(deps);
   const engageMovementMode = unitMovementModes.COMBAT_ENGAGE;
   const unitState = new Array(units.length);
+  let maxContactRadius = 0;
   for (let i = 0; i < units.length; i += 1) {
     const unit = units[i];
     const laneControlled = isLaneControlledUnit(unit);
+    const contactRadius = getUnitContactRadius(unit, deps);
+    const attackRange = getUnitAttackRange(unit, deps);
     unitState[i] = {
       laneControlled,
       freeRoamInCombat: laneControlled && shouldLaneControlledUnitFreeRoamInCombat(unit),
+      contactRadius,
+      attackRange,
+      targetId: getCurrentCombatTargetUnitId(unit),
     };
+    if (contactRadius > maxContactRadius)
+      maxContactRadius = contactRadius;
   }
+  const maxInteractionDistance = Math.max(minSpacing, (maxContactRadius * 2) + 0.20);
+  const cellSize = Math.max(0.5, maxInteractionDistance);
 
   for (let pass = 0; pass < 2; pass += 1) {
+    const spatialIndex = buildSeparationSpatialIndex(units, cellSize);
     for (let i = 0; i < units.length; i += 1) {
-      for (let j = i + 1; j < units.length; j += 1) {
+      const checkedIndices = new Set();
+      while (true) {
+        const neighborIndices = collectSeparationNeighborIndices(i, units, cellSize, spatialIndex, checkedIndices);
+        if (neighborIndices.length === 0)
+          break;
+
+        for (const j of neighborIndices) {
+          checkedIndices.add(j);
         const left = units[i];
         const right = units[j];
         const leftState = unitState[i];
@@ -1660,7 +2073,14 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
           distance = 0.001;
         }
 
-        let pairSpacing = getPairSpacing(left, right, minSpacing, deps);
+        let pairSpacing = getPairSpacing(left, right, minSpacing, deps, {
+          leftContactRadius: leftState.contactRadius,
+          rightContactRadius: rightState.contactRadius,
+          leftAttackRange: leftState.attackRange,
+          rightAttackRange: rightState.attackRange,
+          leftTargetId: leftState.targetId,
+          rightTargetId: rightState.targetId,
+        });
         if (distance >= pairSpacing)
           continue;
 
@@ -1697,6 +2117,8 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
           positive.posY = Math.max(minY, Math.min(maxY, positive.posY + (sharedTargetTangentialAxis.y * push)));
           syncMovedUnitPathState(negative);
           syncMovedUnitPathState(positive);
+          updateSeparationSpatialIndexUnit(chooseNegativeLeft ? i : j, units, cellSize, spatialIndex);
+          updateSeparationSpatialIndexUnit(chooseNegativeLeft ? j : i, units, cellSize, spatialIndex);
           continue;
         }
 
@@ -1720,6 +2142,8 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
             clampLaneControlledUnitToCombatLeash(positive, minX, maxX, minY, maxY, null, deps);
           clampLaneControlledUnitToAnchorDrift(negative, minX, maxX, minY, maxY, deps);
           clampLaneControlledUnitToAnchorDrift(positive, minX, maxX, minY, maxY, deps);
+          updateSeparationSpatialIndexUnit(chooseNegativeLeft ? i : j, units, cellSize, spatialIndex);
+          updateSeparationSpatialIndexUnit(chooseNegativeLeft ? j : i, units, cellSize, spatialIndex);
           continue;
         }
 
@@ -1738,6 +2162,9 @@ function applySeparation2D(game, lane, units, minSpacing, minX, maxX, minY, maxY
           clampLaneControlledUnitToCombatLeash(right, minX, maxX, minY, maxY, null, deps);
         if (!simpleLaneSpacing)
           clampLaneControlledUnitToAnchorDrift(right, minX, maxX, minY, maxY, deps);
+        updateSeparationSpatialIndexUnit(i, units, cellSize, spatialIndex);
+        updateSeparationSpatialIndexUnit(j, units, cellSize, spatialIndex);
+        }
       }
     }
   }
@@ -1862,6 +2289,7 @@ module.exports = {
   getStructureTargetAcquisitionRange,
   findHostileRouteUnitTarget,
   getWaveUnitPreferredTarget,
+  isRouteUnitTargetBlockedByStructure,
   hasImmediateFollowThroughCombatTarget,
   getLaneBlockingStructureTargets,
   findBlockingStructureTarget,

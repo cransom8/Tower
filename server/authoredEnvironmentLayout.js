@@ -372,11 +372,6 @@ function validateRequiredLaneAnchors(lanes) {
       }
     }
 
-    if (!lane.tradeOutpost) {
-      throw new Error(
-        `[authoredEnvironmentLayout] Lane '${laneKey}' is missing required authored trade outpost 'BeastLair'.`
-      );
-    }
   }
 }
 

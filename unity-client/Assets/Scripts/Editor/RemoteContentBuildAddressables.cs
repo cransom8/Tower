@@ -35,6 +35,7 @@ namespace CastleDefender.Editor
 
             try
             {
+                SetupRemoteEnvironmentAddressables.RemoveEmbeddedGameMlEnvironmentRoots(logResult: true);
                 SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
                 SyncRegistryToAddressables();
 

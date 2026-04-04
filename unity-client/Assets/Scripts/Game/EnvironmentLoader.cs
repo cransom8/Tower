@@ -9,6 +9,13 @@ using UnityEngine.UI;
 
 public class EnvironmentLoader : MonoBehaviour
 {
+    static readonly HashSet<string> RetiredFortressPadIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "turret_core_03_pad",
+        "turret_core_04_pad",
+        "turret_core_05_pad",
+    };
+
     [Header("Remote Environment")]
     public string environmentAddress = RemoteContentManager.GameMlEnvironmentAddress;
     public Transform instantiateParent;
@@ -64,6 +71,7 @@ public class EnvironmentLoader : MonoBehaviour
         _instance = Instantiate(prefab, parent, false);
         if (!string.IsNullOrWhiteSpace(instantiatedRootName))
             _instance.name = instantiatedRootName;
+        RetireObsoleteFortressPads(_instance);
 
         yield return WaitForBattlefieldLayoutAndApply(address);
         if (_instance == null)
@@ -249,6 +257,12 @@ public class EnvironmentLoader : MonoBehaviour
             if (anchor == null)
                 continue;
 
+            if (IsRetiredFortressPadId(anchor.PadId))
+            {
+                RetireObsoleteFortressPad(anchor);
+                continue;
+            }
+
             string laneKey = NormalizeLaneKey(FortressLaneResolver.ResolveLaneKey(anchor.transform, anchor.AnchorLaneColor));
             if (string.IsNullOrWhiteSpace(laneKey))
             {
@@ -393,6 +407,47 @@ public class EnvironmentLoader : MonoBehaviour
         return true;
     }
 
+    static bool IsRetiredFortressPadId(string padId)
+    {
+        return !string.IsNullOrWhiteSpace(padId) && RetiredFortressPadIds.Contains(padId.Trim());
+    }
+
+    static void RetireObsoleteFortressPads(GameObject environmentRoot)
+    {
+        if (environmentRoot == null)
+            return;
+
+        var padAnchors = environmentRoot.GetComponentsInChildren<FortressPadAnchor>(true);
+        for (int i = 0; i < padAnchors.Length; i++)
+        {
+            var anchor = padAnchors[i];
+            if (anchor == null || !IsRetiredFortressPadId(anchor.PadId))
+                continue;
+
+            RetireObsoleteFortressPad(anchor);
+        }
+    }
+
+    static void RetireObsoleteFortressPad(FortressPadAnchor anchor)
+    {
+        if (anchor == null)
+            return;
+
+        anchor.enabled = false;
+
+        var bridge = anchor.GetComponent<SnapshotBuildingVisualBridge>();
+        if (bridge != null)
+            bridge.enabled = false;
+
+        var healthView = anchor.GetComponent<FortressPadHealthView>();
+        if (healthView != null)
+            healthView.enabled = false;
+
+        var interactionCollider = anchor.GetComponent<Collider>();
+        if (interactionCollider != null)
+            interactionCollider.enabled = false;
+    }
+
     static MLFortressPadPlacement FindFortressPad(MLBattlefieldLayoutLane lane, string padId)
     {
         if (lane?.fortressPads == null || string.IsNullOrWhiteSpace(padId))
@@ -510,13 +565,35 @@ public class EnvironmentLoader : MonoBehaviour
         if (!Application.isEditor)
             return false;
 
-        if (NetworkManager.Instance != null)
+        if (HasActiveAuthoritativeMatchBootstrap())
             return false;
 
-        return SnapshotApplier.Instance?.HasAuthoritativeBattlefieldLayout() != true;
+        return true;
 #else
         return false;
 #endif
+    }
+
+    static bool HasActiveAuthoritativeMatchBootstrap()
+    {
+        var snapshotApplier = SnapshotApplier.Instance;
+        if (snapshotApplier?.HasAuthoritativeBattlefieldLayout() == true)
+            return true;
+
+        if (snapshotApplier?.LatestMLMatchReady?.laneAssignments?.Length > 0)
+            return true;
+
+        var network = NetworkManager.Instance;
+        if (network == null)
+            return false;
+
+        if (network.LastMLMatchReady?.laneAssignments?.Length > 0)
+            return true;
+
+        if (network.LastMLMatchConfig?.battlefieldLayout != null)
+            return true;
+
+        return false;
     }
 
     void RefreshBattlefieldCamera()

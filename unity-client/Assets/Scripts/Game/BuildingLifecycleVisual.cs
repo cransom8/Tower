@@ -8,8 +8,16 @@ namespace CastleDefender.Game
     [DisallowMultipleComponent]
     public sealed class BuildingLifecycleVisual : MonoBehaviour
     {
+        [Serializable]
+        public struct ConstructionVisualSet
+        {
+            public int targetTier;
+            public GameObject[] stageRoots;
+        }
+
         [SerializeField] TieredBuildingVisual tieredVisual;
         [SerializeField] GameObject[] constructionStageRoots = Array.Empty<GameObject>();
+        [SerializeField] ConstructionVisualSet[] constructionVisualSets = Array.Empty<ConstructionVisualSet>();
         [SerializeField] GameObject hammerPrefab;
         [SerializeField] GameObject burningSmallFxPrefab;
         [SerializeField] GameObject burningLargeFxPrefab;
@@ -27,6 +35,7 @@ namespace CastleDefender.Game
         bool _cachedLocalBoundsValid;
 
         static Material s_dustMaterial;
+        static Material s_hammerMaterial;
 
         void Awake()
         {
@@ -36,14 +45,15 @@ namespace CastleDefender.Game
 
         public void ConfigureForEditor(
             TieredBuildingVisual configuredTieredVisual,
-            GameObject[] configuredConstructionStageRoots,
+            ConstructionVisualSet[] configuredConstructionVisualSets,
             GameObject configuredHammerPrefab,
             GameObject configuredBurningSmallFxPrefab,
             GameObject configuredBurningLargeFxPrefab,
             GameObject configuredDestroyedFxPrefab)
         {
             tieredVisual = configuredTieredVisual;
-            constructionStageRoots = configuredConstructionStageRoots ?? Array.Empty<GameObject>();
+            constructionStageRoots = Array.Empty<GameObject>();
+            constructionVisualSets = configuredConstructionVisualSets ?? Array.Empty<ConstructionVisualSet>();
             hammerPrefab = configuredHammerPrefab;
             burningSmallFxPrefab = configuredBurningSmallFxPrefab;
             burningLargeFxPrefab = configuredBurningLargeFxPrefab;
@@ -51,16 +61,28 @@ namespace CastleDefender.Game
             _cachedLocalBoundsValid = false;
         }
 
+        public bool HasConstructionStagesFor(int targetTier)
+        {
+            var stageRoots = ResolveConstructionStageRoots(targetTier);
+            return CountValidStageRoots(stageRoots) > 0;
+        }
+
         public void ApplyState(
             bool showTieredVisual,
             float constructionProgress01,
             bool showConstructionFx,
             bool showConstructionStages,
+            int constructionTargetTier,
             bool showDamagedFx,
             bool showDestroyedFx)
         {
             tieredVisual?.SetVisualsVisible(showTieredVisual);
-            SetConstructionStageIndex(showConstructionStages ? ResolveConstructionStageIndex(constructionProgress01) : -1);
+            var stageRoots = showConstructionStages
+                ? ResolveConstructionStageRoots(constructionTargetTier)
+                : null;
+            SetConstructionStageIndex(
+                stageRoots,
+                showConstructionStages ? ResolveConstructionStageIndex(stageRoots, constructionProgress01) : -1);
             ToggleConstructionFx(showConstructionFx);
             ToggleDamageFx(showDamagedFx && !showDestroyedFx);
             ToggleDestroyedFx(showDestroyedFx);
@@ -69,20 +91,42 @@ namespace CastleDefender.Game
         public void HideAllPresentation()
         {
             tieredVisual?.SetVisualsVisible(true);
-            SetConstructionStageIndex(-1);
+            SetConstructionStageIndex(null, -1);
             ToggleConstructionFx(false);
             ToggleDamageFx(false);
             ToggleDestroyedFx(false);
         }
 
-        int ResolveConstructionStageIndex(float progress01)
+        GameObject[] ResolveConstructionStageRoots(int targetTier)
         {
-            int stageCount = 0;
-            for (int i = 0; i < constructionStageRoots.Length; i++)
+            int safeTargetTier = Mathf.Max(1, targetTier);
+            if (constructionVisualSets != null && constructionVisualSets.Length > 0)
             {
-                if (constructionStageRoots[i] != null)
-                    stageCount += 1;
+                for (int i = 0; i < constructionVisualSets.Length; i++)
+                {
+                    var set = constructionVisualSets[i];
+                    if (Mathf.Max(0, set.targetTier) != safeTargetTier)
+                        continue;
+                    if (CountValidStageRoots(set.stageRoots) > 0)
+                        return set.stageRoots;
+                }
+
+                for (int i = 0; i < constructionVisualSets.Length; i++)
+                {
+                    var set = constructionVisualSets[i];
+                    if (Mathf.Max(0, set.targetTier) > 0)
+                        continue;
+                    if (CountValidStageRoots(set.stageRoots) > 0)
+                        return set.stageRoots;
+                }
             }
+
+            return constructionStageRoots ?? Array.Empty<GameObject>();
+        }
+
+        static int ResolveConstructionStageIndex(GameObject[] stageRoots, float progress01)
+        {
+            int stageCount = CountValidStageRoots(stageRoots);
 
             if (stageCount <= 0)
                 return -1;
@@ -93,17 +137,83 @@ namespace CastleDefender.Game
                 stageCount - 1);
         }
 
-        void SetConstructionStageIndex(int activeIndex)
+        static int CountValidStageRoots(GameObject[] stageRoots)
         {
+            int stageCount = 0;
+            if (stageRoots == null)
+                return 0;
+
+            for (int i = 0; i < stageRoots.Length; i++)
+            {
+                if (stageRoots[i] != null)
+                    stageCount += 1;
+            }
+
+            return stageCount;
+        }
+
+        void SetConstructionStageIndex(GameObject[] activeRoots, int activeIndex)
+        {
+            if (constructionVisualSets != null && constructionVisualSets.Length > 0)
+            {
+                for (int setIndex = 0; setIndex < constructionVisualSets.Length; setIndex++)
+                {
+                    var stageRoots = constructionVisualSets[setIndex].stageRoots;
+                    if (stageRoots == null)
+                        continue;
+
+                    bool showSet = ReferenceEquals(stageRoots, activeRoots) && activeIndex >= 0;
+                    for (int i = 0; i < stageRoots.Length; i++)
+                    {
+                        var root = stageRoots[i];
+                        if (root == null)
+                            continue;
+
+                        bool shouldShow = showSet && i == activeIndex;
+                        if (root.activeSelf != shouldShow)
+                            root.SetActive(shouldShow);
+                    }
+
+                    SetConstructionGroupRootsActive(stageRoots, showSet);
+                }
+            }
+
+            bool showLegacyRoots = ReferenceEquals(constructionStageRoots, activeRoots) && activeIndex >= 0;
+            if (constructionStageRoots == null)
+                return;
+
             for (int i = 0; i < constructionStageRoots.Length; i++)
             {
                 var root = constructionStageRoots[i];
                 if (root == null)
                     continue;
 
-                bool shouldShow = i == activeIndex;
+                bool shouldShow = showLegacyRoots && i == activeIndex;
                 if (root.activeSelf != shouldShow)
                     root.SetActive(shouldShow);
+            }
+
+            SetConstructionGroupRootsActive(constructionStageRoots, showLegacyRoots);
+        }
+
+        void SetConstructionGroupRootsActive(GameObject[] stageRoots, bool visible)
+        {
+            if (stageRoots == null || stageRoots.Length <= 0)
+                return;
+
+            var handledParents = new HashSet<Transform>();
+            for (int i = 0; i < stageRoots.Length; i++)
+            {
+                var stageRoot = stageRoots[i];
+                if (stageRoot == null)
+                    continue;
+
+                var parent = stageRoot.transform.parent;
+                if (parent == null || parent == transform || !handledParents.Add(parent))
+                    continue;
+
+                if (parent.gameObject.activeSelf != visible)
+                    parent.gameObject.SetActive(visible);
             }
         }
 
@@ -161,6 +271,7 @@ namespace CastleDefender.Game
                     var hammer = Instantiate(hammerPrefab, _constructionFxRoot.transform, false);
                     hammer.name = $"Hammer_{i + 1}";
                     hammer.transform.localScale = Vector3.one * Mathf.Clamp(footprint * 0.26f, 0.30f, 0.75f);
+                    ApplyConstructionHammerMaterial(hammer);
                     hammerRoots.Add(hammer.transform);
                 }
             }
@@ -260,12 +371,33 @@ namespace CastleDefender.Game
             var renderers = new List<Renderer>();
             if (tieredVisual != null)
                 renderers.AddRange(tieredVisual.GetComponentsInChildren<Renderer>(true));
-            for (int i = 0; i < constructionStageRoots.Length; i++)
+            if (constructionStageRoots != null)
             {
-                var stageRoot = constructionStageRoots[i];
-                if (stageRoot == null)
-                    continue;
-                renderers.AddRange(stageRoot.GetComponentsInChildren<Renderer>(true));
+                for (int i = 0; i < constructionStageRoots.Length; i++)
+                {
+                    var stageRoot = constructionStageRoots[i];
+                    if (stageRoot == null)
+                        continue;
+                    renderers.AddRange(stageRoot.GetComponentsInChildren<Renderer>(true));
+                }
+            }
+
+            if (constructionVisualSets != null)
+            {
+                for (int setIndex = 0; setIndex < constructionVisualSets.Length; setIndex++)
+                {
+                    var stageRoots = constructionVisualSets[setIndex].stageRoots;
+                    if (stageRoots == null)
+                        continue;
+
+                    for (int i = 0; i < stageRoots.Length; i++)
+                    {
+                        var stageRoot = stageRoots[i];
+                        if (stageRoot == null)
+                            continue;
+                        renderers.AddRange(stageRoot.GetComponentsInChildren<Renderer>(true));
+                    }
+                }
             }
 
             Bounds worldBounds = default;
@@ -385,6 +517,55 @@ namespace CastleDefender.Game
             if (s_dustMaterial.HasProperty("_Color"))
                 s_dustMaterial.SetColor("_Color", new Color(0.82f, 0.80f, 0.72f, 0.45f));
             return s_dustMaterial;
+        }
+
+        static void ApplyConstructionHammerMaterial(GameObject hammerRoot)
+        {
+            if (hammerRoot == null)
+                return;
+
+            var material = ResolveHammerMaterial();
+            if (material == null)
+                return;
+
+            foreach (var renderer in hammerRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null)
+                    continue;
+
+                var replacementMaterials = renderer.sharedMaterials != null && renderer.sharedMaterials.Length > 0
+                    ? new Material[renderer.sharedMaterials.Length]
+                    : new[] { material };
+
+                for (int i = 0; i < replacementMaterials.Length; i++)
+                    replacementMaterials[i] = material;
+
+                renderer.sharedMaterials = replacementMaterials;
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+            }
+        }
+
+        static Material ResolveHammerMaterial()
+        {
+            if (s_hammerMaterial != null)
+                return s_hammerMaterial;
+
+            var shader = Shader.Find("Universal Render Pipeline/Lit")
+                ?? Shader.Find("Standard");
+            if (shader == null)
+                return null;
+
+            s_hammerMaterial = new Material(shader);
+            if (s_hammerMaterial.HasProperty("_BaseColor"))
+                s_hammerMaterial.SetColor("_BaseColor", new Color(0.48f, 0.45f, 0.40f, 1f));
+            if (s_hammerMaterial.HasProperty("_Color"))
+                s_hammerMaterial.SetColor("_Color", new Color(0.48f, 0.45f, 0.40f, 1f));
+            if (s_hammerMaterial.HasProperty("_Smoothness"))
+                s_hammerMaterial.SetFloat("_Smoothness", 0.18f);
+            if (s_hammerMaterial.HasProperty("_Metallic"))
+                s_hammerMaterial.SetFloat("_Metallic", 0.55f);
+            return s_hammerMaterial;
         }
     }
 }

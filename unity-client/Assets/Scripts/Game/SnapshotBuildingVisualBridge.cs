@@ -4,12 +4,22 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using CastleDefender.Net;
 using CastleDefender.UI;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace CastleDefender.Game
 {
     [DisallowMultipleComponent]
     public sealed class SnapshotBuildingVisualBridge : MonoBehaviour
     {
+        struct GeneratedVisualInstance
+        {
+            public GameObject root;
+            public TieredBuildingVisual tieredVisual;
+            public BuildingLifecycleVisual lifecycleVisual;
+        }
+
         struct CachedRendererState
         {
             public Material[] materials;
@@ -24,13 +34,16 @@ namespace CastleDefender.Game
 
         [Header("Legacy Visuals")]
         [SerializeField] Renderer[] legacyRenderers = Array.Empty<Renderer>();
+        [SerializeField] Transform[] supplementalVisualRoots = Array.Empty<Transform>();
 
         readonly Dictionary<Renderer, CachedRendererState> _generatedRendererStates = new();
+        readonly List<GeneratedVisualInstance> _supplementalGeneratedVisuals = new();
 
         FortressPadAnchor _fortressPad;
         BarracksSiteView _barracksSiteView;
         TieredBuildingVisual _tieredVisual;
         BuildingLifecycleVisual _lifecycleVisual;
+        GameObject _visualInstanceRoot;
         Renderer[] _generatedRenderers = Array.Empty<Renderer>();
         MaterialPropertyBlock _rendererPropertyBlock;
         SnapshotApplier _boundSnapshotApplier;
@@ -76,18 +89,21 @@ namespace CastleDefender.Game
         public void ConfigureForEditor(
             BuildingVisualCatalog configuredCatalog,
             string configuredBuildingTypeOverride,
-            Renderer[] configuredLegacyRenderers)
+            Renderer[] configuredLegacyRenderers,
+            Transform[] configuredSupplementalVisualRoots = null)
         {
             catalog = configuredCatalog;
             buildingTypeOverride = configuredBuildingTypeOverride;
             visualParent = transform;
             legacyRenderers = configuredLegacyRenderers ?? Array.Empty<Renderer>();
+            supplementalVisualRoots = configuredSupplementalVisualRoots ?? Array.Empty<Transform>();
         }
 
-        public void ConfigureRuntime(Renderer[] configuredLegacyRenderers)
+        public void ConfigureRuntime(Renderer[] configuredLegacyRenderers, Transform[] configuredSupplementalVisualRoots = null)
         {
             visualParent = transform;
             legacyRenderers = configuredLegacyRenderers ?? Array.Empty<Renderer>();
+            this.supplementalVisualRoots = configuredSupplementalVisualRoots ?? this.supplementalVisualRoots ?? Array.Empty<Transform>();
             CacheComponents();
             EnsureVisualInstance();
             RefreshFromSnapshot();
@@ -99,8 +115,13 @@ namespace CastleDefender.Game
             _barracksSiteView ??= GetComponent<BarracksSiteView>();
             if (visualParent == null)
                 visualParent = transform;
-            if (legacyRenderers == null || legacyRenderers.Length == 0)
-                legacyRenderers = GetComponents<Renderer>();
+
+            if (_fortressPad != null)
+                legacyRenderers = _fortressPad.GetPrimaryRenderers();
+            else if (_barracksSiteView != null)
+                legacyRenderers = _barracksSiteView.GetPrimaryRenderers();
+            else if (legacyRenderers == null || legacyRenderers.Length == 0)
+                legacyRenderers = GetComponentsInChildren<Renderer>(true);
         }
 
         void SubscribeSnapshots()
@@ -173,29 +194,41 @@ namespace CastleDefender.Game
                 return;
             }
 
-            var instance = Instantiate(entry.prefab, visualParent != null ? visualParent : transform);
-            instance.name = entry.prefab.name;
-            instance.transform.localPosition = Vector3.zero;
-            instance.transform.localRotation = Quaternion.identity;
-            instance.transform.localScale = Vector3.one;
-            _tieredVisual = instance.GetComponent<TieredBuildingVisual>();
+            ResetGeneratedRendererStates();
+            _supplementalGeneratedVisuals.Clear();
 
-            if (_tieredVisual == null)
-                _tieredVisual = instance.GetComponentInChildren<TieredBuildingVisual>(true);
-            _lifecycleVisual = instance.GetComponent<BuildingLifecycleVisual>();
-            if (_lifecycleVisual == null)
-                _lifecycleVisual = instance.GetComponentInChildren<BuildingLifecycleVisual>(true);
+            var primaryInstance = CreateGeneratedVisualInstance(
+                entry.prefab,
+                visualParent != null ? visualParent : transform,
+                buildingType);
+            _visualInstanceRoot = primaryInstance.root;
+            _tieredVisual = primaryInstance.tieredVisual;
+            _lifecycleVisual = primaryInstance.lifecycleVisual;
 
             if (_tieredVisual == null)
             {
-                Destroy(instance);
+                if (_visualInstanceRoot != null)
+                    Destroy(_visualInstanceRoot);
                 ReportVisualFailure("missing_tier_component", $"Generated visual prefab '{entry.prefab.name}' is missing TieredBuildingVisual.");
                 HideBrokenVisuals();
                 return;
             }
 
-            ApplyTeamTint(instance);
-            CacheGeneratedRendererStates(instance);
+            var resolvedSupplementalRoots = ResolveSupplementalVisualRoots();
+            for (int i = 0; i < resolvedSupplementalRoots.Length; i++)
+            {
+                var supplementalRoot = resolvedSupplementalRoots[i];
+                if (supplementalRoot == null)
+                    continue;
+
+                if (ReferenceEquals(supplementalRoot, transform) || ReferenceEquals(supplementalRoot, visualParent))
+                    continue;
+
+                var supplementalInstance = CreateGeneratedVisualInstance(entry.prefab, supplementalRoot, buildingType);
+                if (supplementalInstance.root != null)
+                    _supplementalGeneratedVisuals.Add(supplementalInstance);
+            }
+
             ClearVisualFailure();
         }
 
@@ -204,10 +237,18 @@ namespace CastleDefender.Game
             bool built = false;
             int tier = 1;
             bool constructing = false;
+            int constructionTargetTier = 1;
             float constructionProgress01 = 0f;
             bool destroyed = false;
+            bool underRepair = false;
             float hp01 = 1f;
             bool hasSnapshot = SnapshotApplier.Instance?.LatestML?.lanes != null;
+
+            if (!hasSnapshot && ShouldUseEditorPreviewWithoutAuthoritativeMatch())
+            {
+                ShowEditorPreviewVisuals();
+                return;
+            }
 
             if (_barracksSiteView != null)
             {
@@ -247,8 +288,15 @@ namespace CastleDefender.Game
                 built = site != null && site.isBuilt;
                 tier = built ? Mathf.Max(1, site.level) : 1;
                 constructing = site != null && site.isConstructing;
+                constructionTargetTier = site != null
+                    ? Mathf.Max(1, site.constructionTargetLevel > 0 ? site.constructionTargetLevel : (built ? site.level : 1))
+                    : 1;
                 constructionProgress01 = site != null ? Mathf.Clamp01(site.constructionProgress01) : 0f;
                 destroyed = site != null && site.isDestroyed;
+                underRepair = site != null
+                    && (site.isUnderRepair
+                        || string.Equals(site.lifecycleState, "under_repair", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(site.buildState, "under_repair", StringComparison.OrdinalIgnoreCase));
                 hp01 = site != null && site.maxHp > 0f ? Mathf.Clamp01(site.hp / site.maxHp) : 1f;
             }
             else if (_fortressPad != null)
@@ -289,14 +337,22 @@ namespace CastleDefender.Game
                 built = pad != null && pad.isBuilt;
                 tier = built ? Mathf.Max(1, pad.tier) : 1;
                 constructing = pad != null && pad.isConstructing;
+                constructionTargetTier = pad != null
+                    ? Mathf.Max(1, pad.constructionTargetTier > 0 ? pad.constructionTargetTier : (built ? pad.tier : 1))
+                    : 1;
                 constructionProgress01 = pad != null ? Mathf.Clamp01(pad.constructionProgress01) : 0f;
                 destroyed = pad != null && pad.isDestroyed;
+                underRepair = pad != null
+                    && (pad.isUnderRepair
+                        || string.Equals(pad.lifecycleState, "under_repair", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(pad.buildState, "under_repair", StringComparison.OrdinalIgnoreCase));
                 hp01 = pad != null && pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : 1f;
             }
 
             if (_tieredVisual == null)
                 EnsureVisualInstance();
 
+            bool showWorldVisual = built || constructing;
             if (_tieredVisual == null)
             {
                 HideBrokenVisuals();
@@ -310,39 +366,74 @@ namespace CastleDefender.Game
                 return;
             }
 
-            bool showWorldVisual = built || constructing;
             if (!showWorldVisual)
             {
-                _tieredVisual.gameObject.SetActive(false);
-                _lifecycleVisual?.HideAllPresentation();
+                SetGeneratedVisualsActive(false);
+                HideGeneratedPresentation();
                 SetLegacyRenderersVisible(false);
                 SetInteractionEnabled(false);
                 ClearVisualFailure();
                 return;
             }
 
-            _tieredVisual.gameObject.SetActive(true);
-            _tieredVisual.ApplyTier(tier);
+            int presentationTier = constructing
+                ? Mathf.Max(1, constructionTargetTier)
+                : Mathf.Max(1, tier);
             destroyed = destroyed && built;
             if (destroyed)
                 constructing = false;
 
-            if (_lifecycleVisual != null)
+            bool useAuthoredBuiltVisuals = built
+                && !constructing
+                && !destroyed
+                && ShouldUseAuthoredBuiltVisuals();
+
+            bool showConstructionStages = constructing && HasConstructionStagesFor(constructionTargetTier);
+            bool showConstructionFx = constructing;
+            bool showDamagedFx = built && !destroyed && (underRepair || (hp01 > 0f && hp01 <= 0.35f));
+            SetGeneratedVisualsActive(true);
+            ApplyGeneratedPresentation(
+                presentationTier,
+                useAuthoredBuiltVisuals,
+                constructionProgress01,
+                showConstructionFx,
+                showConstructionStages,
+                constructionTargetTier,
+                showDamagedFx,
+                destroyed);
+
+            SetLegacyRenderersVisible(useAuthoredBuiltVisuals);
+            SetInteractionEnabled(true);
+            ClearVisualFailure();
+        }
+
+        void ShowEditorPreviewVisuals()
+        {
+            if (_tieredVisual == null)
+                EnsureVisualInstance();
+
+            if (ShouldUseAuthoredBuiltVisuals())
             {
-                bool showConstructionStages = constructing && !built;
-                bool showConstructionFx = constructing;
-                bool showDamagedFx = built && !destroyed && hp01 > 0f && hp01 <= 0.35f;
-                _lifecycleVisual.ApplyState(
-                    !showConstructionStages,
-                    constructionProgress01,
-                    showConstructionFx,
-                    showConstructionStages,
-                    showDamagedFx,
-                    destroyed);
+                SetGeneratedVisualsActive(false);
+                HideGeneratedPresentation();
+
+                SetLegacyRenderersVisible(true);
+                SetInteractionEnabled(true);
+                ClearVisualFailure();
+                return;
             }
 
-            SetLegacyRenderersVisible(false);
-            SetInteractionEnabled(true);
+            if (_tieredVisual != null && RestoreGeneratedRendererStates())
+            {
+                SetGeneratedVisualsActive(true);
+                ApplyGeneratedPreviewPresentation();
+                SetLegacyRenderersVisible(false);
+                SetInteractionEnabled(true);
+                ClearVisualFailure();
+                return;
+            }
+
+            ShowLegacyOnly(true);
             ClearVisualFailure();
         }
 
@@ -351,12 +442,25 @@ namespace CastleDefender.Game
             if (root == null)
                 return;
 
-            _generatedRenderers = root.GetComponentsInChildren<Renderer>(true);
-            _generatedRendererStates.Clear();
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0)
+                return;
 
-            for (int i = 0; i < _generatedRenderers.Length; i++)
+            if (_generatedRenderers == null || _generatedRenderers.Length == 0)
             {
-                var renderer = _generatedRenderers[i];
+                _generatedRenderers = renderers;
+            }
+            else
+            {
+                var merged = new Renderer[_generatedRenderers.Length + renderers.Length];
+                Array.Copy(_generatedRenderers, merged, _generatedRenderers.Length);
+                Array.Copy(renderers, 0, merged, _generatedRenderers.Length, renderers.Length);
+                _generatedRenderers = merged;
+            }
+
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
                 if (renderer == null)
                     continue;
 
@@ -372,6 +476,12 @@ namespace CastleDefender.Game
                     receiveShadows = renderer.receiveShadows,
                 };
             }
+        }
+
+        void ResetGeneratedRendererStates()
+        {
+            _generatedRendererStates.Clear();
+            _generatedRenderers = Array.Empty<Renderer>();
         }
 
         bool RestoreGeneratedRendererStates()
@@ -424,9 +534,8 @@ namespace CastleDefender.Game
 
         void ShowLegacyOnly(bool enableInteraction)
         {
-            if (_tieredVisual != null)
-                _tieredVisual.gameObject.SetActive(false);
-            _lifecycleVisual?.HideAllPresentation();
+            SetGeneratedVisualsActive(false);
+            HideGeneratedPresentation();
 
             SetLegacyRenderersVisible(true);
             SetInteractionEnabled(enableInteraction);
@@ -462,6 +571,235 @@ namespace CastleDefender.Game
                 return "barracks";
 
             return string.Empty;
+        }
+
+        bool ShouldUseAuthoredBuiltVisuals()
+        {
+            if (_fortressPad == null)
+                return false;
+
+            switch ((ResolveBuildingType() ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wall":
+                case "gate":
+                case "turret":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        Transform[] ResolveSupplementalVisualRoots()
+        {
+            var results = new List<Transform>();
+            var seen = new HashSet<Transform>();
+
+            void AppendRoot(Transform root)
+            {
+                if (root == null || !seen.Add(root))
+                    return;
+
+                results.Add(root);
+            }
+
+            if (supplementalVisualRoots != null)
+            {
+                for (int i = 0; i < supplementalVisualRoots.Length; i++)
+                    AppendRoot(supplementalVisualRoots[i]);
+            }
+
+            if (!ShouldUseAuthoredBuiltVisuals() || legacyRenderers == null || legacyRenderers.Length <= 0)
+                return results.ToArray();
+
+            Transform primaryRoot = visualParent != null ? visualParent : transform;
+            Transform primaryParent = primaryRoot != null ? primaryRoot.parent : null;
+            for (int i = 0; i < legacyRenderers.Length; i++)
+            {
+                var renderer = legacyRenderers[i];
+                if (renderer == null)
+                    continue;
+
+                var candidate = renderer.transform;
+                while (candidate != null && candidate.parent != null && candidate.parent != primaryParent)
+                    candidate = candidate.parent;
+
+                if (candidate == null || candidate == primaryRoot)
+                    continue;
+
+                AppendRoot(candidate);
+            }
+
+            return results.ToArray();
+        }
+
+        GeneratedVisualInstance CreateGeneratedVisualInstance(GameObject prefab, Transform parent, string buildingType)
+        {
+            if (prefab == null || parent == null)
+                return default;
+
+            var instance = Instantiate(prefab, parent);
+            instance.name = prefab.name;
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            instance.transform.localScale = Vector3.one;
+
+            var tieredVisual = instance.GetComponent<TieredBuildingVisual>();
+            if (tieredVisual == null)
+                tieredVisual = instance.GetComponentInChildren<TieredBuildingVisual>(true);
+
+            var lifecycleVisual = instance.GetComponent<BuildingLifecycleVisual>();
+            if (lifecycleVisual == null)
+                lifecycleVisual = instance.GetComponentInChildren<BuildingLifecycleVisual>(true);
+#if UNITY_EDITOR
+            if (lifecycleVisual == null)
+            {
+                TryAttachEditorLifecycleVisualFallback(instance, buildingType);
+                lifecycleVisual = instance.GetComponent<BuildingLifecycleVisual>();
+                if (lifecycleVisual == null)
+                    lifecycleVisual = instance.GetComponentInChildren<BuildingLifecycleVisual>(true);
+            }
+#endif
+
+            ApplyTeamTint(instance);
+            CacheGeneratedRendererStates(instance);
+
+            return new GeneratedVisualInstance
+            {
+                root = instance,
+                tieredVisual = tieredVisual,
+                lifecycleVisual = lifecycleVisual,
+            };
+        }
+
+        void SetGeneratedVisualsActive(bool visible)
+        {
+            if (_visualInstanceRoot != null && _visualInstanceRoot.activeSelf != visible)
+                _visualInstanceRoot.SetActive(visible);
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+            {
+                var instance = _supplementalGeneratedVisuals[i];
+                if (instance.root != null && instance.root.activeSelf != visible)
+                    instance.root.SetActive(visible);
+            }
+        }
+
+        void HideGeneratedPresentation()
+        {
+            _lifecycleVisual?.HideAllPresentation();
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+                _supplementalGeneratedVisuals[i].lifecycleVisual?.HideAllPresentation();
+        }
+
+        bool HasConstructionStagesFor(int constructionTargetTier)
+        {
+            if (_lifecycleVisual != null && _lifecycleVisual.HasConstructionStagesFor(constructionTargetTier))
+                return true;
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+            {
+                var lifecycleVisual = _supplementalGeneratedVisuals[i].lifecycleVisual;
+                if (lifecycleVisual != null && lifecycleVisual.HasConstructionStagesFor(constructionTargetTier))
+                    return true;
+            }
+
+            return false;
+        }
+
+        void ApplyGeneratedPresentation(
+            int presentationTier,
+            bool useAuthoredBuiltVisuals,
+            float constructionProgress01,
+            bool showConstructionFx,
+            bool showConstructionStages,
+            int constructionTargetTier,
+            bool showDamagedFx,
+            bool showDestroyedFx)
+        {
+            ApplyGeneratedPresentationToInstance(
+                _tieredVisual,
+                _lifecycleVisual,
+                presentationTier,
+                useAuthoredBuiltVisuals,
+                constructionProgress01,
+                showConstructionFx,
+                showConstructionStages,
+                constructionTargetTier,
+                showDamagedFx,
+                showDestroyedFx);
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+            {
+                var instance = _supplementalGeneratedVisuals[i];
+                ApplyGeneratedPresentationToInstance(
+                    instance.tieredVisual,
+                    instance.lifecycleVisual,
+                    presentationTier,
+                    useAuthoredBuiltVisuals,
+                    constructionProgress01,
+                    showConstructionFx,
+                    showConstructionStages,
+                    constructionTargetTier,
+                    showDamagedFx,
+                    showDestroyedFx);
+            }
+        }
+
+        void ApplyGeneratedPreviewPresentation()
+        {
+            ApplyGeneratedPreviewToInstance(_tieredVisual, _lifecycleVisual);
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+            {
+                var instance = _supplementalGeneratedVisuals[i];
+                ApplyGeneratedPreviewToInstance(instance.tieredVisual, instance.lifecycleVisual);
+            }
+        }
+
+        static void ApplyGeneratedPreviewToInstance(TieredBuildingVisual tieredVisual, BuildingLifecycleVisual lifecycleVisual)
+        {
+            if (tieredVisual == null)
+                return;
+
+            tieredVisual.gameObject.SetActive(true);
+            tieredVisual.ApplyTier(Mathf.Max(1, tieredVisual.CurrentTier));
+            lifecycleVisual?.HideAllPresentation();
+        }
+
+        static void ApplyGeneratedPresentationToInstance(
+            TieredBuildingVisual tieredVisual,
+            BuildingLifecycleVisual lifecycleVisual,
+            int presentationTier,
+            bool useAuthoredBuiltVisuals,
+            float constructionProgress01,
+            bool showConstructionFx,
+            bool showConstructionStages,
+            int constructionTargetTier,
+            bool showDamagedFx,
+            bool showDestroyedFx)
+        {
+            if (tieredVisual == null)
+                return;
+
+            tieredVisual.gameObject.SetActive(true);
+            tieredVisual.ApplyTier(presentationTier);
+
+            if (lifecycleVisual != null)
+            {
+                lifecycleVisual.ApplyState(
+                    !showConstructionStages && !useAuthoredBuiltVisuals,
+                    constructionProgress01,
+                    showConstructionFx,
+                    showConstructionStages,
+                    constructionTargetTier,
+                    showDamagedFx,
+                    showDestroyedFx);
+            }
+            else if (useAuthoredBuiltVisuals)
+            {
+                tieredVisual.gameObject.SetActive(false);
+            }
         }
 
         MLLaneSnap ResolveLane(FortressPadAnchor.LaneColor laneColor, out bool laneConfigured)
@@ -543,9 +881,8 @@ namespace CastleDefender.Game
 
         void HideBrokenVisuals()
         {
-            if (_tieredVisual != null)
-                _tieredVisual.gameObject.SetActive(false);
-            _lifecycleVisual?.HideAllPresentation();
+            SetGeneratedVisualsActive(false);
+            HideGeneratedPresentation();
 
             SetLegacyRenderersVisible(false);
             SetInteractionEnabled(true);
@@ -568,6 +905,192 @@ namespace CastleDefender.Game
             _lastVisualFailureSignature = null;
             RuntimeFailureMarker.Clear(transform, "building_visual");
         }
+
+        static bool ShouldUseEditorPreviewWithoutAuthoritativeMatch()
+        {
+#if UNITY_EDITOR
+            if (!Application.isEditor)
+                return false;
+
+            var snapshotApplier = SnapshotApplier.Instance;
+            if (snapshotApplier?.LatestML?.lanes != null)
+                return false;
+
+            if (snapshotApplier?.LatestMLMatchReady?.laneAssignments?.Length > 0)
+                return false;
+
+            if (snapshotApplier?.LatestMLMatchConfig?.battlefieldLayout != null)
+                return false;
+
+            var network = NetworkManager.Instance;
+            if (network == null)
+                return true;
+
+            if (network.LastMLMatchReady?.laneAssignments?.Length > 0)
+                return false;
+
+            if (network.LastMLMatchConfig?.battlefieldLayout != null)
+                return false;
+
+            return true;
+#else
+            return false;
+#endif
+        }
+
+#if UNITY_EDITOR
+        const string TtConstructionRoot = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/models/buildings/construction";
+        const string TtExtrasRoot = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/models/extras";
+        const string TtFxPrefabsRoot = "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/FX/FX_prefabs";
+
+        struct EditorConstructionSpec
+        {
+            public int targetTier;
+            public string[] stageModelPaths;
+        }
+
+        void TryAttachEditorLifecycleVisualFallback(GameObject instance, string buildingType)
+        {
+            if (!Application.isEditor || instance == null || string.IsNullOrWhiteSpace(buildingType))
+                return;
+            if (_lifecycleVisual != null)
+                return;
+
+            var tieredVisual = _tieredVisual != null
+                ? _tieredVisual
+                : instance.GetComponent<TieredBuildingVisual>() ?? instance.GetComponentInChildren<TieredBuildingVisual>(true);
+            if (tieredVisual == null)
+                return;
+
+            var lifecycleVisual = instance.GetComponent<BuildingLifecycleVisual>() ?? instance.AddComponent<BuildingLifecycleVisual>();
+            lifecycleVisual.ConfigureForEditor(
+                tieredVisual,
+                BuildEditorConstructionVisualSets(instance.transform, buildingType),
+                AssetDatabase.LoadAssetAtPath<GameObject>($"{TtExtrasRoot}/weapons/w_hammer.FBX"),
+                AssetDatabase.LoadAssetAtPath<GameObject>($"{TtFxPrefabsRoot}/FX_Building_burning_small.prefab"),
+                AssetDatabase.LoadAssetAtPath<GameObject>($"{TtFxPrefabsRoot}/FX_Building_burning.prefab"),
+                AssetDatabase.LoadAssetAtPath<GameObject>($"{TtFxPrefabsRoot}/FX_Building_Destroyed_mid.prefab"));
+            _lifecycleVisual = lifecycleVisual;
+        }
+
+        static BuildingLifecycleVisual.ConstructionVisualSet[] BuildEditorConstructionVisualSets(Transform parent, string buildingType)
+        {
+            var specs = ResolveEditorConstructionSpecs(buildingType);
+            if (parent == null || specs.Length <= 0)
+                return Array.Empty<BuildingLifecycleVisual.ConstructionVisualSet>();
+
+            var results = new List<BuildingLifecycleVisual.ConstructionVisualSet>(specs.Length);
+            for (int specIndex = 0; specIndex < specs.Length; specIndex++)
+            {
+                var spec = specs[specIndex];
+                if (spec.stageModelPaths == null || spec.stageModelPaths.Length <= 0)
+                    continue;
+
+                var groupRoot = new GameObject($"ConstructionTargetTier_{Mathf.Max(1, spec.targetTier)}");
+                groupRoot.transform.SetParent(parent, false);
+                groupRoot.SetActive(false);
+
+                var stageRoots = new List<GameObject>(spec.stageModelPaths.Length);
+                for (int stageIndex = 0; stageIndex < spec.stageModelPaths.Length; stageIndex++)
+                {
+                    string sourceModelPath = spec.stageModelPaths[stageIndex];
+                    if (string.IsNullOrWhiteSpace(sourceModelPath))
+                        continue;
+
+                    var stageAsset = AssetDatabase.LoadAssetAtPath<GameObject>(sourceModelPath);
+                    if (stageAsset == null)
+                        continue;
+
+                    var stageRoot = new GameObject($"ConstructionStage_{stageIndex + 1}");
+                    stageRoot.transform.SetParent(groupRoot.transform, false);
+                    stageRoot.SetActive(false);
+
+                    var stageModel = Instantiate(stageAsset, stageRoot.transform, false);
+                    stageModel.name = stageAsset.name;
+                    stageRoots.Add(stageRoot);
+                }
+
+                if (stageRoots.Count <= 0)
+                {
+                    DestroyImmediate(groupRoot);
+                    continue;
+                }
+
+                results.Add(new BuildingLifecycleVisual.ConstructionVisualSet
+                {
+                    targetTier = Mathf.Max(1, spec.targetTier),
+                    stageRoots = stageRoots.ToArray(),
+                });
+            }
+
+            return results.ToArray();
+        }
+
+        static EditorConstructionSpec[] ResolveEditorConstructionSpecs(string buildingType)
+        {
+            switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "town_core":
+                    return new[]
+                    {
+                        ConstructionStages(1, $"{TtConstructionRoot}/House_0.FBX", $"{TtConstructionRoot}/House_1.FBX"),
+                        ConstructionStages(2, $"{TtConstructionRoot}/TownHall_0.FBX", $"{TtConstructionRoot}/TownHall_1.FBX"),
+                        ConstructionStages(3, $"{TtConstructionRoot}/Keep_0.FBX", $"{TtConstructionRoot}/Keep_1.FBX"),
+                        ConstructionStages(4, $"{TtConstructionRoot}/Castle_0.FBX", $"{TtConstructionRoot}/Castle_1.FBX"),
+                    };
+                case "barracks":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Barracks_0.FBX", $"{TtConstructionRoot}/Barracks_1.FBX");
+                case "blacksmith":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Blacksmith_0.FBX", $"{TtConstructionRoot}/Blacksmith_1.FBX");
+                case "temple":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Temple_0.FBX", $"{TtConstructionRoot}/Temple_1.FBX");
+                case "wizard_tower":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/MageTower_0.FBX", $"{TtConstructionRoot}/MageTower_1.FBX");
+                case "archery_tower":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Archery_0.FBX", $"{TtConstructionRoot}/Archery_1.FBX");
+                case "stable":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Stables_0.FBX", $"{TtConstructionRoot}/Stables_1.FBX");
+                case "workshop":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Workshop_0.FBX", $"{TtConstructionRoot}/Workshop_1.FBX");
+                case "library":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Library_0.FBX", $"{TtConstructionRoot}/Library_1.FBX");
+                case "market":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Market_0.FBX", $"{TtConstructionRoot}/Market_1.FBX");
+                case "lumber_mill":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/LumberMill_0.FBX", $"{TtConstructionRoot}/LumberMill_1.FBX");
+                case "wall":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_wall_0.FBX", $"{TtConstructionRoot}/Wall_A_wall_1.FBX");
+                case "gate":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_gate_0.FBX", $"{TtConstructionRoot}/Wall_A_gate_1.FBX");
+                case "turret":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_corner_0.FBX", $"{TtConstructionRoot}/Wall_A_corner_1.FBX");
+                case "tower_archer":
+                    return RepeatConstructionStages(3, $"{TtConstructionRoot}/Tower_A_0.FBX", $"{TtConstructionRoot}/Tower_A_1.FBX");
+                default:
+                    return Array.Empty<EditorConstructionSpec>();
+            }
+        }
+
+        static EditorConstructionSpec ConstructionStages(int targetTier, params string[] stageModelPaths)
+        {
+            return new EditorConstructionSpec
+            {
+                targetTier = Mathf.Max(1, targetTier),
+                stageModelPaths = stageModelPaths ?? Array.Empty<string>(),
+            };
+        }
+
+        static EditorConstructionSpec[] RepeatConstructionStages(int maxTier, params string[] stageModelPaths)
+        {
+            if (maxTier <= 0 || stageModelPaths == null || stageModelPaths.Length <= 0)
+                return Array.Empty<EditorConstructionSpec>();
+
+            var results = new EditorConstructionSpec[maxTier];
+            for (int tier = 1; tier <= maxTier; tier++)
+                results[tier - 1] = ConstructionStages(tier, stageModelPaths);
+            return results;
+        }
+#endif
 
         string BuildFailureContext()
         {

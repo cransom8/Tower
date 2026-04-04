@@ -187,6 +187,7 @@ namespace CastleDefender.Editor
             criticalLoader.instantiatedRootName = RuntimeCriticalRootName;
             criticalLoader.failureTitle = "Required map environment failed to load.";
             criticalLoader.readinessTimeoutSeconds = 12f;
+            criticalLoader.enabled = true;
             EditorUtility.SetDirty(criticalLoader);
 
             var optionalLoader = mapRoot.GetComponent<OptionalEnvironmentLoader>();
@@ -201,6 +202,7 @@ namespace CastleDefender.Editor
             optionalLoader.waitForCriticalTimeoutSeconds = 15f;
             optionalLoader.loadStartDelaySeconds = 0.25f;
             optionalLoader.logWarnings = true;
+            optionalLoader.enabled = true;
             EditorUtility.SetDirty(optionalLoader);
         }
 

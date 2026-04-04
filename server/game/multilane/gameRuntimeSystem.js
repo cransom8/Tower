@@ -33,6 +33,13 @@ const DEFAULT_ROUTE_TYPES = Object.freeze({
   WAVE_LANE: "WAVE_LANE",
 });
 
+const DEFAULT_BUILDING_LIFECYCLE_STATES = Object.freeze({
+  beingBuilt: "being_built",
+  active: "active",
+  destroyed: "destroyed",
+  underRepair: "under_repair",
+});
+
 const DEFAULT_FIXED_SLOT_LAYOUT = Object.freeze([
   Object.freeze({ laneIndex: 0, slotKey: "left_a", side: "left", slotColor: "red", branchId: "left_branch_a", branchLabel: "Red Branch", castleSide: "right" }),
   Object.freeze({ laneIndex: 1, slotKey: "left_b", side: "left", slotColor: "yellow", branchId: "left_branch_b", branchLabel: "Yellow Branch", castleSide: "right" }),
@@ -158,6 +165,10 @@ function getLaneCommandStates(deps = {}) {
 
 function getRouteTypes(deps = {}) {
   return deps.ROUTE_TYPES || DEFAULT_ROUTE_TYPES;
+}
+
+function getBuildingLifecycleStates(deps = {}) {
+  return deps.BUILDING_LIFECYCLE_STATES || DEFAULT_BUILDING_LIFECYCLE_STATES;
 }
 
 function getFixedSlotLayout(deps = {}) {
@@ -723,6 +734,160 @@ function rejectLegacyFortressAction(game, laneIndex, type, deps = {}) {
   return { ok: false, reason };
 }
 
+function applyLumberMillRepairAllAction(game, lane, data = null, deps = {}) {
+  const getFortressPadByBuildingType = requireDepFunction(deps, "getFortressPadByBuildingType");
+  const getFortressPadLifecycleState = requireDepFunction(deps, "getFortressPadLifecycleState");
+  const applyFortressPadRepair = requireDepFunction(deps, "applyFortressPadRepair");
+  const getBarracksSiteState = requireDepFunction(deps, "getBarracksSiteState");
+  const getBarracksSiteLifecycleState = requireDepFunction(deps, "getBarracksSiteLifecycleState");
+  const applyBarracksSiteRepair = requireDepFunction(deps, "applyBarracksSiteRepair");
+  const lifecycleStates = getBuildingLifecycleStates(deps);
+  const requestedPadId = String((data && data.padId) || "").trim();
+  const lumberMillPad = getFortressPadByBuildingType(lane, "lumber_mill");
+  if (!lumberMillPad || Math.max(0, Math.floor(Number(lumberMillPad.tier) || 0)) <= 0)
+    return { ok: false, reason: "Build the Lumber Mill first" };
+  if (requestedPadId && requestedPadId !== lumberMillPad.padId)
+    return { ok: false, reason: "Repair must be triggered from the Lumber Mill" };
+  if (getFortressPadLifecycleState(lumberMillPad, game) === lifecycleStates.beingBuilt)
+    return { ok: false, reason: "Lumber Mill construction is not complete" };
+
+  const availableGold = Math.max(0, Math.floor(Number(lane && lane.gold) || 0));
+  if (availableGold <= 0)
+    return { ok: false, reason: "Not enough gold" };
+
+  const repairTargets = [];
+  if (lane && Array.isArray(lane.fortressPads)) {
+    for (const pad of lane.fortressPads) {
+      if (!pad)
+        continue;
+      if (String(pad.buildingType || "").trim().toLowerCase() === "town_core")
+        continue;
+
+      const lifecycleState = getFortressPadLifecycleState(pad, game);
+      const maxHp = Math.max(0, Math.floor(Number(pad.maxHp) || 0));
+      const hp = Math.max(0, Math.floor(Number(pad.hp) || 0));
+      if (lifecycleState === lifecycleStates.beingBuilt || maxHp <= 0 || hp >= maxHp)
+        continue;
+
+      repairTargets.push({
+        kind: "fortress_pad",
+        id: pad.padId,
+        buildingType: pad.buildingType,
+        lifecycleState,
+        missingHp: maxHp - hp,
+        sortKey: `fortress:${pad.padId}`,
+        applyRepair(amount) {
+          return applyFortressPadRepair(game, lane, pad.padId, amount, deps);
+        },
+      });
+    }
+  }
+
+  for (const siteDef of getBarracksSiteDefs(deps)) {
+    if (!siteDef)
+      continue;
+
+    const siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
+    if (!siteState || !siteState.isBuilt)
+      continue;
+
+    const lifecycleState = getBarracksSiteLifecycleState(siteState, game);
+    const maxHp = Math.max(0, Math.floor(Number(siteState.maxHp) || 0));
+    const hp = Math.max(0, Math.floor(Number(siteState.hp) || 0));
+    if (lifecycleState === lifecycleStates.beingBuilt || maxHp <= 0 || hp >= maxHp)
+      continue;
+
+    repairTargets.push({
+      kind: "barracks_site",
+      id: siteDef.barracksId,
+      buildingType: "barracks",
+      lifecycleState,
+      missingHp: maxHp - hp,
+      sortKey: `barracks:${siteDef.barracksId}`,
+      applyRepair(amount) {
+        return applyBarracksSiteRepair(game, lane, siteDef.barracksId, amount);
+      },
+    });
+  }
+
+  if (repairTargets.length <= 0)
+    return { ok: false, reason: "No damaged buildings to repair" };
+
+  const lifecyclePriority = new Map([
+    [lifecycleStates.destroyed, 0],
+    [lifecycleStates.underRepair, 1],
+    [lifecycleStates.active, 2],
+  ]);
+  repairTargets.sort((left, right) => {
+    const leftPriority = lifecyclePriority.get(left.lifecycleState) ?? 99;
+    const rightPriority = lifecyclePriority.get(right.lifecycleState) ?? 99;
+    if (leftPriority !== rightPriority)
+      return leftPriority - rightPriority;
+    return String(left.sortKey || "").localeCompare(String(right.sortKey || ""));
+  });
+
+  const totalMissingHp = repairTargets.reduce((sum, target) => sum + Math.max(0, Math.floor(Number(target.missingHp) || 0)), 0);
+  const repairBudget = Math.min(availableGold, totalMissingHp);
+  if (repairBudget <= 0)
+    return { ok: false, reason: "No damaged buildings to repair" };
+
+  let remainingGold = repairBudget;
+  let hpRestored = 0;
+  let fullyRestoredCount = 0;
+  let partiallyRepairedCount = 0;
+  const repairedTargetIds = [];
+  for (const target of repairTargets) {
+    if (!target || remainingGold <= 0)
+      continue;
+
+    const repairAmount = Math.min(
+      remainingGold,
+      Math.max(0, Math.floor(Number(target.missingHp) || 0))
+    );
+    if (repairAmount <= 0)
+      continue;
+
+    const repairResult = target.applyRepair(repairAmount);
+    const restoredNow = Math.max(0, Math.floor(Number(repairResult && repairResult.hpRestored) || 0));
+    if (restoredNow <= 0)
+      continue;
+
+    remainingGold -= restoredNow;
+    hpRestored += restoredNow;
+    repairedTargetIds.push(`${target.kind}:${target.id}`);
+    if (repairResult.lifecycleState === lifecycleStates.active)
+      fullyRestoredCount += 1;
+    else if (repairResult.lifecycleState === lifecycleStates.underRepair)
+      partiallyRepairedCount += 1;
+  }
+
+  if (hpRestored <= 0)
+    return { ok: false, reason: "No damaged buildings to repair" };
+
+  lane.gold -= hpRestored;
+  lane.totalBuildSpend += hpRestored;
+  lane.buildSpendThisRound += hpRestored;
+  if (typeof deps.recordBalanceSpend === "function") {
+    deps.recordBalanceSpend(game, lane, "repair", hpRestored, {
+      buildingType: "lumber_mill",
+      padId: lumberMillPad.padId,
+      eligibleTargetCount: repairTargets.length,
+      repairedTargetIds,
+    });
+  }
+
+  return {
+    ok: true,
+    goldSpent: hpRestored,
+    hpRestored,
+    eligibleTargetCount: repairTargets.length,
+    fullyRestoredCount,
+    partiallyRepairedCount,
+    repairedTargetIds,
+    totalMissingHp,
+  };
+}
+
 function applyMLAction(game, laneIndex, action, deps = {}) {
   const applyFortressBuildOnPad = requireDepFunction(deps, "applyFortressBuildOnPad");
   const getFortressPadByBuildingType = requireDepFunction(deps, "getFortressPadByBuildingType");
@@ -780,6 +945,9 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
       return { ok: false, reason: "Missing upgradeKey" };
     return applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey, deps);
   }
+
+  if (type === "repair_all_buildings")
+    return applyLumberMillRepairAllAction(game, lane, data, deps);
 
   if (type === "build_barracks_site") {
     const requestedBarracksId = String((data && data.barracksId) || "").trim();

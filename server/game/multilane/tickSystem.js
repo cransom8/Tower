@@ -1,5 +1,7 @@
 "use strict";
 
+const { performance } = require("node:perf_hooks");
+
 const {
   isSpawnAuditLoggingEnabled,
   logSpawnAuditInfo,
@@ -17,6 +19,12 @@ const DEFAULT_UNIT_MOVEMENT_MODES = Object.freeze({
   ANCHOR_JOIN: "AnchorJoin",
   COMBAT_ENGAGE: "CombatEngage",
 });
+
+function roundPerfDuration(value) {
+  if (!Number.isFinite(value))
+    return 0;
+  return Math.round(value * 10) / 10;
+}
 
 function requireDepFunction(deps, name) {
   const fn = deps && deps[name];
@@ -383,10 +391,12 @@ function processLane(game, lane, deps = {}) {
   const isLaneControlledUnitInRegroupWindow = requireDepFunction(deps, "isLaneControlledUnitInRegroupWindow");
   const canLaneControlledUnitSeekCombat = requireDepFunction(deps, "canLaneControlledUnitSeekCombat");
   const getWaveUnitPreferredTarget = requireDepFunction(deps, "getWaveUnitPreferredTarget");
+  const isRouteUnitTargetBlockedByStructure = requireDepFunction(deps, "isRouteUnitTargetBlockedByStructure");
   const shouldSwitchCombatTarget = requireDepFunction(deps, "shouldSwitchCombatTarget");
   const assignUnitCombatTarget = requireDepFunction(deps, "assignUnitCombatTarget");
   const findBlockingStructureTarget = requireDepFunction(deps, "findBlockingStructureTarget");
   const markTownCoreBreach = requireDepFunction(deps, "markTownCoreBreach");
+  const getRouteUnitTargetPressureCount = requireDepFunction(deps, "getRouteUnitTargetPressureCount");
   const findFriendlyHealTarget = requireDepFunction(deps, "findFriendlyHealTarget");
   const getUnitAttackRange = requireDepFunction(deps, "getUnitAttackRange");
   const dist2D = requireDepFunction(deps, "dist2D");
@@ -489,10 +499,50 @@ function processLane(game, lane, deps = {}) {
         }
       }
 
-      const canReacquireUnitTarget = !isLaneControlledUnitInRegroupWindow(unit, game.tick);
+      const currentTargetInDirectContact = !!(
+        resolvedCombatTarget
+        && resolvedCombatTarget.kind === "unit"
+        && resolvedCombatTarget.entity
+        && isUnitInCombatContact(lane, unit, resolvedCombatTarget.entity)
+      );
+      const currentDefenseStructureLock = !!(
+        resolvedCombatTarget
+        && resolvedCombatTarget.kind === "fortress_pad"
+        && ["wall", "gate", "turret"].includes(String(resolvedCombatTarget.buildingType || resolvedCombatTarget.type || "").trim().toLowerCase())
+      );
+      const canReacquireUnitTarget = !currentTargetInDirectContact
+        && !isLaneControlledUnitInRegroupWindow(unit, game.tick);
+      const canSeekCombat = canLaneControlledUnitSeekCombat(game, unit);
+      const currentUnitTargetDescriptor = resolvedCombatTarget
+        && resolvedCombatTarget.kind === "unit"
+        && resolvedCombatTarget.entity
+        ? {
+            kind: "unit",
+            entity: resolvedCombatTarget.entity,
+            laneIndex: resolvedCombatTarget.laneIndex,
+            reason: "current_unit_target",
+          }
+        : null;
+      let blockingTarget = null;
+      if (canSeekCombat && (!resolvedCombatTarget || resolvedCombatTarget.kind !== "unit" || canReacquireUnitTarget || currentUnitTargetDescriptor))
+        blockingTarget = findBlockingStructureTarget(game, lane, unit);
+      if (currentUnitTargetDescriptor
+          && !currentTargetInDirectContact
+          && isRouteUnitTargetBlockedByStructure(game, lane, unit, currentUnitTargetDescriptor, blockingTarget)) {
+        clearUnitCombatTarget(unit, game.tick, { suppressRegroup: true });
+        resolvedCombatTarget = null;
+      }
       let directPreferredTarget = null;
-      if (canReacquireUnitTarget && canLaneControlledUnitSeekCombat(game, unit))
+      if (canReacquireUnitTarget && canSeekCombat) {
         directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit);
+        if (directPreferredTarget && currentDefenseStructureLock) {
+          directPreferredTarget = null;
+        }
+        if (directPreferredTarget
+            && isRouteUnitTargetBlockedByStructure(game, lane, unit, directPreferredTarget, blockingTarget)) {
+          directPreferredTarget = null;
+        }
+      }
 
       if (directPreferredTarget)
         preferredTarget = directPreferredTarget;
@@ -512,27 +562,27 @@ function processLane(game, lane, deps = {}) {
 
       const canReevaluateStructureTarget = !resolvedCombatTarget || resolvedCombatTarget.kind !== "unit";
       if (canReevaluateStructureTarget) {
-        const blockingTarget = findBlockingStructureTarget(game, lane, unit);
+        const activeBlockingTarget = blockingTarget || findBlockingStructureTarget(game, lane, unit);
         const currentStructureTargetId = resolvedCombatTarget && resolvedCombatTarget.kind === "fortress_pad"
           ? String(resolvedCombatTarget.padId || resolvedCombatTarget.unitId || "")
           : "";
-        const nextStructureTargetId = blockingTarget
-          ? String(blockingTarget.padId || blockingTarget.unitId || "")
+        const nextStructureTargetId = activeBlockingTarget
+          ? String(activeBlockingTarget.padId || activeBlockingTarget.unitId || "")
           : "";
-        if (blockingTarget && currentStructureTargetId !== nextStructureTargetId) {
-          if (blockingTarget.buildingType === "town_core")
-            markTownCoreBreach(game, lane, unit, blockingTarget);
+        if (activeBlockingTarget && currentStructureTargetId !== nextStructureTargetId) {
+          if (activeBlockingTarget.buildingType === "town_core")
+            markTownCoreBreach(game, lane, unit, activeBlockingTarget);
           unit.blockedByStructure = true;
-          unit.blockedByStructureId = blockingTarget.unitId;
-          unit.blockedByStructureType = blockingTarget.buildingType || blockingTarget.type || null;
+          unit.blockedByStructureId = activeBlockingTarget.unitId;
+          unit.blockedByStructureType = activeBlockingTarget.buildingType || activeBlockingTarget.type || null;
           assignUnitCombatTarget(unit, {
-            unitId: blockingTarget.unitId,
+            unitId: activeBlockingTarget.unitId,
             kind: "fortress_pad",
-            padId: blockingTarget.padId,
-            laneIndex: Number.isInteger(blockingTarget.laneIndex) ? blockingTarget.laneIndex : lane.laneIndex,
+            padId: activeBlockingTarget.padId,
+            laneIndex: Number.isInteger(activeBlockingTarget.laneIndex) ? activeBlockingTarget.laneIndex : lane.laneIndex,
           }, game.tick);
           resolvedCombatTarget = resolveWaveCombatTarget(game, lane, unit.combatTarget);
-        } else if (!blockingTarget && !unit.combatTarget) {
+        } else if (!activeBlockingTarget && !unit.combatTarget) {
           unit.blockedByStructure = false;
           unit.blockedByStructureId = null;
           unit.blockedByStructureType = null;
@@ -934,29 +984,101 @@ function mlTick(game, deps = {}) {
     ? deps.recordBalanceTick
     : null;
 
-  if (!game || game.phase !== "playing")
+  if (!game)
     return;
+
+  game._lastTickPerfBreakdown = null;
+  if (game.phase !== "playing")
+    return;
+
+  const tickBreakdown = {
+    incomeMs: 0,
+    scheduledWavesMs: 0,
+    buildingConstructionMs: 0,
+    barracksSendsMs: 0,
+    syncLaneCommandsMs: 0,
+    lanesMs: 0,
+    balanceTickMs: 0,
+    finalizeMs: 0,
+    slowestLanes: [],
+  };
 
   game.tick += 1;
   if (!game.startedAt)
     game.startedAt = Date.now();
+
+  let phaseStartedAt = performance.now();
   grantScheduledIncome(game);
+  tickBreakdown.incomeMs = performance.now() - phaseStartedAt;
+
+  phaseStartedAt = performance.now();
   runScheduledWaves(game);
+  tickBreakdown.scheduledWavesMs = performance.now() - phaseStartedAt;
+
+  phaseStartedAt = performance.now();
   runScheduledBuildingConstruction(game);
+  tickBreakdown.buildingConstructionMs = performance.now() - phaseStartedAt;
+
+  phaseStartedAt = performance.now();
   runScheduledBarracksSends(game);
+  tickBreakdown.barracksSendsMs = performance.now() - phaseStartedAt;
+
+  phaseStartedAt = performance.now();
   syncLaneCommandAssignments(game);
+  tickBreakdown.syncLaneCommandsMs = performance.now() - phaseStartedAt;
+
   game.roundState = "combat";
   game.roundStateTicks = Number.isInteger(game.lastWaveSpawnTick)
     ? Math.max(0, game.tick - game.lastWaveSpawnTick)
     : game.tick;
 
-  for (const lane of game.lanes || [])
+  const laneTimings = [];
+  phaseStartedAt = performance.now();
+  for (const lane of game.lanes || []) {
+    const laneStartedAt = performance.now();
     processLane(game, lane, deps);
+    laneTimings.push({
+      laneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
+      ms: performance.now() - laneStartedAt,
+      unitCount: Array.isArray(lane && lane.units) ? lane.units.length : 0,
+      projectileCount: Array.isArray(lane && lane.projectiles) ? lane.projectiles.length : 0,
+      eliminated: !!(lane && lane.eliminated),
+    });
+  }
+  tickBreakdown.lanesMs = performance.now() - phaseStartedAt;
 
-  if (recordBalanceTick)
+  if (recordBalanceTick) {
+    phaseStartedAt = performance.now();
     recordBalanceTick(game);
+    tickBreakdown.balanceTickMs = performance.now() - phaseStartedAt;
+  }
 
+  phaseStartedAt = performance.now();
   finalizeTick(game, deps);
+  tickBreakdown.finalizeMs = performance.now() - phaseStartedAt;
+
+  tickBreakdown.slowestLanes = laneTimings
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 3)
+    .map((lanePerf) => ({
+      laneIndex: lanePerf.laneIndex,
+      ms: roundPerfDuration(lanePerf.ms),
+      unitCount: lanePerf.unitCount,
+      projectileCount: lanePerf.projectileCount,
+      eliminated: lanePerf.eliminated,
+    }));
+
+  game._lastTickPerfBreakdown = {
+    incomeMs: roundPerfDuration(tickBreakdown.incomeMs),
+    scheduledWavesMs: roundPerfDuration(tickBreakdown.scheduledWavesMs),
+    buildingConstructionMs: roundPerfDuration(tickBreakdown.buildingConstructionMs),
+    barracksSendsMs: roundPerfDuration(tickBreakdown.barracksSendsMs),
+    syncLaneCommandsMs: roundPerfDuration(tickBreakdown.syncLaneCommandsMs),
+    lanesMs: roundPerfDuration(tickBreakdown.lanesMs),
+    balanceTickMs: roundPerfDuration(tickBreakdown.balanceTickMs),
+    finalizeMs: roundPerfDuration(tickBreakdown.finalizeMs),
+    slowestLanes: tickBreakdown.slowestLanes,
+  };
 }
 
 module.exports = {

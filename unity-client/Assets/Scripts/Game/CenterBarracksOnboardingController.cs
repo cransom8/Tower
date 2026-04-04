@@ -11,7 +11,8 @@ namespace CastleDefender.Game
     {
         const string CenterBarracksId = "center";
         const string MilitiaRosterKey = "militia";
-        const int MilitiaTargetCount = 10;
+        const string TownCorePadId = "town_core_pad";
+        const int MilitiaTargetCount = 5;
         const string PromptRootName = "CenterBarracksOnboardingPrompt";
         const string ArrowRootName = "CenterBarracksOnboardingArrow";
         const string UiArrowRootName = "CenterBarracksOnboardingUiArrow";
@@ -25,8 +26,14 @@ namespace CastleDefender.Game
         {
             None = 0,
             Purchase = 1,
-            Upgrade = 2,
-            BuyMilitia = 3,
+            Constructing = 2,
+            OpenBarracks = 3,
+            BuyMilitia = 4,
+            UpgradeTownCoreTier2 = 5,
+            WaitForTownCoreTier2 = 6,
+            BuyMarket = 7,
+            WaitForMarket = 8,
+            BuyTraders = 9,
         }
 
         Canvas _mainCanvas;
@@ -86,6 +93,7 @@ namespace CastleDefender.Game
         void Update()
         {
             EnsureSubscriptions();
+            RefreshOnboardingState();
 
             if (!_flowResolved || _flowCompleted || _stage == CenterBarracksStage.None)
                 return;
@@ -180,7 +188,11 @@ namespace CastleDefender.Game
             if (payload == null || string.IsNullOrWhiteSpace(payload.type))
                 return;
 
-            if (payload.type == "buy_barracks_unit" && _stage == CenterBarracksStage.BuyMilitia)
+            if ((payload.type == "buy_barracks_unit" && _stage == CenterBarracksStage.BuyMilitia)
+                || (payload.type == "buy_market_unit" && _stage == CenterBarracksStage.BuyTraders)
+                || payload.type == "build_barracks_site"
+                || payload.type == "upgrade_building"
+                || payload.type == "build_on_pad")
                 RefreshOnboardingState();
         }
 
@@ -232,13 +244,13 @@ namespace CastleDefender.Game
 
             if (!_flowResolved)
             {
-                _initialStage = ResolveInitialStage(site);
+                _initialStage = ResolveInitialStage(lane, site);
                 _stage = _initialStage;
                 _flowResolved = true;
             }
             else
             {
-                _stage = ResolveCurrentStage(site);
+                _stage = ResolveCurrentStage(lane, site);
             }
 
             if (_stage != _lastVisibleStage)
@@ -282,33 +294,117 @@ namespace CastleDefender.Game
             HideIndicators();
         }
 
-        CenterBarracksStage ResolveInitialStage(MLBarracksSite site)
+        CenterBarracksStage ResolveInitialStage(MLLaneSnap lane, MLBarracksSite site)
         {
             if (site == null)
                 return CenterBarracksStage.None;
 
+            if (IsBarracksConstructing(site))
+                return CenterBarracksStage.Constructing;
+
             if (!site.isBuilt)
                 return CenterBarracksStage.Purchase;
 
-            return ResolveMilitiaStage(site);
+            return ResolvePostBuildStage(lane, site);
         }
 
-        CenterBarracksStage ResolveCurrentStage(MLBarracksSite site)
+        CenterBarracksStage ResolveCurrentStage(MLLaneSnap lane, MLBarracksSite site)
         {
             if (site == null)
                 return CenterBarracksStage.None;
 
+            if (IsBarracksConstructing(site))
+                return CenterBarracksStage.Constructing;
+
             if (!site.isBuilt)
                 return CenterBarracksStage.Purchase;
 
-            return ResolveMilitiaStage(site);
+            return ResolvePostBuildStage(lane, site);
         }
 
-        CenterBarracksStage ResolveMilitiaStage(MLBarracksSite site)
+        CenterBarracksStage ResolvePostBuildStage(MLLaneSnap lane, MLBarracksSite site)
         {
-            return GetOwnedCount(site, MilitiaRosterKey) >= MilitiaTargetCount
+            if (GetOwnedCount(site, MilitiaRosterKey) < MilitiaTargetCount)
+            {
+                if (!CanShowMilitiaPurchaseStep())
+                    return CenterBarracksStage.OpenBarracks;
+
+                return CenterBarracksStage.BuyMilitia;
+            }
+
+            var townCorePad = FindFortressPadByBuildingType(lane, "town_core");
+            if (townCorePad != null && Mathf.Max(0, townCorePad.tier) < 2)
+            {
+                if (IsPadConstructingTowardTier(townCorePad, 2))
+                    return CenterBarracksStage.WaitForTownCoreTier2;
+                return CenterBarracksStage.UpgradeTownCoreTier2;
+            }
+
+            var marketPad = FindFortressPadByBuildingType(lane, "market");
+            if (marketPad != null && !marketPad.isBuilt)
+            {
+                if (IsPadConstructing(marketPad))
+                    return CenterBarracksStage.WaitForMarket;
+                return CenterBarracksStage.BuyMarket;
+            }
+
+            var currentMarketEntry = GetCurrentMarketRosterEntry(lane);
+            if (currentMarketEntry == null)
+                return CenterBarracksStage.BuyMarket;
+
+            return Mathf.Max(0, currentMarketEntry.ownedCount) > 0
                 ? CenterBarracksStage.None
-                : CenterBarracksStage.BuyMilitia;
+                : CenterBarracksStage.BuyTraders;
+        }
+
+        static MLFortressPad FindFortressPadByBuildingType(MLLaneSnap lane, string buildingType)
+        {
+            if (lane?.fortressPads == null || string.IsNullOrWhiteSpace(buildingType))
+                return null;
+
+            for (int i = 0; i < lane.fortressPads.Length; i++)
+            {
+                var pad = lane.fortressPads[i];
+                if (pad != null && string.Equals(pad.buildingType, buildingType, System.StringComparison.OrdinalIgnoreCase))
+                    return pad;
+            }
+
+            return null;
+        }
+
+        static MLMarketRosterEntry GetCurrentMarketRosterEntry(MLLaneSnap lane)
+        {
+            if (lane?.marketRoster == null)
+                return null;
+
+            MLMarketRosterEntry unlockedFallback = null;
+            for (int i = 0; i < lane.marketRoster.Length; i++)
+            {
+                var entry = lane.marketRoster[i];
+                if (entry == null)
+                    continue;
+                if (entry.currentTier)
+                    return entry;
+                if (entry.unlocked && unlockedFallback == null)
+                    unlockedFallback = entry;
+            }
+
+            return unlockedFallback;
+        }
+
+        bool CanShowMilitiaPurchaseStep()
+        {
+            var panel = ResolveBarracksPanel();
+            if (panel == null)
+                return false;
+
+            if (panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey) != null)
+                return true;
+
+            if (panel.GetFocusedBarracksUnitCard(MilitiaRosterKey) != null)
+                return true;
+
+            return panel.IsShowingFocusedBarracks(CenterBarracksId);
         }
 
         static int GetOwnedCount(MLBarracksSite site, string rosterKey)
@@ -330,6 +426,52 @@ namespace CastleDefender.Game
             }
 
             return null;
+        }
+
+        static bool IsBarracksConstructing(MLBarracksSite site)
+        {
+            return site != null
+                && (site.isConstructing
+                    || string.Equals(site.buildState, "constructing", System.StringComparison.OrdinalIgnoreCase));
+        }
+
+        static bool IsPadConstructing(MLFortressPad pad)
+        {
+            return pad != null
+                && (pad.isConstructing
+                    || string.Equals(pad.buildState, "constructing", System.StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(pad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase));
+        }
+
+        static bool IsPadConstructingTowardTier(MLFortressPad pad, int targetTier)
+        {
+            return pad != null
+                && IsPadConstructing(pad)
+                && Mathf.Max(Mathf.Max(0, pad.tier), Mathf.Max(0, pad.constructionTargetTier)) >= Mathf.Max(1, targetTier);
+        }
+
+        static int GetConstructionSecondsRemaining(MLBarracksSite site)
+        {
+            if (site == null)
+                return -1;
+
+            return Mathf.CeilToInt(site.constructionTimerTicksRemaining / Mathf.Max(1f, SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetTickHz() : 20));
+        }
+
+        static int GetConstructionSecondsRemaining(MLFortressPad pad)
+        {
+            if (pad == null)
+                return -1;
+
+            return Mathf.CeilToInt(pad.constructionTimerTicksRemaining / Mathf.Max(1f, SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetTickHz() : 20));
+        }
+
+        static string BuildConstructionTimerLabel(string constructionKind, int seconds)
+        {
+            string verb = string.Equals(constructionKind, "upgrade", System.StringComparison.OrdinalIgnoreCase)
+                ? "Upgrading"
+                : "Building";
+            return $"{verb} {Mathf.Max(0, seconds)}s";
         }
 
         void HideIndicators()
@@ -468,8 +610,8 @@ namespace CastleDefender.Game
             _promptHideButton = EnsurePromptButton(
                 _promptHideButton,
                 "HideButton",
-                new Vector2(compactLayout ? 0.72f : 0.76f, 0.36f),
-                new Vector2(0.94f, 0.54f),
+                new Vector2(compactLayout ? 0.74f : 0.78f, 0.08f),
+                new Vector2(0.94f, 0.26f),
                 out _promptHideButtonLabel);
             _promptHideButton.onClick.RemoveListener(HandlePromptHidePressed);
             _promptHideButton.onClick.AddListener(HandlePromptHidePressed);
@@ -974,9 +1116,15 @@ namespace CastleDefender.Game
 
             _headlineLabel.text = _stage switch
             {
-                CenterBarracksStage.Purchase => "Open Town Core",
-                CenterBarracksStage.Upgrade => "Upgrade In Town Core",
-                CenterBarracksStage.BuyMilitia => "Buy Militia x10",
+                CenterBarracksStage.Purchase => "Build Center Barracks",
+                CenterBarracksStage.Constructing => "Wait For Center Barracks",
+                CenterBarracksStage.OpenBarracks => "Open Center Barracks",
+                CenterBarracksStage.BuyMilitia => "Buy Militia",
+                CenterBarracksStage.UpgradeTownCoreTier2 => "Upgrade Town Core",
+                CenterBarracksStage.WaitForTownCoreTier2 => "Wait For Town Core",
+                CenterBarracksStage.BuyMarket => "Buy Market",
+                CenterBarracksStage.WaitForMarket => "Wait For Market",
+                CenterBarracksStage.BuyTraders => "Buy Traders",
                 _ => string.Empty,
             };
 
@@ -985,8 +1133,14 @@ namespace CastleDefender.Game
             _focusButtonLabel.text = _stage switch
             {
                 CenterBarracksStage.Purchase => "Open Town Core",
-                CenterBarracksStage.Upgrade => "Open Town Core",
+                CenterBarracksStage.Constructing => "Open Town Core",
+                CenterBarracksStage.OpenBarracks => "Open Center Barracks",
                 CenterBarracksStage.BuyMilitia => "Open Center Barracks",
+                CenterBarracksStage.UpgradeTownCoreTier2 => "Open Town Core",
+                CenterBarracksStage.WaitForTownCoreTier2 => "Open Town Core",
+                CenterBarracksStage.BuyMarket => "Open Town Core",
+                CenterBarracksStage.WaitForMarket => "View Market",
+                CenterBarracksStage.BuyTraders => "Open Market",
                 _ => "Focus Barracks",
             };
         }
@@ -1002,25 +1156,83 @@ namespace CastleDefender.Game
                 if (lane != null && lane.gold < buildCost)
                     return $"Center Barracks costs {buildCost}g in Town Core. Need {Mathf.Max(0, buildCost - Mathf.FloorToInt(lane.gold))} more gold before you can purchase it.";
 
-                return $"Town Core starts built. Open Town Core and purchase Center Barracks for {buildCost}g, then return here to buy your first militia.";
+                return $"Town Core starts built. Open Town Core and purchase Center Barracks for {buildCost}g, then wait for construction to finish.";
             }
 
-            if (_stage == CenterBarracksStage.Upgrade)
+            if (_stage == CenterBarracksStage.Constructing)
             {
-                return "Center Barracks upgrades are purchased from Town Core.";
+                string timerLabel = BuildConstructionTimerLabel(site.constructionKind, GetConstructionSecondsRemaining(site));
+                return $"Center Barracks has been purchased and is still under construction. {timerLabel}. Wait for it to finish before opening the barracks.";
+            }
+
+            if (_stage == CenterBarracksStage.OpenBarracks)
+            {
+                return $"Center Barracks is finished. Open the barracks, then keep buying Militia until you own {MilitiaTargetCount}.";
             }
 
             if (_stage == CenterBarracksStage.BuyMilitia)
             {
                 var militia = FindRosterEntry(site, MilitiaRosterKey);
+                int ownedCount = GetOwnedCount(site, MilitiaRosterKey);
                 if (militia == null)
-                    return "Open the center barracks and stock it with your first militia squad.";
+                    return $"Open the center barracks and start buying Militia. Progress {ownedCount}/{MilitiaTargetCount}.";
 
-                int totalCost = Mathf.Max(0, militia.buyCost * MilitiaTargetCount);
+                int unitCost = Mathf.Max(0, militia.buyCost);
+                if (lane != null && lane.gold < unitCost)
+                    return $"Militia progress {ownedCount}/{MilitiaTargetCount}. Need {Mathf.Max(0, unitCost - Mathf.FloorToInt(lane.gold))} more gold to buy the next Militia.";
+
+                return $"Center Barracks is open. Buy Militia one at a time until you own {MilitiaTargetCount}. Progress {ownedCount}/{MilitiaTargetCount}.";
+            }
+
+            var townCorePad = FindFortressPadByBuildingType(lane, "town_core");
+            if (_stage == CenterBarracksStage.UpgradeTownCoreTier2)
+            {
+                if (townCorePad == null)
+                    return "Town Core upgrade data is unavailable.";
+
+                int upgradeCost = Mathf.Max(0, townCorePad.upgradeCost);
+                if (lane != null && lane.gold < upgradeCost)
+                    return $"Town Core Tier 2 needs {Mathf.Max(0, upgradeCost - Mathf.FloorToInt(lane.gold))} more gold before you can upgrade it.";
+
+                return $"Militia is online. Open Town Core and upgrade it to Tier 2 so the Market branch unlocks.";
+            }
+
+            if (_stage == CenterBarracksStage.WaitForTownCoreTier2)
+            {
+                string timerLabel = BuildConstructionTimerLabel(townCorePad != null ? townCorePad.constructionKind : null, GetConstructionSecondsRemaining(townCorePad));
+                return $"Town Core is upgrading toward Tier 2. {timerLabel}. Wait for it to finish so you can unlock the Market.";
+            }
+
+            var marketPad = FindFortressPadByBuildingType(lane, "market");
+            if (_stage == CenterBarracksStage.BuyMarket)
+            {
+                if (marketPad == null)
+                    return "Market branch data is unavailable.";
+
+                int buildCost = Mathf.Max(0, marketPad.buildCost);
+                if (lane != null && lane.gold < buildCost)
+                    return $"Market costs {buildCost}g. Need {Mathf.Max(0, buildCost - Mathf.FloorToInt(lane.gold))} more gold before you can purchase it.";
+
+                return $"Town Core Tier 2 is ready. Open Town Core and buy the Market to start your income branch.";
+            }
+
+            if (_stage == CenterBarracksStage.WaitForMarket)
+            {
+                string timerLabel = BuildConstructionTimerLabel(marketPad != null ? marketPad.constructionKind : null, GetConstructionSecondsRemaining(marketPad));
+                return $"Market has been purchased and is still under construction. {timerLabel}. Wait for it to finish before buying traders.";
+            }
+
+            if (_stage == CenterBarracksStage.BuyTraders)
+            {
+                var currentMarketEntry = GetCurrentMarketRosterEntry(lane);
+                if (currentMarketEntry == null)
+                    return "Open the Market and buy trader income.";
+
+                int totalCost = Mathf.Max(0, currentMarketEntry.buyCost);
                 if (lane != null && lane.gold < totalCost)
-                    return $"Need {Mathf.Max(0, totalCost - Mathf.FloorToInt(lane.gold))} more gold to buy Militia x{MilitiaTargetCount}.";
+                    return $"Need {Mathf.Max(0, totalCost - Mathf.FloorToInt(lane.gold))} more gold to buy {currentMarketEntry.displayName}.";
 
-                return $"Center Barracks is ready. Open it and buy Militia x{MilitiaTargetCount} to start your first live deployment.";
+                return $"Market is open. Buy {currentMarketEntry.displayName} to start your trader income line.";
             }
 
             return string.Empty;
@@ -1066,9 +1278,15 @@ namespace CastleDefender.Game
         {
             return _stage switch
             {
-                CenterBarracksStage.Purchase => "TOWN CORE",
-                CenterBarracksStage.Upgrade => "UPGRADE",
-                CenterBarracksStage.BuyMilitia => "OPEN",
+                CenterBarracksStage.Purchase => "BUILD",
+                CenterBarracksStage.Constructing => "WAIT",
+                CenterBarracksStage.OpenBarracks => "OPEN",
+                CenterBarracksStage.BuyMilitia => "BUY",
+                CenterBarracksStage.UpgradeTownCoreTier2 => "UPGRADE",
+                CenterBarracksStage.WaitForTownCoreTier2 => "WAIT",
+                CenterBarracksStage.BuyMarket => "BUILD",
+                CenterBarracksStage.WaitForMarket => "WAIT",
+                CenterBarracksStage.BuyTraders => "BUY",
                 _ => "BARRACKS",
             };
         }
@@ -1084,9 +1302,15 @@ namespace CastleDefender.Game
 
             caption = _stage switch
             {
-                CenterBarracksStage.Purchase => "OPEN",
-                CenterBarracksStage.Upgrade => "OPEN",
-                CenterBarracksStage.BuyMilitia => "BUY x10",
+                CenterBarracksStage.Purchase => "BUILD",
+                CenterBarracksStage.Constructing => "WAIT",
+                CenterBarracksStage.OpenBarracks => "OPEN",
+                CenterBarracksStage.BuyMilitia => "BUY",
+                CenterBarracksStage.UpgradeTownCoreTier2 => "UPGRADE",
+                CenterBarracksStage.WaitForTownCoreTier2 => "WAIT",
+                CenterBarracksStage.BuyMarket => "BUILD",
+                CenterBarracksStage.WaitForMarket => "WAIT",
+                CenterBarracksStage.BuyTraders => "BUY",
                 _ => null,
             };
 
@@ -1099,27 +1323,89 @@ namespace CastleDefender.Game
             pointDownFromAbove = false;
 
             var panel = ResolveBarracksPanel();
-            if (panel == null || !panel.IsShowingFocusedBarracks(CenterBarracksId))
+            if (panel == null)
                 return false;
 
             switch (_stage)
             {
                 case CenterBarracksStage.Purchase:
-                case CenterBarracksStage.Upgrade:
                     {
-                        var button = panel.GetFocusedBarracksHeaderActionButton();
+                        if (!panel.IsShowingFocusedPad(TownCorePadId))
+                            return false;
+
+                        var button = panel.GetTownCoreBarracksPrimaryActionButton(CenterBarracksId);
                         if (button == null || !button.gameObject.activeInHierarchy)
                             return false;
 
                         target = button.GetComponent<RectTransform>();
-                        pointDownFromAbove = false;
+                        pointDownFromAbove = true;
                         return target != null;
                     }
 
+                case CenterBarracksStage.OpenBarracks:
+                    {
+                        if (!panel.IsShowingFocusedPad(TownCorePadId))
+                            return false;
+
+                        var button = panel.GetTownCoreBarracksPrimaryActionButton(CenterBarracksId);
+                        if (button == null || !button.gameObject.activeInHierarchy)
+                            return false;
+
+                        target = button.GetComponent<RectTransform>();
+                        pointDownFromAbove = true;
+                        return target != null;
+                    }
+
+                case CenterBarracksStage.Constructing:
+                    {
+                        if (!panel.IsShowingFocusedPad(TownCorePadId))
+                            return false;
+
+                        var button = panel.GetTownCoreBarracksPrimaryActionButton(CenterBarracksId);
+                        if (button == null || !button.gameObject.activeInHierarchy)
+                            return false;
+
+                        target = button.GetComponent<RectTransform>();
+                        pointDownFromAbove = true;
+                        return target != null;
+                    }
+
+                case CenterBarracksStage.UpgradeTownCoreTier2:
+                case CenterBarracksStage.WaitForTownCoreTier2:
+                    {
+                        if (!panel.IsShowingFocusedPad(TownCorePadId))
+                            return false;
+
+                        var button = panel.GetTownCorePadPrimaryActionButton(TownCorePadId);
+                        if (button == null || !button.gameObject.activeInHierarchy)
+                            return false;
+
+                        target = button.GetComponent<RectTransform>();
+                        pointDownFromAbove = true;
+                        return target != null;
+                    }
+
+                case CenterBarracksStage.BuyMarket:
+                    {
+                        var marketPad = FindFortressPadByBuildingType(SnapshotApplier.Instance?.MyLane, "market");
+                        if (marketPad == null || !panel.IsShowingFocusedPad(TownCorePadId))
+                            return false;
+
+                        var button = panel.GetTownCorePadPrimaryActionButton(marketPad.padId);
+                        if (button == null || !button.gameObject.activeInHierarchy)
+                            return false;
+
+                        target = button.GetComponent<RectTransform>();
+                        pointDownFromAbove = true;
+                        return target != null;
+                    }
+
+                case CenterBarracksStage.WaitForMarket:
+                    return false;
+
                 case CenterBarracksStage.BuyMilitia:
                     {
-                        var buyButton = panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey, MilitiaTargetCount)
-                            ?? panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey);
+                        var buyButton = panel.GetFocusedBarracksUnitBuyButton(MilitiaRosterKey);
                         if (buyButton != null && buyButton.gameObject.activeInHierarchy)
                         {
                             target = buyButton.GetComponent<RectTransform>();
@@ -1132,6 +1418,18 @@ namespace CastleDefender.Game
                             return false;
 
                         target = card;
+                        pointDownFromAbove = true;
+                        return target != null;
+                    }
+
+                case CenterBarracksStage.BuyTraders:
+                    {
+                        var currentMarketEntry = GetCurrentMarketRosterEntry(SnapshotApplier.Instance?.MyLane);
+                        var buyButton = panel.GetFocusedMarketBuyButton(currentMarketEntry != null ? currentMarketEntry.unitKey : null);
+                        if (buyButton == null || !buyButton.gameObject.activeInHierarchy)
+                            return false;
+
+                        target = buyButton.GetComponent<RectTransform>();
                         pointDownFromAbove = true;
                         return target != null;
                     }
@@ -1286,12 +1584,25 @@ namespace CastleDefender.Game
         {
             worldPosition = Vector3.zero;
 
-            if (_stage == CenterBarracksStage.Purchase || _stage == CenterBarracksStage.Upgrade)
+            if (_stage == CenterBarracksStage.Purchase
+                || _stage == CenterBarracksStage.UpgradeTownCoreTier2
+                || _stage == CenterBarracksStage.WaitForTownCoreTier2)
             {
-                var townCoreAnchor = FortressPadAnchor.FindAnchor("town_core_pad", _laneSlotColor, _laneIndex);
+                var townCoreAnchor = FortressPadAnchor.FindAnchor(TownCorePadId, _laneSlotColor, _laneIndex);
                 if (townCoreAnchor != null)
                 {
                     worldPosition = ResolveArrowWorldPosition(townCoreAnchor);
+                    return true;
+                }
+            }
+
+            if (_stage == CenterBarracksStage.BuyMarket || _stage == CenterBarracksStage.WaitForMarket || _stage == CenterBarracksStage.BuyTraders)
+            {
+                var marketPad = FindFortressPadByBuildingType(SnapshotApplier.Instance?.MyLane, "market");
+                var marketAnchor = FortressPadAnchor.FindAnchor(marketPad != null ? marketPad.padId : null, _laneSlotColor, _laneIndex);
+                if (marketAnchor != null)
+                {
+                    worldPosition = ResolveArrowWorldPosition(marketAnchor);
                     return true;
                 }
             }
@@ -1460,6 +1771,37 @@ namespace CastleDefender.Game
                 : SnapshotApplier.Instance != null ? SnapshotApplier.Instance.MyLaneIndex : -1;
             if (laneIndex < 0)
                 return;
+
+            if (_stage == CenterBarracksStage.Purchase)
+            {
+                if (!FortressSelectionController.OpenFortressPad(laneIndex, TownCorePadId))
+                    FortressSelectionController.FocusFortressPad(laneIndex, TownCorePadId);
+                return;
+            }
+
+            if (_stage == CenterBarracksStage.Constructing)
+            {
+                if (!FortressSelectionController.OpenFortressPad(laneIndex, TownCorePadId))
+                    FortressSelectionController.FocusFortressPad(laneIndex, TownCorePadId);
+                return;
+            }
+
+            if (_stage == CenterBarracksStage.UpgradeTownCoreTier2 || _stage == CenterBarracksStage.WaitForTownCoreTier2 || _stage == CenterBarracksStage.BuyMarket)
+            {
+                if (!FortressSelectionController.OpenFortressPad(laneIndex, TownCorePadId))
+                    FortressSelectionController.FocusFortressPad(laneIndex, TownCorePadId);
+                return;
+            }
+
+            if (_stage == CenterBarracksStage.WaitForMarket || _stage == CenterBarracksStage.BuyTraders)
+            {
+                var marketPad = FindFortressPadByBuildingType(SnapshotApplier.Instance?.MyLane, "market");
+                if (marketPad != null)
+                {
+                    FortressSelectionController.OpenFortressPad(laneIndex, marketPad.padId);
+                    return;
+                }
+            }
 
             FortressSelectionController.OpenBarracksSite(laneIndex, CenterBarracksId);
         }

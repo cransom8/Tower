@@ -1,3 +1,4 @@
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -8,6 +9,8 @@ namespace CastleDefender.UI
     [DisallowMultipleComponent]
     public class DraggableHudPanel : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
     {
+        public event Action<HudPanelLayoutChangeKind> LayoutCommitted;
+
         [SerializeField] RectTransform widgetRect;
         [SerializeField] RectTransform bodyRoot;
         [SerializeField] RectTransform collapsedRoot;
@@ -33,6 +36,16 @@ namespace CastleDefender.UI
         bool _isCollapsed;
 
         public bool IsCollapsed => _isCollapsed;
+        public RectTransform WidgetRect
+        {
+            get
+            {
+                if (widgetRect == null)
+                    widgetRect = GetComponent<RectTransform>();
+
+                return widgetRect;
+            }
+        }
 
         public void Configure(
             RectTransform rect,
@@ -112,6 +125,17 @@ namespace CastleDefender.UI
             ClampToParent();
         }
 
+        public void SetAnchoredPosition(Vector2 anchoredPosition, bool persist = false)
+        {
+            if (WidgetRect == null)
+                return;
+
+            widgetRect.anchoredPosition = anchoredPosition;
+            ClampToParent();
+            if (persist)
+                SaveState();
+        }
+
         public void SetClampMargins(float left, float top, float right, float bottom)
         {
             _clampLeftMargin = Mathf.Max(0f, left);
@@ -127,6 +151,7 @@ namespace CastleDefender.UI
             ApplyCollapseVisuals();
             ClampToParent();
             SaveState();
+            LayoutCommitted?.Invoke(HudPanelLayoutChangeKind.CollapseChanged);
         }
 
         public void OnBeginDrag(PointerEventData eventData)
@@ -152,6 +177,7 @@ namespace CastleDefender.UI
         public void OnEndDrag(PointerEventData eventData)
         {
             SaveState();
+            LayoutCommitted?.Invoke(HudPanelLayoutChangeKind.DragEnded);
         }
 
         void CacheParent()

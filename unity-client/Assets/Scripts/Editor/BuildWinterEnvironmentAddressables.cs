@@ -21,10 +21,19 @@ namespace CastleDefender.Editor
         const string OptionalPrefabPath = EnvironmentFolder + "/GameEnvironmentOptional.prefab";
         const string CriticalGroupName = "Remote Environment";
         const string OptionalGroupName = "Remote Environment Dressing";
+        const string SharedGroupName = "Remote Environment Shared";
         const string TemplateGroup = "Remote Units 01";
         const string ReportRelativePath = "projects/Game_ML Winter Environment Addressables.md";
         const string RemoteBuildPathProfileId = "165fb4a3ad8d19e4aa002d6fc764a7ce";
         const string RemoteLoadPathProfileId = "247226ff3fd294f46b8dfca266320b8c";
+
+        static readonly (string assetPath, string address)[] SharedAssetCatalog =
+        {
+            (
+                "Assets/Winter & Christmas Pack/Winter & Christmas Pack/Textures/Seamless Terrain/Snow_Dirt_Seamless_Texture_Albedo.png",
+                "environment/shared/snow_dirt_albedo"
+            ),
+        };
 
         static readonly string[] OptionalAssetCatalog =
         {
@@ -71,6 +80,7 @@ namespace CastleDefender.Editor
                 BuildOptionalEnvironmentPrefab();
                 EnsureAddressablesEntry(CriticalPrefabPath, RemoteContentManager.GameMlEnvironmentAddress, CriticalGroupName);
                 EnsureAddressablesEntry(OptionalPrefabPath, RemoteContentManager.GameMlEnvironmentDressingAddress, OptionalGroupName);
+                EnsureSharedAddressablesEntries();
                 EnsureSceneLoaders();
 
                 AssetDatabase.SaveAssets();
@@ -145,6 +155,7 @@ namespace CastleDefender.Editor
             criticalLoader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentRootName;
             criticalLoader.failureTitle = "Required map environment failed to load.";
             criticalLoader.readinessTimeoutSeconds = 12f;
+            criticalLoader.enabled = true;
             EditorUtility.SetDirty(criticalLoader);
 
             var optionalLoader = mapRoot.GetComponent<OptionalEnvironmentLoader>();
@@ -159,10 +170,20 @@ namespace CastleDefender.Editor
             optionalLoader.waitForCriticalTimeoutSeconds = 15f;
             optionalLoader.loadStartDelaySeconds = 0.25f;
             optionalLoader.logWarnings = true;
+            optionalLoader.enabled = true;
             EditorUtility.SetDirty(optionalLoader);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
+        }
+
+        static void EnsureSharedAddressablesEntries()
+        {
+            for (int i = 0; i < SharedAssetCatalog.Length; i++)
+            {
+                var entry = SharedAssetCatalog[i];
+                EnsureAddressablesEntry(entry.assetPath, entry.address, SharedGroupName);
+            }
         }
 
         static void AddCliffRing(Transform parent)
@@ -473,9 +494,9 @@ namespace CastleDefender.Editor
                 .GetProperty("address", BindingFlags.Public | BindingFlags.Instance)
                 ?.SetValue(entry, address);
 
-            ForceRemoteBundledSchema(group, bundledSchemaType);
-            EditorUtility.SetDirty(entry as UnityEngine.Object);
-            EditorUtility.SetDirty(group as UnityEngine.Object);
+            ForceRemoteBundledSchema(group, groupName, bundledSchemaType, contentUpdateSchemaType);
+            SafeSetDirty(entry);
+            SafeSetDirty(group);
         }
 
         static void CopySchemaSettings(object sourceGroup, object targetGroup, Type bundledType, Type contentUpdateType)
@@ -516,15 +537,15 @@ namespace CastleDefender.Editor
                     }
                 }
 
-                EditorUtility.SetDirty(targetSchema as UnityEngine.Object);
+                SafeSetDirty(targetSchema);
             }
 
-            EditorUtility.SetDirty(targetGroup as UnityEngine.Object);
+            SafeSetDirty(targetGroup);
         }
 
-        static void ForceRemoteBundledSchema(object group, Type bundledSchemaType)
+        static void ForceRemoteBundledSchema(object group, string groupName, Type bundledSchemaType, Type contentUpdateSchemaType)
         {
-            if (group == null || bundledSchemaType == null)
+            if (group == null || string.IsNullOrWhiteSpace(groupName) || bundledSchemaType == null)
                 return;
 
             var getSchema = group.GetType()
@@ -540,10 +561,28 @@ namespace CastleDefender.Editor
                 return;
 
             var serialized = new SerializedObject(bundledSchema);
+            serialized.FindProperty("m_Name")?.SetValueIfPresent($"{groupName}_BundledAssetGroupSchema");
             serialized.FindProperty("m_BuildPath.m_Id")?.SetValueIfPresent(RemoteBuildPathProfileId);
             serialized.FindProperty("m_LoadPath.m_Id")?.SetValueIfPresent(RemoteLoadPathProfileId);
             serialized.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(bundledSchema);
+            SafeSetDirty(bundledSchema);
+
+            NormalizeSchemaName(group, getSchema, contentUpdateSchemaType, $"{groupName}_ContentUpdateGroupSchema");
+        }
+
+        static void NormalizeSchemaName(object group, MethodInfo getSchema, Type schemaType, string expectedName)
+        {
+            if (group == null || getSchema == null || schemaType == null || string.IsNullOrWhiteSpace(expectedName))
+                return;
+
+            var schema = getSchema.Invoke(group, new object[] { schemaType }) as UnityEngine.Object;
+            if (schema == null)
+                return;
+
+            var serialized = new SerializedObject(schema);
+            serialized.FindProperty("m_Name")?.SetValueIfPresent(expectedName);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            SafeSetDirty(schema);
         }
 
         static void WriteReport()
@@ -573,6 +612,12 @@ namespace CastleDefender.Editor
             builder.AppendLine("- Streams after the critical environment is present.");
             builder.AppendLine("- Contains only collider-free visual dressing: edge cliffs, pines, rock borders, snow details, landmark props, backdrop silhouettes, and optional warm accent lights.");
             builder.AppendLine();
+            builder.AppendLine("## Shared Content");
+            builder.AppendLine();
+            builder.AppendLine($"- Group: `{SharedGroupName}`");
+            foreach (var asset in SharedAssetCatalog)
+                builder.AppendLine($"- `{asset.assetPath}` -> `{asset.address}`");
+            builder.AppendLine();
             builder.AppendLine("## Optional Winter Pack Assets Used");
             builder.AppendLine();
             foreach (var asset in OptionalAssetCatalog.Distinct())
@@ -598,6 +643,12 @@ namespace CastleDefender.Editor
         {
             if (property != null)
                 property.stringValue = value;
+        }
+
+        static void SafeSetDirty(object value)
+        {
+            if (value is UnityEngine.Object unityObject && unityObject != null)
+                EditorUtility.SetDirty(unityObject);
         }
 
         readonly struct Placement

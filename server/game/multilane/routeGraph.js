@@ -14,6 +14,26 @@ const WAVE_SPAWN_NODE_IDS = Object.freeze(["WA", "WB", "WC", "WD"]);
 const LANE_NODE_IDS = Object.freeze(["A", "B", "C", "D"]);
 const RouteMineNode = "M";
 const ROUTE_TANGENT_SAMPLE_DELTA = 0.003;
+const OUTER_LOOP_ROUTE_TRANSITIONS = Object.freeze({
+  clockwise: Object.freeze({
+    A: "D",
+    D: "B",
+    B: "C",
+    C: "A",
+  }),
+  counterclockwise: Object.freeze({
+    A: "C",
+    C: "B",
+    B: "D",
+    D: "A",
+  }),
+});
+const OUTER_LOOP_ROUTE_SPACE_CORNERS = Object.freeze({
+  topLeft: Object.freeze({ x: -40, y: 40 }),
+  topRight: Object.freeze({ x: 40, y: 40 }),
+  bottomRight: Object.freeze({ x: 40, y: -40 }),
+  bottomLeft: Object.freeze({ x: -40, y: -40 }),
+});
 
 const ROUTE_GRAPH_CORE_NODE_POSITIONS = Object.freeze({
   M: Object.freeze({ x: 0, y: 0 }),
@@ -148,6 +168,7 @@ const ROUTE_SEGMENT_POLYLINES = Object.freeze({
     Object.freeze({ x: 0, y: 0 }),
     Object.freeze({ x: -24, y: -24 }),
   ]),
+  ...buildOuterLoopRoutePolylines(),
   ...buildWaveLanePolylines(),
   ...buildBarracksRouteLinkPolylines(),
   ...buildMarketRouteLinkPolylines(),
@@ -519,6 +540,51 @@ function wrapRouteLoopIndex(index) {
   return ((Math.floor(Number(index) || 0) % routeCount) + routeCount) % routeCount;
 }
 
+function buildOuterLoopRoutePolylines() {
+  return {
+    A_D: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.topLeft.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.topLeft.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.y }),
+    ]),
+    D_A: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.topLeft.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.topLeft.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.y }),
+    ]),
+    D_B: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.topRight.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.topRight.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.y }),
+    ]),
+    B_D: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.topRight.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.topRight.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.D.y }),
+    ]),
+    B_C: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomRight.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomRight.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.y }),
+    ]),
+    C_B: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomRight.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomRight.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.B.y }),
+    ]),
+    C_A: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomLeft.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomLeft.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.y }),
+    ]),
+    A_C: Object.freeze([
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.A.y }),
+      Object.freeze({ x: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomLeft.x, y: OUTER_LOOP_ROUTE_SPACE_CORNERS.bottomLeft.y }),
+      Object.freeze({ x: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.x, y: ROUTE_GRAPH_CORE_NODE_POSITIONS.C.y }),
+    ]),
+  };
+}
+
 function buildOuterLoopRouteSegments(sourceNodeId, direction = "clockwise") {
   const routeSourceNodeId = String(sourceNodeId || "").trim().toUpperCase();
   const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeSourceNodeId);
@@ -528,17 +594,21 @@ function buildOuterLoopRouteSegments(sourceNodeId, direction = "clockwise") {
   if (!sourceCoreNodeId)
     return null;
 
-  const sourceIndex = getNodeIndex(sourceCoreNodeId);
-  if (sourceIndex < 0)
+  const normalizedDirection = String(direction || "").trim().toLowerCase();
+  const transitions = OUTER_LOOP_ROUTE_TRANSITIONS[normalizedDirection] || OUTER_LOOP_ROUTE_TRANSITIONS.clockwise;
+  if (!transitions[sourceCoreNodeId])
     return null;
 
-  const normalizedDirection = String(direction || "").trim().toLowerCase();
-  const indexDelta = normalizedDirection === "counterclockwise" ? -1 : 1;
   const segments = prependBarracksLink ? [prependBarracksLink] : [];
+  let currentNodeId = sourceCoreNodeId;
   for (let step = 0; step < ROUTE_NODE_IDS.length; step += 1) {
-    const fromNodeId = ROUTE_NODE_IDS[wrapRouteLoopIndex(sourceIndex + (step * indexDelta))];
-    const toNodeId = ROUTE_NODE_IDS[wrapRouteLoopIndex(sourceIndex + ((step + 1) * indexDelta))];
+    const nextNodeId = transitions[currentNodeId];
+    if (!nextNodeId)
+      return null;
+    const fromNodeId = currentNodeId;
+    const toNodeId = nextNodeId;
     segments.push(`${fromNodeId}_${toNodeId}`);
+    currentNodeId = nextNodeId;
   }
   return segments;
 }

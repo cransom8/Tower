@@ -7,12 +7,41 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path $SourceDir)) {
-    throw "Build source directory not found: $SourceDir"
+function Resolve-WorkspacePath {
+    param([string]$PathValue)
+
+    if ([System.IO.Path]::IsPathRooted($PathValue)) {
+        return [System.IO.Path]::GetFullPath($PathValue)
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $repoRoot $PathValue))
 }
 
-if (-not (Test-Path $GsutilPath)) {
-    throw "gsutil not found at: $GsutilPath"
+function Test-IsSubPath {
+    param(
+        [string]$CandidatePath,
+        [string]$RootPath
+    )
+
+    $normalizedCandidate = [System.IO.Path]::GetFullPath($CandidatePath).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $normalizedRoot = [System.IO.Path]::GetFullPath($RootPath).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    return $normalizedCandidate.StartsWith($normalizedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$resolvedSourceDir = Resolve-WorkspacePath $SourceDir
+$resolvedGsutilPath = Resolve-WorkspacePath $GsutilPath
+
+if (-not (Test-IsSubPath -CandidatePath $resolvedSourceDir -RootPath $repoRoot)) {
+    throw "Build source directory must stay inside repo root '$repoRoot'. Resolved path: $resolvedSourceDir"
+}
+
+if (-not (Test-Path $resolvedSourceDir)) {
+    throw "Build source directory not found: $resolvedSourceDir"
+}
+
+if (-not (Test-Path $resolvedGsutilPath)) {
+    throw "gsutil not found at: $resolvedGsutilPath"
 }
 
 $bucketBuildPath = "gs://$Bucket/client/Build"
@@ -36,16 +65,16 @@ function Set-ObjectMetadata {
     }
 
     $metadataArgs += $ObjectPath
-    & $GsutilPath @metadataArgs
+    & $resolvedGsutilPath @metadataArgs
 }
 
-$files = Get-ChildItem -Path $SourceDir -File
+$files = Get-ChildItem -Path $resolvedSourceDir -File
 if ($files.Count -eq 0) {
-    throw "No files found under $SourceDir"
+    throw "No files found under $resolvedSourceDir"
 }
 
-Write-Host "Uploading WebGL build files from $SourceDir to $bucketBuildPath"
-& $GsutilPath -m cp "$SourceDir/*" "$bucketBuildPath/"
+Write-Host "Uploading WebGL build files from $resolvedSourceDir to $bucketBuildPath"
+& $resolvedGsutilPath -m cp "$resolvedSourceDir/*" "$bucketBuildPath/"
 
 foreach ($file in $files) {
     $objectPath = "$bucketBuildPath/$($file.Name)"

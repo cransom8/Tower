@@ -29,6 +29,13 @@ namespace CastleDefender.UI
         public Sprite InventoryTitle;
         public Sprite QuestTitleYellow;
 
+        [Header("Role Icons")]
+        public Sprite ActivityShieldIcon;
+        public Sprite ActivityArcherIcon;
+        public Sprite ActivityInfantryIcon;
+        public Sprite ActivityPriestIcon;
+        public Sprite ActivityMageIcon;
+
         [Header("Buttons - Long")]
         public Sprite ButtonLongNormal;
         public Sprite ButtonLongHovered;

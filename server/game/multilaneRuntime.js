@@ -166,6 +166,9 @@ function createMultilaneRuntime({
       return;
 
     const load = summarizeLiveMatchLoad(entry.game);
+    const tickBreakdown = entry.game && entry.game._lastTickPerfBreakdown
+      ? entry.game._lastTickPerfBreakdown
+      : null;
     log.warn("[ml-game][perf] tick over budget", {
       roomId,
       code,
@@ -182,6 +185,17 @@ function createMultilaneRuntime({
       liveUnitCount: load.liveUnitCount,
       projectileCount: load.projectileCount,
       laneUnitCounts: load.laneUnitCounts,
+      tickBreakdown: tickBreakdown ? {
+        incomeMs: tickBreakdown.incomeMs,
+        scheduledWavesMs: tickBreakdown.scheduledWavesMs,
+        buildingConstructionMs: tickBreakdown.buildingConstructionMs,
+        barracksSendsMs: tickBreakdown.barracksSendsMs,
+        syncLaneCommandsMs: tickBreakdown.syncLaneCommandsMs,
+        lanesMs: tickBreakdown.lanesMs,
+        balanceTickMs: tickBreakdown.balanceTickMs,
+        finalizeMs: tickBreakdown.finalizeMs,
+        slowestLanes: tickBreakdown.slowestLanes,
+      } : null,
     });
   }
 

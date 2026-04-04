@@ -72,6 +72,7 @@ namespace CastleDefender.Game
             if (_overlayRoot == null || !_overlayRoot.gameObject.activeSelf || _labelRoot == null)
                 return;
 
+            HpBarVisuals.ConfigureBuildingHud(_labelRoot);
             FaceToCamera(_labelRoot);
         }
 

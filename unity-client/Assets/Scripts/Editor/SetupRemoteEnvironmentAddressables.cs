@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using CastleDefender.Game;
 using CastleDefender.Net;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -78,6 +79,14 @@ namespace CastleDefender.Editor
             "grid",
             "path",
             "loader",
+        };
+
+        static readonly string[] EmbeddedEnvironmentRootNames =
+        {
+            "GameEnvironment",
+            "GameEnvironmentOptional",
+            RemoteContentManager.GameMlEnvironmentRootName,
+            RemoteContentManager.GameMlEnvironmentDressingRootName,
         };
 
         public static void ExtractGameMlEnvironment()
@@ -206,6 +215,59 @@ namespace CastleDefender.Editor
             }
         }
 
+        [MenuItem("Castle Defender/Remote Content/Remove Embedded Game_ML Environment Roots")]
+        public static void RemoveEmbeddedGameMlEnvironmentRootsMenu()
+        {
+            RemoveEmbeddedGameMlEnvironmentRoots(logResult: true);
+        }
+
+        public static int RemoveEmbeddedGameMlEnvironmentRoots(bool logResult = false)
+        {
+            var scene = EditorSceneManager.GetActiveScene();
+            if (!string.Equals(scene.path, ScenePath, StringComparison.OrdinalIgnoreCase))
+                scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+
+            var mapRoot = GameObject.Find(MapRootName);
+            if (mapRoot == null)
+            {
+                if (logResult)
+                    Debug.LogWarning($"[SetupRemoteEnvironmentAddressables] Could not find '{MapRootName}' in {ScenePath}.");
+
+                return 0;
+            }
+
+            int removed = 0;
+            for (int i = 0; i < EmbeddedEnvironmentRootNames.Length; i++)
+            {
+                string rootName = EmbeddedEnvironmentRootNames[i];
+                while (true)
+                {
+                    var child = mapRoot.transform.Find(rootName);
+                    if (child == null)
+                        break;
+
+                    UnityEngine.Object.DestroyImmediate(child.gameObject);
+                    removed++;
+                }
+            }
+
+            EnsureEnvironmentLoader(mapRoot);
+
+            if (removed > 0)
+            {
+                SafeSetDirty(mapRoot);
+                EditorSceneManager.MarkSceneDirty(scene);
+                EditorSceneManager.SaveScene(scene);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+
+            if (logResult)
+                Debug.Log($"[SetupRemoteEnvironmentAddressables] Removed {removed} embedded environment root(s) from '{ScenePath}'.");
+
+            return removed;
+        }
+
         [MenuItem("Castle Defender/Remote Content/Sanitize GameEnvironment Prefab")]
         public static void SanitizeGameEnvironmentPrefabMenu()
         {
@@ -233,23 +295,171 @@ namespace CastleDefender.Editor
 
             try
             {
-                int removed = StripLegacyToonyTinyPeopleBannerMeshes(prefabRoot.transform);
+                int removedBannerRenderers = StripLegacyToonyTinyPeopleBannerMeshes(prefabRoot.transform);
+                int consolidatedDefensePads = ConsolidateDuplicateDefensePadAnchors(prefabRoot.transform);
                 PrefabUtility.SaveAsPrefabAsset(prefabRoot, EnvironmentPrefabPath);
                 AssetDatabase.SaveAssets();
 
                 if (logResult)
                 {
                     Debug.Log(
-                        removed > 0
-                            ? $"[SetupRemoteEnvironmentAddressables] Removed {removed} legacy TT banner/flag renderers from '{EnvironmentPrefabPath}'."
-                            : $"[SetupRemoteEnvironmentAddressables] No legacy TT banner/flag renderers were found in '{EnvironmentPrefabPath}'.");
+                        $"[SetupRemoteEnvironmentAddressables] Sanitized '{EnvironmentPrefabPath}'. " +
+                        $"removedBannerRenderers={removedBannerRenderers} consolidatedDuplicateDefensePads={consolidatedDefensePads}.");
                 }
 
-                return removed;
+                return removedBannerRenderers + consolidatedDefensePads;
             }
             finally
             {
                 PrefabUtility.UnloadPrefabContents(prefabRoot);
+            }
+        }
+
+        static int ConsolidateDuplicateDefensePadAnchors(Transform root)
+        {
+            if (root == null)
+                return 0;
+
+            var groups = new Dictionary<string, List<FortressPadAnchor>>(StringComparer.OrdinalIgnoreCase);
+            var anchors = root.GetComponentsInChildren<FortressPadAnchor>(true);
+            for (int i = 0; i < anchors.Length; i++)
+            {
+                var anchor = anchors[i];
+                if (anchor == null
+                    || anchor.AnchorLaneColor == FortressPadAnchor.LaneColor.Any
+                    || string.IsNullOrWhiteSpace(anchor.PadId)
+                    || !IsSharedDefenseBuildingType(anchor.BuildingType))
+                {
+                    continue;
+                }
+
+                string key = $"{(int)anchor.AnchorLaneColor}:{anchor.PadId.Trim()}";
+                if (!groups.TryGetValue(key, out var bucket))
+                {
+                    bucket = new List<FortressPadAnchor>();
+                    groups.Add(key, bucket);
+                }
+
+                bucket.Add(anchor);
+            }
+
+            int consolidatedCount = 0;
+            foreach (var entry in groups)
+            {
+                var bucket = entry.Value;
+                if (bucket == null || bucket.Count <= 1)
+                    continue;
+
+                bucket.Sort(CompareDuplicateDefenseAnchors);
+                var primary = bucket[0];
+                var mergedRenderers = new List<Renderer>(32);
+                var supplementalRoots = new Transform[Mathf.Max(0, bucket.Count - 1)];
+                AppendUniqueRenderers(mergedRenderers, primary.GetPrimaryRenderers());
+
+                for (int i = 1; i < bucket.Count; i++)
+                {
+                    AppendUniqueRenderers(mergedRenderers, bucket[i].GetPrimaryRenderers());
+                    supplementalRoots[i - 1] = bucket[i] != null ? bucket[i].transform : null;
+                }
+
+                if (mergedRenderers.Count > 0)
+                    primary.explicitRenderers = mergedRenderers.ToArray();
+
+                primary.autoSizeInteractionCollider = true;
+                EditorUtility.SetDirty(primary);
+
+                var primaryBridge = primary.GetComponent<SnapshotBuildingVisualBridge>();
+                if (primaryBridge != null)
+                {
+                    primaryBridge.ConfigureForEditor(
+                        configuredCatalog: null,
+                        configuredBuildingTypeOverride: primary.BuildingType,
+                        configuredLegacyRenderers: primary.explicitRenderers,
+                        configuredSupplementalVisualRoots: supplementalRoots);
+                    EditorUtility.SetDirty(primaryBridge);
+                }
+
+                for (int i = 1; i < bucket.Count; i++)
+                {
+                    var secondary = bucket[i];
+                    if (secondary == null)
+                        continue;
+
+                    var secondaryBridge = secondary.GetComponent<SnapshotBuildingVisualBridge>();
+                    if (secondaryBridge != null)
+                        UnityEngine.Object.DestroyImmediate(secondaryBridge);
+
+                    var secondaryHud = secondary.GetComponent<FortressPadHealthView>();
+                    if (secondaryHud != null)
+                        UnityEngine.Object.DestroyImmediate(secondaryHud);
+
+                    var secondaryCollider = secondary.GetComponent<Collider>();
+                    if (secondaryCollider != null)
+                        UnityEngine.Object.DestroyImmediate(secondaryCollider);
+
+                    UnityEngine.Object.DestroyImmediate(secondary);
+                    consolidatedCount += 1;
+                }
+            }
+
+            return consolidatedCount;
+        }
+
+        static void AppendUniqueRenderers(List<Renderer> results, Renderer[] renderers)
+        {
+            if (results == null || renderers == null)
+                return;
+
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer != null && !results.Contains(renderer))
+                    results.Add(renderer);
+            }
+        }
+
+        static int CompareDuplicateDefenseAnchors(FortressPadAnchor left, FortressPadAnchor right)
+        {
+            if (ReferenceEquals(left, right))
+                return 0;
+            if (left == null)
+                return 1;
+            if (right == null)
+                return -1;
+
+            int suffixCompare = GetDuplicateNamePriority(left.name).CompareTo(GetDuplicateNamePriority(right.name));
+            if (suffixCompare != 0)
+                return suffixCompare;
+
+            return string.CompareOrdinal(BuildTransformPath(left.transform), BuildTransformPath(right.transform));
+        }
+
+        static int GetDuplicateNamePriority(string name)
+        {
+            return string.IsNullOrWhiteSpace(name) || name.IndexOf(" (", StringComparison.Ordinal) < 0 ? 0 : 1;
+        }
+
+        static string BuildTransformPath(Transform transform)
+        {
+            if (transform == null)
+                return string.Empty;
+
+            var parts = new Stack<string>();
+            for (var current = transform; current != null; current = current.parent)
+                parts.Push(current.name);
+            return string.Join("/", parts);
+        }
+
+        static bool IsSharedDefenseBuildingType(string buildingType)
+        {
+            switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wall":
+                case "gate":
+                case "turret":
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -454,6 +664,7 @@ namespace CastleDefender.Editor
             loader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentRootName;
             loader.failureTitle = "Required map environment failed to load.";
             loader.readinessTimeoutSeconds = 12f;
+            loader.enabled = true;
             SafeSetDirty(loader);
 
             var optionalLoader = mapRoot.GetComponent<OptionalEnvironmentLoader>();
@@ -468,6 +679,7 @@ namespace CastleDefender.Editor
             optionalLoader.waitForCriticalTimeoutSeconds = 15f;
             optionalLoader.loadStartDelaySeconds = 0.25f;
             optionalLoader.logWarnings = true;
+            optionalLoader.enabled = true;
             SafeSetDirty(optionalLoader);
         }
 
@@ -476,17 +688,9 @@ namespace CastleDefender.Editor
             if (mapRoot == null)
                 throw new InvalidOperationException("[SetupRemoteEnvironmentAddressables] Map root is required before extraction.");
 
-            string[] liveRootNames =
+            for (int i = 0; i < EmbeddedEnvironmentRootNames.Length; i++)
             {
-                "GameEnvironment",
-                "GameEnvironmentOptional",
-                RemoteContentManager.GameMlEnvironmentRootName,
-                RemoteContentManager.GameMlEnvironmentDressingRootName,
-            };
-
-            for (int i = 0; i < liveRootNames.Length; i++)
-            {
-                string rootName = liveRootNames[i];
+                string rootName = EmbeddedEnvironmentRootNames[i];
                 if (mapRoot.Find(rootName) == null)
                     continue;
 

@@ -28,6 +28,9 @@ namespace CastleDefender.Game
         public static void PurchaseBuildingUpgrade(string padId, string upgradeKey)
             => SendAction("purchase_building_upgrade", new { padId, upgradeKey });
 
+        public static void RepairAllBuildings(string padId)
+            => SendAction("repair_all_buildings", new { padId });
+
         public static void BuildBarracksSite(string barracksId)
             => SendAction("build_barracks_site", new { barracksId });
 

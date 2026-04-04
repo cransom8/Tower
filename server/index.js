@@ -14,6 +14,7 @@ const authService = require("./auth");
 const barracksLevels = require("./barracksLevels");
 const branding = require("./branding");
 const gameConfig = require("./gameConfig");
+const { renderPrivacyPolicyPage } = require("./legalPages");
 const log = require("./logger");
 const matchmaker = require("./services/matchQueueManager");
 const simMl = require("./sim-multilane");
@@ -632,9 +633,17 @@ app.get("/admin.css", (_req, res) => sendAdminClientFile(res, "admin.css"));
 app.get("/admin.js", (_req, res) => sendAdminClientFile(res, "admin.js"));
 app.get("/render/assets.js", (_req, res) => sendAdminClientFile(res, path.join("render", "assets.js")));
 app.get("/terms", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
-app.get("/privacy", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
 app.get("/terms-of-service", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
-app.get("/privacy-policy", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
+app.get(["/privacy", "/privacy-policy"], (_req, res) => {
+  try {
+    res.type("html").send(renderPrivacyPolicyPage());
+  } catch (err) {
+    log.error("privacy policy page render failed", {
+      err: err && (err.stack || err.message || String(err)),
+    });
+    res.status(500).type("text/plain").send("Unable to render privacy policy.");
+  }
+});
 
 app.get("/health", async (_req, res) => {
   if (process.env.DATABASE_URL) {
