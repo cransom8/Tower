@@ -1,8 +1,12 @@
 "use strict";
 
+const { logSpawnAuditLine } = require("./spawnAuditLogging");
+
 const DEFAULT_ESCALATION_PER_EXTRA_ROUND = 0.10;
 const DEFAULT_INCOME_INTERVAL_TICKS = 240;
 const DEFAULT_WAVE_TIMER_TICKS = 2400;
+const DEFAULT_WAVE_GROUP_INTERVAL_TICKS = 30 * 20;
+const DEFAULT_INITIAL_WAVE_DELAY_TICKS = 30 * 20;
 const DEFAULT_TICK_HZ = 20;
 const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
 
@@ -28,6 +32,35 @@ function getWaveTimerTicks(deps = {}) {
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_WAVE_TIMER_TICKS;
 }
 
+function getWaveGroupIntervalTicks(game, deps = {}) {
+  const gameValue = Math.floor(Number(game && game.waveGroupIntervalTicks));
+  if (Number.isInteger(gameValue) && gameValue > 0)
+    return gameValue;
+
+  const depValue = Math.floor(Number(deps.WAVE_GROUP_INTERVAL_TICKS));
+  return Number.isInteger(depValue) && depValue > 0 ? depValue : DEFAULT_WAVE_GROUP_INTERVAL_TICKS;
+}
+
+function getInitialWaveDelayTicks(game, deps = {}) {
+  const gameValue = Math.floor(Number(game && game.initialWaveDelayTicks));
+  if (Number.isInteger(gameValue) && gameValue > 0)
+    return gameValue;
+
+  const depValue = Math.floor(Number(deps.INITIAL_WAVE_DELAY_TICKS));
+  return Number.isInteger(depValue) && depValue > 0 ? depValue : DEFAULT_INITIAL_WAVE_DELAY_TICKS;
+}
+
+function getWaveDurationTicks(game, deps = {}) {
+  const gameValue = Math.floor(Number(game && game.waveIntervalTicks));
+  return Number.isInteger(gameValue) && gameValue > 0 ? gameValue : getWaveTimerTicks(deps);
+}
+
+function getWaveGroupsPerRound(game, deps = {}) {
+  const durationTicks = getWaveDurationTicks(game, deps);
+  const groupIntervalTicks = getWaveGroupIntervalTicks(game, deps);
+  return Math.max(1, Math.ceil(durationTicks / groupIntervalTicks));
+}
+
 function getTickHz(deps = {}) {
   const value = Math.floor(Number(deps.TICK_HZ));
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_TICK_HZ;
@@ -37,6 +70,14 @@ function getBarracksSiteDefs(deps = {}) {
   return Array.isArray(deps.BARRACKS_SITE_DEFS)
     ? deps.BARRACKS_SITE_DEFS
     : DEFAULT_BARRACKS_SITE_DEFS;
+}
+
+function hasDungeonWaveSchedule(game) {
+  return !!(
+    game
+    && Array.isArray(game.waveConfig)
+    && game.waveConfig.length > 0
+  );
 }
 
 function isScheduledWaveUnit(unit, deps = {}) {
@@ -108,6 +149,25 @@ function getUpcomingWaveNumber(game) {
     : currentRound;
 }
 
+function countPendingTimedWaveUnits(game) {
+  const session = game && game.activeWaveSession;
+  if (!session || !Array.isArray(game.lanes))
+    return 0;
+
+  const pendingGroups = Math.max(0, Number(session.totalGroups || 0) - Number(session.groupsSpawned || 0));
+  const spawnQtyPerLane = Math.max(0, Math.floor(Number(session.spawnQtyPerLane) || 0));
+  if (pendingGroups <= 0 || spawnQtyPerLane <= 0)
+    return 0;
+
+  let pendingUnits = 0;
+  for (const lane of game.lanes) {
+    if (!lane || lane.eliminated)
+      continue;
+    pendingUnits += pendingGroups * spawnQtyPerLane;
+  }
+  return pendingUnits;
+}
+
 function countRemainingWaveMobs(game, deps = {}) {
   if (!game)
     return 0;
@@ -128,7 +188,7 @@ function countRemainingWaveMobs(game, deps = {}) {
     }
   }
 
-  return remaining;
+  return remaining + countPendingTimedWaveUnits(game);
 }
 
 function isCurrentWaveComplete(game, deps = {}) {
@@ -204,13 +264,14 @@ function createLaneUpcomingWavePreview(game, lane, waveNumber = null, deps = {})
 
   const scheduledWave = resolveWaveForRound(game, upcomingWaveNumber, deps);
   if (scheduledWave) {
+    const totalScheduledCount = Math.max(0, Math.floor(Number(scheduledWave.spawn_qty) || 0)) * getWaveGroupsPerRound(game, deps);
     addEntry({
       source: "scheduled",
       unitType: scheduledWave.unit_type,
       archetypeKey: scheduledWave.archetypeKey || null,
       presentationKey: scheduledWave.presentationKey || null,
       skinKey: scheduledWave.skinKey || null,
-      count: scheduledWave.spawn_qty,
+      count: totalScheduledCount,
       hpMult: scheduledWave.hp_mult,
       dmgMult: scheduledWave.dmg_mult,
       speedMult: getEffectiveWaveEntrySpeedMult(game, lane, scheduledWave, deps),
@@ -291,43 +352,102 @@ function resetWaveIntervalState(game) {
   }
 }
 
-function spawnScheduledWave(game, deps = {}) {
-  if (!game)
+function spawnActiveWaveGroup(game, deps = {}) {
+  const spawnWaveUnit = requireDepFunction(deps, "spawnWaveUnit");
+  const session = game && game.activeWaveSession;
+  if (!game || !session || !session.waveDef)
     return false;
 
-  const spawnWaveUnit = requireDepFunction(deps, "spawnWaveUnit");
-  const nextRoundNumber = getUpcomingWaveNumber(game);
-  const waveDef = resolveWaveForRound(game, nextRoundNumber, deps);
-  if (!waveDef)
+  if (Number(session.groupsSpawned || 0) >= Number(session.totalGroups || 0))
     return false;
+
+  const spawnQtyPerLane = Math.max(0, Math.floor(Number(session.spawnQtyPerLane) || 0));
+  if (spawnQtyPerLane <= 0) {
+    session.groupsSpawned = Math.max(0, Math.floor(Number(session.totalGroups) || 0));
+    session.nextGroupSpawnTick = Number(session.endsAtTick) || Math.floor(Number(game.tick) || 0);
+    return false;
+  }
+
+  for (const lane of game.lanes) {
+    if (!lane || lane.eliminated)
+      continue;
+    for (let i = 0; i < spawnQtyPerLane; i += 1)
+      spawnWaveUnit(game, lane, session.waveDef);
+  }
+
+  session.groupsSpawned += 1;
+  session.nextGroupSpawnTick = Number(session.startedAtTick) + (session.groupsSpawned * Number(session.groupIntervalTicks || 1));
+  session.lastGroupSpawnTick = Math.floor(Number(game.tick) || 0);
+  return true;
+}
+
+function beginScheduledWaveSession(game, waveDef, roundNumber, deps = {}) {
+  if (!game || !waveDef)
+    return false;
+
+  const spawnQtyPerLane = Math.max(0, Math.floor(Number(waveDef.spawn_qty) || 0));
+  const startTick = Math.floor(Number(game.tick) || 0);
+  const waveDurationTicks = getWaveDurationTicks(game, deps);
+  const groupIntervalTicks = getWaveGroupIntervalTicks(game, deps);
+  const totalGroups = getWaveGroupsPerRound(game, deps);
 
   if (game.hasSpawnedWave)
     finalizeCompletedWave(game, deps);
 
-  game.roundNumber = nextRoundNumber;
+  game.roundNumber = roundNumber;
   resetWaveIntervalState(game);
+  game.hasSpawnedWave = true;
+  game.lastWaveSpawnTick = startTick;
+  game.barracksSendIntervalTicks = groupIntervalTicks;
+  game.nextBarracksSendTick = startTick;
+  game.activeWaveSession = {
+    roundNumber,
+    waveDef: { ...waveDef },
+    spawnQtyPerLane,
+    startedAtTick: startTick,
+    endsAtTick: startTick + waveDurationTicks,
+    groupIntervalTicks,
+    totalGroups,
+    groupsSpawned: 0,
+    nextGroupSpawnTick: startTick,
+    lastGroupSpawnTick: null,
+  };
+  game.nextWaveTick = game.activeWaveSession.endsAtTick;
+
   const waveSizes = {};
   for (const lane of game.lanes) {
-    if (lane.eliminated)
+    if (!lane || lane.eliminated)
       continue;
-    waveSizes[lane.laneIndex] = waveDef.spawn_qty;
-    for (let i = 0; i < waveDef.spawn_qty; i += 1)
-      spawnWaveUnit(game, lane, waveDef);
+    waveSizes[lane.laneIndex] = spawnQtyPerLane * totalGroups;
   }
-
-  game.hasSpawnedWave = true;
-  game.lastWaveSpawnTick = game.tick;
   game._pendingEvents.push({
     type: "ml_wave_start",
     roundNumber: game.roundNumber,
     waveSizes,
   });
+
+  spawnActiveWaveGroup(game, deps);
   return true;
+}
+
+function spawnScheduledWave(game, deps = {}) {
+  if (!game || game.activeWaveSession)
+    return false;
+
+  const nextRoundNumber = getUpcomingWaveNumber(game);
+  const waveDef = resolveWaveForRound(game, nextRoundNumber, deps);
+  if (!waveDef)
+    return false;
+
+  return beginScheduledWaveSession(game, waveDef, nextRoundNumber, deps);
 }
 
 function grantScheduledIncome(game, deps = {}) {
   if (!game)
     return;
+  const getLaneTotalIncome = typeof deps.getLaneTotalIncome === "function"
+    ? deps.getLaneTotalIncome
+    : ((lane) => Math.max(0, Number(lane && lane.income) || 0));
   const interval = Math.max(
     1,
     Math.floor(Number(game.incomeIntervalTicks) || getIncomeIntervalTicks(deps))
@@ -338,7 +458,7 @@ function grantScheduledIncome(game, deps = {}) {
   while (game.tick >= game.nextIncomeTick) {
     for (const lane of game.lanes) {
       if (lane && !lane.eliminated)
-        lane.gold += lane.income;
+        lane.gold += getLaneTotalIncome(lane);
     }
     game.nextIncomeTick += interval;
   }
@@ -354,6 +474,58 @@ function runScheduledBarracksSends(game, deps = {}) {
   const createBarracksSiteSnapshot = requireDepFunction(deps, "createBarracksSiteSnapshot");
   const summarizeBarracksSiteRosterEntries = requireDepFunction(deps, "summarizeBarracksSiteRosterEntries");
   const spawnScheduledBarracksRoster = requireDepFunction(deps, "spawnScheduledBarracksRoster");
+
+  if (hasDungeonWaveSchedule(game)) {
+    const interval = Math.max(
+      1,
+      Math.floor(Number(game.barracksSendIntervalTicks) || getWaveGroupIntervalTicks(game, deps))
+    );
+    game.barracksSendIntervalTicks = interval;
+
+    if (!Number.isInteger(game.nextBarracksSendTick) || game.nextBarracksSendTick <= 0)
+      game.nextBarracksSendTick = getInitialWaveDelayTicks(game, deps);
+
+    while (game.tick >= game.nextBarracksSendTick) {
+      const pulseTick = Math.floor(Number(game.nextBarracksSendTick) || 0);
+      const nextPulseTick = pulseTick + interval;
+
+      for (const lane of game.lanes) {
+        if (!lane || lane.eliminated)
+          continue;
+
+        ensureBarracksSiteStates(lane, game);
+        for (const siteDef of getBarracksSiteDefs(deps)) {
+          const descriptor = describeBarracksSite(game, lane, siteDef.barracksId);
+          if (!descriptor || !descriptor.isBuilt || descriptor.destroyed)
+            continue;
+
+          let siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
+          if (!siteState)
+            continue;
+          siteState.nextSendTick = pulseTick;
+
+          const siteSnapshot = createBarracksSiteSnapshot(game, lane, siteDef.barracksId);
+          logSpawnAuditLine(deps,
+            `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
+            `barracksId='${siteDef.barracksId}' built=${siteSnapshot ? siteSnapshot.isBuilt : false} ` +
+            `roster=${summarizeBarracksSiteRosterEntries(siteSnapshot && siteSnapshot.roster)}`
+          );
+          const spawnedCount = spawnScheduledBarracksRoster(game, lane, siteDef.barracksId);
+          logSpawnAuditLine(deps,
+            `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
+            `barracksId='${siteDef.barracksId}' spawnedCount=${spawnedCount}`
+          );
+
+          siteState = getBarracksSiteState(lane, siteDef.barracksId, game);
+          if (siteState != null)
+            siteState.nextSendTick = nextPulseTick;
+        }
+      }
+
+      game.nextBarracksSendTick = nextPulseTick;
+    }
+    return;
+  }
 
   for (const lane of game.lanes) {
     if (!lane || lane.eliminated)
@@ -375,13 +547,13 @@ function runScheduledBarracksSends(game, deps = {}) {
 
       while (siteState != null && game.tick >= siteState.nextSendTick) {
         const siteSnapshot = createBarracksSiteSnapshot(game, lane, siteDef.barracksId);
-        console.log(
+        logSpawnAuditLine(deps,
           `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
           `barracksId='${siteDef.barracksId}' built=${siteSnapshot ? siteSnapshot.isBuilt : false} ` +
           `roster=${summarizeBarracksSiteRosterEntries(siteSnapshot && siteSnapshot.roster)}`
         );
         const spawnedCount = spawnScheduledBarracksRoster(game, lane, siteDef.barracksId);
-        console.log(
+        logSpawnAuditLine(deps,
           `[BarracksTrace][ServerTimer] tick=${game.tick} sourceLane=${lane.laneIndex} ` +
           `barracksId='${siteDef.barracksId}' spawnedCount=${spawnedCount}`
         );
@@ -406,16 +578,36 @@ function runScheduledBuildingConstruction(game, deps = {}) {
 function runScheduledWaves(game, deps = {}) {
   if (!game)
     return;
-  const interval = Math.max(
-    1,
-    Math.floor(Number(game.waveIntervalTicks) || getWaveTimerTicks(deps))
-  );
-  if (!Number.isInteger(game.nextWaveTick) || game.nextWaveTick <= 0)
-    game.nextWaveTick = game.tick + interval;
 
-  while (game.tick >= game.nextWaveTick) {
-    spawnScheduledWave(game, deps);
-    game.nextWaveTick += interval;
+  if (!Number.isInteger(game.nextWaveTick) || game.nextWaveTick <= 0)
+    game.nextWaveTick = getInitialWaveDelayTicks(game, deps);
+
+  let guard = 0;
+  while (guard < 32) {
+    guard += 1;
+
+    const session = game.activeWaveSession;
+    if (session) {
+      while (game.activeWaveSession
+          && Number(game.activeWaveSession.groupsSpawned || 0) < Number(game.activeWaveSession.totalGroups || 0)
+          && game.tick >= Number(game.activeWaveSession.nextGroupSpawnTick || 0)) {
+        spawnActiveWaveGroup(game, deps);
+      }
+
+      if (game.activeWaveSession && game.tick >= Number(game.activeWaveSession.endsAtTick || 0)) {
+        game.activeWaveSession = null;
+        continue;
+      }
+      break;
+    }
+
+    if (game.tick < game.nextWaveTick)
+      break;
+
+    if (!spawnScheduledWave(game, deps)) {
+      game.nextWaveTick = Math.floor(Number(game.tick) || 0) + getWaveDurationTicks(game, deps);
+      break;
+    }
   }
 }
 
@@ -424,15 +616,7 @@ function startNextWaveNow(game, deps = {}) {
     return false;
   if (!isCurrentWaveComplete(game, deps))
     return false;
-
-  const interval = Math.max(
-    1,
-    Math.floor(Number(game.waveIntervalTicks) || getWaveTimerTicks(deps))
-  );
-  const spawned = spawnScheduledWave(game, deps);
-  if (spawned)
-    game.nextWaveTick = Math.floor(Number(game.tick) || 0) + interval;
-  return spawned;
+  return spawnScheduledWave(game, deps);
 }
 
 module.exports = {

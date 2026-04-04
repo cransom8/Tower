@@ -615,7 +615,6 @@ class BotBrain {
     const gateCount = countBuiltPads(laneSummary, "gate");
     const wallCount = countBuiltPads(laneSummary, "wall");
     const turretCount = countBuiltPads(laneSummary, "turret");
-    const archerTowerCount = countBuiltPads(laneSummary, "tower_archer");
 
     if (gateCount < desiredGateCount) {
       const gate = findBuildablePad(laneSummary, "gate");
@@ -653,16 +652,6 @@ class BotBrain {
         }, 3.7 + (desiredTurretCount - turretCount) * 0.45 + (context.pressureWindow ? 0.5 : 0), {
           defensive: context.danger,
         });
-      }
-    }
-
-    if (context.roundStage === "late" && laneSummary.padTiers.turret >= 3 && archerTowerCount < 1) {
-      const archerTower = findBuildablePad(laneSummary, "tower_archer");
-      if (archerTower) {
-        this.addCandidate(candidateMap, game, laneSummary, {
-          type: AI_ACTION_TYPE.BUILD_PAD,
-          padId: archerTower.padId,
-        }, 3.2 + this.personalityProfile.pressureWeight * 0.4 + (context.pressureWindow ? 0.7 : 0), {});
       }
     }
 

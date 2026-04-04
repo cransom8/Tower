@@ -1,6 +1,7 @@
 "use strict";
 
 const { getMaxBarracksLevel } = require("../../barracksLevels");
+const { logSpawnAuditInfo: logVerboseAuditInfo } = require("./spawnAuditLogging");
 
 const DEFAULT_TEAM_HP_START = 20;
 const FRONT_GATE_COMBAT_OFFSET = 10.2;
@@ -38,7 +39,177 @@ const FORTRESS_CONSTRUCTION_DURATION_TICKS = Object.freeze({
   wall: Object.freeze({ build: 6 * 20, upgrade: 10 * 20 }),
   gate: Object.freeze({ build: 6 * 20, upgrade: 10 * 20 }),
   turret: Object.freeze({ build: 8 * 20, upgrade: 12 * 20 }),
-  tower_archer: Object.freeze({ build: 8 * 20, upgrade: 12 * 20 }),
+});
+
+const SHARED_DEFENSE_BUILDING_TYPES = new Set(["wall", "gate", "turret"]);
+
+const BUILDING_UPGRADE_SECTION_TYPES = Object.freeze({
+  repeatable: "repeatable",
+  oneTime: "one_time",
+});
+
+const DEFAULT_REPEATABLE_UPGRADE_COST = 100;
+const DEFAULT_ONE_TIME_UPGRADE_COST = 500;
+const REPEATABLE_UPGRADE_STEP_TO_MULTIPLIER = 0.01;
+const WALL_HP_UPGRADE_KEY = "wall_hp";
+const WALL_ARCHERS_UPGRADE_KEY = "wall_archers";
+const TURRET_DAMAGE_UPGRADE_KEY = "turret_damage";
+const WALL_ARCHER_BASE_DAMAGE = 10;
+const WALL_ARCHER_RANGE = 4.1;
+const WALL_ARCHER_ATTACK_COOLDOWN_TICKS = 18;
+const WALL_ARCHER_PROJECTILE_TICKS = 6;
+const WALL_ARCHER_DAMAGE_TYPE = "PIERCE";
+const WALL_ARCHER_SPLASH_RADIUS = 1.5;
+
+const BUILDING_PANEL_DESCRIPTIONS = Object.freeze({
+  blacksmith: "Frontline melee durability and damage.",
+  archery_tower: "Archer performance and wall archer support.",
+  lumber_mill: "Fortress defenses and turret improvements.",
+  wizard_tower: "Mage damage and spell utility.",
+  temple: "Healing power and support utility.",
+  stable: "Movement speed improvements for mounted branches.",
+});
+
+const BUILDING_UPGRADE_DEFS = Object.freeze({
+  blacksmith: Object.freeze([
+    Object.freeze({
+      key: "shield_armor",
+      displayName: "Shield Armor",
+      affectedLabel: "Shield units",
+      description: "Increase shield unit armor by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 10,
+    }),
+    Object.freeze({
+      key: "frontline_damage",
+      displayName: "Frontline Damage",
+      affectedLabel: "Infantry and spear units",
+      description: "Increase infantry and spear attack damage by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 20,
+    }),
+  ]),
+  archery_tower: Object.freeze([
+    Object.freeze({
+      key: "archer_range",
+      displayName: "Archer Range",
+      affectedLabel: "Archers",
+      description: "Increase archer range by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 10,
+    }),
+    Object.freeze({
+      key: "archer_damage",
+      displayName: "Archer Damage",
+      affectedLabel: "Archers",
+      description: "Increase archer damage by 0.1%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.1,
+      sortIndex: 20,
+    }),
+    Object.freeze({
+      key: WALL_ARCHERS_UPGRADE_KEY,
+      displayName: "Wall Archers",
+      affectedLabel: "Built turrets",
+      description: "Place one archer on each built tower.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
+      cost: DEFAULT_ONE_TIME_UPGRADE_COST,
+      sortIndex: 30,
+    }),
+  ]),
+  lumber_mill: Object.freeze([
+    Object.freeze({
+      key: "buy_turrets",
+      displayName: "Buy Turrets",
+      affectedLabel: "Fortress towers",
+      description: "Turret purchase cost is not set yet.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
+      cost: null,
+      unavailableReason: "Turret purchase cost is not set yet.",
+      sortIndex: 10,
+    }),
+    Object.freeze({
+      key: WALL_HP_UPGRADE_KEY,
+      displayName: "Wall Integrity",
+      affectedLabel: "Walls",
+      description: "Increase wall HP by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 20,
+    }),
+    Object.freeze({
+      key: TURRET_DAMAGE_UPGRADE_KEY,
+      displayName: "Turret Damage",
+      affectedLabel: "Wall archers",
+      description: "Increase tower archer damage by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 30,
+    }),
+  ]),
+  wizard_tower: Object.freeze([
+    Object.freeze({
+      key: "mage_splash",
+      displayName: "Splash Upgrade",
+      affectedLabel: "Mages",
+      description: "Mage attacks splash onto 2 nearby enemies.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
+      cost: DEFAULT_ONE_TIME_UPGRADE_COST,
+      sortIndex: 10,
+    }),
+    Object.freeze({
+      key: "mage_damage",
+      displayName: "Mage Damage",
+      affectedLabel: "Mages",
+      description: "Increase mage damage by 0.1%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.1,
+      sortIndex: 20,
+    }),
+  ]),
+  temple: Object.freeze([
+    Object.freeze({
+      key: "heal_strength",
+      displayName: "Healing Strength",
+      affectedLabel: "Temple healers",
+      description: "Increase heal strength by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 10,
+    }),
+    Object.freeze({
+      key: "chain_heal",
+      displayName: "Chain Heal",
+      affectedLabel: "Temple healers",
+      description: "Each heal also jumps to 2 extra nearby allies.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
+      cost: DEFAULT_ONE_TIME_UPGRADE_COST,
+      sortIndex: 20,
+    }),
+  ]),
+  stable: Object.freeze([
+    Object.freeze({
+      key: "run_speed",
+      displayName: "Run Speed Boost",
+      affectedLabel: "Stable units",
+      description: "Increase run speed by 0.5%.",
+      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
+      stepPct: 0.5,
+      sortIndex: 10,
+    }),
+  ]),
 });
 
 function createFortressPadDef(
@@ -116,9 +287,9 @@ const FORTRESS_TURRET_PAD_LAYOUT = Object.freeze([
 
 const FORTRESS_BUILDING_DEFS = Object.freeze({
   town_core: {
-    displayName: "Civic",
-    branchKey: "civic",
-    branchLabel: "Civic Progression",
+    displayName: "Town Core",
+    branchKey: "town_core",
+    branchLabel: "Town Core",
     tierDisplayNames: Object.freeze([null, "House", "Town Hall", "Keep", "Castle"]),
     maxTier: 4,
     startsBuilt: true,
@@ -137,9 +308,10 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     branchLabel: "Barracks",
     tierDisplayNames: Object.freeze([null, "Barracks"]),
     maxTier: 1,
-    startsBuilt: true,
+    startsBuilt: false,
     requiredTownCoreTier: 1,
     baseMaxHp: 260,
+    buildCost: 100,
   },
   blacksmith: {
     displayName: "Blacksmith",
@@ -148,8 +320,8 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 225,
     buildCost: 60,
     upgradeCosts: {
@@ -158,14 +330,14 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     },
   },
   archery_tower: {
-    displayName: "Archery Tower",
+    displayName: "Archery",
     branchKey: "archery",
-    branchLabel: "Archery Tower",
+    branchLabel: "Archery",
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 190,
     buildCost: 50,
     upgradeCosts: {
@@ -180,8 +352,8 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 205,
     buildCost: 70,
     upgradeCosts: {
@@ -190,14 +362,14 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     },
   },
   wizard_tower: {
-    displayName: "Wizard Tower",
+    displayName: "Mage Tower",
     branchKey: "wizard",
-    branchLabel: "Wizard Tower",
+    branchLabel: "Mage Tower",
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 195,
     buildCost: 75,
     upgradeCosts: {
@@ -212,8 +384,8 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 200,
     buildCost: 60,
     upgradeCosts: {
@@ -276,8 +448,8 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     requiresLumberMill: false,
     requiresTurretTier3: false,
     baseMaxHp: 210,
@@ -288,19 +460,15 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     },
   },
   wall: {
-    displayName: "Wall",
+    displayName: "Walls",
     branchKey: "wall",
     branchLabel: "Walls",
-    progressionCategory: "Wall",
+    progressionCategory: "Defense",
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    dependencyRequirementsByTier: {
-      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
-      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
-    },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 180,
     buildCost: 20,
     upgradeCosts: {
@@ -311,17 +479,13 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
   gate: {
     displayName: "Gate",
     branchKey: "gate",
-    branchLabel: "Gates",
-    progressionCategory: "Gate",
+    branchLabel: "Walls",
+    progressionCategory: "Defense",
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    dependencyRequirementsByTier: {
-      2: Object.freeze([{ buildingType: "lumber_mill", minTier: 2 }]),
-      3: Object.freeze([{ buildingType: "lumber_mill", minTier: 3 }]),
-    },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 260,
     buildCost: 20,
     upgradeCosts: {
@@ -331,57 +495,32 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
   },
   turret: {
     displayName: "Turret",
-    branchKey: "base_tower",
-    branchLabel: "Base Towers",
-    progressionCategory: "BaseTower",
+    branchKey: "turret",
+    branchLabel: "Turrets",
+    progressionCategory: "Defense",
     tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
     maxTier: 3,
     startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
-    requiresLumberMill: true,
-    requiresTurretTier3: false,
-    dependencyRequirementsByTier: {
-      1: Object.freeze([{ buildingType: "lumber_mill", minTier: 1 }]),
-    },
-    baseMaxHp: 210,
-    buildCost: 40,
-    upgradeCosts: {
-      2: 80,
-      3: 140,
-    },
-  },
-  tower_archer: {
-    displayName: "Archer Tower",
-    branchKey: "archer_tower",
-    branchLabel: "Archer Towers",
-    progressionCategory: "ArcherTower",
-    tierDisplayNames: Object.freeze([null, "Tier 1", "Tier 2", "Tier 3"]),
-    maxTier: 3,
-    startsBuilt: false,
-    requiredTownCoreTier: 1,
-    requiredTownCoreTierByTier: { 1: 1, 2: 1, 3: 1 },
+    requiredTownCoreTier: 2,
+    requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     requiresLumberMill: false,
-    requiresTurretTier3: true,
-    dependencyRequirementsByTier: {
-      1: Object.freeze([{ buildingType: "turret", minTier: 3 }]),
-    },
-    baseMaxHp: 220,
-    buildCost: 180,
+    requiresTurretTier3: false,
+    baseMaxHp: 210,
+    buildCost: 20,
     upgradeCosts: {
-      2: 260,
-      3: 380,
+      2: 40,
+      3: 80,
     },
   },
 });
 
 const FORTRESS_PAD_DEFS = Object.freeze([
-  createFortressPadDef("town_core_pad", "town_core", "Civic", 3, 25),
+  createFortressPadDef("town_core_pad", "town_core", "Town Core", 3, 25),
   createFortressPadDef("barracks_pad", "barracks", "Barracks", 7, 25),
   createFortressPadDef("blacksmith_pad", "blacksmith", "Blacksmith", 1, 20),
   createFortressPadDef("temple_pad", "temple", "Temple", 5, 20),
-  createFortressPadDef("wizard_tower_pad", "wizard_tower", "Wizard Tower", 7, 20),
-  createFortressPadDef("archery_tower_pad", "archery_tower", "Archery Tower", 9, 20),
+  createFortressPadDef("wizard_tower_pad", "wizard_tower", "Mage Tower", 7, 20),
+  createFortressPadDef("archery_tower_pad", "archery_tower", "Archery", 9, 20),
   createFortressPadDef("market_pad", "market", "Market", 3, 20),
   createFortressPadDef("stable_pad", "stable", "Stable", 1, 15),
   createFortressPadDef("workshop_pad", "workshop", "Workshop", 3, 15),
@@ -430,6 +569,18 @@ function getFortressMaxTier(buildingType) {
   return buildingDef ? Math.max(1, Math.floor(Number(buildingDef.maxTier) || 1)) : 1;
 }
 
+function isSharedDefenseBuildingType(buildingType) {
+  return SHARED_DEFENSE_BUILDING_TYPES.has(String(buildingType || "").trim().toLowerCase());
+}
+
+function getFortressActionBuildingType(buildingType) {
+  return isSharedDefenseBuildingType(buildingType) ? "wall" : buildingType;
+}
+
+function getTownCoreRequirementLabel(requiredTownCoreTier) {
+  return `Town Core: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+}
+
 function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart = DEFAULT_TEAM_HP_START) {
   const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
   if (!buildingDef)
@@ -442,35 +593,169 @@ function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart = DEFAULT_
   return Math.floor(baseHp * (1 + (0.25 * (safeTier - 1))));
 }
 
-function createFortressPadStates(teamHpStart = DEFAULT_TEAM_HP_START) {
-  return FORTRESS_PAD_DEFS.map((padDef) => {
-    const buildingDef = FORTRESS_BUILDING_DEFS[padDef.buildingType];
-    const tier = buildingDef && buildingDef.startsBuilt ? 1 : 0;
-    const maxHp = tier > 0
-      ? resolveFortressBuildingMaxHp(padDef.buildingType, tier, teamHpStart)
-      : 0;
-    return {
-      padId: padDef.padId,
-      buildingType: padDef.buildingType,
-      displayName: padDef.displayName,
-      gridX: padDef.gridX,
-      gridY: padDef.gridY,
-      combatOffsetX: Number.isFinite(Number(padDef.combatOffsetX))
-        ? Number(padDef.combatOffsetX)
-        : null,
-      combatOffsetY: Number.isFinite(Number(padDef.combatOffsetY))
-        ? Number(padDef.combatOffsetY)
-        : null,
-      tier,
-      maxHp,
-      hp: maxHp,
-      costHistory: tier > 0 ? [] : null,
-      constructionKind: null,
-      constructionTargetTier: 0,
+function createFortressPadState(padDef, teamHpStart = DEFAULT_TEAM_HP_START) {
+  const buildingDef = FORTRESS_BUILDING_DEFS[padDef.buildingType];
+  const tier = buildingDef && buildingDef.startsBuilt ? 1 : 0;
+  const maxHp = tier > 0
+    ? resolveFortressBuildingMaxHp(padDef.buildingType, tier, teamHpStart)
+    : 0;
+  return {
+    padId: padDef.padId,
+    buildingType: padDef.buildingType,
+    displayName: padDef.displayName,
+    gridX: padDef.gridX,
+    gridY: padDef.gridY,
+    combatOffsetX: Number.isFinite(Number(padDef.combatOffsetX))
+      ? Number(padDef.combatOffsetX)
+      : null,
+    combatOffsetY: Number.isFinite(Number(padDef.combatOffsetY))
+      ? Number(padDef.combatOffsetY)
+      : null,
+    tier,
+    maxHp,
+    hp: maxHp,
+    costHistory: tier > 0 ? [] : null,
+    constructionKind: null,
+    constructionTargetTier: 0,
       constructionEndTick: 0,
       constructionTotalTicks: 0,
     };
-  });
+}
+
+function createBuildingUpgradeState() {
+  const state = {};
+  for (const [buildingType, upgradeDefs] of Object.entries(BUILDING_UPGRADE_DEFS)) {
+    const bucket = {};
+    for (const upgradeDef of upgradeDefs) {
+      bucket[upgradeDef.key] = {
+        purchaseCount: 0,
+        totalSpent: 0,
+        costHistory: [],
+      };
+    }
+    state[buildingType] = bucket;
+  }
+  return state;
+}
+
+function ensureBuildingUpgradeState(lane) {
+  if (!lane || typeof lane !== "object")
+    return {};
+
+  if (!lane.buildingUpgradeState || typeof lane.buildingUpgradeState !== "object")
+    lane.buildingUpgradeState = createBuildingUpgradeState();
+
+  for (const [buildingType, upgradeDefs] of Object.entries(BUILDING_UPGRADE_DEFS)) {
+    const bucket = lane.buildingUpgradeState[buildingType];
+    if (!bucket || typeof bucket !== "object") {
+      lane.buildingUpgradeState[buildingType] = {};
+    }
+
+    for (const upgradeDef of upgradeDefs) {
+      const existing = lane.buildingUpgradeState[buildingType][upgradeDef.key];
+      if (!existing || typeof existing !== "object") {
+        lane.buildingUpgradeState[buildingType][upgradeDef.key] = {
+          purchaseCount: 0,
+          totalSpent: 0,
+          costHistory: [],
+        };
+        continue;
+      }
+
+      existing.purchaseCount = Math.max(0, Math.floor(Number(existing.purchaseCount) || 0));
+      existing.totalSpent = Math.max(0, Math.floor(Number(existing.totalSpent) || 0));
+      if (!Array.isArray(existing.costHistory))
+        existing.costHistory = [];
+    }
+  }
+
+  return lane.buildingUpgradeState;
+}
+
+function getBuildingUpgradeDefinitionsForBuilding(buildingType) {
+  const upgradeDefs = BUILDING_UPGRADE_DEFS[String(buildingType || "").trim().toLowerCase()];
+  if (!Array.isArray(upgradeDefs))
+    return [];
+  return upgradeDefs.slice().sort((left, right) => (left.sortIndex || 0) - (right.sortIndex || 0));
+}
+
+function getBuildingUpgradeDefinition(buildingType, upgradeKey) {
+  const normalizedKey = String(upgradeKey || "").trim().toLowerCase();
+  if (!normalizedKey)
+    return null;
+
+  return getBuildingUpgradeDefinitionsForBuilding(buildingType).find((entry) => entry && entry.key === normalizedKey) || null;
+}
+
+function findBuildingUpgradeDefinition(upgradeKey) {
+  const normalizedKey = String(upgradeKey || "").trim().toLowerCase();
+  if (!normalizedKey)
+    return null;
+
+  for (const [buildingType, upgradeDefs] of Object.entries(BUILDING_UPGRADE_DEFS)) {
+    const match = upgradeDefs.find((entry) => entry && entry.key === normalizedKey);
+    if (match)
+      return { buildingType, upgradeDef: match };
+  }
+
+  return null;
+}
+
+function getLaneBuildingUpgradeEntry(lane, buildingType, upgradeKey, createIfMissing = false) {
+  const normalizedBuildingType = String(buildingType || "").trim().toLowerCase();
+  const normalizedKey = String(upgradeKey || "").trim().toLowerCase();
+  if (!normalizedBuildingType || !normalizedKey)
+    return null;
+
+  const upgradeState = createIfMissing
+    ? ensureBuildingUpgradeState(lane)
+    : (lane && lane.buildingUpgradeState);
+  if (!upgradeState || typeof upgradeState !== "object")
+    return null;
+
+  if (!upgradeState[normalizedBuildingType] || typeof upgradeState[normalizedBuildingType] !== "object") {
+    if (!createIfMissing)
+      return null;
+    upgradeState[normalizedBuildingType] = {};
+  }
+
+  if (!upgradeState[normalizedBuildingType][normalizedKey] || typeof upgradeState[normalizedBuildingType][normalizedKey] !== "object") {
+    if (!createIfMissing)
+      return null;
+    upgradeState[normalizedBuildingType][normalizedKey] = {
+      purchaseCount: 0,
+      totalSpent: 0,
+      costHistory: [],
+    };
+  }
+
+  const entry = upgradeState[normalizedBuildingType][normalizedKey];
+  entry.purchaseCount = Math.max(0, Math.floor(Number(entry.purchaseCount) || 0));
+  entry.totalSpent = Math.max(0, Math.floor(Number(entry.totalSpent) || 0));
+  if (!Array.isArray(entry.costHistory))
+    entry.costHistory = [];
+  return entry;
+}
+
+function getLaneBuildingUpgradePurchaseCount(lane, upgradeKey, buildingType = null) {
+  if (buildingType) {
+    const entry = getLaneBuildingUpgradeEntry(lane, buildingType, upgradeKey, false);
+    return Math.max(0, Math.floor(Number(entry && entry.purchaseCount) || 0));
+  }
+
+  const resolved = findBuildingUpgradeDefinition(upgradeKey);
+  if (!resolved)
+    return 0;
+  const entry = getLaneBuildingUpgradeEntry(lane, resolved.buildingType, resolved.upgradeDef.key, false);
+  return Math.max(0, Math.floor(Number(entry && entry.purchaseCount) || 0));
+}
+
+function hasLaneBuildingUpgrade(lane, upgradeKey, buildingType = null) {
+  return getLaneBuildingUpgradePurchaseCount(lane, upgradeKey, buildingType) > 0;
+}
+
+function createFortressPadStates(teamHpStart = DEFAULT_TEAM_HP_START) {
+  return FORTRESS_PAD_DEFS.map((padDef) => createFortressPadState(padDef, teamHpStart));
 }
 
 function getCurrentFortressTick(game) {
@@ -593,7 +878,7 @@ function advanceFortressConstruction(game, deps = {}) {
           : null;
 
       padState.tier = construction.targetTier;
-      padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, construction.targetTier, game.teamHpMax);
+      padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, construction.targetTier);
       padState.hp = padState.maxHp;
       clearFortressConstructionState(padState);
 
@@ -684,6 +969,78 @@ function getBuildingDisplayName(buildingType) {
     : buildingType;
 }
 
+function getBuildingPanelDescription(buildingType) {
+  return BUILDING_PANEL_DESCRIPTIONS[String(buildingType || "").trim().toLowerCase()] || "";
+}
+
+function countBuiltFortressPadsByBuildingType(lane, buildingType) {
+  if (!lane || !Array.isArray(lane.fortressPads))
+    return 0;
+
+  const normalizedBuildingType = String(buildingType || "").trim().toLowerCase();
+  let total = 0;
+  for (const pad of lane.fortressPads) {
+    if (!pad || String(pad.buildingType || "").trim().toLowerCase() !== normalizedBuildingType)
+      continue;
+    if (Math.max(0, Math.floor(Number(pad.tier) || 0)) > 0 && Math.max(0, Math.floor(Number(pad.hp) || 0)) > 0)
+      total += 1;
+  }
+  return total;
+}
+
+function getRepeatableUpgradeMultiplier(lane, upgradeKey, stepPct, buildingType = null) {
+  const purchaseCount = getLaneBuildingUpgradePurchaseCount(lane, upgradeKey, buildingType);
+  return 1 + (purchaseCount * ((Number(stepPct) || 0) * REPEATABLE_UPGRADE_STEP_TO_MULTIPLIER));
+}
+
+function getWallHpUpgradeMultiplier(lane) {
+  return getRepeatableUpgradeMultiplier(lane, WALL_HP_UPGRADE_KEY, 0.5, "lumber_mill");
+}
+
+function resolveFortressPadMaxHp(game, lane, padState, tier) {
+  const maxHp = resolveFortressBuildingMaxHp(
+    padState && padState.buildingType,
+    tier,
+    game && Number.isFinite(Number(game.teamHpMax))
+      ? Number(game.teamHpMax)
+      : DEFAULT_TEAM_HP_START
+  );
+  if (!padState)
+    return maxHp;
+
+  if (String(padState.buildingType || "").trim().toLowerCase() === "wall")
+    return Math.max(1, Math.floor(maxHp * getWallHpUpgradeMultiplier(lane)));
+
+  return maxHp;
+}
+
+function applyWallDurabilityBonuses(game, lane) {
+  if (!game || !lane || !Array.isArray(lane.fortressPads))
+    return false;
+
+  let changed = false;
+  for (const padState of lane.fortressPads) {
+    if (!padState || String(padState.buildingType || "").trim().toLowerCase() !== "wall")
+      continue;
+
+    const currentTier = Math.max(0, Math.floor(Number(padState.tier) || 0));
+    if (currentTier <= 0)
+      continue;
+
+    const previousMaxHp = Math.max(1, Math.floor(Number(padState.maxHp) || 1));
+    const hpRatio = Math.max(0, Math.min(1, (Number(padState.hp) || previousMaxHp) / previousMaxHp));
+    const upgradedMaxHp = resolveFortressPadMaxHp(game, lane, padState, currentTier);
+    if (upgradedMaxHp === previousMaxHp)
+      continue;
+
+    padState.maxHp = upgradedMaxHp;
+    padState.hp = Math.max(0, Math.min(upgradedMaxHp, Math.round(upgradedMaxHp * hpRatio)));
+    changed = true;
+  }
+
+  return changed;
+}
+
 function getFortressPadState(lane, padId) {
   if (!lane || !Array.isArray(lane.fortressPads))
     return null;
@@ -709,12 +1066,69 @@ function getHighestBuiltFortressPadTier(lane, buildingType) {
   return bestTier;
 }
 
+function resolveTownCoreRestoreTeamHpStart(game, lane) {
+  const candidates = [
+    Number(game && game.teamHpMax),
+    Number(lane && lane.lives),
+    DEFAULT_TEAM_HP_START,
+  ];
+  for (const value of candidates) {
+    if (Number.isFinite(value) && value > 0)
+      return Math.max(1, Math.floor(value));
+  }
+
+  return DEFAULT_TEAM_HP_START;
+}
+
+function ensureTownCorePadState(lane, game = null) {
+  if (!lane)
+    return null;
+
+  if (!Array.isArray(lane.fortressPads))
+    lane.fortressPads = [];
+
+  const townCorePadDef = FORTRESS_PAD_DEFS.find((pad) => pad && pad.padId === "town_core_pad");
+  if (!townCorePadDef)
+    throw new Error("[TownCoreValidation] Missing required fortress pad definition 'town_core_pad'.");
+
+  let corePad = lane.fortressPads.find((pad) => pad && pad.padId === townCorePadDef.padId) || null;
+  if (!corePad) {
+    corePad = createFortressPadState(townCorePadDef, resolveTownCoreRestoreTeamHpStart(game, lane));
+    lane.fortressPads.unshift(corePad);
+    console.warn(
+      `[TownCoreValidation] Restored missing Town Core pad for lane ${lane.laneIndex ?? "unknown"}.`
+    );
+    return corePad;
+  }
+
+  const currentTier = Math.max(0, Math.floor(Number(corePad.tier) || 0));
+  if (currentTier > 0)
+    return corePad;
+
+  const restoredMaxHp = resolveFortressBuildingMaxHp(
+    "town_core",
+    1,
+    resolveTownCoreRestoreTeamHpStart(game, lane)
+  );
+  corePad.tier = 1;
+  corePad.maxHp = restoredMaxHp;
+  corePad.hp = restoredMaxHp;
+  if (!Array.isArray(corePad.costHistory))
+    corePad.costHistory = [];
+  clearFortressConstructionState(corePad);
+  console.warn(
+    `[TownCoreValidation] Restored Town Core for lane ${lane.laneIndex ?? "unknown"} because its pad state was invalid.`
+  );
+  return corePad;
+}
+
 function getTownCoreTier(lane) {
-  return Math.max(1, getHighestBuiltFortressPadTier(lane, "town_core") || 1);
+  const corePad = ensureTownCorePadState(lane);
+  return corePad ? Math.max(1, Math.floor(Number(corePad.tier) || 1)) : 1;
 }
 
 function getLaneTownCorePad(lane) {
-  return getFortressPadByBuildingType(lane, "town_core");
+  return ensureTownCorePadState(lane);
 }
 
 function getLaneTownCoreHp(lane) {
@@ -778,11 +1192,12 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   const targetTier = construction
     ? construction.targetTier
     : built ? nextTier : 1;
+  const actionBuildingType = getFortressActionBuildingType(padState.buildingType);
   const townCoreTier = getTownCoreTier(lane);
-  const requiredTownCoreTier = getFortressRequiredTownCoreTier(padState.buildingType, targetTier);
+  const requiredTownCoreTier = getFortressRequiredTownCoreTier(actionBuildingType, targetTier);
   const dependencyLockedReason = construction
     ? null
-    : getFortressDependencyLockedReason(lane, padState.buildingType, targetTier);
+    : getFortressDependencyLockedReason(lane, actionBuildingType, targetTier);
   const canBuild = !built
     && !construction
     && townCoreTier >= requiredTownCoreTier
@@ -821,11 +1236,11 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   } else if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
     lockedReason = dependencyLockedReason
       ? `Requires ${dependencyLockedReason}`
-      : `Requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+      : `Requires ${getTownCoreRequirementLabel(requiredTownCoreTier)}`;
   } else if (built && currentTier < maxTier && !canUpgrade) {
     lockedReason = dependencyLockedReason
       ? `Upgrade requires ${dependencyLockedReason}`
-      : `Upgrade requires Civic: ${getBuildingTierDisplayName("town_core", requiredTownCoreTier)}`;
+      : `Upgrade requires ${getTownCoreRequirementLabel(requiredTownCoreTier)}`;
   }
 
   return {
@@ -839,12 +1254,76 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     targetTier,
     construction,
     destroyed,
-    buildCost: getFortressBuildCost(padState.buildingType),
+    buildCost: getFortressBuildCost(actionBuildingType),
     nextUpgradeCost: built && currentTier < maxTier
-      ? getFortressUpgradeCost(padState.buildingType, nextTier, deps)
+      ? getFortressUpgradeCost(actionBuildingType, nextTier, deps)
       : 0,
     requiredTownCoreTier,
   };
+}
+
+function getSharedDefenseGroupPads(lane) {
+  if (!lane || !Array.isArray(lane.fortressPads))
+    return [];
+
+  return lane.fortressPads.filter((pad) => pad && isSharedDefenseBuildingType(pad.buildingType));
+}
+
+function applySharedDefenseGroupAction(game, lane, padState, deps = {}, kind = FORTRESS_CONSTRUCTION_KINDS.build) {
+  const groupPads = getSharedDefenseGroupPads(lane);
+  if (groupPads.length <= 0)
+    return { ok: false, reason: "Unknown defense group" };
+
+  const representativePad = groupPads.find((pad) => pad && pad.buildingType === "wall") || groupPads[0];
+  if (!representativePad)
+    return { ok: false, reason: "Unknown defense group" };
+
+  const descriptor = describeFortressPad(game, lane, representativePad, deps);
+  if (!descriptor)
+    return { ok: false, reason: "Unknown defense group" };
+
+  const isUpgrade = kind === FORTRESS_CONSTRUCTION_KINDS.upgrade;
+  if (isUpgrade && !descriptor.canUpgrade)
+    return { ok: false, reason: descriptor.lockedReason || "Upgrade unavailable" };
+  if (!isUpgrade && !descriptor.canBuild)
+    return { ok: false, reason: descriptor.lockedReason || "Building is not available" };
+
+  const cost = isUpgrade ? descriptor.nextUpgradeCost : descriptor.buildCost;
+  if (lane.gold < cost)
+    return { ok: false, reason: "Not enough gold" };
+
+  const targetTier = isUpgrade
+    ? Math.max(1, descriptor.currentTier + 1)
+    : 1;
+
+  lane.gold -= cost;
+  lane.totalBuildSpend += cost;
+  lane.buildSpendThisRound += cost;
+
+  for (const groupPad of groupPads) {
+    if (!groupPad)
+      continue;
+
+    if (!isUpgrade) {
+      groupPad.tier = 0;
+      groupPad.maxHp = 0;
+      groupPad.hp = 0;
+    }
+
+    const construction = startFortressConstruction(game, groupPad, targetTier, kind);
+    if (construction && construction.totalTicks <= 0) {
+      groupPad.tier = targetTier;
+      groupPad.maxHp = resolveFortressPadMaxHp(game, lane, groupPad, targetTier);
+      groupPad.hp = groupPad.maxHp;
+    }
+  }
+
+  if (!Array.isArray(padState.costHistory))
+    padState.costHistory = [];
+  padState.costHistory.push({ cost });
+
+  recomputeTeamHpState(game, deps);
+  return { ok: true };
 }
 
 function getFortressPadCombatTarget(lane, padState, positionOverride = null, deps = {}) {
@@ -1012,8 +1491,8 @@ function applyFortressPadDamage(game, lane, padId, damage, deps = {}) {
     lane.lifeLossThisRound += damageApplied;
 
   recomputeTeamHpState(game, deps);
-  if (padState.buildingType === "town_core" && damageApplied > 0 && deps.log && typeof deps.log.info === "function") {
-    deps.log.info("[TownCoreTrace] core damaged", {
+  if (padState.buildingType === "town_core" && damageApplied > 0) {
+    logVerboseAuditInfo(deps, "[TownCoreTrace] core damaged", {
       tick: game.tick,
       laneIndex: lane.laneIndex,
       padId,
@@ -1033,6 +1512,148 @@ function applyFortressPadDamage(game, lane, padId, damage, deps = {}) {
   };
 }
 
+function formatBuildingUpgradePct(stepPct, purchaseCount) {
+  const safeStepPct = Number(stepPct) || 0;
+  const safePurchaseCount = Math.max(0, Math.floor(Number(purchaseCount) || 0));
+  const totalPct = safeStepPct * safePurchaseCount;
+  const decimals = Number.isInteger(safeStepPct) ? 0 : 1;
+  return `+${totalPct.toFixed(decimals)}%`;
+}
+
+function buildBuildingUpgradeCurrentBonusText(lane, padState, upgradeDef, purchaseCount) {
+  if (!upgradeDef)
+    return "";
+
+  if (upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable)
+    return formatBuildingUpgradePct(upgradeDef.stepPct, purchaseCount);
+
+  if (upgradeDef.key === WALL_ARCHERS_UPGRADE_KEY) {
+    const builtTurretCount = countBuiltFortressPadsByBuildingType(lane, "turret");
+    return purchaseCount > 0
+      ? `Active on ${builtTurretCount} turret${builtTurretCount === 1 ? "" : "s"}`
+      : "Not purchased";
+  }
+
+  return purchaseCount > 0 ? "Unlocked" : "Not purchased";
+}
+
+function buildBuildingUpgradeNextBonusText(upgradeDef, purchaseCount) {
+  if (!upgradeDef)
+    return "";
+
+  if (upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable)
+    return formatBuildingUpgradePct(upgradeDef.stepPct, purchaseCount + 1);
+
+  return purchaseCount > 0 ? "Purchased" : "Unlock once";
+}
+
+function buildBuildingUpgradeLockedReason(game, lane, padState, descriptor, upgradeDef, purchaseCount) {
+  if (!lane || !padState || !descriptor || !upgradeDef)
+    return "Upgrade unavailable";
+
+  if (descriptor.construction)
+    return `${descriptor.buildingDef.displayName} is under construction.`;
+
+  if (descriptor.destroyed)
+    return `${descriptor.buildingDef.displayName} is destroyed.`;
+
+  if (descriptor.currentTier <= 0)
+    return `Build ${descriptor.buildingDef.displayName} first.`;
+
+  if (upgradeDef.unavailableReason)
+    return upgradeDef.unavailableReason;
+
+  if (upgradeDef.key === WALL_ARCHERS_UPGRADE_KEY && countBuiltFortressPadsByBuildingType(lane, "turret") <= 0)
+    return "Build at least one turret first.";
+
+  if (upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.oneTime && purchaseCount > 0)
+    return "Already purchased.";
+
+  const cost = Math.max(0, Math.floor(Number(upgradeDef.cost) || 0));
+  if (lane.gold < cost)
+    return `Need ${Math.max(0, cost - Math.floor(Number(lane.gold) || 0))}g`;
+
+  return null;
+}
+
+function createBuildingUpgradeSnapshot(game, lane, padState, descriptor, upgradeDef) {
+  if (!padState || !descriptor || !upgradeDef)
+    return null;
+
+  const entry = getLaneBuildingUpgradeEntry(lane, padState.buildingType, upgradeDef.key, false);
+  const purchaseCount = Math.max(0, Math.floor(Number(entry && entry.purchaseCount) || 0));
+  const lockedReason = buildBuildingUpgradeLockedReason(
+    game,
+    lane,
+    padState,
+    descriptor,
+    upgradeDef,
+    purchaseCount
+  );
+  const currentBonusPct = upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable
+    ? (Number(upgradeDef.stepPct) || 0) * purchaseCount
+    : 0;
+  const nextBonusPct = upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable
+    ? currentBonusPct + (Number(upgradeDef.stepPct) || 0)
+    : currentBonusPct;
+
+  return {
+    buildingType: padState.buildingType,
+    upgradeKey: upgradeDef.key,
+    upgradeName: upgradeDef.displayName,
+    affectedLabel: upgradeDef.affectedLabel || "",
+    description: upgradeDef.description || "",
+    section: upgradeDef.section,
+    sectionLabel: upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable
+      ? "Repeatable upgrades"
+      : "One-time upgrades",
+    sortIndex: Math.max(0, Math.floor(Number(upgradeDef.sortIndex) || 0)),
+    cost: Number.isFinite(Number(upgradeDef.cost))
+      ? Math.max(0, Math.floor(Number(upgradeDef.cost)))
+      : 0,
+    purchaseCount,
+    totalSpent: Math.max(0, Math.floor(Number(entry && entry.totalSpent) || 0)),
+    isRepeatable: upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.repeatable,
+    isOneTime: upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.oneTime,
+    isPurchased: purchaseCount > 0,
+    canPurchase: !lockedReason,
+    lockedReason,
+    currentBonusPct,
+    nextBonusPct,
+    currentBonusText: buildBuildingUpgradeCurrentBonusText(lane, padState, upgradeDef, purchaseCount),
+    nextBonusText: buildBuildingUpgradeNextBonusText(upgradeDef, purchaseCount),
+  };
+}
+
+function getLaneWallArcherTurretDefenseProfile(lane) {
+  if (!lane || !hasLaneBuildingUpgrade(lane, WALL_ARCHERS_UPGRADE_KEY, "archery_tower"))
+    return null;
+
+  const turretPadIds = Array.isArray(lane.fortressPads)
+    ? lane.fortressPads
+      .filter((pad) =>
+        pad
+        && pad.buildingType === "turret"
+        && Math.max(0, Math.floor(Number(pad.tier) || 0)) > 0
+        && Math.max(0, Math.floor(Number(pad.hp) || 0)) > 0)
+      .map((pad) => pad.padId)
+    : [];
+  if (turretPadIds.length <= 0)
+    return null;
+
+  const turretDamageMultiplier = getRepeatableUpgradeMultiplier(lane, TURRET_DAMAGE_UPGRADE_KEY, 0.5, "lumber_mill");
+  return {
+    turretPadIds,
+    turretCount: turretPadIds.length,
+    damage: Math.max(1, Math.round(WALL_ARCHER_BASE_DAMAGE * turretDamageMultiplier)),
+    range: WALL_ARCHER_RANGE,
+    attackCooldownTicks: WALL_ARCHER_ATTACK_COOLDOWN_TICKS,
+    projectileTicks: WALL_ARCHER_PROJECTILE_TICKS,
+    damageType: WALL_ARCHER_DAMAGE_TYPE,
+    splashRadius: WALL_ARCHER_SPLASH_RADIUS,
+  };
+}
+
 function createFortressPadSnapshot(game, lane, padState, deps = {}) {
   const descriptor = describeFortressPad(game, lane, padState, deps);
   if (!descriptor)
@@ -1047,6 +1668,12 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
   const allegianceKey = typeof deps.resolveLaneAllegianceKey === "function"
     ? deps.resolveLaneAllegianceKey(lane)
     : null;
+  const foodState = padState.buildingType === "market" && typeof deps.getMarketFoodState === "function"
+    ? deps.getMarketFoodState(lane, currentTier)
+    : null;
+  const buildingUpgrades = getBuildingUpgradeDefinitionsForBuilding(padState.buildingType)
+    .map((upgradeDef) => createBuildingUpgradeSnapshot(game, lane, padState, descriptor, upgradeDef))
+    .filter(Boolean);
 
   return {
     padId: padState.padId,
@@ -1085,18 +1712,73 @@ function createFortressPadSnapshot(game, lane, padState, deps = {}) {
     upgradeCost: Number.isFinite(descriptor.nextUpgradeCost) ? descriptor.nextUpgradeCost : 0,
     requiredTownCoreTier: descriptor.requiredTownCoreTier,
     requiredTownCoreTierName: getBuildingTierDisplayName("town_core", descriptor.requiredTownCoreTier),
+    foodLimit: foodState ? foodState.foodLimit : 0,
+    foodUsed: foodState ? foodState.foodUsed : 0,
+    foodRemaining: foodState ? foodState.foodRemaining : 0,
+    isAtFoodLimit: foodState ? !!foodState.isAtFoodLimit : false,
+    upgradePanelDescription: getBuildingPanelDescription(padState.buildingType),
+    buildingUpgrades,
     hp: currentHp,
     maxHp,
     lockedReason: descriptor.lockedReason,
   };
 }
 
+function applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey, deps = {}) {
+  const padState = getFortressPadState(lane, padId);
+  if (!padState)
+    return { ok: false, reason: "Unknown building pad" };
+
+  const descriptor = describeFortressPad(game, lane, padState, deps);
+  if (!descriptor)
+    return { ok: false, reason: "Unknown building pad" };
+
+  const upgradeDef = getBuildingUpgradeDefinition(padState.buildingType, upgradeKey);
+  if (!upgradeDef)
+    return { ok: false, reason: "This building has no such upgrade" };
+
+  const entry = getLaneBuildingUpgradeEntry(lane, padState.buildingType, upgradeDef.key, true);
+  const purchaseCount = Math.max(0, Math.floor(Number(entry && entry.purchaseCount) || 0));
+  const lockedReason = buildBuildingUpgradeLockedReason(
+    game,
+    lane,
+    padState,
+    descriptor,
+    upgradeDef,
+    purchaseCount
+  );
+  if (lockedReason)
+    return { ok: false, reason: lockedReason };
+
+  const cost = Math.max(0, Math.floor(Number(upgradeDef.cost) || 0));
+  if (cost <= 0)
+    return { ok: false, reason: "Upgrade cost is invalid" };
+
+  lane.gold -= cost;
+  lane.totalBuildSpend += cost;
+  lane.buildSpendThisRound += cost;
+  entry.purchaseCount += 1;
+  entry.totalSpent += cost;
+  entry.costHistory.push({ cost });
+
+  if (upgradeDef.key === WALL_HP_UPGRADE_KEY)
+    applyWallDurabilityBonuses(game, lane);
+
+  if (typeof deps.reapplyOwnedCombatUnitsForLane === "function")
+    deps.reapplyOwnedCombatUnitsForLane(game, lane);
+
+  recomputeTeamHpState(game, deps);
+  return { ok: true };
+}
+
 function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
   const padState = getFortressPadState(lane, padId);
   if (!padState)
     return { ok: false, reason: "Unknown building pad" };
+  if (isSharedDefenseBuildingType(padState.buildingType))
+    return applySharedDefenseGroupAction(game, lane, padState, deps, FORTRESS_CONSTRUCTION_KINDS.build);
   if (padState.buildingType === "barracks")
-    return { ok: false, reason: "Select Barracks Left, Center, or Right to buy that building." };
+    return { ok: false, reason: "Use Town Core to manage Barracks." };
 
   const descriptor = describeFortressPad(game, lane, padState, deps);
   if (!descriptor)
@@ -1115,7 +1797,7 @@ function applyFortressBuildOnPad(game, lane, padId, deps = {}) {
   const construction = startFortressConstruction(game, padState, 1, FORTRESS_CONSTRUCTION_KINDS.build);
   if (construction && construction.totalTicks <= 0) {
     padState.tier = 1;
-    padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, 1, game.teamHpMax);
+    padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, 1);
     padState.hp = padState.maxHp;
   }
   if (!Array.isArray(padState.costHistory))
@@ -1129,8 +1811,10 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
   const padState = getFortressPadState(lane, padId);
   if (!padState)
     return { ok: false, reason: "Unknown building pad" };
+  if (isSharedDefenseBuildingType(padState.buildingType))
+    return applySharedDefenseGroupAction(game, lane, padState, deps, FORTRESS_CONSTRUCTION_KINDS.upgrade);
   if (padState.buildingType === "barracks")
-    return { ok: false, reason: "Select Barracks Left, Center, or Right to upgrade that building." };
+    return { ok: false, reason: "Use Town Core to manage Barracks." };
 
   const descriptor = describeFortressPad(game, lane, padState, deps);
   if (!descriptor)
@@ -1159,7 +1843,7 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
   const construction = startFortressConstruction(game, padState, nextTier, FORTRESS_CONSTRUCTION_KINDS.upgrade);
   if (construction && construction.totalTicks <= 0) {
     padState.tier = nextTier;
-    padState.maxHp = resolveFortressBuildingMaxHp(padState.buildingType, nextTier, game.teamHpMax);
+    padState.maxHp = resolveFortressPadMaxHp(game, lane, padState, nextTier);
     padState.hp = padState.maxHp;
   }
   if (!Array.isArray(padState.costHistory))
@@ -1195,9 +1879,13 @@ module.exports = {
   FORTRESS_BUILD_STATES,
   FORTRESS_CONSTRUCTION_KINDS,
   FORTRESS_BUILDING_DEFS,
+  BUILDING_UPGRADE_DEFS,
+  BUILDING_UPGRADE_SECTION_TYPES,
   FORTRESS_PAD_DEFS,
   createFortressPadDef,
   createFortressPadStates,
+  createBuildingUpgradeState,
+  ensureBuildingUpgradeState,
   getFortressConstructionDurationTicks,
   getFortressConstructionState,
   advanceFortressConstruction,
@@ -1209,9 +1897,17 @@ module.exports = {
   getBuildingTierDisplayName,
   getBuildingBranchLabel,
   getBuildingDisplayName,
+  getBuildingPanelDescription,
+  getBuildingUpgradeDefinitionsForBuilding,
+  getBuildingUpgradeDefinition,
+  isSharedDefenseBuildingType,
+  ensureTownCorePadState,
   getFortressPadState,
   getFortressPadByBuildingType,
   getHighestBuiltFortressPadTier,
+  getLaneBuildingUpgradeEntry,
+  getLaneBuildingUpgradePurchaseCount,
+  hasLaneBuildingUpgrade,
   getTownCoreTier,
   getLaneTownCorePad,
   getLaneTownCoreHp,
@@ -1225,7 +1921,9 @@ module.exports = {
   markLaneDefeated,
   recomputeTeamHpState,
   applyFortressPadDamage,
+  getLaneWallArcherTurretDefenseProfile,
   createFortressPadSnapshot,
   applyFortressBuildOnPad,
   applyFortressUpgrade,
+  applyFortressBuildingUpgradePurchase,
 };

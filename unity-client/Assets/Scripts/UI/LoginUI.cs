@@ -269,16 +269,55 @@ namespace CastleDefender.UI
 
             StartCoroutine(FetchConfig());
 
+            StartCoroutine(BootstrapAuthFlow());
+        }
+
+        IEnumerator BootstrapAuthFlow()
+        {
             if (AuthManager.IsAuthenticated)
             {
                 ShowLoginPresentation(true);
                 SetStatus("Preparing your game session...");
                 StartCoroutine(CompleteLoginAndEnterLobby(0f));
+                yield break;
             }
-            else
+
+            if (!AuthManager.HasStoredSessionHint || AuthManager.Instance == null)
             {
                 StartLoginCinematicSequence();
+                yield break;
             }
+
+            _busy = true;
+            SetBusy(true);
+            ShowLoginPresentation(true);
+            SetError("");
+            SetStatus("Restoring your saved session...");
+
+            bool restored = false;
+            string restoreError = null;
+            yield return AuthManager.Instance.RestoreSessionRoutine(ResolvedBaseUrl, (success, error) =>
+            {
+                restored = success;
+                restoreError = error;
+            });
+
+            _busy = false;
+            SetBusy(false);
+
+            if (restored)
+            {
+                NetworkManager.Instance?.ReconnectForCurrentAuth("session restore");
+                SetStatus("Preparing your game session...");
+                StartCoroutine(CompleteLoginAndEnterLobby(0f));
+                yield break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(restoreError))
+                Debug.Log($"[Login] Saved session restore did not complete: {restoreError}");
+
+            SetStatus("");
+            StartLoginCinematicSequence();
         }
 
         void Update()
@@ -2258,7 +2297,7 @@ namespace CastleDefender.UI
                     SetError("Login failed — no token received.");
                     yield break;
                 }
-                OnLoginSuccess(resp.accessToken);
+                OnLoginSuccess(resp);
             }
             catch (Exception ex)
             {
@@ -2459,7 +2498,7 @@ namespace CastleDefender.UI
                     SetError("Google login failed — no token received.");
                     yield break;
                 }
-                OnLoginSuccess(resp.accessToken);
+                OnLoginSuccess(resp);
             }
             catch (Exception ex)
             {
@@ -2479,9 +2518,15 @@ namespace CastleDefender.UI
             return req;
         }
 
-        void OnLoginSuccess(string accessToken)
+        void OnLoginSuccess(AuthResponse auth)
         {
-            AuthManager.SaveToken(accessToken);
+            if (string.IsNullOrWhiteSpace(auth?.accessToken))
+            {
+                SetError("Login failed - no token received.");
+                return;
+            }
+
+            AuthManager.SaveSession(auth.accessToken, auth.refreshToken);
             NetworkManager.Instance?.ReconnectForCurrentAuth("login success");
             Debug.Log($"[Login] Signed in as {AuthManager.DisplayName}");
             SetStatus($"Welcome, {AuthManager.DisplayName}!");
@@ -2498,6 +2543,19 @@ namespace CastleDefender.UI
             SetBusy(true);
             ShowContentRetryAction(false);
             SetError("");
+
+            bool bootstrapAlreadyMarked = RemoteContentManager.HasRequiredGameBootstrapMarker();
+            if (forceRefreshManifest)
+            {
+                SetStatus("Retrying required game content download...");
+            }
+            else
+            {
+                SetStatus(
+                    bootstrapAlreadyMarked
+                        ? "Checking downloaded game content before entering the lobby..."
+                        : "Setting up required game content on this device. This is a one-time download before entering the game.");
+            }
 
             if (delay > 0f)
                 yield return new WaitForSeconds(delay);
@@ -2626,7 +2684,11 @@ namespace CastleDefender.UI
                     _polling = false;
                     _busy    = false;
                     if (Obj_DevicePanel != null) Obj_DevicePanel.SetActive(false);
-                    OnLoginSuccess(poll.accessToken);
+                    OnLoginSuccess(new AuthResponse
+                    {
+                        accessToken = poll.accessToken,
+                        refreshToken = poll.refreshToken,
+                    });
                     yield break;
                 }
                 if (poll.status == "expired")
@@ -2769,6 +2831,7 @@ namespace CastleDefender.UI
         {
             public string status;        // "pending" | "authorized" | "expired"
             public string accessToken;
+            public string refreshToken;
         }
     }
 }

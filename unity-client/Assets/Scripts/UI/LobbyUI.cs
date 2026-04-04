@@ -104,11 +104,17 @@ namespace CastleDefender.UI
 
         // ── Wizard state ──────────────────────────────────────────────────────
         const  string _gameType = "line_wars";
+        const  int RankedQueueCasualRequirement = 5;
         const  string WinterBackdropResourcePath = "UI/Lobby/WinterForestBackdrop";
         static Sprite _winterBackdropSprite;
         string _matchFormat = "ffa";
         bool   _pendingRanked;
         bool   _showingJoinInput;
+        int    _rankedCasualMatchesCompleted;
+        int    _rankedCasualMatchesRequired = RankedQueueCasualRequirement;
+        bool   _rankedQueueUnlocked;
+        bool   _rankedEligibilityKnown;
+        Coroutine _rankedEligibilityRoutine;
 
         // ── Lobby state ───────────────────────────────────────────────────────
         bool          _isHost;
@@ -168,6 +174,7 @@ namespace CastleDefender.UI
                 nm.OnLobbyError     += HandleLobbyError;
                 nm.OnErrorMsg       += HandleError;
             }
+            AuthManager.AuthStateChanged += HandleAuthStateChanged;
 
             // Step 3 — Type (shown first)
             Btn_Ranked.onClick.AddListener(OnQueueRanked);
@@ -211,6 +218,7 @@ namespace CastleDefender.UI
             BuildProgressionButton();
             ApplyPremiumPresentation();
             BeginLobbyT1Warmup();
+            BeginRankedEligibilityRefresh();
 
             // Fetch leaderboard + season info in background
             StartCoroutine(FetchLeaderboard());
@@ -238,6 +246,10 @@ namespace CastleDefender.UI
             if (_lobbyWarmupRoutine != null)
                 StopCoroutine(_lobbyWarmupRoutine);
 
+            if (_rankedEligibilityRoutine != null)
+                StopCoroutine(_rankedEligibilityRoutine);
+
+            AuthManager.AuthStateChanged -= HandleAuthStateChanged;
             CloseProgressionViewer();
         }
 
@@ -282,12 +294,34 @@ namespace CastleDefender.UI
             if (Btn_Back_Step3 != null) Btn_Back_Step3.gameObject.SetActive(false);
             if (Input_JoinCode != null)  Input_JoinCode.gameObject.SetActive(false);
             if (Btn_JoinConfirm != null) Btn_JoinConfirm.gameObject.SetActive(false);
+            RefreshRankedQueueButtonState();
             RefreshTypePanelLayout();
         }
 
         void OnQueueRanked()
         {
-            if (!AuthManager.IsAuthenticated) { SetStatus("Sign in to use public queue."); Play(AudioManager.SFX.Error); return; }
+            if (!AuthManager.IsAuthenticated)
+            {
+                SetStatus("Sign in to track your war record. Ranked queue opens after 5 casual matches.");
+                Play(AudioManager.SFX.Error);
+                return;
+            }
+
+            if (!_rankedEligibilityKnown)
+            {
+                BeginRankedEligibilityRefresh();
+                SetStatus($"Checking war record. Ranked queue opens after {_rankedCasualMatchesRequired} casual matches.");
+                Play(AudioManager.SFX.Error);
+                return;
+            }
+
+            if (!_rankedQueueUnlocked)
+            {
+                SetStatus(BuildRankedQueueLockedStatus());
+                Play(AudioManager.SFX.Error);
+                return;
+            }
+
             Play(AudioManager.SFX.ButtonClick);
             _pendingRanked = true;
             EnterQueue();
@@ -471,7 +505,21 @@ namespace CastleDefender.UI
                 return;
             }
 
+            BeginRankedEligibilityRefresh();
             SetStatus("Choose a queue.");
+        }
+
+        void HandleAuthStateChanged()
+        {
+            if (Txt_DisplayName != null)
+                Txt_DisplayName.text = AuthManager.IsAuthenticated ? AuthManager.DisplayName : "Guest";
+
+            _rankedEligibilityKnown = !AuthManager.IsAuthenticated;
+            _rankedQueueUnlocked = false;
+            _rankedCasualMatchesCompleted = 0;
+            _rankedCasualMatchesRequired = RankedQueueCasualRequirement;
+            RefreshRankedQueueButtonState();
+            BeginRankedEligibilityRefresh();
         }
 
         void HandleDisconnected()
@@ -492,7 +540,7 @@ namespace CastleDefender.UI
             if (p.status == "idle")
             {
                 _inQueue = false;
-                GoToStep(3);
+                GoToStep(2);
                 return;
             }
             _inQueue = true;
@@ -597,6 +645,67 @@ namespace CastleDefender.UI
         }
 
         void HandleError(ErrorPayload p) => SetStatus($"Error: {p.message}");
+
+        void BeginRankedEligibilityRefresh()
+        {
+            if (_rankedEligibilityRoutine != null)
+                StopCoroutine(_rankedEligibilityRoutine);
+
+            _rankedEligibilityRoutine = StartCoroutine(FetchRankedEligibility());
+        }
+
+        IEnumerator FetchRankedEligibility()
+        {
+            if (!AuthManager.IsAuthenticated)
+            {
+                _rankedEligibilityKnown = true;
+                _rankedQueueUnlocked = false;
+                _rankedCasualMatchesCompleted = 0;
+                _rankedCasualMatchesRequired = RankedQueueCasualRequirement;
+                RefreshRankedQueueButtonState();
+                _rankedEligibilityRoutine = null;
+                yield break;
+            }
+
+            string url = BaseUrl + "/players/me";
+            using var req = UnityWebRequest.Get(url);
+            ApplyAuthorization(req);
+            req.timeout = 10;
+            yield return req.SendWebRequest();
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[Lobby] Ranked eligibility fetch failed: {req.error}");
+                RefreshRankedQueueButtonState();
+                _rankedEligibilityRoutine = null;
+                yield break;
+            }
+
+            try
+            {
+                var resp = JsonConvert.DeserializeObject<PlayerProfileResponse>(req.downloadHandler.text);
+                var progression = resp?.queue_progression;
+                if (progression != null)
+                {
+                    _rankedCasualMatchesCompleted = Mathf.Max(0, progression.ranked_casual_matches_completed);
+                    _rankedCasualMatchesRequired = Mathf.Max(1, progression.ranked_casual_matches_required);
+                    _rankedQueueUnlocked = progression.ranked_queue_unlocked
+                        || _rankedCasualMatchesCompleted >= _rankedCasualMatchesRequired;
+                    _rankedEligibilityKnown = true;
+                }
+                else
+                {
+                    Debug.LogWarning("[Lobby] Ranked eligibility payload was missing queue progression data.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Lobby] Ranked eligibility parse failed: {ex.Message}");
+            }
+
+            RefreshRankedQueueButtonState();
+            _rankedEligibilityRoutine = null;
+        }
 
         // ── Leaderboard (Phase U8) ────────────────────────────────────────────
         void ShowLeaderboard()
@@ -1350,6 +1459,7 @@ namespace CastleDefender.UI
             if (Btn_Leave != null) SetButtonLabel(Btn_Leave, "Leave Lobby");
             if (Btn_Ready != null) SetButtonLabel(Btn_Ready, "Ready");
             if (Btn_Launch != null) SetButtonLabel(Btn_Launch, "Launch Match");
+            RefreshRankedQueueButtonState();
 
             if (Input_JoinCode != null)
             {
@@ -1554,6 +1664,78 @@ namespace CastleDefender.UI
 
             ApplyButtonStyle(Btn_Ready, _isReady ? ClassicRpgButtonSkin.MiniGreen : ClassicRpgButtonSkin.MiniBrown, 48f);
             SetButtonLabel(Btn_Ready, _isReady ? "Ready!" : "Ready");
+        }
+
+        void RefreshRankedQueueButtonState()
+        {
+            if (Btn_Ranked == null)
+                return;
+
+            ApplyButtonStyle(Btn_Ranked, ClassicRpgButtonSkin.LongGold, 56f);
+            Btn_Ranked.interactable = true;
+
+            bool locked = !AuthManager.IsAuthenticated || !_rankedEligibilityKnown || !_rankedQueueUnlocked;
+            SetButtonLabel(Btn_Ranked, BuildRankedQueueButtonLabel());
+
+            var image = Btn_Ranked.targetGraphic as Image ?? Btn_Ranked.GetComponent<Image>();
+            if (image != null)
+                image.color = locked
+                    ? new Color(0.46f, 0.49f, 0.56f, 0.96f)
+                    : Color.white;
+
+            var label = Btn_Ranked.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                label.richText = true;
+                label.enableWordWrapping = false;
+                label.fontSize = locked ? 20f : 24f;
+                label.color = locked
+                    ? new Color(0.90f, 0.91f, 0.94f, 1f)
+                    : ClassicRpgUiRuntime.WarmGold;
+            }
+
+            var colors = Btn_Ranked.colors;
+            if (locked)
+            {
+                colors.normalColor = new Color(0.92f, 0.94f, 0.98f, 1f);
+                colors.highlightedColor = new Color(0.98f, 0.99f, 1f, 1f);
+                colors.pressedColor = new Color(0.80f, 0.83f, 0.90f, 1f);
+                colors.selectedColor = new Color(0.95f, 0.97f, 1f, 1f);
+            }
+            Btn_Ranked.colors = colors;
+        }
+
+        string BuildRankedQueueButtonLabel()
+        {
+            if (!AuthManager.IsAuthenticated)
+                return "Ranked Match <color=#E67C7C><size=80%>Sign In Required</size></color>";
+
+            if (!_rankedEligibilityKnown)
+                return "Ranked Match <color=#E67C7C><size=80%>Checking Record</size></color>";
+
+            if (_rankedQueueUnlocked)
+                return "Ranked Match";
+
+            int remaining = Mathf.Max(0, _rankedCasualMatchesRequired - _rankedCasualMatchesCompleted);
+            return $"Ranked Match <color=#E67C7C><size=80%>{remaining} Casual Required</size></color>";
+        }
+
+        string BuildRankedQueueLockedStatus()
+        {
+            int requiredMatches = Mathf.Max(1, _rankedCasualMatchesRequired);
+            if (!AuthManager.IsAuthenticated)
+                return $"Sign in to track your war record. Ranked queue opens after {requiredMatches} casual matches.";
+
+            if (!_rankedEligibilityKnown)
+                return $"Checking war record. Ranked queue opens after {requiredMatches} casual matches.";
+
+            int remaining = Mathf.Max(0, requiredMatches - _rankedCasualMatchesCompleted);
+            if (remaining <= 0)
+                return "Ranked queue is still updating your war record. Try again in a moment.";
+
+            return remaining == 1
+                ? "Complete 1 more casual match to unlock ranked queue."
+                : $"Complete {remaining} more casual matches to unlock ranked queue.";
         }
 
         void ReparentTo(Transform parent, RectTransform rect, float height, float width = 0f)
@@ -1903,6 +2085,14 @@ namespace CastleDefender.UI
                     : "http://localhost:3000";
 #endif
             }
+        }
+
+        static void ApplyAuthorization(UnityWebRequest req)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(AuthManager.Token))
+                return;
+
+            req.SetRequestHeader("Authorization", $"Bearer {AuthManager.Token}");
         }
 
         static void EnsureEventSystem()
@@ -2275,7 +2465,7 @@ namespace CastleDefender.UI
             }
 
             ResolveCurrentCameraValues(out _, out float zoom, out float rotation);
-            float nextTilt = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.tilt ?? 28f, 0f, 52f, settingsTiltStep);
+            float nextTilt = GetWrappedSelectorValue(UserCameraPreferences.ResolveTilt(UserPreferencesManager.CurrentPreferenceView.camera.tilt), 0f, 52f, settingsTiltStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(nextTilt, zoom, rotation);
         }
 
@@ -2284,12 +2474,12 @@ namespace CastleDefender.UI
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
             {
-                controller.SetZoom(GetWrappedSelectorValue(controller.CurrentZoom, controller.OrthoSizeMin, controller.OrthoSizeMax, settingsZoomStep));
+                controller.SetZoom(GetWrappedSelectorValue(controller.CurrentZoom, controller.ZoomMin, controller.ZoomMax, settingsZoomStep));
                 return;
             }
 
             ResolveCurrentCameraValues(out float tilt, out _, out float rotation);
-            float nextZoom = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.zoom ?? 24f, 4f, 80f, settingsZoomStep);
+            float nextZoom = GetWrappedSelectorValue(UserCameraPreferences.ResolveZoom(UserPreferencesManager.CurrentPreferenceView.camera.zoom), 1f, 1000f, settingsZoomStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, nextZoom, rotation);
         }
 
@@ -2298,12 +2488,12 @@ namespace CastleDefender.UI
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
             {
-                controller.SetRotation(GetWrappedSelectorValue(controller.CurrentRotation, -180f, 180f, settingsRotateStep));
+                controller.SetRotation(GetWrappedRotationSelectorValue(controller.CurrentRotation, settingsRotateStep));
                 return;
             }
 
             ResolveCurrentCameraValues(out float tilt, out float zoom, out _);
-            float nextRotation = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.rotation ?? 0f, -180f, 180f, settingsRotateStep);
+            float nextRotation = GetWrappedRotationSelectorValue(UserCameraPreferences.ResolveRotation(UserPreferencesManager.CurrentPreferenceView.camera.rotation), settingsRotateStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, zoom, nextRotation);
         }
 
@@ -2354,9 +2544,9 @@ namespace CastleDefender.UI
             }
 
             var preferences = UserPreferencesManager.CurrentPreferenceView.camera;
-            tilt = preferences.tilt ?? 28f;
-            zoom = preferences.zoom ?? 24f;
-            rotation = preferences.rotation ?? 0f;
+            tilt = UserCameraPreferences.ResolveTilt(preferences.tilt);
+            zoom = UserCameraPreferences.ResolveZoom(preferences.zoom);
+            rotation = UserCameraPreferences.ResolveRotation(preferences.rotation);
         }
 
         static float GetWrappedSelectorValue(float current, float min, float max, float step)
@@ -2387,6 +2577,54 @@ namespace CastleDefender.UI
             }
 
             return options[(closestIndex + 1) % options.Count];
+        }
+
+        static float GetWrappedRotationSelectorValue(float current, float step)
+        {
+            step = Mathf.Max(0.01f, step);
+            var options = new List<float>();
+
+            for (float value = 0f; value < 360f - 0.001f; value += step)
+                AddUniqueRotationOption(options, value);
+
+            AddUniqueRotationOption(options, 90f);
+            AddUniqueRotationOption(options, 180f);
+            AddUniqueRotationOption(options, 270f);
+            AddUniqueRotationOption(options, 360f);
+            options.Sort();
+
+            float normalizedCurrent = Mathf.Repeat(current, 360f);
+            if (Mathf.Approximately(normalizedCurrent, 0f) && current > 0.001f)
+                normalizedCurrent = 360f;
+
+            int closestIndex = 0;
+            float closestDelta = float.MaxValue;
+            for (int i = 0; i < options.Count; i++)
+            {
+                float delta = Mathf.Abs(options[i] - normalizedCurrent);
+                if (delta < closestDelta)
+                {
+                    closestDelta = delta;
+                    closestIndex = i;
+                }
+            }
+
+            return options[(closestIndex + 1) % options.Count];
+        }
+
+        static void AddUniqueRotationOption(List<float> options, float value)
+        {
+            float normalized = Mathf.Repeat(value, 360f);
+            if (Mathf.Approximately(normalized, 0f) && value > 0.001f)
+                normalized = 360f;
+
+            for (int i = 0; i < options.Count; i++)
+            {
+                if (Mathf.Abs(options[i] - normalized) < 0.001f)
+                    return;
+            }
+
+            options.Add(normalized);
         }
 
         void RefreshSettingsPanelValues()
@@ -2441,7 +2679,7 @@ namespace CastleDefender.UI
             CloseProgressionViewer();
             SetSettingsOverlayVisible(false, immediate: true);
             ClearReconnectPrefs();
-            AuthManager.ClearToken();
+            AuthManager.BeginLogout(NetworkManager.Instance != null ? NetworkManager.Instance.ResolvedServerUrl : null);
             NetworkManager.Instance?.ReconnectForCurrentAuth("lobby logout");
             SetStatus("Returning to sign-in...");
             Play(AudioManager.SFX.ButtonClick);
@@ -2543,6 +2781,20 @@ namespace CastleDefender.UI
             if (button == null) return;
             var text = button.GetComponentInChildren<TMP_Text>(true);
             if (text != null) text.text = label;
+        }
+
+        [Serializable]
+        sealed class PlayerProfileResponse
+        {
+            public QueueProgressionResponse queue_progression;
+        }
+
+        [Serializable]
+        sealed class QueueProgressionResponse
+        {
+            public int ranked_casual_matches_completed;
+            public int ranked_casual_matches_required;
+            public bool ranked_queue_unlocked;
         }
 
         void SetStatus(string msg) { if (TxtStatus != null) TxtStatus.text = msg; }

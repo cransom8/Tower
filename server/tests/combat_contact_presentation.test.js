@@ -823,4 +823,72 @@ test("melee surround wraps a stationary intruder instead of leaving all defender
   );
 });
 
+test("dungeon melee surround wraps a stationary defender instead of collapsing into a single approach file", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  tick(game, 1);
+  assert.ok(lane.outsideGateAnchor, "expected defend mode to expose an outside gate anchor");
+
+  const anchor = lane.outsideGateAnchor;
+  const defender = createBarracksUnit("tt_light_infantry", {
+    id: "wave_surround_defender",
+    posX: anchor.x,
+    posY: anchor.y - 2.8,
+    routeWorldX: anchor.x,
+    routeWorldY: anchor.y - 2.8,
+    hp: 400,
+    maxHp: 400,
+    baseDmg: 0,
+    baseSpeed: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    combatState: "IDLE",
+    routeState: "MOVING",
+    movementMode: "AnchorJoin",
+    commandState: "DEFEND",
+  });
+  const waves = Array.from({ length: 12 }, (_, index) => createWaveUnit("raider", {
+    id: `wave_surround_${index}`,
+    posX: anchor.x + (((index % 4) - 1.5) * 0.6),
+    posY: (anchor.y - 6.0) - (Math.floor(index / 4) * 0.5),
+    routeWorldX: anchor.x + (((index % 4) - 1.5) * 0.6),
+    routeWorldY: (anchor.y - 6.0) - (Math.floor(index / 4) * 0.5),
+    baseSpeed: 0.24,
+    atkCd: 0,
+    hp: 80,
+    maxHp: 80,
+    combatState: "IDLE",
+    routeState: "MOVING",
+    movementMode: "LaneTravel",
+  }));
+
+  lane.units.push(defender, ...waves);
+
+  tick(game, 60);
+
+  const liveWaves = lane.units.filter((unit) => unit && unit.id.startsWith("wave_surround_"));
+  const stopDistance = simMl.getUnitStopDistance("raider", "tt_light_infantry") + 0.1;
+  const wavesAboveDefender = liveWaves.filter((unit) => unit.posY < defender.posY - 0.5);
+  const wavesLeftOfDefender = liveWaves.filter((unit) => unit.posX < defender.posX - 0.5);
+  const wavesRightOfDefender = liveWaves.filter((unit) => unit.posX > defender.posX + 0.5);
+  const wavesInContact = liveWaves.filter((unit) =>
+    Math.hypot(Number(unit.posX) - Number(defender.posX), Number(unit.posY) - Number(defender.posY)) <= stopDistance
+  );
+
+  assert.ok(
+    wavesInContact.length >= 2,
+    `expected several dungeon mobs to reach true contact around one defender, got ${wavesInContact.length}`
+  );
+  assert.ok(
+    wavesAboveDefender.length >= 2,
+    `expected surround behavior to wrap dungeon mobs around the defender, got ${wavesAboveDefender.length} above-defender units`
+  );
+  assert.ok(
+    wavesLeftOfDefender.length >= 2 && wavesRightOfDefender.length >= 2,
+    "expected dungeon mobs to occupy both lateral sides of the defender instead of staying in one approach blob"
+  );
+});
+
 

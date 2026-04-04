@@ -53,6 +53,14 @@ setUnitTypesForTests([
     range: 0.08,
     armor_type: "LIGHT",
   }),
+  makeUnit("infantry_t1", {
+    hp: 42,
+    attack_damage: 7,
+    attack_speed: 22,
+    path_speed: 0.34,
+    range: 0.08,
+    armor_type: "MEDIUM",
+  }),
 ]);
 
 test.beforeEach(() => {
@@ -78,6 +86,28 @@ function createGame() {
   return game;
 }
 
+function countSpawnedWaveUnits(game) {
+  return (game.lanes || []).reduce((total, lane) => {
+    if (!lane)
+      return total;
+    return total + (lane.spawnQueue?.length || 0) + (lane.units?.length || 0);
+  }, 0);
+}
+
+function countUnitsMatching(game, predicate) {
+  return (game.lanes || []).reduce((total, lane) => {
+    if (!lane)
+      return total;
+    const laneUnits = [...(lane.spawnQueue || []), ...(lane.units || [])];
+    return total + laneUnits.filter((unit) => unit && predicate(unit)).length;
+  }, 0);
+}
+
+function getBarracksSendTimerTicks(game, lane, barracksId) {
+  const snapshot = simMl.createBarracksSiteSnapshot(game, lane, barracksId);
+  return snapshot ? snapshot.sendTimerTicksRemaining : -1;
+}
+
 test("startNextWaveNow refuses to spawn the next wave while the current wave is still active", () => {
   const game = createGame();
 
@@ -87,7 +117,7 @@ test("startNextWaveNow refuses to spawn the next wave while the current wave is 
   assert.equal(game.roundNumber, 1, "blocking the start should leave the active wave unchanged");
 });
 
-test("startNextWaveNow allows the next wave after the previous wave has fully cleared", () => {
+test("startNextWaveNow stays blocked while the current timed wave still has future scheduled groups", () => {
   const game = createGame();
 
   assert.equal(simMl.startNextWaveNow(game), true, "the first wave should still be startable");
@@ -99,10 +129,113 @@ test("startNextWaveNow allows the next wave after the previous wave has fully cl
     lane.units = [];
   }
 
-  assert.equal(simMl.countRemainingWaveMobs(game), 0, "remaining mobs should reach zero after the wave is cleared");
-  assert.equal(simMl.isCurrentWaveComplete(game), true, "the wave should report complete once all wave units are gone");
-  assert.equal(simMl.startNextWaveNow(game), true, "the next wave should be allowed after the board is clear");
-  assert.equal(game.roundNumber, 2, "starting again after a clear should advance to the next wave");
+  assert.ok(simMl.countRemainingWaveMobs(game) > 0, "future scheduled groups should still count as remaining wave mobs");
+  assert.equal(simMl.isCurrentWaveComplete(game), false, "the timed wave should stay active until its session expires");
+  assert.equal(simMl.startNextWaveNow(game), false, "the next wave should stay blocked until the timed session finishes");
+  assert.equal(game.roundNumber, 1, "blocking the start should leave the active wave unchanged");
+});
+
+test("timed waves respawn groups during the round and roll to the next wave on timer even if old mobs remain", () => {
+  const game = createGame();
+  game.waveIntervalTicks = 4;
+  game.waveGroupIntervalTicks = 2;
+  game.initialWaveDelayTicks = 1;
+  game.nextWaveTick = 1;
+
+  simMl.mlTick(game);
+  assert.equal(game.roundNumber, 1, "the first timed wave should start on the configured opening delay");
+  assert.equal(countSpawnedWaveUnits(game), 2, "wave 1 should queue one group per surviving lane on start");
+
+  for (const lane of game.lanes) {
+    lane.spawnQueue = [];
+    lane.units = [];
+  }
+
+  simMl.mlTick(game);
+  assert.equal(countSpawnedWaveUnits(game), 0, "no new timed group should appear before the next group interval");
+
+  simMl.mlTick(game);
+  assert.equal(countSpawnedWaveUnits(game), 2, "the same authored group should respawn on the next timed interval");
+
+  simMl.mlTick(game);
+  assert.equal(game.roundNumber, 1, "the round should stay active until the timed session expires");
+
+  simMl.mlTick(game);
+  assert.equal(game.roundNumber, 2, "the timer should advance into the next wave even while the prior group is still alive");
+  assert.equal(countSpawnedWaveUnits(game), 4, "wave 2 should stack onto the remaining wave 1 mobs instead of waiting for a clear");
+});
+
+test("barracks sends stay synchronized with dungeon wave pulses and with each other", () => {
+  const game = createGame();
+  game.waveIntervalTicks = 6;
+  game.waveGroupIntervalTicks = 2;
+  game.initialWaveDelayTicks = 2;
+  game.barracksSendIntervalTicks = 2;
+  game.nextWaveTick = 2;
+  game.nextBarracksSendTick = 2;
+
+  const lane = game.lanes[0];
+  lane.barracksSiteStates.center = {
+    barracksId: "center",
+    isBuilt: true,
+    level: 1,
+    hp: 260,
+    maxHp: 260,
+    nextSendTick: 99,
+    commandState: "DEFEND",
+    costHistory: [],
+    constructionKind: null,
+    constructionTargetLevel: 0,
+    constructionEndTick: 0,
+    constructionTotalTicks: 0,
+  };
+  lane.barracksSiteStates.left = {
+    barracksId: "left",
+    isBuilt: true,
+    level: 1,
+    hp: 260,
+    maxHp: 260,
+    nextSendTick: 1,
+    commandState: "DEFEND",
+    costHistory: [],
+    constructionKind: null,
+    constructionTargetLevel: 0,
+    constructionEndTick: 0,
+    constructionTotalTicks: 0,
+  };
+  lane.barracksSiteRosterCounts.center.militia = 1;
+  lane.barracksSiteRosterCounts.left.militia = 1;
+
+  simMl.mlTick(game);
+  assert.equal(countUnitsMatching(game, (unit) => unit.isWaveUnit), 0, "no wave mobs should arrive before the shared opening pulse");
+  assert.equal(lane.totalSendCount, 0, "no barracks units should drift ahead of the shared opening pulse");
+  assert.equal(
+    getBarracksSendTimerTicks(game, lane, "center"),
+    getBarracksSendTimerTicks(game, lane, "left"),
+    "all barracks should show the same countdown before the shared pulse"
+  );
+
+  simMl.mlTick(game);
+  assert.equal(countUnitsMatching(game, (unit) => unit.isWaveUnit), 2, "wave mobs should arrive on the shared opening pulse");
+  assert.equal(lane.totalSendCount, 2, "both barracks should fire on the shared pulse");
+  assert.equal(
+    getBarracksSendTimerTicks(game, lane, "center"),
+    getBarracksSendTimerTicks(game, lane, "left"),
+    "all barracks should stay aligned after firing"
+  );
+
+  for (const liveLane of game.lanes) {
+    liveLane.spawnQueue = [];
+    liveLane.units = [];
+  }
+
+  simMl.mlTick(game);
+  assert.equal(countSpawnedWaveUnits(game), 0, "nothing new should spawn between shared pulses");
+  assert.equal(lane.totalSendCount, 2, "barracks should wait between shared pulses");
+
+  simMl.mlTick(game);
+  assert.equal(countUnitsMatching(game, (unit) => unit.isWaveUnit), 2, "wave mobs should repeat on the next shared pulse");
+  assert.equal(lane.totalSendCount, 4, "both barracks should stay aligned on later pulses");
 });
 
 test("resolveWaveForRound uses the most recent authored wave before a gap and only escalates past the authored tail", () => {

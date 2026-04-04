@@ -74,6 +74,7 @@ const {
   INCOME_INTERVAL_TICKS,
   TOWER_MAX_LEVEL,
   MAX_UNITS_PER_LANE,
+  ENABLE_SPAWN_AUDIT_LOGS,
   ENABLE_WAVE_UNIT_TRACE,
   WAVE_UNIT_STATES,
   GRID_W,
@@ -93,6 +94,8 @@ const {
   TEAM_HP_START,
   BARRACKS_SEND_TIMER_TICKS,
   WAVE_TIMER_TICKS,
+  WAVE_GROUP_INTERVAL_TICKS,
+  INITIAL_WAVE_DELAY_TICKS,
   BUILD_PHASE_TICKS,
   TRANSITION_PHASE_TICKS,
   ESCALATION_PER_EXTRA_ROUND,
@@ -275,6 +278,11 @@ const buildLaneCommandAnchorSet = bindSystemMethodWithDeps(
 const sampleLaneCommandAnchor = bindSystemMethodWithDeps(
   laneCommandSystem,
   "sampleLaneCommandAnchor",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
+const resolveLaneCommandAnchorProgressRequest = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "resolveLaneCommandAnchorProgressRequest",
   () => LANE_COMMAND_SYSTEM_DEPS
 );
 const normalizeLegacyDefenderUnit = bindSystemMethodWithDeps(
@@ -669,6 +677,22 @@ const createFortressPadStates = bindSystemMethod(
   fortressSystem,
   "createFortressPadStates"
 );
+const createBuildingUpgradeState = bindSystemMethod(
+  fortressSystem,
+  "createBuildingUpgradeState"
+);
+const getLaneBuildingUpgradePurchaseCount = bindSystemMethod(
+  fortressSystem,
+  "getLaneBuildingUpgradePurchaseCount"
+);
+const hasLaneBuildingUpgrade = bindSystemMethod(
+  fortressSystem,
+  "hasLaneBuildingUpgrade"
+);
+const getLaneWallArcherTurretDefenseProfile = bindSystemMethod(
+  fortressSystem,
+  "getLaneWallArcherTurretDefenseProfile"
+);
 const createBarracksRosterCounts = bindSystemMethod(
   barracksSystem,
   "createBarracksRosterCounts"
@@ -784,6 +808,10 @@ const getCurrentMarketRosterDefinitionForLane = bindSystemMethod(
   barracksSystem,
   "getCurrentMarketRosterDefinitionForLane"
 );
+const getLaneTotalIncome = bindSystemMethod(
+  barracksSystem,
+  "getLaneTotalIncome"
+);
 const resolveBarracksRosterUnlockContext = bindSystemMethod(
   barracksSystem,
   "resolveBarracksRosterUnlockContext"
@@ -832,6 +860,9 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
   resolveLaneAllegianceKey,
   getCurrentBarracksRosterDefinitionForBranch,
   getCurrentMarketRosterDefinitionForLane,
+  getMarketFoodState(lane, marketTier) {
+    return barracksSystem.getMarketFoodState(lane, marketTier);
+  },
   upgradeOwnedBarracksBranchUnits(game, lane, branchKey, targetRosterDef) {
     return barracksSystem.upgradeOwnedBarracksBranchUnits(
       game,
@@ -849,7 +880,15 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
       BARRACKS_SYSTEM_DEPS
     );
   },
+  reapplyOwnedCombatUnitsForLane(game, lane) {
+    return barracksSystem.reapplyOwnedCombatUnitsForLane(
+      game,
+      lane,
+      BARRACKS_SYSTEM_DEPS
+    );
+  },
   log,
+  ENABLE_SPAWN_AUDIT_LOGS,
   getBarracksUpgradeCost(nextTier) {
     const nextDef = getBarracksUpgradeDef(nextTier);
     if (nextDef && Number.isFinite(nextDef.upgradeCost))
@@ -890,15 +929,19 @@ const BARRACKS_SYSTEM_DEPS = Object.freeze({
   normalizeCombatRole,
   resolveUnitCombatRole,
   spawnWaveUnit: _spawnWaveUnit,
+  getLaneBuildingUpgradePurchaseCount,
+  hasLaneBuildingUpgrade,
   gridWidth: GRID_W,
   defaultHeroCombatRole: UNIT_COMBAT_ROLES.SWORD,
   spawnSourceTypes: SPAWN_SOURCE_TYPES,
+  ENABLE_SPAWN_AUDIT_LOGS,
 });
 
 const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   log,
   getLaneByIndex,
   getSourceLane,
+  ensureBarracksSiteStates,
   isOpponentLane,
   getLaneTownCoreCombatTarget,
   getWaveSpawnWorldPosition,
@@ -933,6 +976,7 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   ROUTE_SLOT_ROW_SPACING,
   SPAWN_X,
   SPAWN_YG,
+  ENABLE_SPAWN_AUDIT_LOGS,
 });
 
 const SPAWN_SYSTEM_DEPS = Object.freeze({
@@ -961,12 +1005,15 @@ const SPAWN_SYSTEM_DEPS = Object.freeze({
   PATH_CONTRACT_TYPES,
   UNIT_MOVEMENT_MODES,
   WAVE_UNIT_STATES,
+  ENABLE_SPAWN_AUDIT_LOGS,
 });
 
 const WAVE_SYSTEM_DEPS = Object.freeze({
   ESCALATION_PER_EXTRA_ROUND,
   INCOME_INTERVAL_TICKS,
   WAVE_TIMER_TICKS,
+  WAVE_GROUP_INTERVAL_TICKS,
+  INITIAL_WAVE_DELAY_TICKS,
   TICK_HZ,
   BARRACKS_SITE_DEFS,
   isScheduledWaveUnit,
@@ -981,6 +1028,8 @@ const WAVE_SYSTEM_DEPS = Object.freeze({
   summarizeBarracksSiteRosterEntries,
   spawnScheduledBarracksRoster,
   spawnWaveUnit: _spawnWaveUnit,
+  getLaneTotalIncome,
+  ENABLE_SPAWN_AUDIT_LOGS,
 });
 
 const COMBAT_SYSTEM_DEPS = Object.freeze({
@@ -996,6 +1045,7 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
   resolveUnitCombatRole,
   isFortArchetypeKey,
   getLaneByIndex,
+  getBarracksSiteState,
   getBarracksSiteCombatTarget,
   getFortressPadState,
   getLaneTownCorePad,
@@ -1003,6 +1053,7 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
   getLaneTownCoreMaxHp,
   getLaneTownCoreCombatTarget,
   getFortressPadCombatTarget,
+  applyBarracksSiteDamage,
   applyFortressPadDamage,
   findRouteUnitById,
   canRouteUnitEngageTarget,
@@ -1028,6 +1079,7 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
   UNIT_MOVEMENT_MODES,
   WAVE_UNIT_STATES,
   USE_PER_UNIT_ANCHOR_SLOTS,
+  ENABLE_SPAWN_AUDIT_LOGS,
   ENABLE_WAVE_UNIT_TRACE,
   CONTACT_SLOT_TOLERANCE,
   LANE_COMMAND_COMBAT_LEASH,
@@ -1068,6 +1120,9 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   resolveAbilityHook,
   resolveStatuses,
   resolveUnitSupportProfile,
+  resolveLaneAllegianceKey,
+  resolveUnitAllegianceKey,
+  areAllegiancesHostile,
   traceWaveUnitTick,
   resolveWaveCombatTarget,
   isUnitCombatTargetStillValid,
@@ -1098,7 +1153,12 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   getWaveUnitTargetDistance,
   isLaneControlledUnit,
   isUnitInCombatContact,
+  shouldUseLaneControlledSurroundSlots,
   resolveUnitDef,
+  fireProjectile,
+  getFortressPadState,
+  getFortressPadCombatTarget,
+  getLaneWallArcherTurretDefenseProfile,
   attackFortressPad,
   shouldLaneControlledUnitRouteMarch,
   syncUnitRouteStateToWorldPosition,
@@ -1127,6 +1187,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   GRID_W,
   TICK_HZ,
   MIN_UNIT_SPACING,
+  ENABLE_SPAWN_AUDIT_LOGS,
   WAVE_ROUTE_COMBAT_RECOVERY_TICKS,
   ENABLE_WAVE_UNIT_TRACE,
 });
@@ -1142,7 +1203,9 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   buildSampledPathFromSegments,
   getBarracksLevelDef,
   createFortressPadStates,
+  createBuildingUpgradeState,
   createBarracksSiteStates,
+  ensureBarracksSiteStates,
   createBarracksSiteRosterCounts,
   createMarketRosterCounts,
   seedStartingCombatTestMilitia,
@@ -1153,6 +1216,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   areAllegiancesHostile,
   normalizeLaneCommandState,
   getLaneCommandAnchorProgress,
+  resolveLaneCommandAnchorProgressRequest,
   getLaneCommandObjectiveLaneIndex,
   isLaneCombatEnabledCommandState,
   getLaneCommandEngagementRadius,
@@ -1160,6 +1224,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   applyFortressBuildOnPad,
   getFortressPadByBuildingType,
   applyFortressUpgrade,
+  applyFortressBuildingUpgradePurchase,
   normalizeBarracksSiteId,
   applyBarracksSiteBuildAction,
   applyBarracksSiteUpgradeAction,
@@ -1199,6 +1264,8 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   INCOME_INTERVAL_TICKS,
   BARRACKS_SEND_TIMER_TICKS,
   WAVE_TIMER_TICKS,
+  WAVE_GROUP_INTERVAL_TICKS,
+  INITIAL_WAVE_DELAY_TICKS,
   BUILD_PHASE_TICKS,
   TRANSITION_PHASE_TICKS,
   GRID_W,
@@ -1280,6 +1347,10 @@ function recomputeTeamHpState(game) {
 
 function applyFortressPadDamage(game, lane, padId, damage) {
   return fortressSystem.applyFortressPadDamage(game, lane, padId, damage, FORTRESS_SYSTEM_DEPS);
+}
+
+function applyBarracksSiteDamage(game, lane, barracksId, damage) {
+  return barracksSystem.applyBarracksSiteDamage(game, lane, barracksId, damage);
 }
 
 function resolveFortressBuildingMaxHp(buildingType, tier, teamHpStart) {
@@ -1485,6 +1556,16 @@ function applyFortressUpgrade(game, lane, padId) {
   return fortressSystem.applyFortressUpgrade(game, lane, padId, FORTRESS_SYSTEM_DEPS);
 }
 
+function applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey) {
+  return fortressSystem.applyFortressBuildingUpgradePurchase(
+    game,
+    lane,
+    padId,
+    upgradeKey,
+    FORTRESS_SYSTEM_DEPS
+  );
+}
+
 function deployBarracksHero(game, laneIndex, lane, heroKey, barracksId) {
   return barracksSystem.deployBarracksHero(game, laneIndex, lane, heroKey, barracksId, BARRACKS_SYSTEM_DEPS);
 }
@@ -1628,7 +1709,11 @@ function resolveRouteUnitFactionKey(game, unit) {
 
 function getLaneCommandAnchorStateForUnit(game, unit) {
   const ownerLane = getLaneCommandOwnerLane(game, unit);
-  return ownerLane ? sampleLaneCommandAnchor(game, ownerLane) : null;
+  if (!ownerLane)
+    return null;
+  return sampleLaneCommandAnchor(game, ownerLane, {
+    commandState: getLaneCommandStateForUnit(game, unit),
+  });
 }
 
 function isTargetInsideHomeFortressEmergencyZone(game, attacker, target) {
@@ -2251,6 +2336,8 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   createBarracksRosterSnapshot,
   createMarketRosterSnapshot,
   createHeroRosterSnapshot,
+  getLaneTotalIncome,
+  recomputeTeamHpState,
   resolveLaneAllegianceKey,
   resolveUnitAllegianceKey,
   resolveUnitOwnerLaneIndex,
@@ -2358,6 +2445,7 @@ module.exports = {
   resolveTargetLaneForBarracksSend,
   buildRouteSegments,
   initializeMovingUnitRouteState,
+  getBarracksSiteCombatTarget,
   getLaneTownCoreCombatTarget,
   getUnitStopDistance,
   LANE_COMMAND_STATES,
@@ -2366,6 +2454,7 @@ module.exports = {
   createBarracksSiteSnapshot,
   createBarracksRosterSnapshot,
   createHeroRosterSnapshot,
+  attackFortressPad,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,
   BARRACKS_SITE_DEFS,

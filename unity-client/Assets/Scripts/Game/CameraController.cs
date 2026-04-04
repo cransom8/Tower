@@ -6,7 +6,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 
 /// <summary>
-/// Orthographic gameplay camera with pan, zoom, and tilt controls.
+/// Gameplay camera with orthographic or perspective projection, pan, zoom, and tilt controls.
 ///
 /// Desktop:
 ///   Scroll wheel = zoom
@@ -32,7 +32,9 @@ public class CameraController : MonoBehaviour
 
     [Header("Zoom")]
     public float OrthoSizeMin = 4f;
-    public float OrthoSizeMax = 120f;
+    public float OrthoSizeMax = 1000f;
+    public float PerspectiveFovMin = 1f;
+    public float PerspectiveFovMax = 170f;
     public float ZoomSpeed = 4f;
     public float PinchSpeed = 0.02f;
     public float ZoomSmoothing = 8f;
@@ -59,7 +61,7 @@ public class CameraController : MonoBehaviour
     Vector3 _targetPos;
     Quaternion _targetRotation;
     Vector3 _targetFocus;
-    float _targetOrtho;
+    float _targetZoom;
     float _targetTilt;
     float _targetYaw;
     float _cameraHeight = 20f;
@@ -73,15 +75,28 @@ public class CameraController : MonoBehaviour
     const float LmbDragThreshold = 12f;
 
     Vector3 _defaultFocus;
-    float _defaultOrtho;
+    float _defaultZoom;
     float _defaultTilt;
     float _defaultYaw;
     bool _applyingSavedPreferences;
 
     public static bool IsLmbPanning { get; private set; }
-    public float CurrentZoom => _targetOrtho;
+    public float CurrentZoom => _targetZoom;
     public float CurrentTilt => _targetTilt;
-    public float CurrentRotation => Mathf.DeltaAngle(0f, _targetYaw);
+    public float CurrentRotation => NormalizeRotationDegrees(_targetYaw);
+    public float ZoomMin => IsPerspectiveProjection ? PerspectiveFovMin : OrthoSizeMin;
+    public float ZoomMax => IsPerspectiveProjection ? PerspectiveFovMax : OrthoSizeMax;
+
+    bool IsPerspectiveProjection => MainCam != null && !MainCam.orthographic;
+
+    static float NormalizeRotationDegrees(float yawDegrees)
+    {
+        float normalized = Mathf.Repeat(yawDegrees, 360f);
+        if (Mathf.Approximately(normalized, 0f) && yawDegrees > 0.001f)
+            return 360f;
+
+        return normalized;
+    }
 
     void OnEnable()
     {
@@ -106,6 +121,7 @@ public class CameraController : MonoBehaviour
 
         ConfigureBoundsFromGrid();
         SyncCameraStateFromTransform(true);
+        ApplySavedPreferences(UserPreferencesManager.CurrentPreferences.camera);
         StartCoroutine(ApplySavedPreferencesNextFrame());
     }
 
@@ -144,6 +160,39 @@ public class CameraController : MonoBehaviour
             return;
 
         FocusPlaneY = BattlefieldSpaceMapper.TileToWorld(0, 0f, 0f).y;
+    }
+
+    float ClampZoom(float zoomValue)
+    {
+        return Mathf.Clamp(zoomValue, ZoomMin, ZoomMax);
+    }
+
+    float GetCurrentCameraZoomValue()
+    {
+        if (MainCam == null)
+            return OrthoSizeMin;
+
+        return IsPerspectiveProjection ? MainCam.fieldOfView : MainCam.orthographicSize;
+    }
+
+    void ApplyZoomImmediate(float zoomValue)
+    {
+        if (MainCam == null)
+            return;
+
+        if (IsPerspectiveProjection)
+            MainCam.fieldOfView = zoomValue;
+        else
+            MainCam.orthographicSize = zoomValue;
+    }
+
+    float GetKeyboardPanScale()
+    {
+        if (!IsPerspectiveProjection)
+            return Mathf.Max(0.25f, _targetZoom / 10f);
+
+        float normalized = Mathf.InverseLerp(PerspectiveFovMin, PerspectiveFovMax, _targetZoom);
+        return Mathf.Lerp(0.75f, 1.5f, normalized);
     }
 
     void ScrollZoom()
@@ -219,7 +268,7 @@ public class CameraController : MonoBehaviour
         {
             Vector3 right = Vector3.ProjectOnPlane(MainCam.transform.right, Vector3.up).normalized;
             Vector3 upOnGround = Quaternion.Euler(0f, _targetYaw, 0f) * Vector3.forward;
-            float speed = KeyPanSpeed * (MainCam.orthographicSize / 10f) * Time.deltaTime;
+            float speed = KeyPanSpeed * GetKeyboardPanScale() * Time.deltaTime;
             TranslateFocus((right * h + upOnGround * v) * speed);
         }
 
@@ -291,7 +340,7 @@ public class CameraController : MonoBehaviour
 
         ClampZoomToBounds();
 
-        if (TryGetAllowedFocusRange(_targetOrtho, out var minFocus, out var maxFocus))
+        if (TryGetAllowedFocusRange(_targetZoom, out var minFocus, out var maxFocus))
         {
             _targetFocus.x = Mathf.Clamp(_targetFocus.x, minFocus.x, maxFocus.x);
             _targetFocus.z = Mathf.Clamp(_targetFocus.z, minFocus.y, maxFocus.y);
@@ -307,7 +356,10 @@ public class CameraController : MonoBehaviour
         float dt = Time.deltaTime;
         CameraTarget.position = Vector3.Lerp(CameraTarget.position, _targetPos, PanSmoothing * dt);
         CameraTarget.rotation = Quaternion.Slerp(CameraTarget.rotation, _targetRotation, TiltSmoothing * dt);
-        MainCam.orthographicSize = Mathf.Lerp(MainCam.orthographicSize, _targetOrtho, ZoomSmoothing * dt);
+        if (IsPerspectiveProjection)
+            MainCam.fieldOfView = Mathf.Lerp(MainCam.fieldOfView, _targetZoom, ZoomSmoothing * dt);
+        else
+            MainCam.orthographicSize = Mathf.Lerp(MainCam.orthographicSize, _targetZoom, ZoomSmoothing * dt);
     }
 
     bool TryScreenToGround(Vector2 screenPos, out Vector3 worldPoint)
@@ -331,7 +383,7 @@ public class CameraController : MonoBehaviour
 
     void SyncCameraStateFromTransform(bool captureDefaults)
     {
-        _targetOrtho = Mathf.Clamp(MainCam.orthographicSize, OrthoSizeMin, OrthoSizeMax);
+        _targetZoom = ClampZoom(GetCurrentCameraZoomValue());
 
         if (TryScreenToGround(new Vector2(Screen.width * 0.5f, Screen.height * 0.5f), out var focus))
             _targetFocus = new Vector3(focus.x, FocusPlaneY, focus.z);
@@ -360,7 +412,7 @@ public class CameraController : MonoBehaviour
         if (captureDefaults)
         {
             _defaultFocus = _targetFocus;
-            _defaultOrtho = _targetOrtho;
+            _defaultZoom = _targetZoom;
             _defaultTilt = _targetTilt;
             _defaultYaw = _targetYaw;
         }
@@ -376,7 +428,7 @@ public class CameraController : MonoBehaviour
     public void ResetView()
     {
         _targetFocus = _defaultFocus;
-        _targetOrtho = _defaultOrtho;
+        _targetZoom = _defaultZoom;
         _targetTilt = _defaultTilt;
         _targetYaw = _defaultYaw;
         ClampZoomToBounds();
@@ -421,7 +473,7 @@ public class CameraController : MonoBehaviour
 
     public void SetZoom(float zoomSize)
     {
-        _targetOrtho = Mathf.Clamp(zoomSize, OrthoSizeMin, OrthoSizeMax);
+        _targetZoom = ClampZoom(zoomSize);
         ClampZoomToBounds();
         ClampTargetFocus();
         UpdateTargetPose();
@@ -437,14 +489,14 @@ public class CameraController : MonoBehaviour
     {
         if (!TryScreenToGround(focusScreenPoint, out var worldBefore))
         {
-            SetZoom(_targetOrtho + delta);
+            SetZoom(_targetZoom + delta);
             return;
         }
 
-        float previousOrtho = MainCam.orthographicSize;
-        _targetOrtho = Mathf.Clamp(_targetOrtho + delta, OrthoSizeMin, OrthoSizeMax);
+        float previousZoom = GetCurrentCameraZoomValue();
+        _targetZoom = ClampZoom(_targetZoom + delta);
         ClampZoomToBounds();
-        MainCam.orthographicSize = _targetOrtho;
+        ApplyZoomImmediate(_targetZoom);
 
         if (TryScreenToGround(focusScreenPoint, out var worldAfter))
         {
@@ -452,7 +504,7 @@ public class CameraController : MonoBehaviour
             ClampTargetFocus();
         }
 
-        MainCam.orthographicSize = previousOrtho;
+        ApplyZoomImmediate(previousZoom);
         UpdateTargetPose();
         ReportPreferenceChange();
     }
@@ -472,7 +524,32 @@ public class CameraController : MonoBehaviour
         SyncCameraStateFromTransform(true);
         CameraTarget.position = _targetPos;
         CameraTarget.rotation = _targetRotation;
-        MainCam.orthographicSize = _targetOrtho;
+        ApplyZoomImmediate(_targetZoom);
+    }
+
+    public void ApplyGameplayPreset(float zoomValue, float tiltDegrees)
+    {
+        if (!EnsureCameraReferences())
+            return;
+
+        if (EnableBoundsClamp)
+            ConfigureBoundsFromGrid();
+
+        SyncCameraStateFromTransform(false);
+        _targetZoom = ClampZoom(zoomValue);
+        _targetTilt = Mathf.Clamp(tiltDegrees, TiltMin, TiltMax);
+        ClampZoomToBounds();
+        ClampTargetFocus();
+        UpdateTargetPose();
+
+        CameraTarget.position = _targetPos;
+        CameraTarget.rotation = _targetRotation;
+        ApplyZoomImmediate(_targetZoom);
+
+        _defaultFocus = _targetFocus;
+        _defaultZoom = _targetZoom;
+        _defaultTilt = _targetTilt;
+        _defaultYaw = _targetYaw;
     }
 
     IEnumerator ApplySavedPreferencesNextFrame()
@@ -488,7 +565,7 @@ public class CameraController : MonoBehaviour
 
     public void ApplySavedPreferences(UserCameraPreferences preferences)
     {
-        if (preferences == null || !EnsureCameraReferences())
+        if (!EnsureCameraReferences())
             return;
 
         _applyingSavedPreferences = true;
@@ -496,25 +573,31 @@ public class CameraController : MonoBehaviour
         {
             bool changed = false;
 
-            if (preferences.tilt.HasValue)
+            if (preferences?.tilt.HasValue == true)
             {
                 _targetTilt = Mathf.Clamp(preferences.tilt.Value, TiltMin, TiltMax);
                 _defaultTilt = _targetTilt;
                 changed = true;
             }
 
-            if (preferences.zoom.HasValue)
+            float resolvedZoom = ClampZoom(UserCameraPreferences.ResolveZoom(preferences?.zoom));
+            if (!Mathf.Approximately(_targetZoom, resolvedZoom) || !Mathf.Approximately(_defaultZoom, resolvedZoom))
             {
-                _targetOrtho = Mathf.Clamp(preferences.zoom.Value, OrthoSizeMin, OrthoSizeMax);
-                _defaultOrtho = _targetOrtho;
+                _targetZoom = resolvedZoom;
+                _defaultZoom = _targetZoom;
                 changed = true;
             }
 
-            if (preferences.rotation.HasValue)
+            if (preferences?.rotation.HasValue == true)
             {
-                _targetYaw = preferences.rotation.Value;
-                _defaultYaw = _targetYaw;
-                changed = true;
+                float resolvedRotation = NormalizeRotationDegrees(preferences.rotation.Value);
+                if (!Mathf.Approximately(NormalizeRotationDegrees(_targetYaw), resolvedRotation) ||
+                    !Mathf.Approximately(NormalizeRotationDegrees(_defaultYaw), resolvedRotation))
+                {
+                    _targetYaw = resolvedRotation;
+                    _defaultYaw = _targetYaw;
+                    changed = true;
+                }
             }
 
             if (!changed)
@@ -525,7 +608,7 @@ public class CameraController : MonoBehaviour
             UpdateTargetPose();
             CameraTarget.position = _targetPos;
             CameraTarget.rotation = _targetRotation;
-            MainCam.orthographicSize = _targetOrtho;
+            ApplyZoomImmediate(_targetZoom);
         }
         finally
         {
@@ -639,39 +722,15 @@ public class CameraController : MonoBehaviour
 
     void ClampZoomToBounds()
     {
-        if (!EnableBoundsClamp)
-            return;
-
-        _targetOrtho = Mathf.Clamp(_targetOrtho, OrthoSizeMin, OrthoSizeMax);
-        if (TryGetAllowedFocusRange(_targetOrtho, out _, out _))
-            return;
-
-        float low = OrthoSizeMin;
-        float high = _targetOrtho;
-        if (!TryGetAllowedFocusRange(low, out _, out _))
-        {
-            _targetOrtho = low;
-            return;
-        }
-
-        for (int i = 0; i < 14; i++)
-        {
-            float mid = (low + high) * 0.5f;
-            if (TryGetAllowedFocusRange(mid, out _, out _))
-                low = mid;
-            else
-                high = mid;
-        }
-
-        _targetOrtho = low;
+        _targetZoom = ClampZoom(_targetZoom);
     }
 
-    bool TryGetAllowedFocusRange(float orthoSize, out Vector2 minFocus, out Vector2 maxFocus)
+    bool TryGetAllowedFocusRange(float zoomValue, out Vector2 minFocus, out Vector2 maxFocus)
     {
         minFocus = new Vector2(BoundsMin.x, BoundsMin.y);
         maxFocus = new Vector2(BoundsMax.x, BoundsMax.y);
 
-        if (!TryGetVisibleGroundDeltas(orthoSize, out var deltas))
+        if (!TryGetVisibleGroundDeltas(zoomValue, out var deltas))
             return false;
 
         float minAllowedX = float.NegativeInfinity;
@@ -696,10 +755,10 @@ public class CameraController : MonoBehaviour
         return true;
     }
 
-    bool TryGetVisibleGroundDeltas(float orthoSize, out Vector3[] deltas)
+    bool TryGetVisibleGroundDeltas(float zoomValue, out Vector3[] deltas)
     {
         deltas = null;
-        if (orthoSize <= 0f)
+        if (zoomValue <= 0f || MainCam == null)
             return false;
 
         float aspect = MainCam != null && MainCam.pixelHeight > 0
@@ -711,25 +770,56 @@ public class CameraController : MonoBehaviour
         if (Mathf.Abs(cameraForward.y) < FocusPlaneResolveEpsilon)
             return false;
 
-        float halfHeight = orthoSize;
-        float halfWidth = orthoSize * aspect;
-        Vector3 cameraRight = cameraRotation * Vector3.right;
-        Vector3 cameraUp = cameraRotation * Vector3.up;
-
         deltas = new Vector3[4];
         int index = 0;
+
+        if (!IsPerspectiveProjection)
+        {
+            float halfHeight = zoomValue;
+            float halfWidth = zoomValue * aspect;
+            Vector3 cameraRight = cameraRotation * Vector3.right;
+            Vector3 cameraUp = cameraRotation * Vector3.up;
+
+            for (int sx = -1; sx <= 1; sx += 2)
+            {
+                for (int sy = -1; sy <= 1; sy += 2)
+                {
+                    Vector3 rayOrigin = cameraPos
+                        + (cameraRight * (sx * halfWidth))
+                        + (cameraUp * (sy * halfHeight));
+                    float distance = (FocusPlaneY - rayOrigin.y) / cameraForward.y;
+                    if (distance < 0f)
+                        return false;
+
+                    Vector3 groundPoint = rayOrigin + (cameraForward * distance);
+                    deltas[index++] = new Vector3(
+                        groundPoint.x - _targetFocus.x,
+                        0f,
+                        groundPoint.z - _targetFocus.z);
+                }
+            }
+
+            return true;
+        }
+
+        float halfVerticalFovTangent = Mathf.Tan(Mathf.Clamp(zoomValue, PerspectiveFovMin, PerspectiveFovMax) * 0.5f * Mathf.Deg2Rad);
         for (int sx = -1; sx <= 1; sx += 2)
         {
             for (int sy = -1; sy <= 1; sy += 2)
             {
-                Vector3 rayOrigin = cameraPos
-                    + (cameraRight * (sx * halfWidth))
-                    + (cameraUp * (sy * halfHeight));
-                float distance = (FocusPlaneY - rayOrigin.y) / cameraForward.y;
+                Vector3 rayDirectionCamera = new Vector3(
+                    sx * halfVerticalFovTangent * aspect,
+                    sy * halfVerticalFovTangent,
+                    1f).normalized;
+                Vector3 rayDirectionWorld = cameraRotation * rayDirectionCamera;
+                if (Mathf.Abs(rayDirectionWorld.y) < FocusPlaneResolveEpsilon)
+                    return false;
+
+                float distance = (FocusPlaneY - cameraPos.y) / rayDirectionWorld.y;
                 if (distance < 0f)
                     return false;
 
-                Vector3 groundPoint = rayOrigin + (cameraForward * distance);
+                Vector3 groundPoint = cameraPos + (rayDirectionWorld * distance);
                 deltas[index++] = new Vector3(
                     groundPoint.x - _targetFocus.x,
                     0f,

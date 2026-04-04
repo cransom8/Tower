@@ -27,8 +27,7 @@ namespace CastleDefender.UI
     public enum RaceProgressionLaneCategory
     {
         None,
-        BaseTower,
-        ArcherTower,
+        Turret,
     }
 
     public enum RaceProgressionUnitCardStyle
@@ -353,15 +352,14 @@ namespace CastleDefender.UI
             const string buildingBlacksmithLane = "buildings_blacksmith";
             const string buildingTempleLane = "buildings_temple";
             const string buildingWizardLane = "buildings_wizard_tower";
-            const string buildingArcheryLane = "buildings_archery_tower";
+            const string buildingArcheryLane = "buildings_archery";
             const string buildingStableLane = "buildings_stable";
             const string buildingWorkshopLane = "buildings_workshop";
             const string buildingLibraryLane = "buildings_library";
             const string buildingMarketLane = "buildings_market";
             const string buildingLumberMillLane = "buildings_lumber_mill";
             const string buildingWallsLane = "buildings_walls";
-            const string buildingBaseTowerLane = "buildings_base_towers";
-            const string buildingArcherTowerLane = "buildings_archer_towers";
+            const string buildingTurretLane = "buildings_turrets";
             const string siegeTier1Lane = "siege_tier1";
             const string siegeTier2Lane = "siege_tier2";
             const string abilityTier1Lane = "abilities_tier1";
@@ -369,9 +367,9 @@ namespace CastleDefender.UI
             const string abilityTier3Lane = "abilities_tier3";
             const string abilitySupportLane = "abilities_support";
 
-            var civicT2 = Requirement("town_core", "Civic", 2, "town_core_pad");
-            var civicT3 = Requirement("town_core", "Civic", 3, "town_core_pad");
-            var civicT4 = Requirement("town_core", "Civic", 4, "town_core_pad");
+            var civicT2 = Requirement("town_core", "Town Core", 2, "town_core_pad");
+            var civicT3 = Requirement("town_core", "Town Core", 3, "town_core_pad");
+            var civicT4 = Requirement("town_core", "Town Core", 4, "town_core_pad");
             var castleHeroUnlock = Requirement("town_core", "Castle", 4, "town_core_pad");
             var barracksT1 = Requirement("barracks", "Barracks", 1, "barracks_pad");
             var blacksmithT1 = Requirement("blacksmith", "Blacksmith", 1, "blacksmith_pad");
@@ -380,12 +378,12 @@ namespace CastleDefender.UI
             var templeT1 = Requirement("temple", "Temple", 1, "temple_pad");
             var templeT2 = Requirement("temple", "Temple", 2, "temple_pad");
             var templeT3 = Requirement("temple", "Temple", 3, "temple_pad");
-            var wizardT1 = Requirement("wizard_tower", "Wizard Tower", 1, "wizard_tower_pad");
-            var wizardT2 = Requirement("wizard_tower", "Wizard Tower", 2, "wizard_tower_pad");
-            var wizardT3 = Requirement("wizard_tower", "Wizard Tower", 3, "wizard_tower_pad");
-            var archeryT1 = Requirement("archery_tower", "Archery Tower", 1, "archery_tower_pad");
-            var archeryT2 = Requirement("archery_tower", "Archery Tower", 2, "archery_tower_pad");
-            var archeryT3 = Requirement("archery_tower", "Archery Tower", 3, "archery_tower_pad");
+            var wizardT1 = Requirement("wizard_tower", "Mage Tower", 1, "wizard_tower_pad");
+            var wizardT2 = Requirement("wizard_tower", "Mage Tower", 2, "wizard_tower_pad");
+            var wizardT3 = Requirement("wizard_tower", "Mage Tower", 3, "wizard_tower_pad");
+            var archeryT1 = Requirement("archery_tower", "Archery", 1, "archery_tower_pad");
+            var archeryT2 = Requirement("archery_tower", "Archery", 2, "archery_tower_pad");
+            var archeryT3 = Requirement("archery_tower", "Archery", 3, "archery_tower_pad");
             var marketT1 = Requirement("market", "Market", 1, null);
             var marketT2 = Requirement("market", "Market", 2, null);
             var marketT3 = Requirement("market", "Market", 3, null);
@@ -407,9 +405,6 @@ namespace CastleDefender.UI
             var turretT1Requirement = Requirement("turret", "Turret", 1, null);
             var turretT2Requirement = Requirement("turret", "Turret", 2, null);
             var turretT3Requirement = Requirement("turret", "Turret", 3, null);
-            var archerTowerT1Requirement = Requirement("tower_archer", "Archer Tower", 1, null);
-            var archerTowerT2Requirement = Requirement("tower_archer", "Archer Tower", 2, null);
-
             const int placeholderBuildingTier1Cost = 60;
             const int placeholderBuildingTier2Cost = 100;
             const int placeholderBuildingTier3Cost = 150;
@@ -425,19 +420,11 @@ namespace CastleDefender.UI
             const int placeholderTurret1Cost = 40;
             const int placeholderTurret2Cost = 80;
             const int placeholderTurret3Cost = 140;
-            const int placeholderArcherTower1Cost = 180;
-            const int placeholderArcherTower2Cost = 260;
-            const int placeholderArcherTower3Cost = 380;
             const string feetAuraVisualNote = "Visual indicator: a slight colored circle around the unit's feet only. No full-body glow.";
 
             const string baseTowerDescription =
-                "Requires Lumber Mill before construction. Towers are empty structures by default. " +
-                "After the Archery Tower building is unlocked, this tower can purchase an Archer to man the tower. " +
-                "Archers are purchased per tower and are assigned to the selected tower only.";
-            const string archerTowerDescription =
-                "Requires Turret Tier 3 before construction. Towers are empty structures by default. " +
-                "After the Archery Tower building is unlocked, this tower can purchase an Archer to man the tower. " +
-                "Archers are purchased per tower and are assigned to the selected tower only.";
+                "Walls own the early shared defense path. As that path advances, defensive hardpoints become Turrets. " +
+                "Turrets are defensive structures, separate from the Archery building that unlocks Archer units.";
 
             static string GeneratedBuildingArt(string cardId)
             {
@@ -617,11 +604,11 @@ namespace CastleDefender.UI
                 "Humans",
                 featuredPortraitKey: "tt_king",
                 featuredTitle: "King",
-                summary: "Human progression is building-based. Civic advances House to Castle for hero access, Barracks unlocks Militia, Blacksmith upgrades unlock the melee branches, Archery Tower tiers unlock the ranged branch, Lumber Mill gates the Base Tower row, Turret Tier 3 opens the Archer Tower row, Temple and Wizard Tower unlock support and arcane branches, and Market tiers upgrade the live economy runner from Peasant to Settler to Trader.",
+                summary: "Human progression is Town Core-driven. Town Core advances House to Castle for hero access and building control, Barracks buy Militia and all unlocked troops, Blacksmith upgrades unlock the melee branches, Archery tiers unlock the ranged branch, Walls own the shared defense path that later becomes Turrets, Mage Tower and Temple unlock arcane and support branches, and Market tiers upgrade the live economy runner from Peasant to Settler to Trader.",
                 matchLoadoutKeys: new[] { "tt_peasant", "tt_spearman", "tt_archer", "tt_priest", "tt_light_infantry" },
                 new RaceProgressionLaneDefinition(
                     civicLane,
-                    "Civic",
+                    "Town Core",
                     RaceProgressionLaneLayout.BuildingStepsToOutcomeCards,
                     new[]
                     {
@@ -670,11 +657,11 @@ namespace CastleDefender.UI
                         "tt_king",
                         startsUnlocked: true,
                         unlockRequirement: null,
-                        description: "Opening civic tier. The city starts here and grows upward toward Castle.",
+                        description: "Opening Town Core tier. Town Core starts built, and Center Barracks is the first 100g Town Core purchase before the city grows upward toward Castle.",
                         nextUnitId: "town_hall",
-                        statsSummary: "Civic Tier 1",
+                        statsSummary: "Town Core Tier 1",
                         cardStyle: RaceProgressionUnitCardStyle.UpgradeStep,
-                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Civic Tier 1", "2:00", 0, GeneratedBuildingArt("building_house"))),
+                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Town Core Tier 1", "2:00", 0, GeneratedBuildingArt("building_house"))),
                     new RaceProgressionUnitDefinition(
                         "town_hall",
                         civicLane,
@@ -683,11 +670,11 @@ namespace CastleDefender.UI
                         "tt_paladin",
                         startsUnlocked: false,
                         unlockRequirement: civicT2,
-                        description: "Second civic tier. Pushes the city closer to Keep and Castle.",
+                        description: "Second Town Core tier. Unlocks Tier 1 buildings, the second Barracks, and Center Barracks Tier 2.",
                         nextUnitId: "keep",
-                        statsSummary: "Civic Tier 2",
+                        statsSummary: "Town Core Tier 2",
                         cardStyle: RaceProgressionUnitCardStyle.UpgradeStep,
-                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Civic Tier 2", "2:30", 70, GeneratedBuildingArt("building_town_hall"))),
+                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Town Core Tier 2", "2:30", 70, GeneratedBuildingArt("building_town_hall"))),
                     new RaceProgressionUnitDefinition(
                         "keep",
                         civicLane,
@@ -696,11 +683,11 @@ namespace CastleDefender.UI
                         "tt_commander",
                         startsUnlocked: false,
                         unlockRequirement: civicT3,
-                        description: "Third civic tier. One more upgrade reaches Castle and hero access.",
+                        description: "Third Town Core tier. Unlocks Tier 2 building upgrades, the third Barracks, and broader Barracks upgrades.",
                         nextUnitId: "castle",
-                        statsSummary: "Civic Tier 3",
+                        statsSummary: "Town Core Tier 3",
                         cardStyle: RaceProgressionUnitCardStyle.UpgradeStep,
-                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Civic Tier 3", "3:00", 110, GeneratedBuildingArt("building_keep"))),
+                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Town Core Tier 3", "3:00", 110, GeneratedBuildingArt("building_keep"))),
                     new RaceProgressionUnitDefinition(
                         "castle",
                         civicLane,
@@ -709,10 +696,10 @@ namespace CastleDefender.UI
                         "tt_king",
                         startsUnlocked: false,
                         unlockRequirement: civicT4,
-                        description: "Final civic tier. Reaching Castle unlocks King, Paladin, and Bishop summons in the Barracks.",
-                        statsSummary: "Civic Tier 4",
+                        description: "Final Town Core tier. Reaching Castle unlocks King, Paladin, and Bishop summons in the Barracks.",
+                        statsSummary: "Town Core Tier 4",
                         cardStyle: RaceProgressionUnitCardStyle.UpgradeStep,
-                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Civic Tier 4", "3:30", 165, GeneratedBuildingArt("building_castle")))
+                        cardDisplay: new RaceProgressionCardDisplayDefinition("town_core", "Town Core Tier 4", "3:30", 165, GeneratedBuildingArt("building_castle")))
                 ),
                 new RaceProgressionLaneDefinition(
                     blacksmithInfantryLane,
@@ -753,9 +740,9 @@ namespace CastleDefender.UI
                     RequirementStepCard(
                         "archery_tier1_gate",
                         archeryLane,
-                        "Archery Tower",
+                        "Archery",
                         archeryT1,
-                        "Archery Tower Tier 1 gate for the archery line. Building it unlocks Archer.",
+                        "Archery Tier 1 gate for the archery line. Building it unlocks Archer.",
                         nextUnitId: "archer"),
                     new RaceProgressionUnitDefinition(
                         "archer",
@@ -765,7 +752,7 @@ namespace CastleDefender.UI
                         "tt_archer",
                         startsUnlocked: false,
                         unlockRequirement: archeryT1,
-                        description: "Archery Tower Tier 1 ranged unit. Baseline ranged pressure once the tower is built.",
+                        description: "Archery Tier 1 ranged unit. Baseline ranged pressure once the building is built.",
                         nextUnitId: "crossbowman",
                         suppressInlineRequirementCard: true),
                     new RaceProgressionUnitDefinition(
@@ -776,7 +763,7 @@ namespace CastleDefender.UI
                         "tt_crossbowman",
                         startsUnlocked: false,
                         unlockRequirement: archeryT2,
-                        description: "Archery Tower Tier 2 ranged unit. Heavier shots and stronger back-line threat.",
+                        description: "Archery Tier 2 ranged unit. Heavier shots and stronger back-line threat.",
                         nextUnitId: "ranger"),
                     new RaceProgressionUnitDefinition(
                         "ranger",
@@ -786,7 +773,7 @@ namespace CastleDefender.UI
                         "tt_mounted_scout",
                         startsUnlocked: false,
                         unlockRequirement: archeryT3,
-                        description: "Archery Tower Tier 3 ranged unit. Late-game skirmisher for the ranged branch.")
+                        description: "Archery Tier 3 ranged unit. Late-game skirmisher for the ranged branch.")
                 ),
                 new RaceProgressionLaneDefinition(
                     blacksmithPolearmLane,
@@ -913,13 +900,13 @@ namespace CastleDefender.UI
                 ),
                 new RaceProgressionLaneDefinition(
                     wizardLane,
-                    "Wizard Tower",
+                    "Mage Tower",
                     RequirementStepCard(
                         "wizard_tier1_gate",
                         wizardLane,
-                        "Wizard Tower",
+                        "Mage Tower",
                         wizardT1,
-                        "Wizard Tower Tier 1 gate for the arcane line. Building it unlocks Mage.",
+                        "Mage Tower Tier 1 gate for the arcane line. Building it unlocks Mage.",
                         nextUnitId: "mage"),
                     new RaceProgressionUnitDefinition(
                         "mage",
@@ -929,7 +916,7 @@ namespace CastleDefender.UI
                         "tt_mage",
                         startsUnlocked: false,
                         unlockRequirement: wizardT1,
-                        description: "Wizard Tower Tier 1 arcane unit. The first ranged spellcaster.",
+                        description: "Mage Tower Tier 1 arcane unit. The first ranged spellcaster.",
                         nextUnitId: "wizard",
                         suppressInlineRequirementCard: true),
                     new RaceProgressionUnitDefinition(
@@ -940,7 +927,7 @@ namespace CastleDefender.UI
                         "tt_mounted_mage",
                         startsUnlocked: false,
                         unlockRequirement: wizardT2,
-                        description: "Wizard Tower Tier 2 arcane unit. Stronger spell output and presence.",
+                        description: "Mage Tower Tier 2 arcane unit. Stronger spell output and presence.",
                         nextUnitId: "thaumaturge"),
                     new RaceProgressionUnitDefinition(
                         "thaumaturge",
@@ -950,7 +937,7 @@ namespace CastleDefender.UI
                         "tt_mounted_king",
                         startsUnlocked: false,
                         unlockRequirement: wizardT3,
-                        description: "Wizard Tower Tier 3 arcane unit. The final human caster upgrade.")
+                        description: "Mage Tower Tier 3 arcane unit. The final human caster upgrade.")
                 ),
                 new RaceProgressionLaneDefinition(
                     marketLane,
@@ -1052,7 +1039,7 @@ namespace CastleDefender.UI
                 ),
                 new RaceProgressionLaneDefinition(
                     buildingCivicLane,
-                    "Civic",
+                    "Town Core",
                     RaceProgressionLaneLayout.Linear,
                     null,
                     RaceProgressionLaneSection.Buildings,
@@ -1064,7 +1051,7 @@ namespace CastleDefender.UI
                         buildingCivicLane,
                         "House",
                         "town_core",
-                        "Civic Tier 1",
+                        "Town Core Tier 1",
                         "2:00",
                         0,
                         startsUnlocked: true,
@@ -1076,7 +1063,7 @@ namespace CastleDefender.UI
                         buildingCivicLane,
                         "Town Hall",
                         "town_core",
-                        "Civic Tier 2",
+                        "Town Core Tier 2",
                         "2:30",
                         70,
                         startsUnlocked: false,
@@ -1088,7 +1075,7 @@ namespace CastleDefender.UI
                         buildingCivicLane,
                         "Keep",
                         "town_core",
-                        "Civic Tier 3",
+                        "Town Core Tier 3",
                         "3:00",
                         110,
                         startsUnlocked: false,
@@ -1100,7 +1087,7 @@ namespace CastleDefender.UI
                         buildingCivicLane,
                         "Castle",
                         "town_core",
-                        "Civic Tier 4",
+                        "Town Core Tier 4",
                         "3:30",
                         165,
                         startsUnlocked: false,
@@ -1110,8 +1097,8 @@ namespace CastleDefender.UI
                 StandardBuildingLane(buildingBarracksLane, "Barracks", "barracks", 100, 100, 220),
                 StandardBuildingLane(buildingBlacksmithLane, "Blacksmith", "blacksmith", 60, 95, 145),
                 StandardBuildingLane(buildingTempleLane, "Temple", "temple", 70, 105, 160),
-                StandardBuildingLane(buildingWizardLane, "Wizard Tower", "wizard_tower", 75, 115, 170),
-                StandardBuildingLane(buildingArcheryLane, "Archery Tower", "archery_tower", 50, 85, 130),
+                StandardBuildingLane(buildingWizardLane, "Mage Tower", "wizard_tower", 75, 115, 170),
+                StandardBuildingLane(buildingArcheryLane, "Archery", "archery_tower", 50, 85, 130),
                 TownCoreGatedBuildingLane(
                     buildingStableLane,
                     "Stable",
@@ -1193,20 +1180,20 @@ namespace CastleDefender.UI
                         description: "Wall 3 represents the reinforced final wall tier and requires Lumber Mill Tier 3.")
                 ),
                 new RaceProgressionLaneDefinition(
-                    buildingBaseTowerLane,
-                    "Base Towers",
+                    buildingTurretLane,
+                    "Turrets",
                     RaceProgressionLaneLayout.Linear,
                     null,
                     RaceProgressionLaneSection.Buildings,
                     RaceProgressionTab.Buildings,
                     true,
-                    "Lumber Mill -> Turret Tier 1 -> Turret Tier 2 -> Turret Tier 3",
-                    RaceProgressionLaneCategory.BaseTower,
+                    "Walls -> Turret Tier 1 -> Turret Tier 2 -> Turret Tier 3",
+                    RaceProgressionLaneCategory.Turret,
                     true,
                     false,
                     BuildingCard(
                         "turret_tier_1",
-                        buildingBaseTowerLane,
+                        buildingTurretLane,
                         "Turret Tier 1",
                         "turret",
                         "Tier 1",
@@ -1218,7 +1205,7 @@ namespace CastleDefender.UI
                         nextUnitId: "turret_tier_2"),
                     BuildingCard(
                         "turret_tier_2",
-                        buildingBaseTowerLane,
+                        buildingTurretLane,
                         "Turret Tier 2",
                         "turret",
                         "Tier 2",
@@ -1230,7 +1217,7 @@ namespace CastleDefender.UI
                         nextUnitId: "turret_tier_3"),
                     BuildingCard(
                         "turret_tier_3",
-                        buildingBaseTowerLane,
+                        buildingTurretLane,
                         "Turret Tier 3",
                         "turret",
                         "Tier 3",
@@ -1238,56 +1225,7 @@ namespace CastleDefender.UI
                         placeholderTurret3Cost,
                         startsUnlocked: false,
                         unlockRequirement: turretT2Requirement,
-                        description: baseTowerDescription,
-                        nextUnitId: "archer_tower_tier_1")
-                ),
-                new RaceProgressionLaneDefinition(
-                    buildingArcherTowerLane,
-                    "Archer Towers",
-                    RaceProgressionLaneLayout.Linear,
-                    null,
-                    RaceProgressionLaneSection.Buildings,
-                    RaceProgressionTab.Buildings,
-                    true,
-                    "Turret Tier 3 -> Archer Tower Tier 1 -> Archer Tower Tier 2 -> Archer Tower Tier 3",
-                    RaceProgressionLaneCategory.ArcherTower,
-                    false,
-                    true,
-                    BuildingCard(
-                        "archer_tower_tier_1",
-                        buildingArcherTowerLane,
-                        "Archer Tower Tier 1",
-                        "tower_archer",
-                        "Tier 1",
-                        "80s",
-                        placeholderArcherTower1Cost,
-                        startsUnlocked: false,
-                        unlockRequirement: turretT3Requirement,
-                        description: archerTowerDescription,
-                        nextUnitId: "archer_tower_tier_2"),
-                    BuildingCard(
-                        "archer_tower_tier_2",
-                        buildingArcherTowerLane,
-                        "Archer Tower Tier 2",
-                        "tower_archer",
-                        "Tier 2",
-                        "160s",
-                        placeholderArcherTower2Cost,
-                        startsUnlocked: false,
-                        unlockRequirement: archerTowerT1Requirement,
-                        description: archerTowerDescription,
-                        nextUnitId: "archer_tower_tier_3"),
-                    BuildingCard(
-                        "archer_tower_tier_3",
-                        buildingArcherTowerLane,
-                        "Archer Tower Tier 3",
-                        "tower_archer",
-                        "Tier 3",
-                        "320s",
-                        placeholderArcherTower3Cost,
-                        startsUnlocked: false,
-                        unlockRequirement: archerTowerT2Requirement,
-                        description: archerTowerDescription)
+                        description: baseTowerDescription)
                 ),
                 new RaceProgressionLaneDefinition(
                     siegeTier1Lane,

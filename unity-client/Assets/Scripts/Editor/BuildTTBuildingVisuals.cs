@@ -221,7 +221,7 @@ namespace CastleDefender.Editor
                 {
                     key = "tower_archer",
                     buildingType = "tower_archer",
-                    displayName = "Archer Towers",
+                    displayName = "Turrets",
                     mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
                     constructionStageModelPaths = ResolveConstructionStageModelPaths("tower_archer"),
                     portraitYaw = 150f,
@@ -232,9 +232,9 @@ namespace CastleDefender.Editor
                     portraitLookAtHeightBias = -0.01f,
                     tiers = new[]
                     {
-                        new TierSpec { label = "Archer Tower 1", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_A, accentStyle = AccentStyle.None, cardId = "archer_tower_tier_1" },
-                        new TierSpec { label = "Archer Tower 2", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_B, accentStyle = AccentStyle.ArcherTier2, cardId = "archer_tower_tier_2" },
-                        new TierSpec { label = "Archer Tower 3", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_C, accentStyle = AccentStyle.ArcherTier3, cardId = "archer_tower_tier_3" },
+                        new TierSpec { label = "Turret 1", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_A, accentStyle = AccentStyle.None, cardId = "archer_tower_tier_1" },
+                        new TierSpec { label = "Turret 2", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_B, accentStyle = AccentStyle.ArcherTier2, cardId = "archer_tower_tier_2" },
+                        new TierSpec { label = "Turret 3", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_C, accentStyle = AccentStyle.ArcherTier3, cardId = "archer_tower_tier_3" },
                     },
                 },
             };

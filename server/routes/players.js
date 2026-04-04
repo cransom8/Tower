@@ -10,6 +10,7 @@ const {
 } = require('../lib/playerPreferences');
 
 const VALID_REGIONS = new Set(['global', 'na', 'eu', 'asia']);
+const RANKED_QUEUE_CASUAL_REQUIREMENT = 5;
 
 // GET /players/me — authenticated player's own profile + ranked rating
 router.get('/me', requireAuth, async (req, res) => {
@@ -17,17 +18,29 @@ router.get('/me', requireAuth, async (req, res) => {
     const result = await db.query(
       `SELECT p.id, p.display_name, p.region, p.status, p.created_at,
               p.preferences_json,
-              r.mu, r.sigma, r.rating, r.wins, r.losses, r.updated_at AS rating_updated_at
+              r.mu, r.sigma, r.rating, r.wins, r.losses, r.updated_at AS rating_updated_at,
+              COALESCE(casual.wins + casual.losses, 0) AS ranked_unlock_casual_matches_completed
        FROM players p
        LEFT JOIN ratings r ON r.player_id = p.id AND r.mode = '2v2_ranked'
+       LEFT JOIN ratings casual ON casual.player_id = p.id AND casual.mode = 'ffa_casual'
        WHERE p.id = $1`,
       [req.player.sub]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Player not found' });
-    const { preferences_json, ...player } = result.rows[0];
+    const {
+      preferences_json,
+      ranked_unlock_casual_matches_completed,
+      ...player
+    } = result.rows[0];
+    const completedCasualMatches = Number(ranked_unlock_casual_matches_completed) || 0;
     res.json({
       ...player,
       preferences: normalizePlayerPreferences(preferences_json),
+      queue_progression: {
+        ranked_casual_matches_completed: completedCasualMatches,
+        ranked_casual_matches_required: RANKED_QUEUE_CASUAL_REQUIREMENT,
+        ranked_queue_unlocked: completedCasualMatches >= RANKED_QUEUE_CASUAL_REQUIREMENT,
+      },
     });
   } catch (err) {
     log.error('[players] GET /me:', { err: err.message });

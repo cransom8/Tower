@@ -42,7 +42,13 @@ namespace CastleDefender.Game
 
         [Header("Camera Preset")]
         public bool ForceCameraPreset = true;
+        public bool UsePerspectiveCamera = true;
         public float CameraOrthoSize = 9.2f;
+        public float PerspectiveFieldOfView = 28f;
+        public float PerspectiveTilt = 52f;
+        [Min(1f)]
+        [Tooltip("Multiplier applied to the startup camera height in perspective mode so the first entry shows more of the fortress.")]
+        public float PerspectiveEntryHeightMultiplier = 3f;
 
         [Header("Battlefield Camera (Phase 3)")]
         [Tooltip("World position of the camera for the full-battlefield view.")]
@@ -405,8 +411,11 @@ namespace CastleDefender.Game
             var cam = FindCameraInScene();
             if (cam == null) return;
 
-            cam.orthographic     = true;
-            cam.orthographicSize = CameraOrthoSize;
+            cam.orthographic = !UsePerspectiveCamera;
+            if (UsePerspectiveCamera)
+                cam.fieldOfView = PerspectiveFieldOfView;
+            else
+                cam.orthographicSize = CameraOrthoSize;
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = BattlefieldBackgroundColor;
 
@@ -433,11 +442,30 @@ namespace CastleDefender.Game
                     { int bc = BattlefieldSpaceMapper.GetBranchConfigIndex(ls.branchId); if (bc >= 0) { branchCfg = bc; break; } }
             }
 
-            if (TryGetFortressLaneCameraFrame(cam, laneIndex, out var fortressFocus, out var fortressScreenUp, out var fortressOrthoSize))
+            if (TryGetFortressLaneCameraFrame(
+                cam,
+                laneIndex,
+                out _,
+                out var fortressScreenUp,
+                out var fortressOrthoSize,
+                out var townCoreFocus))
             {
-                cam.orthographicSize = fortressOrthoSize;
-                cam.transform.position = fortressFocus + Vector3.up * Mathf.Max(CameraHeight, 11f);
-                cam.transform.LookAt(fortressFocus, fortressScreenUp);
+                var cameraPreferences = UserPreferencesManager.CurrentPreferenceView.camera;
+                float startupZoom = UserCameraPreferences.ResolveZoom(cameraPreferences?.zoom);
+                float startupTilt = cameraPreferences?.tilt ?? (UsePerspectiveCamera ? PerspectiveTilt : 0f);
+                Vector3 startupScreenUp = ResolveStartupScreenUp(
+                    fortressScreenUp,
+                    cameraPreferences?.rotation);
+
+                if (!UsePerspectiveCamera)
+                    cam.orthographicSize = fortressOrthoSize;
+
+                Vector3 startupFocus = townCoreFocus;
+                float startupHeight = UsePerspectiveCamera
+                    ? GetPerspectiveEntryCameraHeight()
+                    : Mathf.Max(CameraHeight, 11f);
+                cam.transform.position = startupFocus + Vector3.up * startupHeight;
+                cam.transform.LookAt(startupFocus, startupScreenUp);
 
                 var fortressCtrl = FindFirstObjectByType<global::CameraController>();
                 if (fortressCtrl == null)
@@ -448,22 +476,29 @@ namespace CastleDefender.Game
                     fortressCtrl.CameraTarget = cam.transform;
 
                 fortressCtrl.EnableBoundsClamp = true;
-                fortressCtrl.SnapToCurrentPosition();
+                fortressCtrl.ApplyGameplayPreset(startupZoom, startupTilt);
                 return;
             }
 
             Vector3 castlePos  = BattlefieldSpaceMapper.TileToWorld(branchCfg, 5, BattlefieldSpaceMapper.LaneRows - 1);
-            Vector3 spawnPos   = BattlefieldSpaceMapper.TileToWorld(branchCfg, 5, 0);
-            Vector3 laneCenter = (castlePos + spawnPos) * 0.5f;
-            Vector3 camPos     = laneCenter + Vector3.up * CameraHeight;
+            var fallbackCameraPreferences = UserPreferencesManager.CurrentPreferenceView.camera;
+            float fallbackZoom = UserCameraPreferences.ResolveZoom(fallbackCameraPreferences?.zoom);
+            float fallbackTilt = fallbackCameraPreferences?.tilt ?? (UsePerspectiveCamera ? PerspectiveTilt : 0f);
+            Vector3 startupFallbackFocus = castlePos;
+            float startupFallbackHeight = UsePerspectiveCamera
+                ? GetPerspectiveEntryCameraHeight()
+                : CameraHeight;
+            Vector3 camPos = startupFallbackFocus + Vector3.up * startupFallbackHeight;
 
             cam.transform.position = camPos;
 
             // Orient so spawn (row 0) appears at the TOP of the screen.
             // rowDir points spawn→castle, so negating it gives the screen-up direction.
-            Vector3 screenUp = -BattlefieldSpaceMapper.GetLaneForwardDir(branchCfg);
+            Vector3 screenUp = ResolveStartupScreenUp(
+                -BattlefieldSpaceMapper.GetLaneForwardDir(branchCfg),
+                fallbackCameraPreferences?.rotation);
             if (screenUp.sqrMagnitude < 0.001f) screenUp = Vector3.back;
-            cam.transform.LookAt(laneCenter, screenUp);
+            cam.transform.LookAt(startupFallbackFocus, screenUp);
 
             var ctrl = FindFirstObjectByType<global::CameraController>();
             if (ctrl == null)
@@ -474,15 +509,29 @@ namespace CastleDefender.Game
                 ctrl.CameraTarget = cam.transform;
 
             ctrl.EnableBoundsClamp = true;
-            // Sync the controller so pan/zoom starts from exactly this position.
-            ctrl.SnapToCurrentPosition();
+            ctrl.ApplyGameplayPreset(fallbackZoom, fallbackTilt);
         }
 
-        bool TryGetFortressLaneCameraFrame(Camera cam, int laneIndex, out Vector3 focusWorld, out Vector3 screenUp, out float orthoSize)
+        float GetPerspectiveEntryCameraHeight()
+        {
+            float multiplier = PerspectiveEntryHeightMultiplier > 0f
+                ? PerspectiveEntryHeightMultiplier
+                : 3f;
+            return Mathf.Max(CameraHeight, 11f) * multiplier;
+        }
+
+        bool TryGetFortressLaneCameraFrame(
+            Camera cam,
+            int laneIndex,
+            out Vector3 focusWorld,
+            out Vector3 screenUp,
+            out float orthoSize,
+            out Vector3 townCoreFocusWorld)
         {
             focusWorld = Vector3.zero;
             screenUp = Vector3.forward;
             orthoSize = CameraOrthoSize;
+            townCoreFocusWorld = Vector3.zero;
 
             string slotColor = ResolveLaneSlotColor(laneIndex);
             if (FortressPadAnchor.CollectAnchors(s_cameraAnchors, slotColor, laneIndex) <= 0)
@@ -559,7 +608,7 @@ namespace CastleDefender.Game
                         : laneBounds.center - townCoreAnchor.FocusTransform.position;
                 outward.y = 0f;
                 if (outward.sqrMagnitude > 0.001f)
-                    screenUp = outward.normalized;
+                    screenUp = SnapHorizontalDirectionToDominantAxis(outward);
             }
 
             if (screenUp.sqrMagnitude < 0.001f)
@@ -592,7 +641,38 @@ namespace CastleDefender.Game
 
             float gameplaySurfaceY = BattlefieldSpaceMapper.TileToWorld(laneIndex, 0f, 0f).y;
             focusWorld = new Vector3(focusWorld.x, gameplaySurfaceY, focusWorld.z);
+            townCoreFocusWorld = townCoreAnchor != null
+                ? new Vector3(
+                    townCoreAnchor.FocusTransform.position.x,
+                    gameplaySurfaceY,
+                    townCoreAnchor.FocusTransform.position.z)
+                : focusWorld;
             return true;
+        }
+
+        static Vector3 ResolveStartupScreenUp(Vector3 fallbackScreenUp, float? savedRotation)
+        {
+            if (savedRotation.HasValue)
+            {
+                Vector3 savedScreenUp = Quaternion.Euler(0f, savedRotation.Value, 0f) * Vector3.forward;
+                savedScreenUp.y = 0f;
+                if (savedScreenUp.sqrMagnitude > 0.001f)
+                    return savedScreenUp.normalized;
+            }
+
+            return SnapHorizontalDirectionToDominantAxis(fallbackScreenUp);
+        }
+
+        static Vector3 SnapHorizontalDirectionToDominantAxis(Vector3 direction)
+        {
+            direction.y = 0f;
+            if (direction.sqrMagnitude <= 0.001f)
+                return Vector3.forward;
+
+            if (Mathf.Abs(direction.x) >= Mathf.Abs(direction.z))
+                return direction.x >= 0f ? Vector3.right : Vector3.left;
+
+            return direction.z >= 0f ? Vector3.forward : Vector3.back;
         }
 
         static bool IsPriorityFortressCameraAnchor(FortressPadAnchor anchor)

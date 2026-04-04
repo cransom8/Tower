@@ -123,6 +123,53 @@ function finishPadConstruction(game, laneIndex, padId) {
   });
 }
 
+function upgradeTownCoreToTier(game, laneIndex, targetTier) {
+  let lane = laneSnapshot(game, laneIndex);
+  let townCore = findPad(lane, "town_core_pad");
+  assert.ok(townCore, "expected the Town Core pad to exist");
+
+  while ((townCore && townCore.tier) < targetTier) {
+    act(game, laneIndex, "upgrade_building", { padId: "town_core_pad" });
+    finishPadConstruction(game, laneIndex, "town_core_pad");
+    lane = laneSnapshot(game, laneIndex);
+    townCore = findPad(lane, "town_core_pad");
+  }
+}
+
+function upgradeBarracksSiteToLevel(game, laneIndex, barracksId, targetLevel) {
+  let site = findBarracksSite(laneSnapshot(game, laneIndex), barracksId);
+  assert.ok(site, `expected barracks '${barracksId}' to exist`);
+
+  if (!(site && site.isBuilt) && targetLevel > 0) {
+    act(game, laneIndex, "build_barracks_site", { barracksId });
+    finishBarracksConstruction(game, laneIndex, barracksId);
+    site = findBarracksSite(laneSnapshot(game, laneIndex), barracksId);
+  }
+
+  while ((site && site.level) < targetLevel) {
+    act(game, laneIndex, "upgrade_barracks_site", { barracksId });
+    finishBarracksConstruction(game, laneIndex, barracksId);
+    site = findBarracksSite(laneSnapshot(game, laneIndex), barracksId);
+  }
+}
+
+function upgradePadToTier(game, laneIndex, padId, targetTier) {
+  let pad = findPad(laneSnapshot(game, laneIndex), padId);
+  assert.ok(pad, `expected pad '${padId}' to exist`);
+
+  if ((pad && pad.tier) <= 0 && targetTier > 0) {
+    act(game, laneIndex, "build_on_pad", { padId });
+    finishPadConstruction(game, laneIndex, padId);
+    pad = findPad(laneSnapshot(game, laneIndex), padId);
+  }
+
+  while ((pad && pad.tier) < targetTier) {
+    act(game, laneIndex, "upgrade_building", { padId });
+    finishPadConstruction(game, laneIndex, padId);
+    pad = findPad(laneSnapshot(game, laneIndex), padId);
+  }
+}
+
 function collectLaneUnits(game, laneIndex, predicate) {
   const lane = game.lanes[laneIndex];
   if (!lane)
@@ -140,6 +187,14 @@ function collectLaneUnits(game, laneIndex, predicate) {
   return matches;
 }
 
+function collectGameUnits(game, predicate) {
+  const matches = [];
+  for (let laneIndex = 0; laneIndex < (game && Array.isArray(game.lanes) ? game.lanes.length : 0); laneIndex += 1) {
+    matches.push(...collectLaneUnits(game, laneIndex, predicate));
+  }
+  return matches;
+}
+
 function act(game, laneIndex, type, data) {
   const result = simMl.applyMLAction(game, laneIndex, { type, data });
   assert.equal(result.ok, true, result.reason || `Expected '${type}' to succeed`);
@@ -153,14 +208,20 @@ test("default games do not seed combat-test militia into live spawn queues", () 
   assert.equal(game.lanes[1].spawnQueue.length, 0);
 });
 
-test("militia stays unavailable until a barracks is built", () => {
+test("House starts with Town Core only, and Center Barracks must be purchased through Town Core", () => {
   const game = createGame();
-  const lane = laneSnapshot(game, 0);
+  let lane = laneSnapshot(game, 0);
+  let centerBarracks = findBarracksSite(lane, "center");
   const leftBarracks = findBarracksSite(lane, "left");
-  const militia = findRosterEntry(leftBarracks && leftBarracks.roster, "militia");
+  let militia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
 
+  assert.ok(centerBarracks, "expected the center barracks site to exist");
+  assert.equal(centerBarracks.isBuilt, false);
+  assert.equal(centerBarracks.canBuild, true);
+  assert.equal(centerBarracks.buildCost, 100);
   assert.ok(leftBarracks, "expected the left barracks site to exist");
   assert.equal(leftBarracks.isBuilt, false);
+  assert.equal(leftBarracks.canBuild, false);
   assert.equal(militia && militia.unlocked, false);
   assert.equal(militia && militia.archetypeKey, "infantry_t1");
   assert.equal(militia && militia.presentationKey, "human_default");
@@ -168,21 +229,122 @@ test("militia stays unavailable until a barracks is built", () => {
 
   const buyResult = simMl.applyMLAction(game, 0, {
     type: "buy_barracks_unit",
-    data: { barracksId: "left", rosterKey: "militia" },
+    data: { barracksId: "center", rosterKey: "militia" },
   });
 
   assert.equal(buyResult.ok, false);
-  assert.match(buyResult.reason, /Buy Building first/i);
+  assert.match(buyResult.reason, /Town Core/i);
+
+  act(game, 0, "build_barracks_site", { barracksId: "center" });
+  lane = laneSnapshot(game, 0);
+  centerBarracks = findBarracksSite(lane, "center");
+  assert.equal(centerBarracks && centerBarracks.isConstructing, true);
+
+  finishBarracksConstruction(game, 0, "center");
+
+  lane = laneSnapshot(game, 0);
+  centerBarracks = findBarracksSite(lane, "center");
+  militia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
+  assert.equal(centerBarracks && centerBarracks.isBuilt, true);
+  assert.equal(militia && militia.unlocked, true);
+  assert.equal(militia && militia.availableForPurchase, true);
 });
 
-test("combat test militia can be seeded before the center barracks is built", () => {
+test("center barracks purchase requires 100 gold and deducts it exactly once", () => {
+  const poorGame = createGame(99);
+  const poorLaneGold = poorGame.lanes[0].gold;
+  const poorResult = simMl.applyMLAction(poorGame, 0, {
+    type: "build_barracks_site",
+    data: { barracksId: "center" },
+  });
+
+  assert.equal(poorResult.ok, false);
+  assert.match(String(poorResult.reason || ""), /Not enough gold/i);
+  assert.equal(poorGame.lanes[0].gold, poorLaneGold);
+  assert.equal(findBarracksSite(laneSnapshot(poorGame, 0), "center")?.isBuilt, false);
+  assert.equal(findBarracksSite(laneSnapshot(poorGame, 0), "center")?.isConstructing, false);
+
+  const game = createGame(140);
+  const goldBefore = game.lanes[0].gold;
+  act(game, 0, "build_barracks_site", { barracksId: "center" });
+  assert.equal(game.lanes[0].gold, goldBefore - 100);
+
+  const siteDuringConstruction = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.equal(siteDuringConstruction && siteDuringConstruction.isBuilt, false);
+  assert.equal(siteDuringConstruction && siteDuringConstruction.isConstructing, true);
+
+  finishBarracksConstruction(game, 0, "center");
+  assert.equal(game.lanes[0].gold, goldBefore - 100);
+});
+
+test("empty built barracks stay built and scheduled cycles no-op when no roster units are owned", () => {
+  const game = createGame();
+  game.lanes[0].barracksSiteStates.center = {
+    barracksId: "center",
+    isBuilt: true,
+    level: 1,
+    hp: 260,
+    maxHp: 260,
+    nextSendTick: 120,
+    costHistory: [],
+    constructionKind: null,
+    constructionTargetLevel: 0,
+    constructionEndTick: 0,
+    constructionTotalTicks: 0,
+  };
+
+  let centerBarracks = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(centerBarracks, "expected the center barracks site to exist");
+  assert.equal(centerBarracks.isBuilt, true);
+  assert.equal(centerBarracks.isConstructing, false);
+  assert.equal(centerBarracks.canBuild, false);
+  assert.equal(game.lanes[0].barracksSiteStates.center.isBuilt, true);
+
+  simMl.mlTick(game);
+
+  centerBarracks = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(centerBarracks, "expected the center barracks site to still exist after the send cycle");
+  assert.equal(centerBarracks.isBuilt, true);
+  assert.equal(game.lanes[0].spawnQueue.length, 0);
+  assert.equal(game.lanes[0].units.length, 0);
+  assert.equal(game.lanes[0].totalSendCount, 0);
+});
+
+test("barracks site snapshot HP updates when the site takes structure damage", () => {
+  const game = createGame();
+  act(game, 0, "build_barracks_site", { barracksId: "center" });
+  finishBarracksConstruction(game, 0, "center");
+
+  const lane = game.lanes[0];
+  const target = simMl.getBarracksSiteCombatTarget(lane, "center");
+  assert.ok(target, "expected the built center barracks to expose a structure combat target");
+
+  const attacker = {
+    id: "barracks_damage_test",
+    type: "tt_spearman",
+    baseDmg: 12,
+    atkCd: 0,
+    atkCdTicks: 20,
+    attackPulse: 0,
+  };
+  const result = simMl.attackFortressPad(game, lane, attacker, target);
+  assert.equal(result.damageApplied, 12, "expected the barracks site to take structure damage");
+
+  const laneAfterDamage = laneSnapshot(game, 0);
+  const centerBarracks = findBarracksSite(laneAfterDamage, "center");
+  assert.ok(centerBarracks, "expected the center barracks snapshot to still exist after taking damage");
+  assert.equal(centerBarracks.hp, 248, "expected the barracks snapshot HP to match the damaged live site");
+  assert.equal(centerBarracks.maxHp, 260, "expected the barracks snapshot max HP to stay intact");
+});
+
+test("combat test militia keeps using the built center barracks identity", () => {
   const game = createGameWithStartingMilitia();
   const lane = laneSnapshot(game, 0);
   const centerBarracks = findBarracksSite(lane, "center");
   const centerMilitia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
 
   assert.ok(centerBarracks, "expected the center barracks site to exist");
-  assert.equal(centerBarracks.isBuilt, false);
+  assert.equal(centerBarracks.isBuilt, true);
   assert.equal(centerMilitia && centerMilitia.ownedCount, 0);
   assert.equal(game.lanes[0].spawnQueue.length, 5);
   assert.equal(game.lanes[1].spawnQueue.length, 5);
@@ -208,12 +370,13 @@ test("combat test militia can be seeded before the center barracks is built", ()
   const centerBarracksAfterTick = findBarracksSite(laneAfterTick, "center");
 
   assert.equal(activeStartingMilitia.length, 5);
-  assert.equal(centerBarracksAfterTick && centerBarracksAfterTick.isBuilt, false);
+  assert.equal(centerBarracksAfterTick && centerBarracksAfterTick.isBuilt, true);
 });
 
 test("building a barracks unlocks militia without requiring a blacksmith", () => {
   const game = createGame();
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_barracks_site", { barracksId: "left" });
 
   let lane = laneSnapshot(game, 0);
@@ -264,6 +427,7 @@ test("building a barracks unlocks militia without requiring a blacksmith", () =>
 test("blacksmith still unlocks the later melee progression after militia", () => {
   const game = createGame(900);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_barracks_site", { barracksId: "left" });
   finishBarracksConstruction(game, 0, "left");
   act(game, 0, "build_on_pad", { padId: "blacksmith_pad" });
@@ -285,6 +449,7 @@ test("blacksmith still unlocks the later melee progression after militia", () =>
   assert.equal(swordsman && swordsman.availableForPurchase, false);
   assert.match(String(swordsman && swordsman.lockedReason), /Tier 2/i);
 
+  upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "blacksmith_pad" });
   finishPadConstruction(game, 0, "blacksmith_pad");
 
@@ -301,6 +466,7 @@ test("blacksmith still unlocks the later melee progression after militia", () =>
 test("blacksmith tier upgrades convert owned and live infantry units into the current branch tier", () => {
   const game = createGameWithStartingMilitia(900, 2);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_barracks_site", { barracksId: "left" });
   finishBarracksConstruction(game, 0, "left");
   act(game, 0, "buy_barracks_unit", { barracksId: "left", rosterKey: "militia", count: 2 });
@@ -310,6 +476,7 @@ test("blacksmith tier upgrades convert owned and live infantry units into the cu
   const preUpgradeMilitia = collectLaneUnits(game, 0, (unit) => unit && unit.rosterKey === "militia");
   assert.equal(preUpgradeMilitia.length, 2);
 
+  upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "blacksmith_pad" });
   finishPadConstruction(game, 0, "blacksmith_pad");
 
@@ -327,13 +494,14 @@ test("blacksmith tier upgrades convert owned and live infantry units into the cu
   assert.equal(swordsman && swordsman.availableForPurchase, true);
   assert.equal(aggregatedMilitia && aggregatedMilitia.ownedCount, 0);
   assert.equal(aggregatedSwordsman && aggregatedSwordsman.ownedCount, 2);
-  assert.equal(liveSwordsmen.length, 2);
+  assert.equal(liveSwordsmen.length, 4);
   assert.ok(liveSwordsmen.every((unit) => unit.archetypeKey === "infantry_t2" && unit.isMarketWorker !== true));
 });
 
 test("market upgrades convert existing workers and future purchases to the current trade tier", () => {
   const game = createGame(900);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "market_pad" });
   finishPadConstruction(game, 0, "market_pad");
 
@@ -346,9 +514,10 @@ test("market upgrades convert existing workers and future purchases to the curre
   act(game, 0, "buy_market_unit", { unitKey: "peasant", count: 2 });
 
   let livePeasants = collectLaneUnits(game, 0, (unit) => unit && unit.marketUnitKey === "peasant");
-  assert.equal(livePeasants.length, 2);
-  assert.ok(livePeasants.every((unit) => unit.isMarketWorker === true && unit.spawnSourceType === "market_roster"));
+  assert.equal(livePeasants.length, 0);
+  assert.equal(laneSnapshot(game, 0).income, 8);
 
+  upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "market_pad" });
   finishPadConstruction(game, 0, "market_pad");
 
@@ -363,12 +532,13 @@ test("market upgrades convert existing workers and future purchases to the curre
   assert.equal(trader && trader.availableForPurchase, false);
 
   let liveSettlers = collectLaneUnits(game, 0, (unit) => unit && unit.marketUnitKey === "settler");
-  assert.equal(liveSettlers.length, 2);
-  assert.ok(liveSettlers.every((unit) => unit.archetypeKey === "economy_t2" && unit.isMarketWorker === true));
+  assert.equal(liveSettlers.length, 0);
+  assert.equal(lane.income, 14);
 
   act(game, 0, "buy_market_unit", { unitKey: "settler" });
   liveSettlers = collectLaneUnits(game, 0, (unit) => unit && unit.marketUnitKey === "settler");
-  assert.equal(liveSettlers.length, 3);
+  assert.equal(liveSettlers.length, 0);
+  assert.equal(laneSnapshot(game, 0).income, 21);
 
   const oldPeasantBuy = simMl.applyMLAction(game, 0, {
     type: "buy_market_unit",
@@ -378,28 +548,281 @@ test("market upgrades convert existing workers and future purchases to the curre
   assert.match(oldPeasantBuy.reason, /higher-tier market worker/i);
 });
 
-test("completed market laps award the configured gold for the worker tier", () => {
+test("market income is awarded on the shared income timer based on owned count and tier value", () => {
   const game = createGame(900);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "market_pad" });
   finishPadConstruction(game, 0, "market_pad");
-  act(game, 0, "buy_market_unit", { unitKey: "peasant" });
+  act(game, 0, "buy_market_unit", { unitKey: "peasant", count: 2 });
 
-  const peasantWorker = collectLaneUnits(game, 0, (unit) => unit && unit.marketUnitKey === "peasant")[0];
-  assert.ok(peasantWorker, "expected a live peasant worker to exist");
+  let lane = laneSnapshot(game, 0);
+  assert.equal(lane.income, 8);
 
-  const goldBeforePeasantLap = game.lanes[0].gold;
-  const peasantLapGold = barracksSystem.completeMarketWorkerLap(game, game.lanes[0], peasantWorker);
-  assert.equal(peasantLapGold, 4);
-  assert.equal(game.lanes[0].gold, goldBeforePeasantLap + 4);
+  const goldBeforePeasantTick = game.lanes[0].gold;
+  advanceUntil(game, () => game.lanes[0].gold > goldBeforePeasantTick, simMl.INCOME_INTERVAL_TICKS + 5);
+  assert.equal(game.lanes[0].gold, goldBeforePeasantTick + 8);
 
+  upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "market_pad" });
   finishPadConstruction(game, 0, "market_pad");
-  const settlerWorker = collectLaneUnits(game, 0, (unit) => unit && unit.marketUnitKey === "settler")[0];
-  assert.ok(settlerWorker, "expected the existing worker to convert into a settler");
 
-  const goldBeforeSettlerLap = game.lanes[0].gold;
-  const settlerLapGold = barracksSystem.completeMarketWorkerLap(game, game.lanes[0], settlerWorker);
-  assert.equal(settlerLapGold, 7);
-  assert.equal(game.lanes[0].gold, goldBeforeSettlerLap + 7);
+  lane = laneSnapshot(game, 0);
+  assert.equal(lane.income, 14);
+
+  const goldBeforeSettlerTick = game.lanes[0].gold;
+  advanceUntil(game, () => game.lanes[0].gold > goldBeforeSettlerTick, simMl.INCOME_INTERVAL_TICKS + 5);
+  assert.equal(game.lanes[0].gold, goldBeforeSettlerTick + 14);
+});
+
+test("barracks food limits follow barracks tier capacity and troop tier food costs", () => {
+  const cases = [
+    {
+      barracksLevel: 1,
+      townCoreTier: 1,
+      unlockPadId: null,
+      unlockTier: 0,
+      rosterKey: "militia",
+      expectedFoodCost: 1,
+      expectedFoodLimit: 20,
+      purchaseCount: 20,
+    },
+    {
+      barracksLevel: 2,
+      townCoreTier: 3,
+      unlockPadId: "blacksmith_pad",
+      unlockTier: 2,
+      rosterKey: "swordsman",
+      expectedFoodCost: 2,
+      expectedFoodLimit: 40,
+      purchaseCount: 20,
+    },
+    {
+      barracksLevel: 3,
+      townCoreTier: 4,
+      unlockPadId: "blacksmith_pad",
+      unlockTier: 3,
+      rosterKey: "knight",
+      expectedFoodCost: 3,
+      expectedFoodLimit: 60,
+      purchaseCount: 20,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const game = createGame(5000);
+    upgradeTownCoreToTier(game, 0, testCase.townCoreTier);
+    upgradeBarracksSiteToLevel(game, 0, "center", testCase.barracksLevel);
+    if (testCase.unlockPadId && testCase.unlockTier > 0)
+      upgradePadToTier(game, 0, testCase.unlockPadId, testCase.unlockTier);
+
+    let lane = laneSnapshot(game, 0);
+    let site = findBarracksSite(lane, "center");
+    let entry = findRosterEntry(site && site.roster, testCase.rosterKey);
+
+    assert.ok(entry, `expected barracks roster entry '${testCase.rosterKey}' to exist`);
+    assert.equal(site && site.foodLimit, testCase.expectedFoodLimit);
+    assert.equal(entry && entry.foodCost, testCase.expectedFoodCost);
+
+    act(game, 0, "buy_barracks_unit", {
+      barracksId: "center",
+      rosterKey: testCase.rosterKey,
+      count: testCase.purchaseCount,
+    });
+
+    lane = laneSnapshot(game, 0);
+    site = findBarracksSite(lane, "center");
+    entry = findRosterEntry(site && site.roster, testCase.rosterKey);
+
+    assert.equal(site && site.foodUsed, testCase.expectedFoodLimit);
+    assert.equal(site && site.foodRemaining, 0);
+    assert.equal(site && site.isAtFoodLimit, true);
+    assert.equal(entry && entry.ownedCount, testCase.purchaseCount);
+
+    const overflow = simMl.applyMLAction(game, 0, {
+      type: "buy_barracks_unit",
+      data: { barracksId: "center", rosterKey: testCase.rosterKey },
+    });
+
+    assert.equal(overflow.ok, false);
+    assert.match(String(overflow.reason || ""), /food/i);
+  }
+});
+
+test("market caps owned traders at 10 regardless of tier and reports timed income correctly", () => {
+  const cases = [
+    {
+      marketTier: 1,
+      townCoreTier: 2,
+      unitKey: "peasant",
+      expectedFoodCost: 1,
+      expectedFoodLimit: 10,
+      purchaseCount: 10,
+      expectedIncome: 40,
+    },
+    {
+      marketTier: 2,
+      townCoreTier: 3,
+      unitKey: "settler",
+      expectedFoodCost: 1,
+      expectedFoodLimit: 10,
+      purchaseCount: 10,
+      expectedIncome: 70,
+    },
+    {
+      marketTier: 3,
+      townCoreTier: 4,
+      unitKey: "trader",
+      expectedFoodCost: 1,
+      expectedFoodLimit: 10,
+      purchaseCount: 10,
+      expectedIncome: 100,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const game = createGame(5000);
+    upgradeTownCoreToTier(game, 0, testCase.townCoreTier);
+    upgradePadToTier(game, 0, "market_pad", testCase.marketTier);
+
+    let lane = laneSnapshot(game, 0);
+    let marketPad = findPad(lane, "market_pad");
+    let entry = findMarketEntry(lane, testCase.unitKey);
+
+    assert.ok(entry, `expected market roster entry '${testCase.unitKey}' to exist`);
+    assert.equal(marketPad && marketPad.foodLimit, testCase.expectedFoodLimit);
+    assert.equal(entry && entry.foodCost, testCase.expectedFoodCost);
+
+    act(game, 0, "buy_market_unit", {
+      unitKey: testCase.unitKey,
+      count: testCase.purchaseCount,
+    });
+
+    lane = laneSnapshot(game, 0);
+    marketPad = findPad(lane, "market_pad");
+    entry = findMarketEntry(lane, testCase.unitKey);
+
+    assert.equal(marketPad && marketPad.foodUsed, testCase.expectedFoodLimit);
+    assert.equal(marketPad && marketPad.foodRemaining, 0);
+    assert.equal(marketPad && marketPad.isAtFoodLimit, true);
+    assert.equal(entry && entry.ownedCount, testCase.purchaseCount);
+    assert.equal(lane.income, testCase.expectedIncome);
+
+    const overflow = simMl.applyMLAction(game, 0, {
+      type: "buy_market_unit",
+      data: { unitKey: testCase.unitKey },
+    });
+
+    assert.equal(overflow.ok, false);
+    assert.match(String(overflow.reason || ""), /(slot|cap)/i);
+  }
+});
+
+test("barracks food limit also caps how much of one barracks can stay active on its target lane", () => {
+  const game = createGame(5000);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  act(game, 0, "buy_barracks_unit", {
+    barracksId: "center",
+    rosterKey: "militia",
+    count: 20,
+  });
+
+  const sourceLane = game.lanes[0];
+  const targetLaneIndex = simMl.resolveTargetLaneForBarracksSend(game, 0, "center");
+  assert.ok(Number.isInteger(targetLaneIndex) && targetLaneIndex >= 0, "expected a valid barracks target lane");
+  const siteState = sourceLane.barracksSiteStates.center;
+  assert.ok(siteState, "expected live center barracks site state");
+
+  siteState.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  let activeUnits = collectLaneUnits(game, targetLaneIndex, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceBarracksId === "center"
+    && unit.sourceLaneIndex === 0
+  );
+  assert.equal(activeUnits.length, 20);
+
+  siteState.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  activeUnits = collectLaneUnits(game, targetLaneIndex, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceBarracksId === "center"
+    && unit.sourceLaneIndex === 0
+  );
+  assert.equal(activeUnits.length, 20);
+});
+
+test("barracks snapshots keep independent command states per site", () => {
+  const game = createGame(5000);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  upgradeTownCoreToTier(game, 0, 2);
+  upgradeBarracksSiteToLevel(game, 0, "left", 1);
+
+  act(game, 0, "set_barracks_attack", { barracksId: "center" });
+  act(game, 0, "set_barracks_retreat", { barracksId: "left" });
+
+  const lane = laneSnapshot(game, 0);
+  const centerBarracks = findBarracksSite(lane, "center");
+  const leftBarracks = findBarracksSite(lane, "left");
+  const rightBarracks = findBarracksSite(lane, "right");
+
+  assert.equal(centerBarracks && centerBarracks.commandState, "ATTACK");
+  assert.equal(leftBarracks && leftBarracks.commandState, "RETREAT");
+  assert.equal(rightBarracks && rightBarracks.commandState, "DEFEND");
+});
+
+test("barracks command actions only retask units from the targeted barracks", () => {
+  const game = createGame(5000);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  upgradeTownCoreToTier(game, 0, 2);
+  upgradeBarracksSiteToLevel(game, 0, "left", 1);
+
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 1 });
+  act(game, 0, "buy_barracks_unit", { barracksId: "left", rosterKey: "militia", count: 1 });
+
+  game.lanes[0].barracksSiteStates.center.nextSendTick = game.tick;
+  game.lanes[0].barracksSiteStates.left.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  let centerUnit = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "center"
+  )[0];
+  let leftUnit = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "left"
+  )[0];
+
+  assert.ok(centerUnit, "expected the center barracks to field a unit");
+  assert.ok(leftUnit, "expected the left barracks to field a unit");
+  assert.equal(centerUnit.commandState, "DEFEND");
+  assert.equal(leftUnit.commandState, "DEFEND");
+  assert.equal(centerUnit.targetLaneIndex, 0);
+  assert.equal(leftUnit.targetLaneIndex, 0);
+
+  act(game, 0, "set_barracks_attack", { barracksId: "center" });
+
+  centerUnit = collectGameUnits(game, (unit) => unit && unit.id === centerUnit.id)[0];
+  leftUnit = collectGameUnits(game, (unit) => unit && unit.id === leftUnit.id)[0];
+  assert.equal(centerUnit && centerUnit.commandState, "ATTACK");
+  assert.equal(centerUnit && centerUnit.targetLaneIndex, 1);
+  assert.equal(leftUnit && leftUnit.commandState, "DEFEND");
+  assert.equal(leftUnit && leftUnit.targetLaneIndex, 0);
+
+  act(game, 0, "set_barracks_retreat", { barracksId: "left" });
+
+  centerUnit = collectGameUnits(game, (unit) => unit && unit.id === centerUnit.id)[0];
+  leftUnit = collectGameUnits(game, (unit) => unit && unit.id === leftUnit.id)[0];
+  assert.equal(centerUnit && centerUnit.commandState, "ATTACK");
+  assert.equal(centerUnit && centerUnit.targetLaneIndex, 1);
+  assert.equal(leftUnit && leftUnit.commandState, "RETREAT");
+  assert.equal(leftUnit && leftUnit.targetLaneIndex, 0);
 });

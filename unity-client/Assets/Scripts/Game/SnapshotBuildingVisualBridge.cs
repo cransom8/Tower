@@ -10,8 +10,6 @@ namespace CastleDefender.Game
     [DisallowMultipleComponent]
     public sealed class SnapshotBuildingVisualBridge : MonoBehaviour
     {
-        const string LockedBuildingHologramResourcePath = "LockedBuildingHologram";
-
         struct CachedRendererState
         {
             public Material[] materials;
@@ -27,9 +25,6 @@ namespace CastleDefender.Game
         [Header("Legacy Visuals")]
         [SerializeField] Renderer[] legacyRenderers = Array.Empty<Renderer>();
 
-        static Material s_lockedBuildingHologramMaterial;
-        static bool s_attemptedLockedBuildingMaterialLoad;
-
         readonly Dictionary<Renderer, CachedRendererState> _generatedRendererStates = new();
 
         FortressPadAnchor _fortressPad;
@@ -37,7 +32,8 @@ namespace CastleDefender.Game
         TieredBuildingVisual _tieredVisual;
         BuildingLifecycleVisual _lifecycleVisual;
         Renderer[] _generatedRenderers = Array.Empty<Renderer>();
-        MaterialPropertyBlock _hologramPropertyBlock;
+        MaterialPropertyBlock _rendererPropertyBlock;
+        SnapshotApplier _boundSnapshotApplier;
         bool _subscribed;
         string _lastVisualFailureSignature;
 
@@ -63,6 +59,18 @@ namespace CastleDefender.Game
                 return;
 
             UnsubscribeSnapshots();
+        }
+
+        void Update()
+        {
+            if (!Application.isPlaying)
+                return;
+
+            if (_boundSnapshotApplier != SnapshotApplier.Instance)
+            {
+                SubscribeSnapshots();
+                RefreshFromSnapshot();
+            }
         }
 
         public void ConfigureForEditor(
@@ -97,25 +105,31 @@ namespace CastleDefender.Game
 
         void SubscribeSnapshots()
         {
-            if (_subscribed)
+            var snapshotApplier = SnapshotApplier.Instance;
+            if (_boundSnapshotApplier == snapshotApplier && _subscribed)
                 return;
 
-            var snapshotApplier = SnapshotApplier.Instance;
+            if (_boundSnapshotApplier != null)
+                _boundSnapshotApplier.OnMLSnapshotApplied -= HandleSnapshotApplied;
+
+            _boundSnapshotApplier = snapshotApplier;
+            _subscribed = false;
             if (snapshotApplier == null)
                 return;
 
             snapshotApplier.OnMLSnapshotApplied += HandleSnapshotApplied;
             _subscribed = true;
+
+            if (snapshotApplier.LatestML != null)
+                RefreshFromSnapshot();
         }
 
         void UnsubscribeSnapshots()
         {
-            if (!_subscribed)
-                return;
+            if (_boundSnapshotApplier != null)
+                _boundSnapshotApplier.OnMLSnapshotApplied -= HandleSnapshotApplied;
 
-            var snapshotApplier = SnapshotApplier.Instance;
-            if (snapshotApplier != null)
-                snapshotApplier.OnMLSnapshotApplied -= HandleSnapshotApplied;
+            _boundSnapshotApplier = null;
             _subscribed = false;
         }
 
@@ -289,8 +303,6 @@ namespace CastleDefender.Game
                 return;
             }
 
-            _tieredVisual.gameObject.SetActive(true);
-
             if (!RestoreGeneratedRendererStates())
             {
                 ReportVisualFailure("missing_renderer_state", "Generated building visuals could not restore their renderer state.");
@@ -298,6 +310,18 @@ namespace CastleDefender.Game
                 return;
             }
 
+            bool showWorldVisual = built || constructing;
+            if (!showWorldVisual)
+            {
+                _tieredVisual.gameObject.SetActive(false);
+                _lifecycleVisual?.HideAllPresentation();
+                SetLegacyRenderersVisible(false);
+                SetInteractionEnabled(false);
+                ClearVisualFailure();
+                return;
+            }
+
+            _tieredVisual.gameObject.SetActive(true);
             _tieredVisual.ApplyTier(tier);
             destroyed = destroyed && built;
             if (destroyed)
@@ -317,70 +341,9 @@ namespace CastleDefender.Game
                     destroyed);
             }
 
-            if (!built && !constructing)
-            {
-                if (!ApplyLockedHologram())
-                {
-                    HideBrokenVisuals();
-                    return;
-                }
-            }
-
             SetLegacyRenderersVisible(false);
             SetInteractionEnabled(true);
             ClearVisualFailure();
-        }
-
-        bool ApplyLockedHologram()
-        {
-            Material lockedMaterial = ResolveLockedBuildingHologramMaterial();
-            if (lockedMaterial == null)
-            {
-                ReportVisualFailure(
-                    "missing_locked_material",
-                    $"Locked building hologram material '{LockedBuildingHologramResourcePath}' could not be loaded or its shader is unsupported.");
-                return false;
-            }
-
-            if (_generatedRenderers == null || _generatedRenderers.Length == 0)
-            {
-                ReportVisualFailure("missing_renderers", "Generated building visual has no renderers available for locked hologram rendering.");
-                return false;
-            }
-
-            ResolveLockedPalette(out Color baseColor, out Color edgeColor, out Color scanColor);
-            _hologramPropertyBlock ??= new MaterialPropertyBlock();
-
-            for (int i = 0; i < _generatedRenderers.Length; i++)
-            {
-                var renderer = _generatedRenderers[i];
-                if (renderer == null)
-                    continue;
-
-                if (!_generatedRendererStates.TryGetValue(renderer, out var cachedState)
-                    || cachedState.materials == null
-                    || cachedState.materials.Length == 0)
-                {
-                    continue;
-                }
-
-                var replacement = new Material[cachedState.materials.Length];
-                for (int materialIndex = 0; materialIndex < replacement.Length; materialIndex++)
-                    replacement[materialIndex] = lockedMaterial;
-
-                renderer.sharedMaterials = replacement;
-                renderer.shadowCastingMode = ShadowCastingMode.Off;
-                renderer.receiveShadows = false;
-
-                renderer.GetPropertyBlock(_hologramPropertyBlock);
-                _hologramPropertyBlock.Clear();
-                _hologramPropertyBlock.SetColor("_BaseColor", baseColor);
-                _hologramPropertyBlock.SetColor("_EdgeColor", edgeColor);
-                _hologramPropertyBlock.SetColor("_ScanColor", scanColor);
-                renderer.SetPropertyBlock(_hologramPropertyBlock);
-            }
-
-            return true;
         }
 
         void CacheGeneratedRendererStates(GameObject root)
@@ -416,7 +379,7 @@ namespace CastleDefender.Game
             if (_generatedRenderers == null || _generatedRenderers.Length == 0)
                 return false;
 
-            _hologramPropertyBlock ??= new MaterialPropertyBlock();
+            _rendererPropertyBlock ??= new MaterialPropertyBlock();
 
             for (int i = 0; i < _generatedRenderers.Length; i++)
             {
@@ -430,58 +393,11 @@ namespace CastleDefender.Game
                 renderer.sharedMaterials = cachedState.materials ?? Array.Empty<Material>();
                 renderer.shadowCastingMode = cachedState.shadowCastingMode;
                 renderer.receiveShadows = cachedState.receiveShadows;
-                _hologramPropertyBlock.Clear();
-                renderer.SetPropertyBlock(_hologramPropertyBlock);
+                _rendererPropertyBlock.Clear();
+                renderer.SetPropertyBlock(_rendererPropertyBlock);
             }
 
             return true;
-        }
-
-        static Material ResolveLockedBuildingHologramMaterial()
-        {
-            if (!s_attemptedLockedBuildingMaterialLoad)
-            {
-                s_attemptedLockedBuildingMaterialLoad = true;
-                s_lockedBuildingHologramMaterial = Resources.Load<Material>(LockedBuildingHologramResourcePath);
-            }
-
-            if (s_lockedBuildingHologramMaterial == null)
-                return null;
-
-            return s_lockedBuildingHologramMaterial.shader != null && s_lockedBuildingHologramMaterial.shader.isSupported
-                ? s_lockedBuildingHologramMaterial
-                : null;
-        }
-
-        void ResolveLockedPalette(out Color baseColor, out Color edgeColor, out Color scanColor)
-        {
-            BattleTeam team = BattleTeam.Blue;
-            if (!TryResolveTeam(out team))
-                team = BattleTeam.Blue;
-
-            switch (team)
-            {
-                case BattleTeam.Red:
-                    baseColor = new Color(1f, 0.30f, 0.40f, 0.16f);
-                    edgeColor = new Color(1f, 0.76f, 0.82f, 0.90f);
-                    break;
-                case BattleTeam.Yellow:
-                    baseColor = new Color(1f, 0.80f, 0.18f, 0.16f);
-                    edgeColor = new Color(1f, 0.95f, 0.72f, 0.90f);
-                    break;
-                case BattleTeam.Green:
-                    baseColor = new Color(0.25f, 1f, 0.68f, 0.16f);
-                    edgeColor = new Color(0.78f, 1f, 0.90f, 0.90f);
-                    break;
-                case BattleTeam.Blue:
-                default:
-                    baseColor = new Color(0.16f, 0.78f, 1f, 0.16f);
-                    edgeColor = new Color(0.78f, 0.96f, 1f, 0.92f);
-                    break;
-            }
-
-            scanColor = Color.Lerp(baseColor, Color.white, 0.55f);
-            scanColor.a = 0.65f;
         }
 
         void SetLegacyRenderersVisible(bool visible)

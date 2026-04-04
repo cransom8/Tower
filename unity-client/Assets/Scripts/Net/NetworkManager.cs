@@ -37,6 +37,7 @@ namespace CastleDefender.Net
         public string MySide       { get; set; }
         public string MyRoomCode   { get; private set; }
         public bool   IsConnected  { get; private set; }
+        public LobbySnapshot CurrentLobby { get; private set; }
 
         // ── Cross-scene loadout cache ─────────────────────────────────────────
         // Populated as soon as the per-player ml_match_config arrives, which
@@ -124,6 +125,15 @@ namespace CastleDefender.Net
         // ── Connection events ─────────────────────────────────────────────────
         public event Action<ErrorPayload> OnErrorMsg;
         public event Action<MLAllChatMessagePayload> OnAllChatMessage;
+        public event Action<FriendListEntryPayload[]> OnFriendsList;
+        public event Action<FriendPresencePayload> OnFriendOnline;
+        public event Action<FriendPresencePayload> OnFriendOffline;
+        public event Action<FriendPresencePayload> OnFriendRequest;
+        public event Action<FriendPresencePayload> OnFriendAccepted;
+        public event Action<FriendPresencePayload> OnFriendRemoved;
+        public event Action<ErrorPayload> OnFriendError;
+        public event Action<LobbyInvitePayload> OnLobbyInvite;
+        public event Action<LobbyInviteSentPayload> OnLobbyInviteSent;
         public event Action               OnConnected;
         public event Action               OnDisconnected;
 
@@ -172,6 +182,13 @@ namespace CastleDefender.Net
             Instance = this;
             DontDestroyOnLoad(gameObject);
         }
+
+        static readonly JsonSerializerSettings _respSettings = new JsonSerializerSettings
+        {
+            // Server sends null for value-type fields (e.g. "winner":null when no winner yet).
+            // Ignore nulls so int/float/bool fields keep their C# defaults instead of throwing.
+            NullValueHandling = NullValueHandling.Ignore
+        };
 
         void Start() => Connect();
 
@@ -237,6 +254,13 @@ namespace CastleDefender.Net
             JSIO_On("ml_lane_reassigned");
             JSIO_On("error_message");
             JSIO_On("ml_chat_message");
+            JSIO_On("friends_list");
+            JSIO_On("friend_online");
+            JSIO_On("friend_offline");
+            JSIO_On("friend_request");
+            JSIO_On("friend_accepted");
+            JSIO_On("friend_removed");
+            JSIO_On("friend_error");
             // Queue & Lobby (Phase U5)
             JSIO_On("queue_status");
             JSIO_On("match_found");
@@ -245,6 +269,8 @@ namespace CastleDefender.Net
             JSIO_On("lobby_update");
             JSIO_On("lobby_left");
             JSIO_On("lobby_error");
+            JSIO_On("lobby_invite");
+            JSIO_On("lobby_invite_sent");
             // Competitive (Phase U8)
             JSIO_On("rating_update");
         }
@@ -263,6 +289,7 @@ namespace CastleDefender.Net
         void OnJSIO_disconnect(string reason)
         {
             IsConnected = false;
+            CurrentLobby = null;
             Debug.Log($"[NM] Disconnected: {reason}");
             OnDisconnected?.Invoke();
         }
@@ -510,6 +537,27 @@ namespace CastleDefender.Net
                     OnAllChatMessage?.Invoke(p);
                     break;
                 }
+                case "friends_list":
+                    OnFriendsList?.Invoke(FromJson<FriendListEntryPayload[]>(json) ?? Array.Empty<FriendListEntryPayload>());
+                    break;
+                case "friend_online":
+                    OnFriendOnline?.Invoke(FromJson<FriendPresencePayload>(json));
+                    break;
+                case "friend_offline":
+                    OnFriendOffline?.Invoke(FromJson<FriendPresencePayload>(json));
+                    break;
+                case "friend_request":
+                    OnFriendRequest?.Invoke(FromJson<FriendPresencePayload>(json));
+                    break;
+                case "friend_accepted":
+                    OnFriendAccepted?.Invoke(FromJson<FriendPresencePayload>(json));
+                    break;
+                case "friend_removed":
+                    OnFriendRemoved?.Invoke(FromJson<FriendPresencePayload>(json));
+                    break;
+                case "friend_error":
+                    OnFriendError?.Invoke(FromJson<ErrorPayload>(json));
+                    break;
                 case "queue_status":
                     OnQueueStatus?.Invoke(JsonUtility.FromJson<QueueStatusPayload>(json));
                     break;
@@ -518,6 +566,7 @@ namespace CastleDefender.Net
                     var p = JsonUtility.FromJson<MatchFoundPayload>(json);
                     MyLaneIndex = p.laneIndex;
                     MyRoomCode  = p.roomCode;
+                    CurrentLobby = null;
                     Debug.Log($"[NM] match_found: {p.roomCode} lane={p.laneIndex} gameType={p.gameType}");
                     OnMatchFound?.Invoke(p);
                     break;
@@ -525,6 +574,7 @@ namespace CastleDefender.Net
                 case "lobby_created":
                 {
                     var p = JsonUtility.FromJson<LobbyCreatedPayload>(json);
+                    CurrentLobby = p?.lobby;
                     Debug.Log($"[NM] lobby_created: {p.code}");
                     OnLobbyCreated?.Invoke(p);
                     break;
@@ -532,14 +582,20 @@ namespace CastleDefender.Net
                 case "lobby_joined":
                 {
                     var p = JsonUtility.FromJson<LobbyJoinedPayload>(json);
+                    CurrentLobby = p?.lobby;
                     Debug.Log($"[NM] lobby_joined: {p.code}");
                     OnLobbyJoined?.Invoke(p);
                     break;
                 }
                 case "lobby_update":
-                    OnLobbyUpdate?.Invoke(JsonUtility.FromJson<LobbyUpdatePayload>(json));
+                {
+                    var p = JsonUtility.FromJson<LobbyUpdatePayload>(json);
+                    CurrentLobby = p?.lobby;
+                    OnLobbyUpdate?.Invoke(p);
                     break;
+                }
                 case "lobby_left":
+                    CurrentLobby = null;
                     OnLobbyLeft?.Invoke(JsonUtility.FromJson<LobbyLeftPayload>(json));
                     break;
                 case "lobby_error":
@@ -549,6 +605,12 @@ namespace CastleDefender.Net
                     OnLobbyError?.Invoke(p);
                     break;
                 }
+                case "lobby_invite":
+                    OnLobbyInvite?.Invoke(FromJson<LobbyInvitePayload>(json));
+                    break;
+                case "lobby_invite_sent":
+                    OnLobbyInviteSent?.Invoke(FromJson<LobbyInviteSentPayload>(json));
+                    break;
                 // ── Competitive (Phase U8) ────────────────────────────────────
                 case "rating_update":
                 {
@@ -618,6 +680,7 @@ namespace CastleDefender.Net
             _socket.OnDisconnected += (_, __) =>
             {
                 IsConnected = false;
+                CurrentLobby = null;
                 Debug.Log("[NM] Disconnected");
                 OnDisconnected?.Invoke();
             };
@@ -854,11 +917,49 @@ namespace CastleDefender.Net
                 OnQueueStatus?.Invoke(FromResp<QueueStatusPayload>(resp));
             });
 
+            _socket.OnUnityThread("friends_list", resp =>
+            {
+                OnFriendsList?.Invoke(FromResp<FriendListEntryPayload[]>(resp) ?? Array.Empty<FriendListEntryPayload>());
+            });
+
+            _socket.OnUnityThread("friend_online", resp =>
+            {
+                OnFriendOnline?.Invoke(FromResp<FriendPresencePayload>(resp));
+            });
+
+            _socket.OnUnityThread("friend_offline", resp =>
+            {
+                OnFriendOffline?.Invoke(FromResp<FriendPresencePayload>(resp));
+            });
+
+            _socket.OnUnityThread("friend_request", resp =>
+            {
+                OnFriendRequest?.Invoke(FromResp<FriendPresencePayload>(resp));
+            });
+
+            _socket.OnUnityThread("friend_accepted", resp =>
+            {
+                OnFriendAccepted?.Invoke(FromResp<FriendPresencePayload>(resp));
+            });
+
+            _socket.OnUnityThread("friend_removed", resp =>
+            {
+                OnFriendRemoved?.Invoke(FromResp<FriendPresencePayload>(resp));
+            });
+
+            _socket.OnUnityThread("friend_error", resp =>
+            {
+                var p = FromResp<ErrorPayload>(resp);
+                Debug.LogWarning($"[NM] friend_error: {p?.message}");
+                OnFriendError?.Invoke(p);
+            });
+
             _socket.OnUnityThread("match_found", resp =>
             {
                 var p = FromResp<MatchFoundPayload>(resp);
                 MyLaneIndex = p.laneIndex;
                 MyRoomCode  = p.roomCode;
+                CurrentLobby = null;
                 Debug.Log($"[NM] match_found: {p.roomCode} lane={p.laneIndex} gameType={p.gameType}");
                 OnMatchFound?.Invoke(p);
             });
@@ -866,6 +967,7 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("lobby_created", resp =>
             {
                 var p = FromResp<LobbyCreatedPayload>(resp);
+                CurrentLobby = p?.lobby;
                 Debug.Log($"[NM] lobby_created: {p.code}");
                 OnLobbyCreated?.Invoke(p);
             });
@@ -873,17 +975,21 @@ namespace CastleDefender.Net
             _socket.OnUnityThread("lobby_joined", resp =>
             {
                 var p = FromResp<LobbyJoinedPayload>(resp);
+                CurrentLobby = p?.lobby;
                 Debug.Log($"[NM] lobby_joined: {p.code}");
                 OnLobbyJoined?.Invoke(p);
             });
 
             _socket.OnUnityThread("lobby_update", resp =>
             {
-                OnLobbyUpdate?.Invoke(FromResp<LobbyUpdatePayload>(resp));
+                var p = FromResp<LobbyUpdatePayload>(resp);
+                CurrentLobby = p?.lobby;
+                OnLobbyUpdate?.Invoke(p);
             });
 
             _socket.OnUnityThread("lobby_left", resp =>
             {
+                CurrentLobby = null;
                 OnLobbyLeft?.Invoke(FromResp<LobbyLeftPayload>(resp));
             });
 
@@ -892,6 +998,16 @@ namespace CastleDefender.Net
                 var p = FromResp<LobbyErrorPayload>(resp);
                 Debug.LogWarning($"[NM] lobby_error: {p?.message}");
                 OnLobbyError?.Invoke(p);
+            });
+
+            _socket.OnUnityThread("lobby_invite", resp =>
+            {
+                OnLobbyInvite?.Invoke(FromResp<LobbyInvitePayload>(resp));
+            });
+
+            _socket.OnUnityThread("lobby_invite_sent", resp =>
+            {
+                OnLobbyInviteSent?.Invoke(FromResp<LobbyInviteSentPayload>(resp));
             });
 
             // ── Competitive (Phase U8) ────────────────────────────────────────
@@ -936,19 +1052,13 @@ namespace CastleDefender.Net
 
         // SocketIOUnity's GetValue<T> uses System.Text.Json which ignores public fields.
         // All GameState classes use fields, not properties, so we route through Newtonsoft.
-        static readonly JsonSerializerSettings _respSettings = new JsonSerializerSettings
-        {
-            // Server sends null for value-type fields (e.g. "winner":null when no winner yet).
-            // Ignore nulls so int/float/bool fields keep their C# defaults instead of throwing.
-            NullValueHandling = NullValueHandling.Ignore
-        };
-
         static T FromResp<T>(SocketIOClient.SocketIOResponse resp) =>
-            JsonConvert.DeserializeObject<T>(
-                resp.GetValue<System.Text.Json.JsonElement>().GetRawText(),
-                _respSettings);
+            FromJson<T>(resp.GetValue<System.Text.Json.JsonElement>().GetRawText());
 
 #endif // !UNITY_WEBGL || UNITY_EDITOR
+
+        static T FromJson<T>(string json) =>
+            JsonConvert.DeserializeObject<T>(json, _respSettings);
 
         MLMatchConfig CacheMLMatchConfig(MLMatchConfig incoming, string source)
         {
@@ -1084,6 +1194,7 @@ namespace CastleDefender.Net
             MyLaneIndex = 0;
             MySide = null;
             MyRoomCode = null;
+            CurrentLobby = null;
             LastMatchLoadout = null;
             LastMLMatchConfig = null;
             PendingLoadoutPhase = null;
@@ -1178,6 +1289,67 @@ namespace CastleDefender.Net
             }
 
             Emit("ml_chat_message", new { message = trimmed });
+        }
+
+        public void RequestFriendsList()
+        {
+            Emit("friend:list");
+        }
+
+        public void SendFriendRequest(string displayName)
+        {
+            string trimmed = displayName?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                Debug.LogWarning("[NM] Refusing to emit friend:add because the target display name was empty.");
+                return;
+            }
+
+            Emit("friend:add", new { displayName = trimmed });
+        }
+
+        public void AcceptFriendRequest(string playerId)
+        {
+            if (string.IsNullOrWhiteSpace(playerId))
+            {
+                Debug.LogWarning("[NM] Refusing to emit friend:accept because playerId was empty.");
+                return;
+            }
+
+            Emit("friend:accept", new { playerId });
+        }
+
+        public void DeclineFriendRequest(string playerId)
+        {
+            if (string.IsNullOrWhiteSpace(playerId))
+            {
+                Debug.LogWarning("[NM] Refusing to emit friend:decline because playerId was empty.");
+                return;
+            }
+
+            Emit("friend:decline", new { playerId });
+        }
+
+        public void RemoveFriend(string playerId)
+        {
+            if (string.IsNullOrWhiteSpace(playerId))
+            {
+                Debug.LogWarning("[NM] Refusing to emit friend:remove because playerId was empty.");
+                return;
+            }
+
+            Emit("friend:remove", new { playerId });
+        }
+
+        public void InviteFriendToLobby(string playerId)
+        {
+            if (string.IsNullOrWhiteSpace(playerId))
+            {
+                Debug.LogWarning("[NM] Refusing to emit lobby:invite because playerId was empty.");
+                return;
+            }
+
+            Emit("lobby:invite", new { targetPlayerId = playerId });
         }
 
         /// <summary>Emit a socket event. Pass null to emit with no payload.</summary>

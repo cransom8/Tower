@@ -516,9 +516,10 @@ router.post('/logout', async (req, res) => {
 //   1. Unity calls POST /auth/device → gets { deviceCode, userCode, expiresIn }
 //   2. Unity opens browser to /?authorize=<userCode>
 //   3. User signs in on the web and clicks "Authorize" → POST /auth/device/authorize
-//   4. Unity polls GET /auth/device/poll?code=<deviceCode> until { status:'authorized', accessToken }
+//   4. Unity polls GET /auth/device/poll?code=<deviceCode> until
+//      { status:'authorized', accessToken, refreshToken }
 
-const _deviceCodes = new Map(); // deviceCode → { userCode, accessToken, expiresAt }
+const _deviceCodes = new Map(); // deviceCode -> { userCode, accessToken, refreshToken, expiresAt }
 
 // Clean up expired codes every 5 minutes
 setInterval(() => {
@@ -531,7 +532,12 @@ router.post('/device', (req, res) => {
   const crypto     = require('crypto');
   const deviceCode = crypto.randomBytes(16).toString('hex');
   const userCode   = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 hex chars
-  _deviceCodes.set(deviceCode, { userCode, accessToken: null, expiresAt: Date.now() + 10 * 60_000 });
+  _deviceCodes.set(deviceCode, {
+    userCode,
+    accessToken: null,
+    refreshToken: null,
+    expiresAt: Date.now() + 10 * 60_000,
+  });
   res.json({ deviceCode, userCode, expiresIn: 600 });
 });
 
@@ -541,9 +547,10 @@ router.get('/device/poll', (req, res) => {
   if (!entry)                      return res.json({ status: 'expired' });
   if (Date.now() > entry.expiresAt){ _deviceCodes.delete(req.query.code); return res.json({ status: 'expired' }); }
   if (entry.accessToken) {
-    const token = entry.accessToken;
+    const accessToken = entry.accessToken;
+    const refreshToken = entry.refreshToken;
     _deviceCodes.delete(req.query.code);
-    return res.json({ status: 'authorized', accessToken: token });
+    return res.json({ status: 'authorized', accessToken, refreshToken });
   }
   res.json({ status: 'pending' });
 });
@@ -564,13 +571,16 @@ router.post('/device/authorize', requireAuth, async (req, res) => {
     return res.status(410).json({ error: 'Code expired' });
   }
 
-  // Issue a fresh access token for the signed-in player
+  // Issue a fresh access/refresh pair for the native client.
+  const playerId = req.player.sub || req.player.id;
   const accessToken = authService.signAccessToken({
-    id:           req.player.sub || req.player.id,
+    id:           playerId,
     display_name: req.player.displayName,
     region:       req.player.region,
   });
+  const refreshToken = await authService.createRefreshToken(playerId);
   data.accessToken = accessToken;
+  data.refreshToken = refreshToken;
   res.json({ ok: true });
 });
 

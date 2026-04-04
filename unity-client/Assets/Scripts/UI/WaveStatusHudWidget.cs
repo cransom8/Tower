@@ -98,6 +98,12 @@ namespace CastleDefender.UI
             ClampToParent();
         }
 
+        void OnRectTransformDimensionsChange()
+        {
+            CacheParent();
+            ClampToParent();
+        }
+
         void OnDisable()
         {
             if (toggleButton != null)
@@ -222,15 +228,30 @@ namespace CastleDefender.UI
                 return;
 
             var parentSize = _parentRect.rect.size;
+            if (parentSize.x <= 0.01f || parentSize.y <= 0.01f)
+                return;
+
             float width = widgetRect.rect.width;
             float height = widgetRect.rect.height;
-            float minX = width * widgetRect.pivot.x + 8f;
-            float maxX = parentSize.x - width * (1f - widgetRect.pivot.x) - 8f;
-            float minY = -parentSize.y + height * widgetRect.pivot.y + 8f;
-            float maxY = -(height * (1f - widgetRect.pivot.y)) - 8f;
-            float x = Mathf.Clamp(widgetRect.anchoredPosition.x, minX, maxX);
-            float y = Mathf.Clamp(widgetRect.anchoredPosition.y, minY, maxY);
-            widgetRect.anchoredPosition = new Vector2(x, y);
+            const float margin = 8f;
+
+            Vector2 parentPivot = _parentRect.pivot;
+            Vector2 anchorCenter = (widgetRect.anchorMin + widgetRect.anchorMax) * 0.5f;
+            Vector2 anchorLocal = new(
+                (anchorCenter.x - parentPivot.x) * parentSize.x,
+                (anchorCenter.y - parentPivot.y) * parentSize.y);
+
+            Vector2 minPivot = new(
+                -parentSize.x * parentPivot.x + width * widgetRect.pivot.x + margin,
+                -parentSize.y * parentPivot.y + height * widgetRect.pivot.y + margin);
+            Vector2 maxPivot = new(
+                parentSize.x * (1f - parentPivot.x) - width * (1f - widgetRect.pivot.x) - margin,
+                parentSize.y * (1f - parentPivot.y) - height * (1f - widgetRect.pivot.y) - margin);
+
+            Vector2 pivotLocal = anchorLocal + widgetRect.anchoredPosition;
+            pivotLocal.x = Mathf.Clamp(pivotLocal.x, minPivot.x, maxPivot.x);
+            pivotLocal.y = Mathf.Clamp(pivotLocal.y, minPivot.y, maxPivot.y);
+            widgetRect.anchoredPosition = pivotLocal - anchorLocal;
         }
 
         void SaveState()

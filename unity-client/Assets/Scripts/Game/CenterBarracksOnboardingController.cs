@@ -57,7 +57,6 @@ namespace CastleDefender.Game
         CenterBarracksStage _stage;
         bool _flowResolved;
         bool _flowCompleted;
-        bool _pendingPurchaseHandoff;
         bool _snapshotSubscribed;
         bool _matchReadySubscribed;
         bool _actionAppliedSubscribed;
@@ -181,24 +180,7 @@ namespace CastleDefender.Game
             if (payload == null || string.IsNullOrWhiteSpace(payload.type))
                 return;
 
-            if (payload.type == "build_barracks_site")
-            {
-                var snapshotApplier = SnapshotApplier.Instance;
-                int myLaneIndex = _laneIndex >= 0
-                    ? _laneIndex
-                    : snapshotApplier != null ? snapshotApplier.MyLaneIndex : -1;
-                var centerSite = myLaneIndex >= 0
-                    ? snapshotApplier?.GetBarracksSite(myLaneIndex, CenterBarracksId)
-                    : null;
-
-                if (centerSite == null || !centerSite.isBuilt)
-                    _pendingPurchaseHandoff = true;
-
-                RefreshOnboardingState();
-                return;
-            }
-
-            if (payload.type == "buy_barracks_unit" && (_stage == CenterBarracksStage.BuyMilitia || _pendingPurchaseHandoff))
+            if (payload.type == "buy_barracks_unit" && _stage == CenterBarracksStage.BuyMilitia)
                 RefreshOnboardingState();
         }
 
@@ -208,7 +190,6 @@ namespace CastleDefender.Game
             _stage = CenterBarracksStage.None;
             _flowResolved = false;
             _flowCompleted = false;
-            _pendingPurchaseHandoff = false;
             _laneIndex = -1;
             _laneSlotColor = null;
             _centerBarracksView = null;
@@ -249,15 +230,7 @@ namespace CastleDefender.Game
                 return;
             }
 
-            if (_pendingPurchaseHandoff && site.isBuilt)
-            {
-                _initialStage = CenterBarracksStage.Purchase;
-                _stage = ResolveMilitiaStage(site);
-                _flowResolved = true;
-                _flowCompleted = false;
-                _pendingPurchaseHandoff = false;
-            }
-            else if (!_flowResolved)
+            if (!_flowResolved)
             {
                 _initialStage = ResolveInitialStage(site);
                 _stage = _initialStage;
@@ -317,9 +290,7 @@ namespace CastleDefender.Game
             if (!site.isBuilt)
                 return CenterBarracksStage.Purchase;
 
-            return site.maxLevel > 1 && site.level <= 1
-                ? CenterBarracksStage.Upgrade
-                : CenterBarracksStage.None;
+            return ResolveMilitiaStage(site);
         }
 
         CenterBarracksStage ResolveCurrentStage(MLBarracksSite site)
@@ -327,17 +298,10 @@ namespace CastleDefender.Game
             if (site == null)
                 return CenterBarracksStage.None;
 
-            return _initialStage switch
-            {
-                CenterBarracksStage.Purchase => !site.isBuilt
-                    ? CenterBarracksStage.Purchase
-                    : ResolveMilitiaStage(site),
-                CenterBarracksStage.Upgrade => site.isBuilt && site.level > 1
-                    ? CenterBarracksStage.None
-                    : CenterBarracksStage.Upgrade,
-                CenterBarracksStage.BuyMilitia => ResolveMilitiaStage(site),
-                _ => CenterBarracksStage.None,
-            };
+            if (!site.isBuilt)
+                return CenterBarracksStage.Purchase;
+
+            return ResolveMilitiaStage(site);
         }
 
         CenterBarracksStage ResolveMilitiaStage(MLBarracksSite site)
@@ -1010,8 +974,8 @@ namespace CastleDefender.Game
 
             _headlineLabel.text = _stage switch
             {
-                CenterBarracksStage.Purchase => "Purchase Center Barracks",
-                CenterBarracksStage.Upgrade => "Upgrade your Barracks",
+                CenterBarracksStage.Purchase => "Open Town Core",
+                CenterBarracksStage.Upgrade => "Upgrade In Town Core",
                 CenterBarracksStage.BuyMilitia => "Buy Militia x10",
                 _ => string.Empty,
             };
@@ -1020,9 +984,9 @@ namespace CastleDefender.Game
             _focusButton.interactable = true;
             _focusButtonLabel.text = _stage switch
             {
-                CenterBarracksStage.Purchase => "Open To Purchase",
-                CenterBarracksStage.Upgrade => "Open To Upgrade",
-                CenterBarracksStage.BuyMilitia => "Open To Buy",
+                CenterBarracksStage.Purchase => "Open Town Core",
+                CenterBarracksStage.Upgrade => "Open Town Core",
+                CenterBarracksStage.BuyMilitia => "Open Center Barracks",
                 _ => "Focus Barracks",
             };
         }
@@ -1034,24 +998,16 @@ namespace CastleDefender.Game
 
             if (_stage == CenterBarracksStage.Purchase)
             {
-                if (!site.canBuild && !string.IsNullOrWhiteSpace(site.lockedReason))
-                    return site.lockedReason;
+                int buildCost = Mathf.Max(0, site.buildCost);
+                if (lane != null && lane.gold < buildCost)
+                    return $"Center Barracks costs {buildCost}g in Town Core. Need {Mathf.Max(0, buildCost - Mathf.FloorToInt(lane.gold))} more gold before you can purchase it.";
 
-                if (lane != null && lane.gold < site.buildCost)
-                    return $"Need {Mathf.Max(0, site.buildCost - Mathf.FloorToInt(lane.gold))} more gold to purchase the center barracks.";
-
-                return "Focus the center barracks and buy it to unlock your first troop source.";
+                return $"Town Core starts built. Open Town Core and purchase Center Barracks for {buildCost}g, then return here to buy your first militia.";
             }
 
             if (_stage == CenterBarracksStage.Upgrade)
             {
-                if (!site.canUpgrade && !string.IsNullOrWhiteSpace(site.lockedReason))
-                    return site.lockedReason;
-
-                if (lane != null && lane.gold < site.upgradeCost)
-                    return $"Need {Mathf.Max(0, site.upgradeCost - Mathf.FloorToInt(lane.gold))} more gold to upgrade the center barracks.";
-
-                return "Focus the center barracks and upgrade it to improve its spawn strength and cadence.";
+                return "Center Barracks upgrades are purchased from Town Core.";
             }
 
             if (_stage == CenterBarracksStage.BuyMilitia)
@@ -1064,7 +1020,7 @@ namespace CastleDefender.Game
                 if (lane != null && lane.gold < totalCost)
                     return $"Need {Mathf.Max(0, totalCost - Mathf.FloorToInt(lane.gold))} more gold to buy Militia x{MilitiaTargetCount}.";
 
-                return $"Open the center barracks and buy Militia x{MilitiaTargetCount} to start your first live barracks deployment.";
+                return $"Center Barracks is ready. Open it and buy Militia x{MilitiaTargetCount} to start your first live deployment.";
             }
 
             return string.Empty;
@@ -1085,10 +1041,7 @@ namespace CastleDefender.Game
 
         void UpdateWorldArrowVisual()
         {
-            if (_centerBarracksView == null || !_centerBarracksView.isActiveAndEnabled)
-                _centerBarracksView = BarracksSiteView.FindSite(CenterBarracksId, _laneSlotColor, _laneIndex);
-
-            if (_centerBarracksView == null)
+            if (!TryResolveStageWorldPosition(out Vector3 worldPosition))
             {
                 SetWorldArrowVisible(false);
                 return;
@@ -1099,7 +1052,6 @@ namespace CastleDefender.Game
             if (_worldArrowRoot == null)
                 return;
 
-            Vector3 worldPosition = ResolveArrowWorldPosition(_centerBarracksView);
             float bob = Mathf.Sin(Time.unscaledTime * 3.1f) * 0.42f;
             float pulse = 1f + Mathf.Sin(Time.unscaledTime * 5.1f) * 0.08f;
 
@@ -1114,7 +1066,7 @@ namespace CastleDefender.Game
         {
             return _stage switch
             {
-                CenterBarracksStage.Purchase => "PURCHASE",
+                CenterBarracksStage.Purchase => "TOWN CORE",
                 CenterBarracksStage.Upgrade => "UPGRADE",
                 CenterBarracksStage.BuyMilitia => "OPEN",
                 _ => "BARRACKS",
@@ -1132,8 +1084,8 @@ namespace CastleDefender.Game
 
             caption = _stage switch
             {
-                CenterBarracksStage.Purchase => "BUY",
-                CenterBarracksStage.Upgrade => "UPGRADE",
+                CenterBarracksStage.Purchase => "OPEN",
+                CenterBarracksStage.Upgrade => "OPEN",
                 CenterBarracksStage.BuyMilitia => "BUY x10",
                 _ => null,
             };
@@ -1320,16 +1272,37 @@ namespace CastleDefender.Game
                 return true;
             }
 
+            if (!TryResolveStageWorldPosition(out Vector3 worldPosition))
+                return false;
+
+            if (!TryProjectWorldToCanvasPoint(worldPosition, out localPoint))
+                return false;
+
+            localPoint += new Vector2(0f, 122f);
+            return true;
+        }
+
+        bool TryResolveStageWorldPosition(out Vector3 worldPosition)
+        {
+            worldPosition = Vector3.zero;
+
+            if (_stage == CenterBarracksStage.Purchase || _stage == CenterBarracksStage.Upgrade)
+            {
+                var townCoreAnchor = FortressPadAnchor.FindAnchor("town_core_pad", _laneSlotColor, _laneIndex);
+                if (townCoreAnchor != null)
+                {
+                    worldPosition = ResolveArrowWorldPosition(townCoreAnchor);
+                    return true;
+                }
+            }
+
             if (_centerBarracksView == null || !_centerBarracksView.isActiveAndEnabled)
                 _centerBarracksView = BarracksSiteView.FindSite(CenterBarracksId, _laneSlotColor, _laneIndex);
 
             if (_centerBarracksView == null)
                 return false;
 
-            if (!TryProjectWorldToCanvasPoint(ResolveArrowWorldPosition(_centerBarracksView), out localPoint))
-                return false;
-
-            localPoint += new Vector2(0f, 122f);
+            worldPosition = ResolveArrowWorldPosition(_centerBarracksView);
             return true;
         }
 
@@ -1424,6 +1397,18 @@ namespace CastleDefender.Game
 
             Vector3 fallback = barracksView != null ? barracksView.FocusTransform.position : Vector3.zero;
             return fallback + new Vector3(0f, 4.4f, 0f);
+        }
+
+        static Vector3 ResolveArrowWorldPosition(FortressPadAnchor anchor)
+        {
+            if (anchor != null)
+            {
+                var bounds = anchor.GetWorldBounds();
+                float lift = Mathf.Max(2.8f, bounds.size.y * 0.70f);
+                return new Vector3(bounds.center.x, bounds.max.y + lift, bounds.center.z);
+            }
+
+            return Vector3.zero;
         }
 
         static bool TryGetActiveRendererBounds(Transform root, out Bounds bounds)

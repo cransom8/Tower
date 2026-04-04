@@ -20,6 +20,7 @@ namespace CastleDefender.UI
             public string RaceId;
             public Image Background;
             public Button Button;
+            public Button ContinueButton;
             public TMP_Text Title;
             public TMP_Text Subtitle;
             public TMP_Text Summary;
@@ -209,6 +210,9 @@ namespace CastleDefender.UI
         const float RequiredRaceSelectionPortraitTimeoutSeconds = 10f;
         const float DetailsPreviewCycleInitialDelay = 1.2f;
         const float DetailsPreviewManualResumeDelay = 2.6f;
+        const string WinterBackdropResourcePath = "UI/Lobby/WinterForestBackdrop";
+
+        static Sprite _winterBackdropSprite;
 
         PhaseState _state = PhaseState.Idle;
         ProgressionViewerMode _mode = ProgressionViewerMode.LobbyViewer;
@@ -443,7 +447,10 @@ namespace CastleDefender.UI
                 if (_txtTimer != null)
                 {
                     int secs = Mathf.CeilToInt(_timerRemaining);
-                    _txtTimer.text = secs > 0 ? $"{secs}s" : "0s";
+                    if (secs > 0)
+                        _txtTimer.SetText("{0}s", secs);
+                    else
+                        _txtTimer.text = "0s";
                     _txtTimer.color = _timerRemaining <= 5f ? timerUrgentColor : timerNormalColor;
                 }
 
@@ -780,11 +787,12 @@ namespace CastleDefender.UI
                 ClassicRpgUiRuntime.ApplyCanvasScaler(hostCanvas.GetComponent<CanvasScaler>(), ClassicRpgUiRuntime.ReferenceResolution);
 
             bool compact = ClassicRpgUiRuntime.IsCompactLayout(canvasRect);
+            bool premiumShellPresentation = UsePremiumShellPresentation();
 
             _panelRoot = new GameObject("Panel_RaceProgression");
             _panelRoot.transform.SetParent(parent, false);
             var rootRect = _panelRoot.AddComponent<RectTransform>();
-            if (_isEmbeddedViewer)
+            if (_isEmbeddedViewer || premiumShellPresentation)
             {
                 ClassicRpgUiRuntime.Stretch(rootRect);
             }
@@ -798,59 +806,93 @@ namespace CastleDefender.UI
                     compact ? 18f : 24f);
             }
             var rootImage = _panelRoot.AddComponent<Image>();
-            rootImage.color = ClassicRpgUiRuntime.BackdropColor;
-            ClassicRpgUiRuntime.ApplyPanel(rootImage, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.26f));
+            rootImage.color = premiumShellPresentation
+                ? Color.clear
+                : ClassicRpgUiRuntime.BackdropColor;
+            if (premiumShellPresentation)
+                BuildWinterBackdrop(_panelRoot.transform, compact);
+            else
+                ClassicRpgUiRuntime.ApplyPanel(rootImage, ClassicRpgPanelSkin.DarkSpell, false, new Color(1f, 1f, 1f, 0.26f));
 
-            var rootFrame = new GameObject("RootFrame", typeof(RectTransform), typeof(Image));
-            rootFrame.transform.SetParent(_panelRoot.transform, false);
-            var rootFrameRect = rootFrame.GetComponent<RectTransform>();
-            rootFrameRect.anchorMin = Vector2.zero;
-            rootFrameRect.anchorMax = Vector2.one;
-            rootFrameRect.offsetMin = new Vector2(4f, 4f);
-            rootFrameRect.offsetMax = new Vector2(-4f, -4f);
-            var rootFrameImage = rootFrame.GetComponent<Image>();
-            rootFrameImage.raycastTarget = false;
-            ClassicRpgUiRuntime.ApplyPanel(rootFrameImage, ClassicRpgPanelSkin.Frame, true, new Color(1f, 1f, 1f, 0.92f));
+            if (!premiumShellPresentation)
+            {
+                var rootFrame = new GameObject("RootFrame", typeof(RectTransform), typeof(Image));
+                rootFrame.transform.SetParent(_panelRoot.transform, false);
+                var rootFrameRect = rootFrame.GetComponent<RectTransform>();
+                rootFrameRect.anchorMin = Vector2.zero;
+                rootFrameRect.anchorMax = Vector2.one;
+                rootFrameRect.offsetMin = new Vector2(4f, 4f);
+                rootFrameRect.offsetMax = new Vector2(-4f, -4f);
+                var rootFrameImage = rootFrame.GetComponent<Image>();
+                rootFrameImage.raycastTarget = false;
+                ClassicRpgUiRuntime.ApplyPanel(rootFrameImage, ClassicRpgPanelSkin.Frame, true, new Color(1f, 1f, 1f, 0.92f));
+            }
 
             var stage = new GameObject("Stage", typeof(RectTransform), typeof(VerticalLayoutGroup));
             stage.transform.SetParent(_panelRoot.transform, false);
             var stageRect = stage.GetComponent<RectTransform>();
-            ClassicRpgUiRuntime.Stretch(stageRect, new Vector2(12f, 12f), new Vector2(-12f, -12f));
+            if (premiumShellPresentation && !_isEmbeddedViewer)
+            {
+                ClassicRpgUiRuntime.ApplySafeArea(
+                    stageRect,
+                    canvasRect,
+                    compact ? 12f : 18f,
+                    compact ? 10f : 14f,
+                    compact ? 8f : 10f);
+            }
+            else
+            {
+                ClassicRpgUiRuntime.Stretch(
+                    stageRect,
+                    premiumShellPresentation
+                        ? new Vector2(compact ? 10f : 18f, compact ? 10f : 16f)
+                        : new Vector2(12f, 12f),
+                    premiumShellPresentation
+                        ? new Vector2(compact ? -10f : -18f, compact ? -10f : -16f)
+                        : new Vector2(-12f, -12f));
+            }
             var layout = stage.GetComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.UpperCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            layout.spacing = compact ? 10f : 14f;
-            layout.padding = compact ? new RectOffset(12, 12, 12, 12) : new RectOffset(18, 18, 18, 18);
+            layout.spacing = premiumShellPresentation ? (compact ? 8f : 10f) : (compact ? 10f : 14f);
+            layout.padding = premiumShellPresentation
+                ? (compact ? new RectOffset(8, 8, 10, 8) : new RectOffset(14, 14, 14, 10))
+                : (compact ? new RectOffset(12, 12, 12, 12) : new RectOffset(18, 18, 18, 18));
 
-            var headerPlate = new GameObject("HeaderPlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            headerPlate.transform.SetParent(stage.transform, false);
-            var headerLayout = headerPlate.GetComponent<LayoutElement>();
-            headerLayout.preferredHeight = compact ? 124f : 144f;
-            var headerImage = headerPlate.GetComponent<Image>();
-            ClassicRpgUiRuntime.ApplyPanel(headerImage, ClassicRpgPanelSkin.TitleLong, false, Color.white);
-            var headerGroup = headerPlate.AddComponent<VerticalLayoutGroup>();
-            headerGroup.childAlignment = TextAnchor.MiddleCenter;
-            headerGroup.childControlWidth = true;
-            headerGroup.childControlHeight = true;
-            headerGroup.childForceExpandWidth = true;
-            headerGroup.childForceExpandHeight = false;
-            headerGroup.spacing = 2f;
-            headerGroup.padding = new RectOffset(28, 28, compact ? 18 : 20, compact ? 14 : 18);
+            if (premiumShellPresentation)
+                BuildPremiumPageHeader(stage.transform, compact);
+            else
+            {
+                var headerPlate = new GameObject("HeaderPlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+                headerPlate.transform.SetParent(stage.transform, false);
+                var headerLayout = headerPlate.GetComponent<LayoutElement>();
+                headerLayout.preferredHeight = compact ? 124f : 144f;
+                var headerImage = headerPlate.GetComponent<Image>();
+                ClassicRpgUiRuntime.ApplyPanel(headerImage, ClassicRpgPanelSkin.TitleLong, false, Color.white);
+                var headerGroup = headerPlate.AddComponent<VerticalLayoutGroup>();
+                headerGroup.childAlignment = TextAnchor.MiddleCenter;
+                headerGroup.childControlWidth = true;
+                headerGroup.childControlHeight = true;
+                headerGroup.childForceExpandWidth = true;
+                headerGroup.childForceExpandHeight = false;
+                headerGroup.spacing = 2f;
+                headerGroup.padding = new RectOffset(28, 28, compact ? 18 : 20, compact ? 14 : 18);
 
-            _txtTitle = MakeLabel(headerPlate.transform, "Txt_Title", "Choose Your Race", compact ? 20 : 22, Color.white, compact ? 34f : 40f);
-            ApplyPlateTitleStyle(_txtTitle, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center);
-            SetResponsiveSingleLine(_txtTitle, compact ? 16f : 18f, compact ? 20f : 22f);
+                _txtTitle = MakeLabel(headerPlate.transform, "Txt_Title", "Choose Your Race", compact ? 20 : 22, Color.white, compact ? 34f : 40f);
+                ApplyPlateTitleStyle(_txtTitle, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center);
+                SetResponsiveSingleLine(_txtTitle, compact ? 16f : 18f, compact ? 20f : 22f);
 
-            _txtSubtitle = MakeLabel(headerPlate.transform, "Txt_Subtitle", "", compact ? 13 : 15, new Color(0.82f, 0.85f, 0.92f), compact ? 22f : 24f);
-            _txtSubtitle.alignment = TextAlignmentOptions.Center;
-            ApplyReadableTextStyle(_txtSubtitle, new Color(0.82f, 0.85f, 0.92f), TextAlignmentOptions.Center);
+                _txtSubtitle = MakeLabel(headerPlate.transform, "Txt_Subtitle", "", compact ? 13 : 15, new Color(0.82f, 0.85f, 0.92f), compact ? 22f : 24f);
+                _txtSubtitle.alignment = TextAlignmentOptions.Center;
+                ApplyReadableTextStyle(_txtSubtitle, new Color(0.82f, 0.85f, 0.92f), TextAlignmentOptions.Center);
 
-            _txtTimer = MakeLabel(headerPlate.transform, "Txt_Timer", "", compact ? 18 : 20, timerNormalColor, 26f);
-            _txtTimer.gameObject.SetActive(_mode == ProgressionViewerMode.PreMatchConfirm);
-            ApplyReadableTextStyle(_txtTimer, timerNormalColor, TextAlignmentOptions.Center, FontStyles.Bold);
+                _txtTimer = MakeLabel(headerPlate.transform, "Txt_Timer", "", compact ? 18 : 20, timerNormalColor, 26f);
+                _txtTimer.gameObject.SetActive(_mode == ProgressionViewerMode.PreMatchConfirm);
+                ApplyReadableTextStyle(_txtTimer, timerNormalColor, TextAlignmentOptions.Center, FontStyles.Bold);
+            }
 
             var bodyRoot = new GameObject("BodyRoot", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             bodyRoot.transform.SetParent(stage.transform, false);
@@ -868,12 +910,24 @@ namespace CastleDefender.UI
 
             BuildCurrentPage(bodyRoot.transform);
 
-            var footer = CreateSectionPanel(stage.transform, "FooterStrip", ClassicRpgUiRuntime.PanelFill, compact ? 132f : 118f, flexibleHeight: 0f);
-            footer.GetComponent<LayoutElement>().preferredHeight = _mode == ProgressionViewerMode.PreMatchConfirm ? (compact ? 172f : 146f) : (compact ? 132f : 118f);
+            var footer = premiumShellPresentation
+                ? CreateFloatingFooter(stage.transform, compact)
+                : CreateSectionPanel(stage.transform, "FooterStrip", ClassicRpgUiRuntime.PanelFill, compact ? 132f : 118f, flexibleHeight: 0f);
+            if (!premiumShellPresentation)
+                footer.GetComponent<LayoutElement>().preferredHeight = _mode == ProgressionViewerMode.PreMatchConfirm ? (compact ? 172f : 146f) : (compact ? 132f : 118f);
 
-            _txtStatus = MakeLabel(footer.transform, "Txt_Status", "", compact ? 14 : 16, new Color(0.74f, 0.78f, 0.85f), compact ? 46f : 34f);
+            _txtStatus = MakeLabel(
+                footer.transform,
+                "Txt_Status",
+                "",
+                compact ? 13 : 15,
+                premiumShellPresentation ? new Color(0.88f, 0.85f, 0.79f, 0.94f) : new Color(0.74f, 0.78f, 0.85f),
+                premiumShellPresentation ? (compact ? 24f : 28f) : (compact ? 46f : 34f));
             _txtStatus.alignment = TextAlignmentOptions.Center;
-            ApplyReadableTextStyle(_txtStatus, new Color(0.78f, 0.82f, 0.90f), TextAlignmentOptions.Center);
+            ApplyReadableTextStyle(
+                _txtStatus,
+                premiumShellPresentation ? new Color(0.90f, 0.86f, 0.80f, 0.96f) : new Color(0.78f, 0.82f, 0.90f),
+                TextAlignmentOptions.Center);
 
             if (_mode == ProgressionViewerMode.PreMatchConfirm)
                 BuildPlayerPanel(footer.transform);
@@ -965,6 +1019,7 @@ namespace CastleDefender.UI
         {
             SyncSelectedUnitToCurrentTab();
             bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            bool scenicProgressionPage = UseScenicProgressionPresentation();
             var workspace = new GameObject(
                 "ProgressionWorkspace",
                 typeof(RectTransform),
@@ -993,16 +1048,16 @@ namespace CastleDefender.UI
                 layout.childControlHeight = true;
                 layout.childForceExpandWidth = false;
                 layout.childForceExpandHeight = false;
-                layout.spacing = 14f;
+                layout.spacing = scenicProgressionPage ? 22f : 14f;
             }
 
             var summaryColumn = new GameObject("SummaryColumn", typeof(RectTransform), typeof(LayoutElement));
             summaryColumn.transform.SetParent(workspace.transform, false);
             var summaryLayout = summaryColumn.GetComponent<LayoutElement>();
-            summaryLayout.preferredWidth = compact ? 0f : 272f;
+            summaryLayout.preferredWidth = compact ? 0f : scenicProgressionPage ? 228f : 272f;
             summaryLayout.flexibleWidth = compact ? 1f : 0f;
             summaryLayout.flexibleHeight = compact ? 0f : 1f;
-            summaryLayout.minWidth = compact ? 0f : 248f;
+            summaryLayout.minWidth = compact ? 0f : scenicProgressionPage ? 214f : 248f;
             summaryLayout.preferredHeight = compact ? 242f : 0f;
             BuildRaceSummarySidebar(summaryColumn.transform, compact);
 
@@ -1011,24 +1066,36 @@ namespace CastleDefender.UI
             var treeLayout = treeColumn.GetComponent<LayoutElement>();
             treeLayout.flexibleWidth = 1f;
             treeLayout.flexibleHeight = 1f;
-            treeLayout.minWidth = compact ? 0f : 640f;
+            treeLayout.minWidth = compact ? 0f : scenicProgressionPage ? 780f : 640f;
             treeLayout.minHeight = compact ? 320f : 0f;
             BuildProgressionTree(treeColumn.transform);
 
             var detailColumn = new GameObject("DetailColumn", typeof(RectTransform), typeof(LayoutElement));
             detailColumn.transform.SetParent(workspace.transform, false);
             var detailLayout = detailColumn.GetComponent<LayoutElement>();
-            detailLayout.preferredWidth = compact ? 0f : 320f;
+            detailLayout.preferredWidth = compact ? 0f : scenicProgressionPage ? 256f : 320f;
             detailLayout.flexibleWidth = compact ? 1f : 0f;
             detailLayout.flexibleHeight = compact ? 0f : 1f;
-            detailLayout.minWidth = compact ? 0f : 292f;
+            detailLayout.minWidth = compact ? 0f : scenicProgressionPage ? 240f : 292f;
             detailLayout.preferredHeight = compact ? 338f : 0f;
             BuildDetailsPanel(detailColumn.transform);
         }
 
         void BuildRaceSummarySidebar(Transform parent, bool compact)
         {
-            var section = CreateSectionPanel(parent, "Section_Summary", new Color(0.09f, 0.11f, 0.17f, 0.98f), compact ? 236f : 0f, flexibleHeight: compact ? 0f : 1f);
+            bool scenicProgressionPage = UseScenicProgressionPresentation();
+            var section = CreateSectionPanel(
+                parent,
+                "Section_Summary",
+                scenicProgressionPage ? new Color(0.07f, 0.07f, 0.09f, 0.88f) : new Color(0.09f, 0.11f, 0.17f, 0.98f),
+                compact ? 236f : 0f,
+                flexibleHeight: compact ? 0f : 1f);
+            var sectionLayout = section.GetComponent<VerticalLayoutGroup>();
+            if (sectionLayout != null && scenicProgressionPage)
+            {
+                sectionLayout.padding = compact ? new RectOffset(10, 10, 10, 10) : new RectOffset(12, 12, 12, 12);
+                sectionLayout.spacing = compact ? 6f : 8f;
+            }
             var title = MakeLabel(section.transform, "Txt_SummaryHeader", "Race Dossier", compact ? 18 : 20, Color.white, 28f);
             title.fontStyle = FontStyles.Bold;
             title.alignment = TextAlignmentOptions.Center;
@@ -1037,7 +1104,7 @@ namespace CastleDefender.UI
             {
                 var portraitCard = new GameObject("RacePortrait", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
                 portraitCard.transform.SetParent(section.transform, false);
-                portraitCard.GetComponent<LayoutElement>().preferredHeight = compact ? 64f : 116f;
+                portraitCard.GetComponent<LayoutElement>().preferredHeight = compact ? 64f : scenicProgressionPage ? 92f : 116f;
                 ClassicRpgUiRuntime.ApplyPanel(portraitCard.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.07f, 0.10f, 0.16f, 0.98f));
 
                 var portrait = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
@@ -1075,11 +1142,24 @@ namespace CastleDefender.UI
         void BuildRaceSelector(Transform parent)
         {
             bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            bool premiumShellPresentation = UsePremiumShellPresentation();
             float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
             float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
 
-            var section = CreateSectionPanel(parent, "Section_RaceSelector", new Color(0.08f, 0.11f, 0.17f, 0.98f), 0f, flexibleHeight: 1f);
-            var header = MakeLabel(section.transform, "Txt_RaceHeader", "Select Race", compact ? 18 : 20, Color.white, 28f);
+            var section = CreateSectionPanel(
+                parent,
+                "Section_RaceSelector",
+                premiumShellPresentation ? new Color(0.02f, 0.02f, 0.03f, 0.80f) : new Color(0.08f, 0.11f, 0.17f, 0.98f),
+                0f,
+                flexibleHeight: 1f);
+            var sectionLayout = section.GetComponent<VerticalLayoutGroup>();
+            if (sectionLayout != null && premiumShellPresentation)
+            {
+                sectionLayout.padding = compact ? new RectOffset(12, 12, 12, 12) : new RectOffset(18, 18, 16, 16);
+                sectionLayout.spacing = compact ? 8f : 10f;
+            }
+
+            var header = MakeLabel(section.transform, "Txt_RaceHeader", premiumShellPresentation ? "War Council Banners" : "Select Race", compact ? 18 : 20, Color.white, 28f);
             header.fontStyle = FontStyles.Bold;
             header.alignment = TextAlignmentOptions.Center;
 
@@ -1112,12 +1192,23 @@ namespace CastleDefender.UI
                 prevLayout.preferredWidth = compact ? 54f : 62f;
                 prevLayout.minWidth = compact ? 54f : 62f;
             }
-            ApplyClassicRpgButtonTheme(_btnRaceCarouselPrev, ClassicRpgButtonSize.Medium);
+            if (premiumShellPresentation)
+                ApplyLobbyButtonStyle(_btnRaceCarouselPrev, ClassicRpgButtonSkin.MiniBrown, compact ? 42f : 46f, compact ? 54f : 62f);
+            else
+                ApplyClassicRpgButtonTheme(_btnRaceCarouselPrev, ClassicRpgButtonSize.Medium);
             _btnRaceCarouselPrev.onClick.AddListener(() => ShiftRaceCarousel(-1));
 
             var scrollGo = new GameObject("RaceCarouselScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
             scrollGo.transform.SetParent(carouselRow.transform, false);
-            ApplyReadablePanelStyle(scrollGo.GetComponent<Image>(), new Color(0.07f, 0.10f, 0.16f, 0.92f));
+            if (premiumShellPresentation)
+            {
+                ClassicRpgUiRuntime.ApplyPanel(scrollGo.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.02f, 0.02f, 0.03f, 0.82f));
+                EnsureDecorativeFrame(scrollGo.GetComponent<RectTransform>());
+            }
+            else
+            {
+                ApplyReadablePanelStyle(scrollGo.GetComponent<Image>(), new Color(0.07f, 0.10f, 0.16f, 0.92f));
+            }
             var scrollLayout = scrollGo.GetComponent<LayoutElement>();
             scrollLayout.flexibleWidth = 1f;
             scrollLayout.preferredHeight = cardHeight + 18f;
@@ -1181,7 +1272,10 @@ namespace CastleDefender.UI
                 nextLayout.preferredWidth = compact ? 54f : 62f;
                 nextLayout.minWidth = compact ? 54f : 62f;
             }
-            ApplyClassicRpgButtonTheme(_btnRaceCarouselNext, ClassicRpgButtonSize.Medium);
+            if (premiumShellPresentation)
+                ApplyLobbyButtonStyle(_btnRaceCarouselNext, ClassicRpgButtonSkin.MiniBrown, compact ? 42f : 46f, compact ? 54f : 62f);
+            else
+                ApplyClassicRpgButtonTheme(_btnRaceCarouselNext, ClassicRpgButtonSize.Medium);
             _btnRaceCarouselNext.onClick.AddListener(() => ShiftRaceCarousel(1));
 
             scrollRect.onValueChanged.AddListener(_ => RefreshRaceCarouselButtons());
@@ -1192,6 +1286,7 @@ namespace CastleDefender.UI
 
         RaceCardView BuildRaceCard(Transform parent, RaceProgressionDefinition race, bool compact)
         {
+            bool premiumShellPresentation = UsePremiumShellPresentation();
             float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
             float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
             var cardGo = new GameObject($"Race_{race.Id}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(Button), typeof(VerticalLayoutGroup));
@@ -1203,7 +1298,15 @@ namespace CastleDefender.UI
             cardLayout.minHeight = cardHeight;
 
             var background = cardGo.GetComponent<Image>();
-            ApplyReadablePanelStyle(background, lockedColor);
+            if (premiumShellPresentation)
+            {
+                ClassicRpgUiRuntime.ApplyPanel(background, ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.07f, 0.05f, 0.04f, 0.96f));
+                EnsureDecorativeFrame(cardGo.GetComponent<RectTransform>());
+            }
+            else
+            {
+                ApplyReadablePanelStyle(background, lockedColor);
+            }
 
             var button = cardGo.GetComponent<Button>();
             button.targetGraphic = background;
@@ -1251,32 +1354,34 @@ namespace CastleDefender.UI
             summary.alignment = TextAlignmentOptions.TopLeft;
             SetResponsiveWrappedText(summary, compact ? 11f : 12f, compact ? 12f : 13f);
 
-            var statusGo = new GameObject("StatusChip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            statusGo.transform.SetParent(cardGo.transform, false);
-            var statusLayout = statusGo.GetComponent<LayoutElement>();
-            statusLayout.preferredHeight = 32f;
-            var statusBackground = statusGo.GetComponent<Image>();
-            ApplyReadablePanelStyle(statusBackground, new Color(0.18f, 0.23f, 0.33f, 0.98f));
-            var status = CreateAnchoredText(statusGo.transform, "Txt_Status", "Available Now", 12, ClassicRpgUiRuntime.WarmGold, Vector2.zero, Vector2.one, new Vector2(8f, 4f), new Vector2(-8f, -4f));
-            ApplyReadableTextStyle(status, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center, FontStyles.Bold);
-            SetResponsiveSingleLine(status, 10f, 12f);
+            var continueButton = MakeButton(cardGo.transform, "Btn_Continue", "Continue", compact ? 42f : 44f, Color.white);
+            continueButton.onClick.AddListener(() =>
+            {
+                OnRaceSelected(race.Id);
+                NavigateToPage(WizardPage.ProgressionTree);
+            });
+            if (premiumShellPresentation)
+                ApplyLobbyButtonStyle(continueButton, ClassicRpgButtonSkin.MiniGold, compact ? 42f : 44f, compact ? 150f : 172f);
+            else
+                ApplyClassicRpgButtonTheme(continueButton, ClassicRpgButtonSize.Medium);
+            continueButton.gameObject.SetActive(false);
 
             return new RaceCardView
             {
                 RaceId = race.Id,
                 Background = background,
                 Button = button,
+                ContinueButton = continueButton,
                 Title = title,
                 Subtitle = subtitle,
                 Summary = summary,
-                StatusBackground = statusBackground,
-                Status = status,
                 Portrait = portrait,
             };
         }
 
         void BuildComingSoonRaceCard(Transform parent, bool compact, int slotIndex)
         {
+            bool premiumShellPresentation = UsePremiumShellPresentation();
             float cardWidth = compact ? CompactRaceCardWidth : RaceCardWidth;
             float cardHeight = compact ? CompactRaceCardHeight : RaceCardHeight;
             var cardGo = new GameObject($"RaceComingSoon_{slotIndex}", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(CanvasGroup));
@@ -1286,7 +1391,15 @@ namespace CastleDefender.UI
             cardLayout.preferredHeight = cardHeight;
             cardLayout.minWidth = cardWidth;
             cardLayout.minHeight = cardHeight;
-            ApplyReadablePanelStyle(cardGo.GetComponent<Image>(), new Color(0.10f, 0.11f, 0.15f, 0.98f));
+            if (premiumShellPresentation)
+            {
+                ClassicRpgUiRuntime.ApplyPanel(cardGo.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.05f, 0.04f, 0.04f, 0.94f));
+                EnsureDecorativeFrame(cardGo.GetComponent<RectTransform>());
+            }
+            else
+            {
+                ApplyReadablePanelStyle(cardGo.GetComponent<Image>(), new Color(0.10f, 0.11f, 0.15f, 0.98f));
+            }
             cardGo.GetComponent<CanvasGroup>().alpha = 0.94f;
 
             var layout = cardGo.GetComponent<VerticalLayoutGroup>();
@@ -1344,15 +1457,37 @@ namespace CastleDefender.UI
 
         void BuildProgressionTree(Transform parent)
         {
-            var section = CreateSectionPanel(parent, "Section_Tree", new Color(0.07f, 0.10f, 0.16f, 0.98f), 0f, flexibleHeight: 1f);
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
+            bool scenicProgressionPage = UseScenicProgressionPresentation();
+            var section = CreateSectionPanel(
+                parent,
+                "Section_Tree",
+                scenicProgressionPage ? new Color(0.06f, 0.06f, 0.08f, 0.90f) : new Color(0.07f, 0.10f, 0.16f, 0.98f),
+                0f,
+                flexibleHeight: 1f);
             _treeSectionRoot = section;
-            var treeHeader = MakeLabel(section.transform, "Txt_TreeHeader", "Upgrade Progression Tree", 20, Color.white, 32f);
+            var sectionLayout = section.GetComponent<VerticalLayoutGroup>();
+            if (sectionLayout != null && scenicProgressionPage)
+            {
+                sectionLayout.padding = compact ? new RectOffset(12, 12, 10, 10) : new RectOffset(16, 16, 12, 12);
+                sectionLayout.spacing = compact ? 8f : 10f;
+            }
+
+            var treeHeader = MakeLabel(
+                section.transform,
+                "Txt_TreeHeader",
+                "Upgrade Progression Tree",
+                scenicProgressionPage ? 18 : 20,
+                scenicProgressionPage ? new Color(0.94f, 0.91f, 0.84f, 1f) : Color.white,
+                scenicProgressionPage ? 28f : 32f);
             treeHeader.fontStyle = FontStyles.Bold;
             treeHeader.alignment = TextAlignmentOptions.Center;
 
             var scrollGo = new GameObject("TreeScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
             scrollGo.transform.SetParent(section.transform, false);
-            ApplyReadablePanelStyle(scrollGo.GetComponent<Image>(), new Color(0.08f, 0.11f, 0.17f, 0.88f));
+            ApplyReadablePanelStyle(
+                scrollGo.GetComponent<Image>(),
+                scenicProgressionPage ? new Color(0.05f, 0.05f, 0.07f, 0.68f) : new Color(0.08f, 0.11f, 0.17f, 0.88f));
             var scrollLayout = scrollGo.GetComponent<LayoutElement>();
             scrollLayout.minHeight = 0f;
             scrollLayout.preferredHeight = 0f;
@@ -1393,8 +1528,8 @@ namespace CastleDefender.UI
             contentLayout.childControlHeight = true;
             contentLayout.childForceExpandWidth = false;
             contentLayout.childForceExpandHeight = false;
-            contentLayout.spacing = 16f;
-            contentLayout.padding = new RectOffset(12, 12, 12, 12);
+            contentLayout.spacing = scenicProgressionPage ? 18f : 16f;
+            contentLayout.padding = scenicProgressionPage ? new RectOffset(16, 16, 14, 14) : new RectOffset(12, 12, 12, 12);
             contentGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
             contentGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
@@ -2636,14 +2771,30 @@ namespace CastleDefender.UI
         void BuildDetailsPanelLayout(Transform parent)
         {
             bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
-            var section = CreateSectionPanel(parent, "Section_Details", new Color(0.08f, 0.11f, 0.18f, 0.98f), compact ? 338f : 0f, flexibleHeight: compact ? 0f : 1f);
+            bool scenicProgressionPage = UseScenicProgressionPresentation();
+            var section = CreateSectionPanel(
+                parent,
+                "Section_Details",
+                scenicProgressionPage ? new Color(0.07f, 0.07f, 0.09f, 0.88f) : new Color(0.08f, 0.11f, 0.18f, 0.98f),
+                compact ? 338f : 0f,
+                flexibleHeight: compact ? 0f : 1f);
             _detailsOverlayRoot = section;
+            var sectionLayout = section.GetComponent<VerticalLayoutGroup>();
+            if (sectionLayout != null && scenicProgressionPage)
+            {
+                sectionLayout.padding = compact ? new RectOffset(10, 10, 10, 10) : new RectOffset(12, 12, 12, 12);
+                sectionLayout.spacing = compact ? 8f : 10f;
+            }
 
             var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(VerticalLayoutGroup));
             titlePlate.transform.SetParent(section.transform, false);
             var titlePlateLayout = titlePlate.GetComponent<LayoutElement>();
-            titlePlateLayout.preferredHeight = compact ? 88f : 96f;
-            ClassicRpgUiRuntime.ApplyPanel(titlePlate.GetComponent<Image>(), ClassicRpgPanelSkin.TitleMedium, false, Color.white);
+            titlePlateLayout.preferredHeight = compact ? 74f : scenicProgressionPage ? 82f : 96f;
+            ClassicRpgUiRuntime.ApplyPanel(
+                titlePlate.GetComponent<Image>(),
+                scenicProgressionPage ? ClassicRpgPanelSkin.TitleMini : ClassicRpgPanelSkin.TitleMedium,
+                false,
+                Color.white);
 
             var titleLayout = titlePlate.GetComponent<VerticalLayoutGroup>();
             titleLayout.childAlignment = TextAnchor.MiddleCenter;
@@ -2664,7 +2815,11 @@ namespace CastleDefender.UI
 
             var scrollGo = new GameObject("DetailsScroll", typeof(RectTransform), typeof(Image), typeof(LayoutElement), typeof(ScrollRect));
             scrollGo.transform.SetParent(section.transform, false);
-            ClassicRpgUiRuntime.ApplyPanel(scrollGo.GetComponent<Image>(), ClassicRpgPanelSkin.PortraitBackdrop, true, new Color(0.08f, 0.11f, 0.17f, 0.88f));
+            ClassicRpgUiRuntime.ApplyPanel(
+                scrollGo.GetComponent<Image>(),
+                ClassicRpgPanelSkin.PortraitBackdrop,
+                true,
+                scenicProgressionPage ? new Color(0.05f, 0.05f, 0.07f, 0.72f) : new Color(0.08f, 0.11f, 0.17f, 0.88f));
             var scrollLayout = scrollGo.GetComponent<LayoutElement>();
             scrollLayout.flexibleHeight = 1f;
             scrollLayout.minHeight = compact ? 188f : 0f;
@@ -3363,29 +3518,301 @@ namespace CastleDefender.UI
 
         void BuildActionRow(Transform parent)
         {
+            bool premiumShellPresentation = UsePremiumShellPresentation();
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_panelRoot != null ? _panelRoot.GetComponent<RectTransform>() : null);
             var row = new GameObject("ActionRow", typeof(RectTransform), typeof(LayoutElement), typeof(HorizontalLayoutGroup));
             row.transform.SetParent(parent, false);
-            row.GetComponent<LayoutElement>().preferredHeight = 48f;
+            row.GetComponent<LayoutElement>().preferredHeight = premiumShellPresentation ? 56f : 48f;
             var layout = row.GetComponent<HorizontalLayoutGroup>();
             layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childControlWidth = false;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = false;
             layout.childForceExpandHeight = false;
-            layout.spacing = 10f;
+            layout.spacing = premiumShellPresentation ? 16f : 10f;
 
             _btnSecondaryAction = MakeButton(row.transform, "Btn_Secondary", "Back", 46f, new Color(0.20f, 0.26f, 0.38f, 1f));
             _txtSecondaryAction = _btnSecondaryAction.GetComponentInChildren<TMP_Text>();
-            ApplyClassicRpgButtonTheme(_btnSecondaryAction, ClassicRpgButtonSize.Medium);
-            ApplyClassicRpgLabelTheme(_txtSecondaryAction, false, true);
+            if (premiumShellPresentation)
+                ApplyLobbyButtonStyle(_btnSecondaryAction, ClassicRpgButtonSkin.MiniBrown, 44f, compact ? 132f : 156f);
+            else
+            {
+                ApplyClassicRpgButtonTheme(_btnSecondaryAction, ClassicRpgButtonSize.Medium);
+                ApplyClassicRpgLabelTheme(_txtSecondaryAction, false, true);
+            }
             _btnSecondaryAction.onClick.AddListener(HandleSecondaryAction);
+            var secondaryLayout = _btnSecondaryAction.GetComponent<LayoutElement>();
+            if (secondaryLayout != null && premiumShellPresentation)
+                secondaryLayout.preferredWidth = compact ? 132f : 156f;
 
             _btnPrimaryAction = MakeButton(row.transform, "Btn_Primary", "Continue", 46f, new Color(0.20f, 0.58f, 0.30f, 1f));
             _txtPrimaryAction = _btnPrimaryAction.GetComponentInChildren<TMP_Text>();
-            ApplyClassicRpgButtonTheme(_btnPrimaryAction, ClassicRpgButtonSize.Long);
-            ApplyClassicRpgLabelTheme(_txtPrimaryAction, false, true);
+            if (premiumShellPresentation)
+                ApplyLobbyButtonStyle(_btnPrimaryAction, ClassicRpgButtonSkin.MiniGold, 44f, compact ? 156f : 186f);
+            else
+            {
+                ApplyClassicRpgButtonTheme(_btnPrimaryAction, ClassicRpgButtonSize.Long);
+                ApplyClassicRpgLabelTheme(_txtPrimaryAction, false, true);
+            }
             _btnPrimaryAction.onClick.AddListener(HandlePrimaryAction);
+            var primaryLayout = _btnPrimaryAction.GetComponent<LayoutElement>();
+            if (primaryLayout != null && premiumShellPresentation)
+                primaryLayout.preferredWidth = compact ? 156f : 186f;
             RefreshPrimaryAction();
+        }
+
+        void ApplyLobbyButtonStyle(Button button, ClassicRpgButtonSkin skin, float height, float preferredWidth = 0f)
+        {
+            if (button == null)
+                return;
+
+            var layout = button.GetComponent<LayoutElement>() ?? button.gameObject.AddComponent<LayoutElement>();
+            layout.preferredHeight = height;
+            layout.minHeight = height;
+            if (preferredWidth > 0f)
+            {
+                layout.preferredWidth = preferredWidth;
+                layout.minWidth = preferredWidth;
+            }
+
+            var image = button.targetGraphic as Image ?? button.GetComponent<Image>();
+            if (image != null)
+            {
+                button.targetGraphic = image;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.InventoryTitle, true, Color.white);
+                image.raycastTarget = true;
+            }
+
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                var labelColor = skin switch
+                {
+                    ClassicRpgButtonSkin.MiniGreen => ClassicRpgUiRuntime.SuccessText,
+                    ClassicRpgButtonSkin.MiniBrown => ClassicRpgUiRuntime.BrightText,
+                    _ => ClassicRpgUiRuntime.WarmGold,
+                };
+
+                ClassicRpgUiRuntime.ApplyTextStyle(
+                    label,
+                    ClassicRpgTextStyle.ButtonLabel,
+                    TextAlignmentOptions.Center,
+                    labelColor,
+                    allowWrap: false);
+                label.fontSize = height >= 54f ? 24f : height >= 46f ? 19f : 17f;
+                label.raycastTarget = false;
+            }
+
+            var colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(0.95f, 0.98f, 1f, 1f);
+            colors.pressedColor = skin switch
+            {
+                ClassicRpgButtonSkin.MiniGreen => new Color(0.84f, 0.95f, 0.86f, 1f),
+                ClassicRpgButtonSkin.MiniBrown => new Color(0.84f, 0.88f, 0.94f, 1f),
+                _ => new Color(0.88f, 0.93f, 1f, 1f),
+            };
+            colors.selectedColor = new Color(0.97f, 0.99f, 1f, 1f);
+            colors.disabledColor = new Color(1f, 1f, 1f, 0.44f);
+            colors.fadeDuration = 0.10f;
+            button.transition = Selectable.Transition.ColorTint;
+            button.colors = colors;
+        }
+
+        bool UsePremiumShellPresentation()
+        {
+            return _activePage == WizardPage.RaceSelection || UseScenicProgressionPresentation();
+        }
+
+        bool UseScenicProgressionPresentation()
+        {
+            return _activePage == WizardPage.ProgressionTree || _activePage == WizardPage.UnitDetails;
+        }
+
+        void BuildPremiumPageHeader(Transform parent, bool compact)
+        {
+            var header = new GameObject("HeaderPlate", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            header.transform.SetParent(parent, false);
+            var headerLayout = header.GetComponent<LayoutElement>();
+            headerLayout.preferredHeight = _mode == ProgressionViewerMode.PreMatchConfirm
+                ? (compact ? 146f : 176f)
+                : (compact ? 116f : 142f);
+
+            var layout = header.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = compact ? 4f : 6f;
+
+            var overline = MakeLabel(header.transform, "Txt_Overline", "WAR COUNCIL", compact ? 14 : 16, ClassicRpgUiRuntime.SoftGold, compact ? 18f : 20f);
+            ApplyReadableTextStyle(overline, ClassicRpgUiRuntime.SoftGold, TextAlignmentOptions.Center, FontStyles.Bold);
+            SetResponsiveSingleLine(overline, 11f, compact ? 14f : 16f);
+
+            var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            titlePlate.transform.SetParent(header.transform, false);
+            var titlePlateLayout = titlePlate.GetComponent<LayoutElement>();
+            titlePlateLayout.preferredWidth = compact ? 430f : 560f;
+            titlePlateLayout.preferredHeight = compact ? 78f : 92f;
+            ClassicRpgUiRuntime.ApplyPanel(titlePlate.GetComponent<Image>(), ClassicRpgPanelSkin.TitleLong, false, Color.white);
+
+            _txtTitle = CreateAnchoredText(
+                titlePlate.transform,
+                "Txt_Title",
+                BuildPageTitle(),
+                compact ? 26 : 34,
+                ClassicRpgUiRuntime.WarmGold,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(24f, 10f),
+                new Vector2(-24f, compact ? -14f : -18f));
+            ApplyPlateTitleStyle(_txtTitle, ClassicRpgUiRuntime.WarmGold, TextAlignmentOptions.Center);
+            SetResponsiveSingleLine(_txtTitle, compact ? 18f : 20f, compact ? 26f : 34f);
+
+            _txtSubtitle = MakeLabel(
+                header.transform,
+                "Txt_Subtitle",
+                BuildPageSubtitle(),
+                compact ? 13 : 15,
+                new Color(0.92f, 0.90f, 0.84f, 0.88f),
+                compact ? 26f : 30f);
+            _txtSubtitle.alignment = TextAlignmentOptions.Center;
+            ApplyReadableTextStyle(_txtSubtitle, new Color(0.92f, 0.90f, 0.84f, 0.88f), TextAlignmentOptions.Center);
+            SetResponsiveWrappedText(_txtSubtitle, compact ? 11f : 12f, compact ? 13f : 15f);
+
+            _txtTimer = null;
+            if (_mode == ProgressionViewerMode.PreMatchConfirm)
+            {
+                var timerPlate = new GameObject("TimerPlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+                timerPlate.transform.SetParent(header.transform, false);
+                var timerPlateLayout = timerPlate.GetComponent<LayoutElement>();
+                timerPlateLayout.preferredWidth = compact ? 190f : 232f;
+                timerPlateLayout.preferredHeight = compact ? 34f : 38f;
+                ClassicRpgUiRuntime.ApplyPanel(timerPlate.GetComponent<Image>(), ClassicRpgPanelSkin.TitleMini, false, Color.white);
+
+                _txtTimer = MakeLabel(timerPlate.transform, "Txt_Timer", "", compact ? 16 : 18, timerNormalColor, compact ? 24f : 26f);
+                ApplyReadableTextStyle(_txtTimer, timerNormalColor, TextAlignmentOptions.Center, FontStyles.Bold);
+                _txtTimer.gameObject.SetActive(true);
+            }
+        }
+
+        GameObject CreateFloatingFooter(Transform parent, bool compact)
+        {
+            var footer = new GameObject("FooterStrip", typeof(RectTransform), typeof(LayoutElement), typeof(VerticalLayoutGroup));
+            footer.transform.SetParent(parent, false);
+            var layoutElement = footer.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = _mode == ProgressionViewerMode.PreMatchConfirm
+                ? (compact ? 112f : 102f)
+                : (compact ? 86f : 76f);
+
+            var layout = footer.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = TextAnchor.MiddleCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = compact ? 4f : 6f;
+            layout.padding = compact ? new RectOffset(0, 0, 2, 6) : new RectOffset(0, 0, 0, 8);
+            return footer;
+        }
+
+        void BuildWinterBackdrop(Transform parent, bool compact)
+        {
+            var scenic = new GameObject("ScenicBackdrop", typeof(RectTransform), typeof(Image));
+            scenic.transform.SetParent(parent, false);
+            var scenicRect = scenic.GetComponent<RectTransform>();
+            ClassicRpgUiRuntime.Stretch(scenicRect);
+            scenic.transform.SetSiblingIndex(0);
+
+            var scenicImage = scenic.GetComponent<Image>();
+            scenicImage.raycastTarget = false;
+            scenicImage.color = new Color(1f, 1f, 1f, 0.98f);
+            var backdropSprite = LoadWinterBackdropSprite();
+            if (backdropSprite != null)
+            {
+                scenicImage.sprite = backdropSprite;
+                scenicImage.type = Image.Type.Simple;
+                scenicImage.preserveAspect = true;
+
+                var fitter = scenic.gameObject.AddComponent<AspectRatioFitter>();
+                fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+                fitter.aspectRatio = backdropSprite.rect.width / Mathf.Max(1f, backdropSprite.rect.height);
+            }
+
+            CreateBackdropTintLayer(parent, "BackdropWash", Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, new Color(0.04f, 0.06f, 0.09f, 0.28f));
+            CreateBackdropTintLayer(parent, "TopShade", new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, compact ? -8f : -12f), new Vector2(0f, compact ? 168f : 208f), new Color(0.01f, 0.02f, 0.04f, 0.72f));
+            CreateBackdropTintLayer(parent, "BottomShade", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 0f : 10f), new Vector2(0f, compact ? 156f : 188f), new Color(0.01f, 0.01f, 0.03f, 0.68f));
+            CreateBackdropTintLayer(parent, "LeftShade", new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(compact ? 54f : 110f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.34f));
+            CreateBackdropTintLayer(parent, "RightShade", new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), Vector2.zero, new Vector2(compact ? 54f : 110f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.40f));
+        }
+
+        static void CreateBackdropTintLayer(
+            Transform parent,
+            string name,
+            Vector2 anchorMin,
+            Vector2 anchorMax,
+            Vector2 pivot,
+            Vector2 anchoredPosition,
+            Vector2 sizeDelta,
+            Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var rect = go.GetComponent<RectTransform>();
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.pivot = pivot;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = sizeDelta;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
+
+            var image = go.GetComponent<Image>();
+            image.color = color;
+            image.raycastTarget = false;
+        }
+
+        static Sprite LoadWinterBackdropSprite()
+        {
+            if (_winterBackdropSprite != null)
+                return _winterBackdropSprite;
+
+            var texture = Resources.Load<Texture2D>(WinterBackdropResourcePath);
+            if (texture == null)
+            {
+                Debug.LogWarning($"[RaceProgression] Missing progression backdrop resource at Resources/{WinterBackdropResourcePath}.");
+                return null;
+            }
+
+            texture.wrapMode = TextureWrapMode.Clamp;
+            _winterBackdropSprite = Sprite.Create(
+                texture,
+                new Rect(0f, 0f, texture.width, texture.height),
+                new Vector2(0.5f, 0.5f),
+                100f);
+            _winterBackdropSprite.name = "WinterForestBackdrop_Runtime";
+            return _winterBackdropSprite;
+        }
+
+        void EnsureDecorativeFrame(RectTransform panelRect)
+        {
+            if (panelRect == null)
+                return;
+
+            var existing = panelRect.Find("PremiumFrame") as RectTransform;
+            if (existing != null)
+            {
+                existing.gameObject.SetActive(true);
+                return;
+            }
+
+            var frame = new GameObject("PremiumFrame", typeof(RectTransform), typeof(Image));
+            frame.transform.SetParent(panelRect, false);
+            var image = frame.GetComponent<Image>();
+            image.raycastTarget = false;
+            ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.Frame, true, new Color(0.90f, 0.84f, 0.72f, 0.50f));
+            ClassicRpgUiRuntime.Stretch(frame.GetComponent<RectTransform>(), new Vector2(-4f, -4f), new Vector2(4f, 4f));
         }
 
         void OnRaceSelected(string raceId)
@@ -3659,8 +4086,8 @@ namespace CastleDefender.UI
             return _activePage switch
             {
                 WizardPage.RaceSelection => _selectedRace != null
-                    ? $"Open {_selectedRace.DisplayName} to review its upgrade chain."
-                    : "Select a race to continue.",
+                    ? $"Use the Continue button on {_selectedRace.DisplayName} to review its upgrade chain."
+                    : "Select a race card to continue.",
                 WizardPage.ProgressionTree => _selectedRace != null
                     ? _selectedUnit != null
                         ? $"{_selectedUnit.DisplayName} selected. Review its dossier and confirm when your build is ready."
@@ -3706,15 +4133,16 @@ namespace CastleDefender.UI
             {
                 var view = _raceCards[i];
                 bool selected = _selectedRace != null && string.Equals(view.RaceId, _selectedRace.Id, StringComparison.OrdinalIgnoreCase);
-                view.Background.color = selected ? selectedColor : new Color(0.13f, 0.17f, 0.26f, 0.98f);
+                view.Background.color = selected ? selectedColor : new Color(0.08f, 0.06f, 0.05f, 0.96f);
                 view.Title.color = selected ? new Color(0.10f, 0.09f, 0.06f, 1f) : Color.white;
                 view.Subtitle.color = selected ? new Color(0.18f, 0.13f, 0.08f, 1f) : new Color(0.82f, 0.88f, 0.96f, 1f);
                 if (view.Summary != null)
                     view.Summary.color = selected ? new Color(0.20f, 0.15f, 0.09f, 1f) : new Color(0.84f, 0.88f, 0.95f, 1f);
-                if (view.StatusBackground != null)
-                    view.StatusBackground.color = selected ? new Color(0.33f, 0.26f, 0.11f, 0.98f) : new Color(0.18f, 0.23f, 0.33f, 0.98f);
-                if (view.Status != null)
-                    view.Status.color = selected ? new Color(0.98f, 0.93f, 0.80f, 1f) : ClassicRpgUiRuntime.WarmGold;
+                if (view.ContinueButton != null)
+                {
+                    view.ContinueButton.gameObject.SetActive(selected);
+                    view.ContinueButton.interactable = selected;
+                }
             }
 
             RefreshRaceCarouselButtons();
@@ -4633,9 +5061,9 @@ namespace CastleDefender.UI
                 return GetUnitProgressState(unit) switch
                 {
                     UnitProgressVisualState.Start => "Starting civic tier",
-                    UnitProgressVisualState.Unlocked => "Civic requirement already met",
-                    UnitProgressVisualState.Available => "Current civic upgrade available",
-                    _ => "Locked civic upgrade",
+                    UnitProgressVisualState.Unlocked => "Town Core requirement already met",
+                    UnitProgressVisualState.Available => "Current Town Core upgrade available",
+                    _ => "Locked Town Core upgrade",
                 };
             }
 
@@ -4700,7 +5128,7 @@ namespace CastleDefender.UI
 
             var builder = new StringBuilder();
             builder.AppendLine(requirementText);
-            builder.AppendLine($"[Rank] {BuildPositionDetailText(unit)}");
+            builder.AppendLine($"[Position] {BuildPositionDetailText(unit)}");
             builder.Append($"[Source] {BuildCurrentSourceText(TryGetCatalogEntry(unit, out var catalog) ? catalog : null)}");
             return builder.ToString().TrimEnd();
         }
@@ -5642,7 +6070,6 @@ namespace CastleDefender.UI
                 "barracks" => "Icons/towers/fighter_icon",
                 "blacksmith" => "Icons/towers/fighter_icon",
                 "archery_tower" => "Icons/towers/archer_icon",
-                "tower_archer" => "Icons/towers/archer_icon",
                 "turret" => "Icons/towers/fighter_icon",
                 "stable" => "Icons/towers/fighter_icon",
                 "market" => "Icons/towers/fighter_icon",
@@ -5750,7 +6177,7 @@ namespace CastleDefender.UI
                 builder.AppendLine($"[Coin] Route Value {BuildEconomyLapText(unit)}");
 
             builder.AppendLine($"[Role] {BuildUnitRoleLabel(unit)}");
-            builder.AppendLine($"[Rank] {BuildPositionDetailText(unit)}");
+            builder.AppendLine($"[Position] {BuildPositionDetailText(unit)}");
             builder.AppendLine($"[Blade] Attack {FormatStatNumber(catalog.attack_damage)}");
             builder.AppendLine($"[Tempo] Attack Speed {Mathf.Max(0.01f, catalog.attack_speed):0.##}/s");
             builder.AppendLine($"[Strike] Damage per second {ComputeUnitDps(catalog):0.#}");
@@ -5824,9 +6251,9 @@ namespace CastleDefender.UI
 
         static string BuildCompactPositionTag(RaceProgressionUnitDefinition unit)
         {
-            int rank = GetBattleLineRank(unit);
-            return rank > 0
-                ? $"{Ordinal(rank)} Rank"
+            int positionIndex = GetPositionSlotIndex(unit);
+            return positionIndex > 0
+                ? BuildPositionLabel(positionIndex)
                 : IsEconomyUnit(unit)
                     ? "Trade Route"
                     : IsStableDisplayOnlyUnit(unit)
@@ -5836,20 +6263,20 @@ namespace CastleDefender.UI
 
         static string BuildPositionDetailText(RaceProgressionUnitDefinition unit)
         {
-            int rank = GetBattleLineRank(unit);
-            if (rank > 0)
-                return $"{Ordinal(rank)} battle-line rank";
+            int positionIndex = GetPositionSlotIndex(unit);
+            if (positionIndex > 0)
+                return BuildPositionDetailLabel(positionIndex);
 
             if (IsEconomyUnit(unit))
-                return "Trade route / off the battle line";
+                return "Trade route / out of lane combat";
 
             if (IsStableDisplayOnlyUnit(unit))
-                return "No live battle-line role; display-only branch";
+                return "No live lane-combat role; display-only branch";
 
-            return "No live battle-line role assigned";
+            return "No live lane-combat role assigned";
         }
 
-        static int GetBattleLineRank(RaceProgressionUnitDefinition unit)
+        static int GetPositionSlotIndex(RaceProgressionUnitDefinition unit)
         {
             return NormalizeTechTreeKey(unit?.Id) switch
             {
@@ -5875,6 +6302,34 @@ namespace CastleDefender.UI
                 "high_priest" => 6,
                 "bishop" => 6,
                 _ => 0,
+            };
+        }
+
+        static string BuildPositionLabel(int positionIndex)
+        {
+            return positionIndex switch
+            {
+                1 => "Frontline",
+                2 => "Melee Line",
+                3 => "Reach Support",
+                4 => "Arcane Support",
+                5 => "Ranged Support",
+                6 => "Rear Support",
+                _ => "Assigned Role",
+            };
+        }
+
+        static string BuildPositionDetailLabel(int positionIndex)
+        {
+            return positionIndex switch
+            {
+                1 => "Frontline anchor role",
+                2 => "Main melee pressure role",
+                3 => "Reach-support role",
+                4 => "Arcane support role",
+                5 => "Ranged support role",
+                6 => "Rear-support role",
+                _ => "Assigned combat role",
             };
         }
 
@@ -5966,21 +6421,21 @@ namespace CastleDefender.UI
                 "militia" => "Raised from the town levy once the first Barracks is standing.",
                 "swordsman" => "Trained out of militia once the Blacksmith professionalizes the infantry line.",
                 "knight" => "Fielded from the elite mounted arm once the Blacksmith reaches its final tier.",
-                "spearman" => "Recruited into the disciplined polearm ranks through the Blacksmith.",
+                "spearman" => "Recruited into the disciplined polearm corps through the Blacksmith.",
                 "halberdier" => "Advanced polearm specialist forged from the same Blacksmith branch.",
                 "lancer" => "Cavalry polearm veteran released at the top of the spear line.",
-                "shieldman" => "Drawn from the city guard and equipped as the front-rank wall.",
+                "shieldman" => "Drawn from the city guard and equipped as a frontline wall.",
                 "shield_guard" => "Veteran shield-line soldier outfitted through upgraded Blacksmith support.",
                 "guardian" => "Late-game elite guard mounted and armored for the final defensive tier.",
                 "cleric" => "Temple acolyte attached to marching companies for field care.",
                 "priest" => "Ordained support unit sent from the upgraded Temple.",
                 "high_priest" => "Senior temple leader deployed once the faith branch is fully matured.",
-                "mage" => "Early battle caster licensed through the Wizard Tower.",
+                "mage" => "Early battle caster licensed through the Mage Tower.",
                 "wizard" => "Veteran spellcaster trained after the tower reaches its middle tier.",
-                "thaumaturge" => "Master arcane operative released at the peak of the Wizard Tower.",
-                "archer" => "Drawn from huntsmen and garrison bowmen once the Archery Tower is built.",
+                "thaumaturge" => "Master arcane operative released at the peak of the Mage Tower.",
+                "archer" => "Drawn from huntsmen and garrison bowmen once the Archery building is built.",
                 "crossbowman" => "Armory-trained marksman issued heavier ranged weapons at tier two.",
-                "ranger" => "Veteran frontier skirmisher fielded from the fully upgraded Archery Tower.",
+                "ranger" => "Veteran frontier skirmisher fielded from the fully upgraded Archery building.",
                 "peasant" => "Starter trade laborer sent from the Market through the Rear Gate to the Beast Lair.",
                 "settler" => "Experienced civilian courier that replaces Peasants on the higher-value market route.",
                 "trader" => "Top-tier commercial runner representing the Market's final rear-gate trade economy.",
@@ -5998,22 +6453,22 @@ namespace CastleDefender.UI
         {
             return NormalizeTechTreeKey(unit?.Id) switch
             {
-                "militia" => "Cheap early frontline body used to establish the second rank.",
+                "militia" => "Cheap early frontline body used to establish the first melee role.",
                 "swordsman" => "Reliable line fighter that upgrades early militia pressure into a sturdier core.",
                 "knight" => "Shock cavalry finisher for the infantry branch.",
-                "spearman" => "Third-rank reach support that helps control enemy approach.",
+                "spearman" => "Reach support that helps control enemy approach.",
                 "halberdier" => "Higher-tier polearm pressure with better anti-armor identity.",
                 "lancer" => "Fast reach cavalry used to punish openings once the line is established.",
-                "shieldman" => "First-rank anchor that protects the rest of the battle line.",
-                "shield_guard" => "Improved first-rank tank that stabilizes longer engagements.",
+                "shieldman" => "Frontline anchor that protects the rest of the force.",
+                "shield_guard" => "Improved frontline tank that stabilizes longer engagements.",
                 "guardian" => "Elite defensive anchor for the late-game frontline.",
                 "cleric" => "Back-rank sustain support and early healing coverage.",
                 "priest" => "Stronger backline sustain with more reliable healing uptime.",
                 "high_priest" => "Peak support output for extended battles.",
                 "mage" => "Backline arcane damage with early spell pressure.",
-                "wizard" => "Stronger magical throughput from deeper behind the battle line.",
-                "thaumaturge" => "Late-game caster that should define the arcane back line.",
-                "archer" => "Baseline ranged pressure from the fifth rank.",
+                "wizard" => "Stronger magical throughput from a safer support position.",
+                "thaumaturge" => "Late-game caster that should define the arcane branch.",
+                "archer" => "Baseline ranged pressure for the ranged branch.",
                 "crossbowman" => "Tier-two ranged specialist intended to hit harder than base archers.",
                 "ranger" => "Late-game skirmisher intended to finish the ranged branch cleanly.",
                 "peasant" => "Carries the starter rear-gate economy route for the human trade branch.",
@@ -6021,7 +6476,7 @@ namespace CastleDefender.UI
                 "trader" => "Represents the fully upgraded rear-gate market runner.",
                 "king" => "Frontline hero commander for the Castle outcome row.",
                 "paladin" => "Holy frontline hero meant to absorb and punish pressure.",
-                "bishop" => "Backline hero support that should sit behind the main damage ranks.",
+                "bishop" => "Rear-support hero that sustains the main force.",
                 "colt" => "Visual stable unlock prepared for future mounted roster logic.",
                 "stallion" => "Mid-tier mount unlock awaiting live stable gameplay.",
                 "dark_stallion" => "End-tier mount unlock awaiting live stable gameplay.",
@@ -6041,11 +6496,11 @@ namespace CastleDefender.UI
                 "lancer" => "Fast lance impact for flank breaks.",
                 "shieldman" => "Shield wall and forward brace to absorb the opening clash.",
                 "shield_guard" => "Heavy brace with longer hold time under pressure.",
-                "guardian" => "Elite guard impact that keeps the first rank intact.",
+                "guardian" => "Elite guard impact that keeps the frontline intact.",
                 "cleric" => "Field mend and close support blessings.",
                 "priest" => "Battle prayer and stronger targeted healing.",
                 "high_priest" => "High-output sustain with stronger blessing coverage.",
-                "mage" => "Arcane burst volleys from the back line.",
+                "mage" => "Arcane burst volleys from the rear support role.",
                 "wizard" => "Heavier spell volleys with stronger magical pressure.",
                 "thaumaturge" => "Late-game arcane control and high burst casting.",
                 "archer" => "Rapid volley fire into softened targets.",
@@ -6220,7 +6675,7 @@ namespace CastleDefender.UI
             {
                 return
                     $"[Route] {BuildUnitSpecialAttackText(unit)}\n" +
-                    "[Position] This runner travels the trade route instead of joining the battle line.\n" +
+                    "[Position] This runner travels the trade route instead of entering lane combat.\n" +
                     "[Preview] Economy audio can be previewed below. Combat animation preview is not applicable.";
             }
 
@@ -6277,17 +6732,17 @@ namespace CastleDefender.UI
             if (unit == null)
                 return "Stance unavailable.";
 
-            int rank = GetBattleLineRank(unit);
-            if (rank > 0)
-                return $"Operates from the {Ordinal(rank)} rank as {BuildUnitRoleLabel(unit).ToLowerInvariant()}.";
+            string positionLabel = BuildCompactPositionTag(unit);
+            if (!string.IsNullOrWhiteSpace(positionLabel))
+                return $"Fills the {positionLabel.ToLowerInvariant()} role.";
 
             if (IsEconomyUnit(unit))
-                return "Runs the market route and stays off the battle line.";
+                return "Runs the market route and stays out of lane combat.";
 
             if (IsStableDisplayOnlyUnit(unit))
                 return "Reserved for future cavalry positioning once mounted combat is live.";
 
-            return "No live battle-line role is assigned to this entry.";
+            return "No live lane-combat role is assigned to this entry.";
         }
 
         static string BuildUnitDeliveryText(RaceProgressionUnitDefinition unit, UnitCatalogEntry catalog)
@@ -6295,21 +6750,20 @@ namespace CastleDefender.UI
             if (catalog == null)
                 return "Delivery data unavailable.";
 
-            int rank = GetBattleLineRank(unit);
-            string rankText = rank > 0 ? $"{Ordinal(rank)} rank" : "assigned position";
+            string positionText = BuildCompactPositionTag(unit) ?? "assigned role";
             string damageType = HumanizeLabel(catalog.damage_type);
             if (!string.IsNullOrWhiteSpace(catalog.proj_behavior))
             {
-                return $"{HumanizeLabel(catalog.proj_behavior)} attack using {damageType.ToLowerInvariant()} damage from the {rankText}.";
+                return $"{HumanizeLabel(catalog.proj_behavior)} attack using {damageType.ToLowerInvariant()} damage from the {positionText.ToLowerInvariant()} role.";
             }
 
             if (catalog.range > 1f)
-                return $"{damageType} ranged strike fired from the {rankText} at {FormatStatNumber(catalog.range)} range.";
+                return $"{damageType} ranged strike fired from the {positionText.ToLowerInvariant()} role at {FormatStatNumber(catalog.range)} range.";
 
             if (catalog.range > 0.30f)
-                return $"{damageType} reach attack delivered from the {rankText}.";
+                return $"{damageType} reach attack delivered from the {positionText.ToLowerInvariant()} role.";
 
-            return $"{damageType} close-range strike delivered from the {rankText}.";
+            return $"{damageType} close-range strike delivered from the {positionText.ToLowerInvariant()} role.";
         }
 
         static string BuildCondensedLiveHookSummary(UnitCatalogEntry catalog)
@@ -6722,6 +7176,7 @@ namespace CastleDefender.UI
             if (_btnPrimaryAction == null)
                 return;
 
+            bool premiumShellPresentation = UsePremiumShellPresentation();
             if (_btnSecondaryAction != null)
             {
                 bool showSecondary = _activePage != WizardPage.RaceSelection || _mode == ProgressionViewerMode.LobbyViewer;
@@ -6737,14 +7192,13 @@ namespace CastleDefender.UI
 
             if (_activePage == WizardPage.RaceSelection)
             {
-                bool canContinue = _selectedRace != null
-                    && (_mode == ProgressionViewerMode.LobbyViewer || _state == PhaseState.Active || _state == PhaseState.Viewing);
-                _btnPrimaryAction.interactable = canContinue;
-                if (_txtPrimaryAction != null)
-                    _txtPrimaryAction.text = canContinue ? "Continue" : "Waiting...";
+                _btnPrimaryAction.gameObject.SetActive(false);
+                if (premiumShellPresentation && _btnSecondaryAction != null)
+                    ApplyLobbyButtonStyle(_btnSecondaryAction, ClassicRpgButtonSkin.MiniBrown, 44f, 156f);
                 return;
             }
 
+            _btnPrimaryAction.gameObject.SetActive(true);
             if (_txtPrimaryAction != null)
             {
                 _txtPrimaryAction.text = _mode == ProgressionViewerMode.LobbyViewer
@@ -6754,6 +7208,17 @@ namespace CastleDefender.UI
 
             _btnPrimaryAction.interactable = _mode == ProgressionViewerMode.LobbyViewer
                 || (_state == PhaseState.Active && _selectedRace != null);
+
+            if (premiumShellPresentation)
+            {
+                if (_btnSecondaryAction != null)
+                    ApplyLobbyButtonStyle(_btnSecondaryAction, ClassicRpgButtonSkin.MiniBrown, 44f, 156f);
+
+                var primarySkin = _mode != ProgressionViewerMode.LobbyViewer && _state == PhaseState.Active && _selectedRace != null
+                    ? ClassicRpgButtonSkin.MiniGreen
+                    : ClassicRpgButtonSkin.MiniGold;
+                ApplyLobbyButtonStyle(_btnPrimaryAction, primarySkin, 44f, 186f);
+            }
         }
 
         void SubmitConfirm()
@@ -7446,7 +7911,15 @@ namespace CastleDefender.UI
                 ClassicRpgUiRuntime.Stretch(section.GetComponent<RectTransform>());
             var sectionImage = section.GetComponent<Image>();
             sectionImage.color = color;
-            ClassicRpgUiRuntime.ApplyPanel(sectionImage, ClassicRpgPanelSkin.PaperMedium, true, color);
+            if (UsePremiumShellPresentation())
+            {
+                ClassicRpgUiRuntime.ApplyPanel(sectionImage, ClassicRpgPanelSkin.PortraitBackdrop, true, color);
+                EnsureDecorativeFrame(section.GetComponent<RectTransform>());
+            }
+            else
+            {
+                ClassicRpgUiRuntime.ApplyPanel(sectionImage, ClassicRpgPanelSkin.PaperMedium, true, color);
+            }
             var layoutElement = section.GetComponent<LayoutElement>();
             if (preferredHeight > 0f)
                 layoutElement.preferredHeight = preferredHeight;

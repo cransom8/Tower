@@ -512,6 +512,37 @@ function buildMarketLoopRouteSegments(laneIndex) {
   ];
 }
 
+function wrapRouteLoopIndex(index) {
+  const routeCount = ROUTE_NODE_IDS.length;
+  if (routeCount <= 0)
+    return -1;
+  return ((Math.floor(Number(index) || 0) % routeCount) + routeCount) % routeCount;
+}
+
+function buildOuterLoopRouteSegments(sourceNodeId, direction = "clockwise") {
+  const routeSourceNodeId = String(sourceNodeId || "").trim().toUpperCase();
+  const sourceCoreNodeId = getLaneCoreNodeIdForRouteNode(routeSourceNodeId);
+  const prependBarracksLink = isBarracksRouteStartNode(routeSourceNodeId) && sourceCoreNodeId
+    ? `${routeSourceNodeId}_${sourceCoreNodeId}`
+    : null;
+  if (!sourceCoreNodeId)
+    return null;
+
+  const sourceIndex = getNodeIndex(sourceCoreNodeId);
+  if (sourceIndex < 0)
+    return null;
+
+  const normalizedDirection = String(direction || "").trim().toLowerCase();
+  const indexDelta = normalizedDirection === "counterclockwise" ? -1 : 1;
+  const segments = prependBarracksLink ? [prependBarracksLink] : [];
+  for (let step = 0; step < ROUTE_NODE_IDS.length; step += 1) {
+    const fromNodeId = ROUTE_NODE_IDS[wrapRouteLoopIndex(sourceIndex + (step * indexDelta))];
+    const toNodeId = ROUTE_NODE_IDS[wrapRouteLoopIndex(sourceIndex + ((step + 1) * indexDelta))];
+    segments.push(`${fromNodeId}_${toNodeId}`);
+  }
+  return segments;
+}
+
 function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
   if (!routeType)
     return null;
@@ -549,17 +580,7 @@ function buildRouteSegments(routeType, sourceNodeId, targetNodeId) {
   if (!sourceCoreNodeId)
     return null;
 
-  const sourceIndex = getNodeIndex(sourceCoreNodeId);
-  if (sourceIndex < 0)
-    return null;
-
-  const segments = prependBarracksLink ? [prependBarracksLink] : [];
-  for (let step = 0; step < ROUTE_NODE_IDS.length; step++) {
-    const from = ROUTE_NODE_IDS[(sourceIndex + step) % ROUTE_NODE_IDS.length];
-    const to = ROUTE_NODE_IDS[(sourceIndex + step + 1) % ROUTE_NODE_IDS.length];
-    segments.push(`${from}_${to}`);
-  }
-  return segments;
+  return buildOuterLoopRouteSegments(routeSourceNodeId, "clockwise");
 }
 
 function parseRouteSegmentId(segmentId) {
@@ -897,6 +918,7 @@ module.exports = {
   getBarracksSiteWorldPosition,
   getMarketPadWorldPosition,
   buildMarketLoopRouteSegments,
+  buildOuterLoopRouteSegments,
   buildRouteSegments,
   parseRouteSegmentId,
   getRouteLength,

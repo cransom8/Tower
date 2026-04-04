@@ -13,6 +13,11 @@ Shader "CastleDefender/ForestVolume"
         _CenterDensity ("Center Density", Range(0.0, 1.5)) = 1.12
         _ViewOcclusionBoost ("View Occlusion Boost", Range(0.0, 1.0)) = 0.4
         _EdgeFadeDistance ("Edge Fade Distance", Range(0.01, 0.18)) = 0.065
+        _CanopyTex ("Canopy Texture", 2D) = "white" {}
+        _CanopyTexScale ("Canopy Texture Scale", Range(0.002, 0.08)) = 0.0215
+        _CanopyTexBlend ("Canopy Texture Blend", Range(0.0, 1.0)) = 0.9
+        _CanopyTexClip ("Canopy Texture Clip", Range(0.0, 0.9)) = 0.24
+        _CanopyTintStrength ("Canopy Tint Strength", Range(0.0, 1.5)) = 0.92
     }
 
     SubShader
@@ -39,6 +44,9 @@ Shader "CastleDefender/ForestVolume"
             #pragma fragment Frag
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            TEXTURE2D(_CanopyTex);
+            SAMPLER(sampler_CanopyTex);
 
             struct Attributes
             {
@@ -68,6 +76,10 @@ Shader "CastleDefender/ForestVolume"
             float _CenterDensity;
             float _ViewOcclusionBoost;
             float _EdgeFadeDistance;
+            float _CanopyTexScale;
+            float _CanopyTexBlend;
+            float _CanopyTexClip;
+            float _CanopyTintStrength;
             CBUFFER_END
 
             float Hash21(float2 p)
@@ -89,6 +101,16 @@ Shader "CastleDefender/ForestVolume"
                 float d = Hash21(cell + float2(1.0, 1.0));
 
                 return lerp(lerp(a, b, smoothF.x), lerp(c, d, smoothF.x), smoothF.y);
+            }
+
+            float2 Rotate2D(float2 value, float degrees)
+            {
+                float angleRadians = radians(degrees);
+                float s = sin(angleRadians);
+                float c = cos(angleRadians);
+                return float2(
+                    (value.x * c) - (value.y * s),
+                    (value.x * s) + (value.y * c));
             }
 
             Varyings Vert(Attributes input)
@@ -121,6 +143,14 @@ Shader "CastleDefender/ForestVolume"
                 float canopyNoise = lerp(noiseA, noiseB, 0.42);
                 float breakup = saturate(lerp(noiseA, canopyNoise, 0.72) + ((noiseB - 0.5) * _NoiseStrength * 0.35));
 
+                float2 canopyUvA = input.positionWS.xz * _CanopyTexScale;
+                float2 canopyUvB = Rotate2D((canopyUvA * 1.17) + float2(0.173, 0.381), 31.0);
+                float4 canopyTexA = SAMPLE_TEXTURE2D(_CanopyTex, sampler_CanopyTex, canopyUvA);
+                float4 canopyTexB = SAMPLE_TEXTURE2D(_CanopyTex, sampler_CanopyTex, canopyUvB);
+                float canopyTexMask = saturate(lerp(canopyTexA.a, canopyTexB.a, 0.48));
+                float canopyTexCoverage = smoothstep(_CanopyTexClip, 1.0, canopyTexMask);
+                float3 canopyTexColor = lerp(canopyTexA.rgb, canopyTexB.rgb, 0.42);
+
                 float vertical01 = saturate(input.positionOS.y + 0.5);
                 float2 edgeUv = min(input.uv, 1.0 - input.uv);
                 float edgeDistance = min(edgeUv.x, edgeUv.y);
@@ -150,6 +180,9 @@ Shader "CastleDefender/ForestVolume"
                     edgeDistance + ((canopyNoise - 0.5) * _NoiseStrength * 0.12));
                 float topAlpha = lerp(0.76, 0.98, canopyCluster) * topEdgeFade;
                 topAlpha *= lerp(1.0, 1.0 + (_CenterDensity * 0.72), centerDensity);
+                float canopyTexInfluence = topMask * _CanopyTexBlend;
+                float canopyTexDensity = saturate((canopyTexCoverage * 0.86) + (canopyCluster * 0.32));
+                topAlpha = lerp(topAlpha, topAlpha * canopyTexDensity, canopyTexInfluence);
 
                 float3 sideColor = lerp(_BaseColor.rgb, _DepthColor.rgb, saturate(0.55 + ((1.0 - breakup) * 0.45)));
                 sideColor *= lerp(0.84, 0.24, darkness);
@@ -157,6 +190,9 @@ Shader "CastleDefender/ForestVolume"
                 float3 topColor = lerp(_DepthColor.rgb, _TopColor.rgb, canopyCluster);
                 topColor = lerp(topColor, _BaseColor.rgb, 0.28);
                 topColor *= lerp(0.8, 0.34, darkness);
+                float3 evergreenTop = saturate((canopyTexColor * _CanopyTintStrength) + (_DepthColor.rgb * 0.16));
+                evergreenTop *= lerp(0.72, 1.05, canopyCluster);
+                topColor = lerp(topColor, evergreenTop, canopyTexInfluence * canopyTexCoverage);
 
                 float3 color = lerp(sideColor, topColor, topMask);
                 color *= lerp(0.8, 1.02, breakup * _NoiseStrength);

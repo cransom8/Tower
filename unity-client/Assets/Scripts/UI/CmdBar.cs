@@ -341,7 +341,7 @@ namespace CastleDefender.UI
             var rowsFitter = rows.gameObject.GetComponent<ContentSizeFitter>() ?? rows.gameObject.AddComponent<ContentSizeFitter>();
             rowsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            var section = new BarracksSectionView(id, root, header, ordersLabel, attackButton, defendButton, retreatButton, troopsLabel, rows);
+            var section = new BarracksSectionView(id, root, header, ordersLabel, controls, attackButton, defendButton, retreatButton, troopsLabel, rows);
             _sections[id] = section;
             ApplyResponsiveSectionLayout(section);
             return section;
@@ -424,6 +424,8 @@ namespace CastleDefender.UI
             {
                 var bucket = buckets[i];
                 parts.Add(bucket.BarracksId);
+                var site = BarracksActivityUtility.FindBarracksSite(ownerLane, bucket.BarracksId);
+                parts.Add(site != null ? site.commandState ?? string.Empty : string.Empty);
                 for (int j = 0; j < bucket.Rows.Count; j++)
                 {
                     parts.Add(bucket.Rows[j].StableKey);
@@ -468,36 +470,29 @@ namespace CastleDefender.UI
         {
             if (section == null) return;
 
-            bool canIssueOrders = ownerLane != null && ownerLaneIndex >= 0 && !ownerLane.eliminated;
-            string commandState = ownerLane != null && !string.IsNullOrWhiteSpace(ownerLane.commandState)
-                ? ownerLane.commandState.Trim().ToUpperInvariant()
-                : "ATTACK";
-            var latestSnapshot = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.LatestML : null;
-            float defendProgress = EstimateLaneHoldProgress(latestSnapshot, ownerLaneIndex, ownerLane);
-            bool hasDefendWorldAnchor = TryEstimateLaneHoldWorldPosition(latestSnapshot, ownerLaneIndex, ownerLane, out var defendWorldAnchor);
+            var site = BarracksActivityUtility.FindBarracksSite(ownerLane, section.BarracksId);
+            bool canIssueOrders = ownerLane != null && ownerLaneIndex >= 0 && !ownerLane.eliminated && site != null && site.isBuilt;
+            string commandState = site != null && !string.IsNullOrWhiteSpace(site.commandState)
+                ? site.commandState.Trim().ToUpperInvariant()
+                : ownerLane != null && !string.IsNullOrWhiteSpace(ownerLane.commandState)
+                    ? ownerLane.commandState.Trim().ToUpperInvariant()
+                    : "DEFEND";
 
             if (section.OrdersLabel != null)
-                section.OrdersLabel.text = canIssueOrders ? "Lane Orders" : "Orders Unavailable";
+                section.OrdersLabel.text = canIssueOrders ? "Barracks Orders" : "Orders Unavailable";
+            if (section.ControlsRoot != null)
+                section.ControlsRoot.gameObject.SetActive(true);
             if (section.TroopsLabel != null)
                 section.TroopsLabel.text = canIssueOrders ? $"{HumanizeLaneCommand(commandState)} Troops" : "Active Troops";
 
-            ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, ActionSender.SetLaneAttack);
+            ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, () => ActionSender.SetBarracksAttack(section.BarracksId));
             ConfigureCommandButton(
                 section.DefendButton,
                 "Defend",
                 commandState == "DEFEND",
                 canIssueOrders,
-                () =>
-                {
-                    if (hasDefendWorldAnchor)
-                    {
-                        ActionSender.SetLaneDefendAt(defendWorldAnchor.x, defendWorldAnchor.y);
-                        return;
-                    }
-
-                    ActionSender.SetLaneDefendProgress(defendProgress);
-                });
-            ConfigureCommandButton(section.RetreatButton, "Retreat", commandState == "RETREAT", canIssueOrders, () => ActionSender.SetLaneRetreatProgress(0f));
+                () => ActionSender.SetBarracksDefend(section.BarracksId));
+            ConfigureCommandButton(section.RetreatButton, "Retreat", commandState == "RETREAT", canIssueOrders, () => ActionSender.SetBarracksRetreat(section.BarracksId));
         }
 
         void ConfigureCommandButton(BarracksCommandButtonView buttonView, string label, bool isActive, bool interactable, Action onClick)
@@ -922,6 +917,7 @@ namespace CastleDefender.UI
                 return;
 
             bool compact = IsCompactPanel();
+
             var rootLayout = section.Root.GetComponent<VerticalLayoutGroup>();
             if (rootLayout != null)
             {
@@ -1331,6 +1327,7 @@ namespace CastleDefender.UI
             RectTransform root,
             TMP_Text header,
             TMP_Text ordersLabel,
+            RectTransform controlsRoot,
             BarracksCommandButtonView attackButton,
             BarracksCommandButtonView defendButton,
             BarracksCommandButtonView retreatButton,
@@ -1341,6 +1338,7 @@ namespace CastleDefender.UI
             Root = root;
             Header = header;
             OrdersLabel = ordersLabel;
+            ControlsRoot = controlsRoot;
             AttackButton = attackButton;
             DefendButton = defendButton;
             RetreatButton = retreatButton;
@@ -1351,6 +1349,7 @@ namespace CastleDefender.UI
         public RectTransform Root { get; }
         public TMP_Text Header { get; }
         public TMP_Text OrdersLabel { get; }
+        public RectTransform ControlsRoot { get; }
         public BarracksCommandButtonView AttackButton { get; }
         public BarracksCommandButtonView DefendButton { get; }
         public BarracksCommandButtonView RetreatButton { get; }
@@ -1552,7 +1551,7 @@ namespace CastleDefender.UI
             return null;
         }
 
-        static MLBarracksSite FindBarracksSite(MLLaneSnap lane, string barracksId)
+        internal static MLBarracksSite FindBarracksSite(MLLaneSnap lane, string barracksId)
         {
             var sites = lane != null ? lane.barracksSites : null;
             if (sites == null) return null;

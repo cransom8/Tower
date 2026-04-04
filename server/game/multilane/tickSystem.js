@@ -1,5 +1,10 @@
 "use strict";
 
+const {
+  isSpawnAuditLoggingEnabled,
+  logSpawnAuditInfo,
+} = require("./spawnAuditLogging");
+
 const DEFAULT_WAVE_UNIT_STATES = Object.freeze({
   IDLE: "IDLE",
   MOVING: "MOVING",
@@ -99,26 +104,24 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
       : -1;
     unit.ownerLaneIndex = unit.ownerLane;
     applyCanonicalUnitMirrors(game, lane, unit);
-    if (log && typeof log.info === "function") {
-      log.info("[SpawnAudit][ServerLive] materialized", {
-        spawnType: resolveSpawnSourceTypeFromUnit(unit),
-        unitId: unit.id,
-        unitType: unit.type,
-        targetLaneIndex: lane.laneIndex,
-        targetTeam: lane.team || null,
-        sourceLaneIndex: Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1,
-        sourceTeam: unit.sourceTeam || null,
-        sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
-        routeType: unit.routeType,
-        currentSegment: unit.currentSegment,
-        segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
-        resolvedMarkerName: "server_route_graph",
-        resolvedLogicalPosition: spawnLogicalPos,
-        fallbackUsed: false,
-        authoring: "server",
-      });
-    }
-    if (unit.sourceBarracksKey || unit.sourceBarracksId) {
+    logSpawnAuditInfo(deps, "[SpawnAudit][ServerLive] materialized", {
+      spawnType: resolveSpawnSourceTypeFromUnit(unit),
+      unitId: unit.id,
+      unitType: unit.type,
+      targetLaneIndex: lane.laneIndex,
+      targetTeam: lane.team || null,
+      sourceLaneIndex: Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex : -1,
+      sourceTeam: unit.sourceTeam || null,
+      sourceBarracksKey: unit.sourceBarracksKey || unit.sourceBarracksId || null,
+      routeType: unit.routeType,
+      currentSegment: unit.currentSegment,
+      segmentProgress: Number.isFinite(unit.segmentProgress) ? Number(unit.segmentProgress.toFixed(3)) : null,
+      resolvedMarkerName: "server_route_graph",
+      resolvedLogicalPosition: spawnLogicalPos,
+      fallbackUsed: false,
+      authoring: "server",
+    });
+    if (isSpawnAuditLoggingEnabled(deps) && (unit.sourceBarracksKey || unit.sourceBarracksId)) {
       console.log(
         `[BarracksTrace][ServerSpawn] tick=${game.tick} targetLane=${lane.laneIndex} `
         + `unit='${unit.id}' type='${unit.type}' barracksId='${unit.sourceBarracksKey || unit.sourceBarracksId}' `
@@ -195,6 +198,166 @@ function resolveUnitAttackStats(unit, deps = {}) {
   };
 }
 
+function applyDirectUnitDamage(targetUnit, baseDamage) {
+  if (!targetUnit || Number(targetUnit.hp) <= 0)
+    return 0;
+  const safeDamage = Math.max(0, Number(baseDamage) || 0);
+  if (safeDamage <= 0)
+    return 0;
+  const directReductionPct = Math.max(
+    0,
+    Math.min(80, Number(targetUnit.directDamageReductionPctBonus) || 0)
+  );
+  const resolvedDamage = Math.max(0, Math.floor(safeDamage * (1 - (directReductionPct / 100))));
+  if (resolvedDamage <= 0)
+    return 0;
+  targetUnit.hp = Math.max(0, Number(targetUnit.hp) - resolvedDamage);
+  return resolvedDamage;
+}
+
+function getUnitDistance(a, b) {
+  const ax = Number(a && a.posX);
+  const ay = Number(a && a.posY);
+  const bx = Number(b && b.posX);
+  const by = Number(b && b.posY);
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by))
+    return Infinity;
+  return Math.hypot(ax - bx, ay - by);
+}
+
+function areUnitsHostile(game, lane, sourceUnit, targetUnit, deps = {}) {
+  const resolveUnitAllegianceKey = requireDepFunction(deps, "resolveUnitAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
+  const sourceAllegiance = resolveUnitAllegianceKey(game, lane, sourceUnit);
+  const targetAllegiance = resolveUnitAllegianceKey(game, lane, targetUnit);
+  return areAllegiancesHostile(sourceAllegiance, targetAllegiance);
+}
+
+function findAdditionalSplashTargets(game, lane, attacker, primaryTarget, targetLane, maxTargets, radius, deps = {}) {
+  if (!game || !attacker || !primaryTarget || !targetLane || !Array.isArray(targetLane.units) || maxTargets <= 0)
+    return [];
+
+  return targetLane.units
+    .filter((candidate) =>
+      candidate
+      && candidate !== primaryTarget
+      && Number(candidate.hp) > 0
+      && areUnitsHostile(game, targetLane, attacker, candidate, deps)
+      && getUnitDistance(primaryTarget, candidate) <= radius)
+    .sort((left, right) => {
+      const distDelta = getUnitDistance(primaryTarget, left) - getUnitDistance(primaryTarget, right);
+      if (Math.abs(distDelta) > 0.0001)
+        return distDelta;
+      return String(left.id || "").localeCompare(String(right.id || ""));
+    })
+    .slice(0, maxTargets);
+}
+
+function findAdditionalChainHealTargets(game, lane, healer, primaryTarget, maxTargets, radius, deps = {}) {
+  const resolveUnitAllegianceKey = requireDepFunction(deps, "resolveUnitAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
+  if (!game || !lane || !healer || !primaryTarget || !Array.isArray(lane.units) || maxTargets <= 0)
+    return [];
+
+  const healerAllegiance = resolveUnitAllegianceKey(game, lane, healer);
+  return lane.units
+    .filter((candidate) => {
+      if (!candidate || candidate === healer || candidate === primaryTarget || Number(candidate.hp) <= 0)
+        return false;
+      const maxHp = Math.max(1, Number(candidate.maxHp) || Number(candidate.hp) || 1);
+      if ((Number(candidate.hp) || 0) >= maxHp)
+        return false;
+      const candidateAllegiance = resolveUnitAllegianceKey(game, lane, candidate);
+      if (areAllegiancesHostile(healerAllegiance, candidateAllegiance))
+        return false;
+      return getUnitDistance(primaryTarget, candidate) <= radius;
+    })
+    .sort((left, right) => {
+      const leftRatio = (Number(left.hp) || 0) / Math.max(1, Number(left.maxHp) || Number(left.hp) || 1);
+      const rightRatio = (Number(right.hp) || 0) / Math.max(1, Number(right.maxHp) || Number(right.hp) || 1);
+      if (Math.abs(leftRatio - rightRatio) > 0.0001)
+        return leftRatio - rightRatio;
+      const distDelta = getUnitDistance(primaryTarget, left) - getUnitDistance(primaryTarget, right);
+      if (Math.abs(distDelta) > 0.0001)
+        return distDelta;
+      return String(left.id || "").localeCompare(String(right.id || ""));
+    })
+    .slice(0, maxTargets);
+}
+
+function fireLaneWallArcherTurrets(game, lane, deps = {}) {
+  const fireProjectile = requireDepFunction(deps, "fireProjectile");
+  const getFortressPadState = requireDepFunction(deps, "getFortressPadState");
+  const getFortressPadCombatTarget = requireDepFunction(deps, "getFortressPadCombatTarget");
+  const getLaneWallArcherTurretDefenseProfile = requireDepFunction(deps, "getLaneWallArcherTurretDefenseProfile");
+  const resolveLaneAllegianceKey = requireDepFunction(deps, "resolveLaneAllegianceKey");
+  const resolveUnitAllegianceKey = requireDepFunction(deps, "resolveUnitAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
+  const profile = getLaneWallArcherTurretDefenseProfile(lane);
+  if (!game || !lane || !profile || !Array.isArray(profile.turretPadIds) || profile.turretPadIds.length <= 0)
+    return 0;
+
+  if (!lane.wallArcherCooldowns || typeof lane.wallArcherCooldowns !== "object")
+    lane.wallArcherCooldowns = {};
+
+  const laneAllegiance = resolveLaneAllegianceKey(lane);
+  let shotsFired = 0;
+  for (const turretPadId of profile.turretPadIds) {
+    const cooldownKey = `wall_archer:${turretPadId}`;
+    const nextReadyTick = Math.max(0, Math.floor(Number(lane.wallArcherCooldowns[cooldownKey]) || 0));
+    if (game.tick < nextReadyTick)
+      continue;
+
+    const turretState = getFortressPadState(lane, turretPadId);
+    if (!turretState)
+      continue;
+    const turretTarget = getFortressPadCombatTarget(lane, turretState);
+    if (!turretTarget)
+      continue;
+
+    let bestTarget = null;
+    let bestDistance = Infinity;
+    for (const candidate of lane.units || []) {
+      if (!candidate || Number(candidate.hp) <= 0)
+        continue;
+      const candidateAllegiance = resolveUnitAllegianceKey(game, lane, candidate);
+      if (!areAllegiancesHostile(laneAllegiance, candidateAllegiance))
+        continue;
+      const distance = getUnitDistance(turretTarget, candidate);
+      if (!Number.isFinite(distance) || distance > profile.range)
+        continue;
+      if (distance < bestDistance - 0.0001
+          || (Math.abs(distance - bestDistance) <= 0.0001
+            && String(candidate.id || "").localeCompare(String(bestTarget && bestTarget.id || "")) < 0)) {
+        bestTarget = candidate;
+        bestDistance = distance;
+      }
+    }
+
+    if (!bestTarget)
+      continue;
+
+    fireProjectile(
+      game,
+      lane,
+      { id: turretPadId, kind: "tower", x: turretTarget.posX, y: turretTarget.posY },
+      bestTarget.id,
+      {
+        dmg: profile.damage,
+        damageType: profile.damageType,
+        behavior: "single",
+        travelTicks: profile.projectileTicks,
+        projectileType: "wall_archer",
+        abilities: [],
+      }
+    );
+    lane.wallArcherCooldowns[cooldownKey] = game.tick + Math.max(1, Math.floor(Number(profile.attackCooldownTicks) || 1));
+    shotsFired += 1;
+  }
+
+  return shotsFired;
+}
+
 function processLane(game, lane, deps = {}) {
   const log = deps && deps.log;
   const combatLog = deps && deps.combatLog;
@@ -237,6 +400,7 @@ function processLane(game, lane, deps = {}) {
   const getWaveUnitTargetDistance = requireDepFunction(deps, "getWaveUnitTargetDistance");
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const isUnitInCombatContact = requireDepFunction(deps, "isUnitInCombatContact");
+  const shouldUseLaneControlledSurroundSlots = requireDepFunction(deps, "shouldUseLaneControlledSurroundSlots");
   const attackFortressPad = requireDepFunction(deps, "attackFortressPad");
   const shouldLaneControlledUnitRouteMarch = requireDepFunction(deps, "shouldLaneControlledUnitRouteMarch");
   const syncUnitRouteStateToWorldPosition = requireDepFunction(deps, "syncUnitRouteStateToWorldPosition");
@@ -367,9 +531,25 @@ function processLane(game, lane, deps = {}) {
         unit.movementMode = unitMovementModes.COMBAT_ENGAGE;
         if (dist <= stopDist + contactSlotTolerance) {
           if (unit.atkCd <= 0) {
-            const healAmount = Math.max(1, Math.round(supportProfile.healAmount || 1));
+            const healAmount = Math.max(1, Math.round(Number(unit.healAmountOverride) || Number(supportProfile.healAmount) || 1));
             const maxHp = Math.max(1, Number(healTarget.maxHp) || Number(healTarget.hp) || 1);
             healTarget.hp = Math.min(maxHp, (Number(healTarget.hp) || 0) + healAmount);
+            const chainHealExtraTargets = Math.max(0, Math.floor(Number(unit.chainHealExtraTargets) || 0));
+            if (chainHealExtraTargets > 0) {
+              const chainTargets = findAdditionalChainHealTargets(
+                game,
+                lane,
+                unit,
+                healTarget,
+                chainHealExtraTargets,
+                Math.max(0.5, Number(unit.chainHealRadius) || 1.75),
+                deps
+              );
+              for (const extraTarget of chainTargets) {
+                const extraMaxHp = Math.max(1, Number(extraTarget.maxHp) || Number(extraTarget.hp) || 1);
+                extraTarget.hp = Math.min(extraMaxHp, (Number(extraTarget.hp) || 0) + healAmount);
+              }
+            }
             unit.attackPulse = (unit.attackPulse || 0) + 1;
             unit.atkCd = Math.max(1, Math.floor(Number(unit.atkCdTicks) || 20));
             attackedTarget = true;
@@ -410,16 +590,31 @@ function processLane(game, lane, deps = {}) {
         const stopDist = getUnitStopDistance(unit.type, targetUnit.type);
         const directContactDistance = getWaveUnitTargetDistance(unit, targetUnit);
         const allowImmediateLaneContact = !!(
-          isLaneControlledUnit(unit)
-          && !startedTickWithCombatTarget
+          !startedTickWithCombatTarget
           && Number.isFinite(directContactDistance)
           && directContactDistance <= stopDist + contactSlotTolerance
+          && shouldUseLaneControlledSurroundSlots(unit, targetUnit)
         );
         const inCombatContact = allowImmediateLaneContact || isUnitInCombatContact(lane, unit, targetUnit);
         if (inCombatContact) {
           if (unit.atkCd <= 0) {
             const attackStats = resolveUnitAttackStats(unit, deps);
-            targetUnit.hp = Math.max(0, targetUnit.hp - attackStats.damage);
+            applyDirectUnitDamage(targetUnit, attackStats.damage);
+            const splashExtraTargets = Math.max(0, Math.floor(Number(unit.splashExtraTargets) || 0));
+            if (splashExtraTargets > 0) {
+              const splashTargets = findAdditionalSplashTargets(
+                game,
+                targetLane || lane,
+                unit,
+                targetUnit,
+                targetLane || lane,
+                splashExtraTargets,
+                Math.max(0.5, Number(unit.splashRadius) || 1.5),
+                deps
+              );
+              for (const splashTarget of splashTargets)
+                applyDirectUnitDamage(splashTarget, attackStats.damage);
+            }
             unit.attackPulse = (unit.attackPulse || 0) + 1;
             if (targetUnit.hp <= 0) {
               combatLog.logEvent(game, "route_unit_killed", {
@@ -471,8 +666,7 @@ function processLane(game, lane, deps = {}) {
             attackedTarget = true;
           }
         } else {
-          const slotPoint = getLaneControlledCombatPocketPoint(lane, unit, target, stopDist);
-          moveTowardPoint2D(unit, slotPoint.x, slotPoint.y, unit.baseSpeed || 0.18, -64, 64, -64, 64);
+          moveTowardSimpleContact2D(unit, target, unit.baseSpeed || 0.18, stopDist, -64, 64, -64, 64);
           if (!shouldLaneControlledUnitFreeRoamInCombat(unit))
             clampLaneControlledUnitToCombatLeash(unit, -64, 64, -64, 64, target);
           unit.movementMode = unitMovementModes.COMBAT_ENGAGE;
@@ -623,14 +817,13 @@ function processLane(game, lane, deps = {}) {
     }
   }
   lane.units = (lane.units || []).filter((unit) => unit.hp > 0);
+  fireLaneWallArcherTurrets(game, lane, deps);
 }
 
 function finalizeTick(game, deps = {}) {
   const log = deps && deps.log;
   const createRoundSnapshotLane = requireDepFunction(deps, "createRoundSnapshotLane");
   const buildTownCoreStateSummary = requireDepFunction(deps, "buildTownCoreStateSummary");
-  const isCurrentWaveComplete = requireDepFunction(deps, "isCurrentWaveComplete");
-  const startNextWaveNow = requireDepFunction(deps, "startNextWaveNow");
 
   if (game.phase !== "playing")
     return;
@@ -664,8 +857,6 @@ function finalizeTick(game, deps = {}) {
     game.phase = "ended";
     game.matchState = "final_game_over";
     game.winner = Number.isInteger(game.officialWinnerLane) ? game.officialWinnerLane : null;
-  } else if (game.hasSpawnedWave && isCurrentWaveComplete(game)) {
-    startNextWaveNow(game);
   }
 }
 

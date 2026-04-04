@@ -1,5 +1,7 @@
 "use strict";
 
+const { logSpawnAuditInfo: logVerboseAuditInfo } = require("./spawnAuditLogging");
+
 const DEFAULT_LANE_COMMAND_STATES = Object.freeze({
   ATTACK: "ATTACK",
   DEFEND: "DEFEND",
@@ -167,6 +169,16 @@ function getEnableWaveUnitTrace(deps = {}) {
   return deps.ENABLE_WAVE_UNIT_TRACE === true;
 }
 
+function getUnitTypeKey(subject) {
+  if (!subject)
+    return null;
+  if (typeof subject === "string")
+    return subject;
+  if (typeof subject !== "object")
+    return null;
+  return subject.type || subject.unitTypeKey || subject.archetypeKey || subject.rosterKey || null;
+}
+
 function moveTowardContact2D(unit, target, speed, stopDistance, minX, maxX, minY, maxY, deps = {}) {
   const syncMovedUnitPathState = requireDepFunction(deps, "syncMovedUnitPathState");
   if (!target)
@@ -241,7 +253,7 @@ function moveTowardSimpleContact2D(unit, target, speed, stopDistance, minX, maxX
     return;
 
   const approachMemory = updateSimpleContactApproachMemory(unit, target, deps);
-  const captureDistance = stopDistance + Math.max(0.55, getUnitContactRadius(unit && unit.type, deps) * 0.65);
+  const captureDistance = stopDistance + Math.max(0.55, getUnitContactRadius(unit, deps) * 0.65);
   if (approachMemory && distance <= captureDistance) {
     moveTowardPoint2D(
       unit,
@@ -259,9 +271,15 @@ function moveTowardSimpleContact2D(unit, target, speed, stopDistance, minX, maxX
   moveTowardContact2D(unit, target, speed, stopDistance, minX, maxX, minY, maxY, deps);
 }
 
-function getUnitAttackRange(typeKey, deps = {}) {
+function getUnitAttackRange(subject, deps = {}) {
   const getTowerStats = requireDepFunction(deps, "getTowerStats");
   const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
+  if (subject && typeof subject === "object" && Number.isFinite(Number(subject.attackRangeOverride))) {
+    const attackRangeOverride = Number(subject.attackRangeOverride);
+    if (attackRangeOverride > 0)
+      return attackRangeOverride;
+  }
+  const typeKey = getUnitTypeKey(subject);
   const stats = getTowerStats(typeKey, 1);
   if (stats && stats.range)
     return stats.range;
@@ -273,9 +291,10 @@ function getUnitAttackRange(typeKey, deps = {}) {
   return 1.5;
 }
 
-function getUnitContactRadius(typeKey, deps = {}) {
+function getUnitContactRadius(subject, deps = {}) {
   const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
   const isFortArchetypeKey = requireDepFunction(deps, "isFortArchetypeKey");
+  const typeKey = getUnitTypeKey(subject);
   if (typeKey && getFortressBuildingDefs(deps)[typeKey]) {
     if (typeKey === "town_core")
       return 1.15;
@@ -302,15 +321,17 @@ function getUnitContactRadius(typeKey, deps = {}) {
   return radius;
 }
 
-function getUnitStopDistance(attackerType, targetType, deps = {}) {
+function getUnitStopDistance(attackerSubject, targetSubject, deps = {}) {
   const resolveUnitCombatRole = requireDepFunction(deps, "resolveUnitCombatRole");
-  const attackRange = getUnitAttackRange(attackerType, deps);
+  const attackerType = getUnitTypeKey(attackerSubject);
+  const targetType = getUnitTypeKey(targetSubject);
+  const attackRange = getUnitAttackRange(attackerSubject, deps);
   const base = attackRange + (attackRange > 2.0 ? 0.15 : 0.05);
   if (attackRange > 2.0)
     return base;
 
-  const attackerRadius = getUnitContactRadius(attackerType, deps);
-  const targetRadius = getUnitContactRadius(targetType, deps);
+  const attackerRadius = getUnitContactRadius(attackerSubject, deps);
+  const targetRadius = getUnitContactRadius(targetSubject, deps);
   const bodyPadding = Math.max(attackerRadius, targetRadius, (attackerRadius + targetRadius) * 0.5);
   const attackerRole = resolveUnitCombatRole({
     type: attackerType,
@@ -447,9 +468,9 @@ function getResolvedCombatTargetDistance(unit, target) {
   return Number.isFinite(distance) ? distance : Infinity;
 }
 
-function getUnitEngagementRange(typeKey, deps = {}) {
+function getUnitEngagementRange(subject, deps = {}) {
   return Math.max(
-    getUnitAttackRange(typeKey, deps) + getEngagementRangePadding(deps),
+    getUnitAttackRange(subject, deps) + getEngagementRangePadding(deps),
     getDefenderEngagementRange(deps)
   );
 }
@@ -463,8 +484,8 @@ function findFriendlyHealTarget(game, lane, unit, supportProfile, deps = {}) {
 
   const healerAllegiance = resolveUnitAllegianceKey(game, lane, unit);
   const maxSeekDistance = isLaneControlledUnit(unit)
-    ? Math.max(getLaneControlledCombatLeashRadius(unit, deps), getUnitAttackRange(unit.type, deps) + 0.5)
-    : Math.max(getUnitEngagementRange(unit.type, deps), getUnitAttackRange(unit.type, deps) + 0.5);
+    ? Math.max(getLaneControlledCombatLeashRadius(unit, deps), getUnitAttackRange(unit, deps) + 0.5)
+    : Math.max(getUnitEngagementRange(unit, deps), getUnitAttackRange(unit, deps) + 0.5);
   let best = null;
   let bestHealthRatio = Infinity;
   let bestDist = Infinity;
@@ -535,12 +556,22 @@ function getRouteUnitTargetPressureCount(game, seeker, targetEntity, deps = {}) 
 
 function shouldUseLaneControlledSurroundSlots(attacker, target, deps = {}) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
-  if (!isLaneControlledUnit(attacker))
+  if (!attacker || attacker.isDefender)
     return false;
   if (!target || (target.kind && target.kind !== "unit"))
     return false;
 
-  return getUnitAttackRange(attacker.type, deps) <= 2.0;
+  if (getUnitAttackRange(attacker, deps) > 2.0)
+    return false;
+
+  if (isLaneControlledUnit(attacker))
+    return true;
+
+  return !!(
+    attacker.isWaveUnit
+    || String(attacker.spawnSourceType || "").trim().toLowerCase() === "dungeon_wave"
+    || Number(attacker.ownerLaneIndex) < 0
+  );
 }
 
 function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAttackRange = false, deps = {}) {
@@ -553,10 +584,9 @@ function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAtta
 
   let approachDistance = centerDistance;
   if (lane
-      && requireDepFunction(deps, "isLaneControlledUnit")(unit)
       && liveTarget
       && shouldUseLaneControlledSurroundSlots(unit, liveTarget, deps)) {
-    const stopDistance = getUnitStopDistance(unit.type, liveTarget.type, deps);
+    const stopDistance = getUnitStopDistance(unit, liveTarget, deps);
     const slotPoint = getLaneControlledCombatPocketPoint(
       lane,
       unit,
@@ -824,7 +854,7 @@ function getContactSlotPoint(lane, attacker, target, stopDistance, options = nul
   const effectiveAttackerCount = appendAttackerIfMissing && attackerIndex < 0
     ? attackers.length + 1
     : attackers.length;
-  const radius = Math.max(0.75, getUnitContactRadius(attacker.type, deps) + getUnitContactRadius(target.type, deps));
+  const radius = Math.max(0.75, getUnitContactRadius(attacker, deps) + getUnitContactRadius(target, deps));
   const centroid = attackers.reduce((sum, unit) => ({
     x: sum.x + (Number(unit.posX) || 0),
     y: sum.y + (Number(unit.posY) || 0),
@@ -919,8 +949,8 @@ function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance
 }
 
 function getCombatSlotArrivalTolerance(attacker, target, deps = {}) {
-  const attackerRadius = getUnitContactRadius(attacker && attacker.type, deps);
-  const targetRadius = getUnitContactRadius(target && target.type, deps);
+  const attackerRadius = getUnitContactRadius(attacker, deps);
+  const targetRadius = getUnitContactRadius(target, deps);
   const combinedRadius = attackerRadius + targetRadius;
   return Math.max(0.35, Math.min(0.75, combinedRadius * 0.35));
 }
@@ -930,7 +960,7 @@ function isUnitInCombatContact(lane, attacker, target, deps = {}) {
     return false;
 
   const distance = getWaveUnitTargetDistance(attacker, target);
-  const stopDistance = getUnitStopDistance(attacker.type, target.type, deps);
+  const stopDistance = getUnitStopDistance(attacker, target, deps);
   if (!Number.isFinite(distance) || !Number.isFinite(stopDistance) || distance > stopDistance + getContactSlotTolerance(deps))
     return false;
 
@@ -948,7 +978,7 @@ function isUnitInCombatContact(lane, attacker, target, deps = {}) {
 function getStructureTargetAcquisitionRange(unit, target, deps = {}) {
   if (!unit || !target)
     return 0;
-  return getUnitStopDistance(unit.type, target.type, deps) + getStructureTargetVicinityPadding(deps);
+  return getUnitStopDistance(unit, target, deps) + getStructureTargetVicinityPadding(deps);
 }
 
 function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}) {
@@ -985,9 +1015,9 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
       const dist = Math.sqrt((dx * dx) + (dy * dy));
       const emergencyInteriorTarget = defendSeek
         && isTargetInsideHomeFortressEmergencyZone(game, unit, candidate);
-      const baseEngagementRange = getUnitEngagementRange(unit.type, deps);
+      const baseEngagementRange = getUnitEngagementRange(unit, deps);
       const rangeLimit = requireAttackRange
-        ? getUnitStopDistance(unit.type, candidate.type, deps) + getContactSlotTolerance(deps)
+        ? getUnitStopDistance(unit, candidate, deps) + getContactSlotTolerance(deps)
         : (directEngagementOnly
           ? baseEngagementRange
           : (emergencyInteriorTarget
@@ -1072,12 +1102,26 @@ function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}) {
 function getLaneBlockingStructureTargets(lane, unit = null, deps = {}) {
   const getFortressPadCombatTarget = requireDepFunction(deps, "getFortressPadCombatTarget");
   const getBarracksSiteCombatTarget = requireDepFunction(deps, "getBarracksSiteCombatTarget");
+  const isWaveStructureSeeker = !!(
+    unit
+    && (unit.isWaveUnit
+      || String(unit.spawnSourceType || "").trim().toLowerCase() === "dungeon_wave"
+      || Number(unit.ownerLaneIndex) < 0)
+  );
   const targets = [];
   if (!lane)
     return targets;
 
   if (Array.isArray(lane.fortressPads)) {
     for (const pad of lane.fortressPads) {
+      const buildingType = String(pad && pad.buildingType || "").trim().toLowerCase();
+      if (isWaveStructureSeeker
+          && buildingType !== "town_core"
+          && buildingType !== "wall"
+          && buildingType !== "gate"
+          && buildingType !== "turret") {
+        continue;
+      }
       const target = getFortressPadCombatTarget(lane, pad);
       if (target)
         targets.push(target);
@@ -1127,7 +1171,6 @@ function findBlockingStructureTarget(game, lane, unit, deps = {}) {
 
 function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
   const combatLog = deps && deps.combatLog;
-  const log = deps && deps.log;
   const getLaneTownCoreHp = requireDepFunction(deps, "getLaneTownCoreHp");
   const getLaneTownCoreMaxHp = requireDepFunction(deps, "getLaneTownCoreMaxHp");
   if (!game || !lane || !unit || unit.hasBreachedTownCore)
@@ -1136,19 +1179,17 @@ function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
   unit.hasBreachedTownCore = true;
   lane.totalLeaksTaken += 1;
   lane.leakCountThisRound += 1;
-  if (log && typeof log.info === "function") {
-    log.info("[TownCoreTrace] core target acquired", {
-      tick: game.tick,
-      laneIndex: lane.laneIndex,
-      attackerId: unit.id,
-      attackerType: unit.type,
-      attackerHp: Math.max(0, Math.floor(Number(unit.hp) || 0)),
-      pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
-      corePadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
-      coreHp: getLaneTownCoreHp(lane),
-      coreMaxHp: getLaneTownCoreMaxHp(lane),
-    });
-  }
+  logVerboseAuditInfo(deps, "[TownCoreTrace] core target acquired", {
+    tick: game.tick,
+    laneIndex: lane.laneIndex,
+    attackerId: unit.id,
+    attackerType: unit.type,
+    attackerHp: Math.max(0, Math.floor(Number(unit.hp) || 0)),
+    pathIdx: Number.isFinite(unit.pathIdx) ? Number(unit.pathIdx.toFixed(2)) : null,
+    corePadId: townCoreTarget ? townCoreTarget.padId || townCoreTarget.id : null,
+    coreHp: getLaneTownCoreHp(lane),
+    coreMaxHp: getLaneTownCoreMaxHp(lane),
+  });
   if (combatLog && typeof combatLog.logEvent === "function") {
     combatLog.logEvent(game, "leak", {
       unitId: unit.id,
@@ -1161,9 +1202,10 @@ function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
 }
 
 function attackFortressPad(game, lane, attacker, target, deps = {}) {
-  const log = deps && deps.log;
   const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
   const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
+  const getBarracksSiteState = requireDepFunction(deps, "getBarracksSiteState");
+  const applyBarracksSiteDamage = requireDepFunction(deps, "applyBarracksSiteDamage");
   const getFortressPadState = requireDepFunction(deps, "getFortressPadState");
   const applyFortressPadDamage = requireDepFunction(deps, "applyFortressPadDamage");
   if (!game || !lane || !attacker || !target || target.kind !== "fortress_pad") {
@@ -1176,14 +1218,23 @@ function attackFortressPad(game, lane, attacker, target, deps = {}) {
   const unitDef = resolveUnitDef(attacker.type);
   const rawDamage = Math.max(1, Math.floor(Number(attacker.baseDmg) || Number(unitDef && unitDef.dmg) || 1));
   const cooldownTicks = Math.max(1, Math.floor(Number(attacker.atkCdTicks) || Number(unitDef && unitDef.atkCdTicks) || 20));
-  const targetPad = getFortressPadState(targetLane, target.padId || target.id);
-  const prevHp = targetPad ? Math.max(0, Math.floor(Number(targetPad.hp) || 0)) : 0;
-  const result = applyFortressPadDamage(game, targetLane, target.padId || target.id, rawDamage);
+  const targetId = String(target.padId || target.unitId || target.id || "");
+  const barracksSiteMatch = targetId.match(/^barracks_site:(.+)$/);
+  const targetPad = barracksSiteMatch ? null : getFortressPadState(targetLane, targetId);
+  const targetSite = barracksSiteMatch ? getBarracksSiteState(targetLane, barracksSiteMatch[1], game) : null;
+  const prevHp = targetPad
+    ? Math.max(0, Math.floor(Number(targetPad.hp) || 0))
+    : targetSite
+      ? Math.max(0, Math.floor(Number(targetSite.hp) || 0))
+      : 0;
+  const result = barracksSiteMatch
+    ? applyBarracksSiteDamage(game, targetLane, barracksSiteMatch[1], rawDamage)
+    : applyFortressPadDamage(game, targetLane, targetId, rawDamage);
 
   attacker.attackPulse = (attacker.attackPulse || 0) + 1;
   attacker.atkCd = cooldownTicks;
-  if (targetPad && targetPad.buildingType === "town_core" && log && typeof log.info === "function") {
-    log.info("[TownCoreTrace] core attacked", {
+  if (targetPad && targetPad.buildingType === "town_core") {
+    logVerboseAuditInfo(deps, "[TownCoreTrace] core attacked", {
       tick: game.tick,
       laneIndex: targetLane.laneIndex,
       attackerId: attacker.id,
@@ -1285,7 +1336,7 @@ function getUnitAnchorLateralAxis(unit) {
 function getPairSpacing(left, right, fallback, deps = {}) {
   let spacing = Math.max(
     fallback,
-    getUnitContactRadius(left && left.type, deps) + getUnitContactRadius(right && right.type, deps)
+    getUnitContactRadius(left, deps) + getUnitContactRadius(right, deps)
   );
 
   const leftTargetId = left && left.combatTarget && left.combatTarget.unitId
@@ -1299,13 +1350,13 @@ function getPairSpacing(left, right, fallback, deps = {}) {
     && leftTargetId
     && rightTargetId
     && leftTargetId === rightTargetId
-    && getUnitAttackRange(left && left.type, deps) <= 2.0
-    && getUnitAttackRange(right && right.type, deps) <= 2.0
+    && getUnitAttackRange(left, deps) <= 2.0
+    && getUnitAttackRange(right, deps) <= 2.0
   );
   if (sharedTargetSpacing) {
     spacing = Math.max(
       spacing,
-      getUnitContactRadius(left && left.type, deps) + getUnitContactRadius(right && right.type, deps) + 0.20
+      getUnitContactRadius(left, deps) + getUnitContactRadius(right, deps) + 0.20
     );
   }
 
@@ -1422,8 +1473,8 @@ function getSharedTargetTangentialAxis(game, lane, left, right, deps = {}) {
 
   const leftDistance = getWaveUnitTargetDistance(left, liveTarget);
   const rightDistance = getWaveUnitTargetDistance(right, liveTarget);
-  const leftStopDistance = getUnitStopDistance(left && left.type, liveTarget && liveTarget.type, deps);
-  const rightStopDistance = getUnitStopDistance(right && right.type, liveTarget && liveTarget.type, deps);
+  const leftStopDistance = getUnitStopDistance(left, liveTarget, deps);
+  const rightStopDistance = getUnitStopDistance(right, liveTarget, deps);
   const tangentialSpreadDistance = Math.max(2.0, Math.max(leftStopDistance, rightStopDistance) + 1.25);
   if (!Number.isFinite(leftDistance) || !Number.isFinite(rightDistance)
       || leftDistance > tangentialSpreadDistance
@@ -1467,7 +1518,7 @@ function shouldApplySimpleLaneHostileCollision(game, left, right, distance, deps
   if (!canLaneControlledUnitSeekCombat(game, laneControlled, other))
     return false;
 
-  const stopDistance = getUnitStopDistance(laneControlled.type, other.type, deps);
+  const stopDistance = getUnitStopDistance(laneControlled, other, deps);
   const collisionWakeDistance = Math.max(2.4, stopDistance + 0.9);
   return distance <= collisionWakeDistance;
 }
@@ -1642,7 +1693,7 @@ function doAttack(game, lane, attacker, target, deps = {}) {
   const unitDef = resolveUnitDef(attacker.type);
   const damage = attacker.baseDmg || (stats ? stats.dmg : (unitDef ? unitDef.dmg : 5));
   const cooldownTicks = attacker.atkCdTicks || (stats ? stats.atkCdTicks : 30);
-  const attackRange = getUnitAttackRange(attacker.type, deps);
+  const attackRange = getUnitAttackRange(attacker, deps);
 
   if (attackRange > 2.0) {
     const behavior = stats ? (stats.projBehavior || "single") : "single";

@@ -26,3 +26,30 @@ test("authored environment layout parses the current prefab and keeps widened fo
   assert.ok(layout.lanes.blue.pads.town_core_pad.y <= -245, "blue town core should stay on the widened lower footprint");
   assert.ok(layout.lanes.green.pads.town_core_pad.y >= 245, "green town core should stay on the widened upper footprint");
 });
+
+test("authored Town Core and center Barracks remain separate committed slots", () => {
+  const layout = loadAuthoredEnvironmentLayout();
+
+  for (const laneKey of ["red", "yellow", "blue", "green"]) {
+    const lane = layout.lanes[laneKey];
+    const townCorePad = lane?.pads?.town_core_pad;
+    const barracksPad = lane?.pads?.barracks_pad;
+    const centerBarracks = lane?.barracks?.center;
+
+    assert.ok(townCorePad, `expected town core pad for '${laneKey}'`);
+    assert.ok(barracksPad, `expected barracks pad for '${laneKey}'`);
+    assert.ok(centerBarracks, `expected center barracks site for '${laneKey}'`);
+    assert.equal(townCorePad.buildingType, "town_core", `expected town core building type for '${laneKey}'`);
+    assert.equal(barracksPad.buildingType, "barracks", `expected barracks building type for '${laneKey}'`);
+    assert.deepEqual(
+      { x: barracksPad.x, y: barracksPad.y },
+      { x: centerBarracks.x, y: centerBarracks.y },
+      `expected center barracks site to stay aligned with barracks_pad for '${laneKey}'`
+    );
+    assert.notDeepEqual(
+      { x: townCorePad.x, y: townCorePad.y },
+      { x: barracksPad.x, y: barracksPad.y },
+      `expected Town Core and Barracks to remain distinct slots for '${laneKey}'`
+    );
+  }
+});

@@ -290,6 +290,27 @@ test("wave units damage the Town Core over time instead of deleting it on contac
   assert.ok(attacker.attackPulse > 0, "the unit should have performed a real attack to cause the damage");
 });
 
+test("Town Core snapshot HP updates immediately after structure damage is applied", () => {
+  const game = createGame(12);
+  const lane = game.lanes[0];
+  const target = simMl.getLaneTownCoreCombatTarget(lane);
+  assert.ok(target, "expected the Town Core to expose a combat target");
+
+  const attacker = createWaveUnit("raider", { atkCd: 0, baseDmg: 6 });
+  const result = simMl.attackFortressPad(game, lane, attacker, target);
+  assert.equal(result.damageApplied, 6, "expected Town Core damage to be applied through the structure combat path");
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const snapshotLane = snapshot.lanes.find((entry) => entry && entry.laneIndex === lane.laneIndex);
+  const snapshotCore = snapshotLane && snapshotLane.fortressPads
+    ? snapshotLane.fortressPads.find((pad) => pad && pad.padId === target.padId)
+    : null;
+
+  assert.ok(snapshotCore, "expected the Town Core pad to be serialized into the snapshot");
+  assert.equal(snapshotCore.hp, 6, "expected the Town Core snapshot HP to match the live damaged state");
+  assert.equal(snapshotCore.maxHp, 12, "expected the Town Core snapshot max HP to stay intact");
+});
+
 test("destroying one Town Core eliminates that lane without ending the FFA survival match", () => {
   const game = createGame(12);
   const lane = game.lanes[0];
@@ -559,7 +580,7 @@ test("wave units already in defender contact range do not backpedal to a slot be
   assert.ok(serverDefender.hp < 80, "the defender should take the opening hit instead of kiting the attacker backward");
 });
 
-test("wave units intercepted near the front gate do not damage the Town Core until defenders fall", () => {
+test("wave units intercepted near the front gate keep the Town Core safe while defenders live", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
@@ -623,7 +644,10 @@ test("wave units intercepted near the front gate do not damage the Town Core unt
 
   tick(game, 1);
 
+  const centerBarracksState = lane.barracksSiteStates && lane.barracksSiteStates.center;
+  assert.ok(centerBarracksState && centerBarracksState.isBuilt, "the active center barracks should be treated as a live fortress structure");
   assert.equal(corePad.hp, 20, "the Town Core should not take damage while a merge-guard defender is intercepting");
+  assert.equal(centerBarracksState.hp, centerBarracksState.maxHp, "the center barracks should stay untouched during the interception");
   for (const attacker of attackers) {
     const serverAttacker = lane.units.find((unit) => unit.id === attacker.id);
     assert.ok(serverAttacker, "the attacker should still be alive during the initial interception");
@@ -635,22 +659,107 @@ test("wave units intercepted near the front gate do not damage the Town Core unt
   tick(game, 6);
 
   assert.equal(corePad.hp, 20, "the Town Core should remain untouched while the defender is still alive");
+  assert.equal((lane.barracksSiteStates && lane.barracksSiteStates.center).hp, centerBarracksState.maxHp, "the barracks should remain untouched while the defender is still alive");
   const livingDefender = lane.units.find((unit) => unit.id === defender.id);
   assert.ok(livingDefender, "the blocker should still be present during the interception window");
-  livingDefender.hp = 0;
+});
+
+test("wave units near the fortress interior clear every defender in range before locking onto the Town Core", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  const corePad = getTownCorePad(lane);
+  const coreApproach = getCoreApproachPosition(lane, 1);
+  const firstDefender = createDefender("guardian", {
+    id: "core_defender_a",
+    hp: 1,
+    maxHp: 1,
+    baseDmg: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    posX: coreApproach.posX - 0.4,
+    posY: coreApproach.posY - 0.3,
+    pathIdx: coreApproach.pathIdx - 0.3,
+    guardAnchorX: coreApproach.posX - 0.4,
+    guardAnchorY: coreApproach.posY - 0.3,
+  });
+  const secondDefender = createDefender("guardian", {
+    id: "core_defender_b",
+    hp: 40,
+    maxHp: 40,
+    baseDmg: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    posX: coreApproach.posX + 0.45,
+    posY: coreApproach.posY - 0.55,
+    pathIdx: coreApproach.pathIdx - 0.55,
+    guardAnchorX: coreApproach.posX + 0.45,
+    guardAnchorY: coreApproach.posY - 0.55,
+  });
+  const attacker = createWaveUnit("raider", {
+    id: "core_clearance_wave",
+    hp: 36,
+    maxHp: 36,
+    baseDmg: 4,
+    atkCd: 0,
+    atkCdTicks: 4,
+    posX: coreApproach.posX,
+    posY: coreApproach.posY,
+    pathIdx: coreApproach.pathIdx,
+  });
+
+  lane.units.push(firstDefender, secondDefender, attacker);
+
   tick(game, 1);
 
-  let damageApplied = false;
-  for (let i = 0; i < 40; i += 1) {
-    tick(game, 1);
-    if (corePad.hp < 20) {
-      damageApplied = true;
-      break;
-    }
-  }
+  let serverAttacker = lane.units.find((unit) => unit.id === attacker.id);
+  assert.ok(serverAttacker, "the attacker should still be alive during the first defender pickup");
+  assert.equal(lane.units.some((unit) => unit.id === firstDefender.id), false, "the first low-health defender should die on the opening contact");
+  assert.equal(corePad.hp, 20, "the Town Core should stay untouched while defenders remain in engagement range");
 
-  assert.equal(damageApplied, true, "surviving attackers should only damage the Town Core after the defender dies");
-  assert.equal(lane.eliminated, false, "the match should not end early during defender interception");
+  tick(game, 1);
+
+  serverAttacker = lane.units.find((unit) => unit.id === attacker.id);
+  assert.ok(serverAttacker, "the attacker should stay alive after the first defender falls");
+  assert.equal(serverAttacker.combatTarget?.unitId, secondDefender.id, "the wave should reacquire the remaining defender before the Town Core");
+  assert.equal(corePad.hp, 20, "the Town Core should still remain untouched while another defender is still alive nearby");
+});
+
+test("wave units can target the center barracks instead of skipping straight to the Town Core", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const barracksBuilder = createDefender("guardian", {
+    id: "barracks_builder_guard",
+    posX: -24,
+    posY: 10,
+    guardAnchorX: -24,
+    guardAnchorY: 10,
+  });
+  lane.units.push(barracksBuilder);
+  tick(game, 1);
+  lane.units = lane.units.filter((unit) => unit.id !== barracksBuilder.id);
+
+  const coreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  const centerBarracksTarget = simMl.getBarracksSiteCombatTarget(lane, "center");
+  assert.ok(coreTarget, "expected the Town Core to expose a combat target");
+  assert.ok(centerBarracksTarget, "expected the center barracks to expose a combat target");
+
+  const attacker = createWaveUnit("raider", {
+    id: "barracks_priority_wave",
+    atkCd: 0,
+    posX: Number(centerBarracksTarget.posX),
+    posY: Number(centerBarracksTarget.posY) + 0.6,
+    pathIdx: Number(centerBarracksTarget.posY) + 0.6,
+    routeWorldX: Number(centerBarracksTarget.posX),
+    routeWorldY: Number(centerBarracksTarget.posY) + 0.6,
+  });
+
+  lane.units.push(attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.kind, "fortress_pad", "the wave should acquire a fortress structure target");
+  assert.equal(attacker.combatTarget?.padId, centerBarracksTarget.padId, "the wave should be allowed to lock onto the center barracks instead of skipping to the Town Core");
 });
 
 

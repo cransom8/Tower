@@ -31,6 +31,11 @@ namespace CastleDefender.Editor
         const string FloorTileAddress = "tiles/floor";
         const string WallTileAddress = "tiles/wall";
         const string CastleTileAddress = "tiles/castle";
+        static readonly string[] LegacyToonyTinyPeopleBannerPrefixes =
+        {
+            "TT_Banner_Pole_",
+            "TT_Flag_",
+        };
 
         static readonly HashSet<Type> AllowedVisualComponentTypes = new()
         {
@@ -123,6 +128,8 @@ namespace CastleDefender.Editor
                         StripColliders(clone.transform);
                     }
 
+                    StripLegacyToonyTinyPeopleBannerMeshes(prefabRoot.transform);
+
                     var prefab = PrefabUtility.SaveAsPrefabAsset(prefabRoot, EnvironmentPrefabPath);
                     if (prefab == null)
                     {
@@ -196,6 +203,53 @@ namespace CastleDefender.Editor
             catch (Exception ex)
             {
                 Debug.LogException(ex);
+            }
+        }
+
+        [MenuItem("Castle Defender/Remote Content/Sanitize GameEnvironment Prefab")]
+        public static void SanitizeGameEnvironmentPrefabMenu()
+        {
+            SanitizeGameEnvironmentPrefab(logResult: true);
+        }
+
+        public static int SanitizeGameEnvironmentPrefab(bool logResult = false)
+        {
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(EnvironmentPrefabPath) == null)
+            {
+                if (logResult)
+                    Debug.LogWarning($"[SetupRemoteEnvironmentAddressables] Prefab '{EnvironmentPrefabPath}' was not found.");
+
+                return 0;
+            }
+
+            var prefabRoot = PrefabUtility.LoadPrefabContents(EnvironmentPrefabPath);
+            if (prefabRoot == null)
+            {
+                if (logResult)
+                    Debug.LogWarning($"[SetupRemoteEnvironmentAddressables] Prefab '{EnvironmentPrefabPath}' was not found.");
+
+                return 0;
+            }
+
+            try
+            {
+                int removed = StripLegacyToonyTinyPeopleBannerMeshes(prefabRoot.transform);
+                PrefabUtility.SaveAsPrefabAsset(prefabRoot, EnvironmentPrefabPath);
+                AssetDatabase.SaveAssets();
+
+                if (logResult)
+                {
+                    Debug.Log(
+                        removed > 0
+                            ? $"[SetupRemoteEnvironmentAddressables] Removed {removed} legacy TT banner/flag renderers from '{EnvironmentPrefabPath}'."
+                            : $"[SetupRemoteEnvironmentAddressables] No legacy TT banner/flag renderers were found in '{EnvironmentPrefabPath}'.");
+                }
+
+                return removed;
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(prefabRoot);
             }
         }
 
@@ -344,6 +398,49 @@ namespace CastleDefender.Editor
 
                 UnityEngine.Object.DestroyImmediate(child.gameObject);
             }
+        }
+
+        static int StripLegacyToonyTinyPeopleBannerMeshes(Transform root)
+        {
+            if (root == null)
+                return 0;
+
+            var removals = root.GetComponentsInChildren<Transform>(true)
+                .Where(ShouldRemoveLegacyBannerNode)
+                .OrderByDescending(GetHierarchyDepth)
+                .ToArray();
+
+            for (int i = 0; i < removals.Length; i++)
+                UnityEngine.Object.DestroyImmediate(removals[i].gameObject);
+
+            return removals.Length;
+        }
+
+        static bool ShouldRemoveLegacyBannerNode(Transform transform)
+        {
+            if (transform == null)
+                return false;
+
+            for (int i = 0; i < LegacyToonyTinyPeopleBannerPrefixes.Length; i++)
+            {
+                if (transform.name.StartsWith(LegacyToonyTinyPeopleBannerPrefixes[i], StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static int GetHierarchyDepth(Transform transform)
+        {
+            int depth = 0;
+            var current = transform;
+            while (current != null)
+            {
+                depth++;
+                current = current.parent;
+            }
+
+            return depth;
         }
 
         static void EnsureEnvironmentLoader(GameObject mapRoot)

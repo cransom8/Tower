@@ -98,7 +98,8 @@ Shader "CastleDefender/RoadDarknessBand"
 
             half4 Frag(Varyings input) : SV_Target
             {
-                float outward = smoothstep(0.0, 1.0, saturate(input.uv.y));
+                float outward = abs((saturate(input.uv.y) - 0.5) * 2.0);
+                outward = smoothstep(0.0, 1.0, outward);
                 float alpha = lerp(_InnerAlpha, _OuterAlpha, pow(outward, 1.15));
 
                 float endFade = smoothstep(0.0, _EndFade, input.uv.x) *

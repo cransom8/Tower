@@ -45,6 +45,12 @@ namespace CastleDefender.UI
             ClampToParent();
         }
 
+        void OnRectTransformDimensionsChange()
+        {
+            CacheParent();
+            ClampToParent();
+        }
+
         public void OnBeginDrag(PointerEventData eventData)
         {
             if (panelRect == null || _parentRect == null)
@@ -108,17 +114,28 @@ namespace CastleDefender.UI
                 return;
 
             var parentSize = _parentRect.rect.size;
+            if (parentSize.x <= 0.01f || parentSize.y <= 0.01f)
+                return;
+
             float width = panelRect.rect.width;
             float height = panelRect.rect.height;
+            Vector2 parentPivot = _parentRect.pivot;
+            Vector2 anchorCenter = (panelRect.anchorMin + panelRect.anchorMax) * 0.5f;
+            Vector2 anchorLocal = new(
+                (anchorCenter.x - parentPivot.x) * parentSize.x,
+                (anchorCenter.y - parentPivot.y) * parentSize.y);
 
-            float minX = width * panelRect.pivot.x + clampMargin;
-            float maxX = parentSize.x - width * (1f - panelRect.pivot.x) - clampMargin;
-            float minY = -parentSize.y + height * panelRect.pivot.y + clampMargin;
-            float maxY = -(height * (1f - panelRect.pivot.y)) - clampMargin;
+            Vector2 minPivot = new(
+                -parentSize.x * parentPivot.x + width * panelRect.pivot.x + clampMargin,
+                -parentSize.y * parentPivot.y + height * panelRect.pivot.y + clampMargin);
+            Vector2 maxPivot = new(
+                parentSize.x * (1f - parentPivot.x) - width * (1f - panelRect.pivot.x) - clampMargin,
+                parentSize.y * (1f - parentPivot.y) - height * (1f - panelRect.pivot.y) - clampMargin);
 
-            panelRect.anchoredPosition = new Vector2(
-                Mathf.Clamp(panelRect.anchoredPosition.x, minX, maxX),
-                Mathf.Clamp(panelRect.anchoredPosition.y, minY, maxY));
+            Vector2 pivotLocal = anchorLocal + panelRect.anchoredPosition;
+            pivotLocal.x = Mathf.Clamp(pivotLocal.x, minPivot.x, maxPivot.x);
+            pivotLocal.y = Mathf.Clamp(pivotLocal.y, minPivot.y, maxPivot.y);
+            panelRect.anchoredPosition = pivotLocal - anchorLocal;
         }
 
         void SaveState()

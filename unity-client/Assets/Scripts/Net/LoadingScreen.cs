@@ -27,6 +27,7 @@ public class LoadingScreen : MonoBehaviour
     public Image progressBar;
     public TextMeshProUGUI tipText;
     public TextMeshProUGUI loadingLabel;
+    public TextMeshProUGUI loadingStatusText;
     public CanvasGroup canvasGroup;
 
     [Header("Config")]
@@ -52,6 +53,7 @@ public class LoadingScreen : MonoBehaviour
     };
 
     static string _pendingScene;
+    static bool _pendingRequiredGameBootstrap;
     static bool _pendingLobbyEntryPreparation;
     static bool _pendingT1GameplayPreload;
     static bool _pendingEnvironmentPreload;
@@ -80,7 +82,7 @@ public class LoadingScreen : MonoBehaviour
         if (instance == null)
             return;
 
-        instance.BeginTransition(sceneName, lobbyEntryPreparation: false, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
+        instance.BeginTransition(sceneName, requiredGameBootstrap: false, lobbyEntryPreparation: false, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
     }
 
     public static void LoadSceneWithCriticalContentPreload(string sceneName)
@@ -89,7 +91,7 @@ public class LoadingScreen : MonoBehaviour
         if (instance == null)
             return;
 
-        instance.BeginTransition(sceneName, lobbyEntryPreparation: true, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
+        instance.BeginTransition(sceneName, requiredGameBootstrap: true, lobbyEntryPreparation: false, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
     }
 
     public static void LoadSceneWithRemoteContentGate(
@@ -104,6 +106,7 @@ public class LoadingScreen : MonoBehaviour
 
         instance.BeginTransition(
             sceneName,
+            requiredGameBootstrap: false,
             lobbyEntryPreparation: false,
             preloadT1Gameplay: preloadT1Gameplay,
             portraitKeys: portraitKeys,
@@ -156,6 +159,7 @@ public class LoadingScreen : MonoBehaviour
 
     void BeginTransition(
         string sceneName,
+        bool requiredGameBootstrap,
         bool lobbyEntryPreparation,
         bool preloadT1Gameplay,
         IEnumerable<string> portraitKeys,
@@ -168,6 +172,7 @@ public class LoadingScreen : MonoBehaviour
         }
 
         _pendingScene = sceneName;
+        _pendingRequiredGameBootstrap = requiredGameBootstrap;
         _pendingLobbyEntryPreparation = lobbyEntryPreparation;
         _pendingT1GameplayPreload = preloadT1Gameplay;
         _pendingEnvironmentPreload = preloadEnvironment;
@@ -179,10 +184,11 @@ public class LoadingScreen : MonoBehaviour
         _tipTimer = 0f;
         _dotTimer = 0f;
         _dotCount = 0;
+        ClearLoadingStatusText();
 
         Debug.Log(
             $"[LoadingScreen] Begin transition to '{sceneName}' " +
-            $"(lobbyGate={lobbyEntryPreparation}, preloadT1={preloadT1Gameplay}, preloadEnvironment={preloadEnvironment}, portraits={_pendingPortraitKeys.Length}).");
+            $"(requiredBootstrap={requiredGameBootstrap}, lobbyGate={lobbyEntryPreparation}, preloadT1={preloadT1Gameplay}, preloadEnvironment={preloadEnvironment}, portraits={_pendingPortraitKeys.Length}).");
 
         if (!HasPendingRemotePreparation() && tips.Length > 0 && tipText)
         {
@@ -205,6 +211,7 @@ public class LoadingScreen : MonoBehaviour
             return;
 
         HideRetryAction();
+        ClearLoadingStatusText();
         _retryRequested = false;
         _transitionInProgress = true;
         if (_activeTransition != null)
@@ -470,6 +477,39 @@ public class LoadingScreen : MonoBehaviour
     {
         var remoteContent = RemoteContentManager.EnsureInstance();
 
+        if (_pendingRequiredGameBootstrap)
+        {
+            bool bootstrapAlreadyMarked = RemoteContentManager.HasRequiredGameBootstrapMarker();
+            if (tipText)
+            {
+                tipText.text = bootstrapAlreadyMarked
+                    ? "Checking the game content already downloaded on this device so this session can start without another required in-game download."
+                    : "This one-time download sets up the required game content on this device. Future sessions reuse it unless the live game content changes or the app data is cleared.";
+            }
+            if (loadingLabel)
+                loadingLabel.text = bootstrapAlreadyMarked ? "Checking Downloaded Game Content" : "One-Time Game Download";
+            SetLoadingStatusText(bootstrapAlreadyMarked ? "Verifying cached game content..." : "Preparing the one-time game download...");
+
+            yield return remoteContent.PrepareRequiredGameContentForSession((progress, status) =>
+            {
+                SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                SetLoadingStatusText(status);
+            }, requester: "LoadingScreen.RequiredGameBootstrap");
+
+            if (!remoteContent.HasCompletedRequiredGameBootstrap)
+            {
+                FailTransition(
+                    BuildFailureTitle(remoteContent.LastFailureStage, "Required game content could not be prepared."),
+                    string.IsNullOrWhiteSpace(remoteContent.LastError)
+                        ? "The game cannot safely continue until the one-time required content download finishes."
+                        : remoteContent.LastError);
+                yield break;
+            }
+
+            _pendingRequiredGameBootstrap = false;
+            SetLoadingStatusText("Opening lobby...");
+        }
+
         if (_pendingLobbyEntryPreparation)
         {
             if (loadingLabel)
@@ -644,7 +684,8 @@ public class LoadingScreen : MonoBehaviour
 
     static bool HasPendingRemotePreparation()
     {
-        return _pendingLobbyEntryPreparation
+        return _pendingRequiredGameBootstrap
+            || _pendingLobbyEntryPreparation
             || _pendingT1GameplayPreload
             || _pendingEnvironmentPreload
             || (_pendingPortraitKeys?.Length ?? 0) > 0;
@@ -724,6 +765,7 @@ public class LoadingScreen : MonoBehaviour
             loadingLabel.text = title;
         if (tipText)
             tipText.text = detail;
+        ClearLoadingStatusText();
 
         SetProgressImmediate(0f);
         Scene activeScene = SceneManager.GetActiveScene();
@@ -736,7 +778,7 @@ public class LoadingScreen : MonoBehaviour
 
     void BuildRuntimeOverlayIfNeeded()
     {
-        bool hasWiredUi = progressBar != null && tipText != null && loadingLabel != null && canvasGroup != null;
+        bool hasWiredUi = progressBar != null && tipText != null && loadingLabel != null && loadingStatusText != null && canvasGroup != null;
         if (hasWiredUi)
             return;
 
@@ -769,11 +811,11 @@ public class LoadingScreen : MonoBehaviour
         loadingLabel = CreateText(
             "LoadingLabel",
             backdrop.transform,
-            36f,
+            40f,
             FontStyles.Bold,
             TextAlignmentOptions.Center,
             "Loading");
-        Stretch(loadingLabel.rectTransform, new Vector2(0.18f, 0.56f), new Vector2(0.82f, 0.70f));
+        Stretch(loadingLabel.rectTransform, new Vector2(0.15f, 0.60f), new Vector2(0.85f, 0.72f));
 
         tipText = CreateText(
             "TipText",
@@ -782,8 +824,20 @@ public class LoadingScreen : MonoBehaviour
             FontStyles.Normal,
             TextAlignmentOptions.Center,
             "Preparing game...");
-        tipText.enableWordWrapping = true;
-        Stretch(tipText.rectTransform, new Vector2(0.16f, 0.30f), new Vector2(0.84f, 0.52f));
+        tipText.textWrappingMode = TextWrappingModes.Normal;
+        Stretch(tipText.rectTransform, new Vector2(0.14f, 0.34f), new Vector2(0.86f, 0.56f));
+
+        loadingStatusText = CreateText(
+            "LoadingStatusText",
+            backdrop.transform,
+            20f,
+            FontStyles.Normal,
+            TextAlignmentOptions.Center,
+            "");
+        loadingStatusText.textWrappingMode = TextWrappingModes.Normal;
+        loadingStatusText.color = new Color(1f, 1f, 1f, 0.84f);
+        Stretch(loadingStatusText.rectTransform, new Vector2(0.18f, 0.25f), new Vector2(0.82f, 0.33f));
+        loadingStatusText.gameObject.SetActive(false);
 
         var progressBg = CreatePanel(
             "ProgressBackground",
@@ -899,6 +953,7 @@ public class LoadingScreen : MonoBehaviour
         HideRetryAction();
         if (loadingLabel)
             loadingLabel.text = "Retrying...";
+        SetLoadingStatusText(_pendingRequiredGameBootstrap ? "Retrying required game content..." : "Retrying...");
 
         if (!_transitionInProgress)
             RestartPendingTransition();
@@ -931,6 +986,8 @@ public class LoadingScreen : MonoBehaviour
     {
         if (_suppressDotAnimation)
             return;
+        if (loadingStatusText != null && loadingStatusText.gameObject.activeSelf)
+            return;
         if (!loadingLabel)
             return;
 
@@ -941,6 +998,25 @@ public class LoadingScreen : MonoBehaviour
             _dotCount = (_dotCount + 1) % 4;
             loadingLabel.text = "Loading" + new string('.', _dotCount);
         }
+    }
+
+    void SetLoadingStatusText(string value)
+    {
+        if (!loadingStatusText)
+            return;
+
+        string normalized = value?.Trim() ?? "";
+        loadingStatusText.text = normalized;
+        loadingStatusText.gameObject.SetActive(!string.IsNullOrWhiteSpace(normalized));
+    }
+
+    void ClearLoadingStatusText()
+    {
+        if (!loadingStatusText)
+            return;
+
+        loadingStatusText.text = "";
+        loadingStatusText.gameObject.SetActive(false);
     }
 
     void TickProgress()

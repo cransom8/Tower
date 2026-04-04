@@ -22,20 +22,28 @@ Material:
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
-    m_TexEnvs: []
+    m_TexEnvs:
+    - _CanopyTex:
+        m_Texture: {fileID: 2800000, guid: 7f44a4e67cb545d4fab4229e57688b70, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _CenterDensity: 1.12
-    - _Darkness: 0.98
-    - _EdgeFadeDistance: 0.065
-    - _FadeSoftness: 0.18
-    - _NoiseScale: 0.045
-    - _NoiseStrength: 0.62
-    - _TopSilhouetteStrength: 1.08
-    - _ViewOcclusionBoost: 0.4
+    - _CanopyTexBlend: 0.9
+    - _CanopyTexClip: 0.24
+    - _CanopyTexScale: 0.0215
+    - _CanopyTintStrength: 0.92
+    - _CenterDensity: 1.28
+    - _Darkness: 0.992
+    - _EdgeFadeDistance: 0.05
+    - _FadeSoftness: 0.13
+    - _NoiseScale: 0.034
+    - _NoiseStrength: 0.76
+    - _TopSilhouetteStrength: 1.22
+    - _ViewOcclusionBoost: 0.58
     m_Colors:
-    - _BaseColor: {r: 0.03, g: 0.055, b: 0.038, a: 0.94}
-    - _DepthColor: {r: 0.006, g: 0.012, b: 0.012, a: 0.99}
-    - _TopColor: {r: 0.048, g: 0.072, b: 0.052, a: 0.9}
+    - _BaseColor: {r: 0.04, g: 0.074, b: 0.046, a: 0.96}
+    - _DepthColor: {r: 0.008, g: 0.018, b: 0.014, a: 0.995}
+    - _TopColor: {r: 0.068, g: 0.104, b: 0.066, a: 0.93}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

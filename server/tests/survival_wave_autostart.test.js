@@ -78,8 +78,10 @@ function createGame() {
   return game;
 }
 
-test("mlTick auto-starts the next wave in active FFA survival once the board is clear", () => {
+test("mlTick advances to the next timed wave in active FFA survival once the round timer expires", () => {
   const game = createGame();
+  game.waveIntervalTicks = 1;
+  game.waveGroupIntervalTicks = 1;
 
   assert.equal(simMl.startNextWaveNow(game), true, "wave 1 should start");
 
@@ -97,8 +99,10 @@ test("mlTick auto-starts the next wave in active FFA survival once the board is 
   assert.ok(simMl.countRemainingWaveMobs(game) > 0, "wave 2 should spawn enemies for the surviving lane");
 });
 
-test("mlTick still auto-starts the next wave after another lane has already been eliminated", () => {
+test("mlTick still advances to the next timed wave after another lane has already been eliminated", () => {
   const game = createGame();
+  game.waveIntervalTicks = 1;
+  game.waveGroupIntervalTicks = 1;
 
   assert.equal(simMl.startNextWaveNow(game), true, "wave 1 should start");
 

@@ -1,5 +1,7 @@
 "use strict";
 
+const { logSpawnAuditInfo } = require("./spawnAuditLogging");
+
 const DEFAULT_GRID_WIDTH = 11;
 const DEFAULT_SPAWN_X = 5;
 const DEFAULT_MAX_UNITS_PER_LANE = 200;
@@ -310,28 +312,26 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   const hp = Math.ceil(def.hp * Number(waveDef.hp_mult || 1));
   const dmg = def.dmg * Number(waveDef.dmg_mult || 1);
   const spd = getBaseCombatPathSpeed(unitType) * effectiveSpeedMult;
-  if (log && typeof log.info === "function") {
-    log.info("[SpawnAudit][ServerQueue] queued", {
-      spawnType: spawnValidation.spawnType,
-      unitType,
-      laneIndex: lane.laneIndex,
-      team: lane.team || null,
-      sourceLaneIndex: spawnValidation.sourceLaneIndex,
-      sourceTeam: spawnValidation.sourceTeam,
-      sourceBarracksKey: spawnValidation.sourceBarracksKey,
-      requestedSpawnKey: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
-        ? `lane:${lane.laneIndex}:wave_origin`
-        : spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER
-          ? `lane:${spawnValidation.sourceLaneIndex}:market`
+  logSpawnAuditInfo(deps, "[SpawnAudit][ServerQueue] queued", {
+    spawnType: spawnValidation.spawnType,
+    unitType,
+    laneIndex: lane.laneIndex,
+    team: lane.team || null,
+    sourceLaneIndex: spawnValidation.sourceLaneIndex,
+    sourceTeam: spawnValidation.sourceTeam,
+    sourceBarracksKey: spawnValidation.sourceBarracksKey,
+    requestedSpawnKey: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
+      ? `lane:${lane.laneIndex}:wave_origin`
+      : spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER
+        ? `lane:${spawnValidation.sourceLaneIndex}:market`
         : `lane:${spawnValidation.sourceLaneIndex}:barracks:${spawnValidation.sourceBarracksKey}`,
-      resolvedMarkerName: `server_queue_${spawnValidation.spawnType}`,
-      resolvedLogicalPosition: spawnValidation.logicalPos,
-      requestedSpawnIndex: spawnValidation.requestedSpawnIndex,
-      resolvedSpawnIndex: spawnValidation.resolvedSpawnIndex,
-      fallbackUsed: false,
-      authoring: "server",
-    });
-  }
+    resolvedMarkerName: `server_queue_${spawnValidation.spawnType}`,
+    resolvedLogicalPosition: spawnValidation.logicalPos,
+    requestedSpawnIndex: spawnValidation.requestedSpawnIndex,
+    resolvedSpawnIndex: spawnValidation.resolvedSpawnIndex,
+    fallbackUsed: false,
+    authoring: "server",
+  });
 
   const ownerLaneIndex = spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
     ? -1

@@ -10,6 +10,7 @@ using UnityEngine.AddressableAssets.Initialization;
 using UnityEngine.Networking;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceLocations;
+using UnityEngine.ResourceManagement.ResourceProviders;
 
 namespace CastleDefender.Net
 {
@@ -39,12 +40,24 @@ namespace CastleDefender.Net
         public const string GameMlEnvironmentRootName = "CoreMapCritical";
         public const string GameMlEnvironmentDressingRootName = "OptionalEnvironmentDressing";
         public const float GameMlEnvironmentDressingScale = 1f;
+        const int RequiredGameBootstrapStateVersion = 1;
+        const string RequiredGameBootstrapStateKey = "remote_content.required_game_bootstrap_version";
+        static readonly string[] RequiredSceneAddresses =
+        {
+            "Login",
+            "Loading",
+            "Lobby",
+            "Loadout",
+            "Game_ML",
+            "PostGame",
+        };
 
         public ContentManifestResponse Manifest { get; private set; }
         public bool HasManifest => Manifest != null;
         public bool HasCompletedLobbyEntryPreparation { get; private set; }
         public bool HasCompletedLoadoutPreload { get; private set; }
         public bool HasCompletedWavePreload { get; private set; }
+        public bool HasCompletedRequiredGameBootstrap { get; private set; }
         public bool HasCompletedCriticalPreload => HasCompletedWavePreload;
         public bool AreAddressablesInitialized => _addressablesReady;
         public string LastError { get; private set; }
@@ -53,8 +66,13 @@ namespace CastleDefender.Net
         public CriticalPreloadFailureStage LastFailureStage { get; private set; }
         public bool HasRetryableFailure => LastFailureStage != CriticalPreloadFailureStage.None;
         public string LastAddressablesCallError { get; private set; }
+        public static bool HasRequiredGameBootstrapMarker()
+        {
+            return PlayerPrefs.GetInt(RequiredGameBootstrapStateKey, 0) >= RequiredGameBootstrapStateVersion;
+        }
 
         readonly HashSet<string> _preloadedContentKeys = new(StringComparer.OrdinalIgnoreCase);
+        readonly HashSet<string> _preloadedSceneAddresses = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, GameObject> _loadedPrefabsByContentKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, AsyncOperationHandle<GameObject>> _assetHandlesByContentKey = new(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, Texture2D> _loadedPortraitsByKey = new(StringComparer.OrdinalIgnoreCase);
@@ -66,6 +84,7 @@ namespace CastleDefender.Net
         bool _addressablesReady;
         AsyncOperationHandle _initializationHandle;
         bool _hasInitializationHandle;
+        bool _requiredGameBootstrapRunning;
         bool _lobbyEntryPreparationRunning;
         bool _loadoutPreloadRunning;
         bool _wavePreloadRunning;
@@ -233,6 +252,161 @@ namespace CastleDefender.Net
         public IEnumerator PreloadCriticalContentForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
         {
             yield return PreloadWaveContentForSession(onProgress, forceRefreshManifest, requester);
+        }
+
+        public IEnumerator PrepareRequiredGameContentForSession(
+            Action<float, string> onProgress = null,
+            bool forceRefreshManifest = false,
+            string requester = null)
+        {
+            RemoteContentVerification.RecordOwnerRequest("required.game.bootstrap", requester, _requiredGameBootstrapRunning);
+            if (_requiredGameBootstrapRunning)
+            {
+                while (_requiredGameBootstrapRunning)
+                    yield return null;
+                yield break;
+            }
+
+            bool bootstrapAlreadyMarked = HasRequiredGameBootstrapMarker();
+            if (HasCompletedRequiredGameBootstrap && !forceRefreshManifest)
+            {
+                ReportProgress(
+                    1f,
+                    bootstrapAlreadyMarked
+                        ? "Required game content already verified."
+                        : "Required game content already prepared.",
+                    onProgress);
+                yield break;
+            }
+
+            _requiredGameBootstrapRunning = true;
+            LastError = null;
+            LastFailureStage = CriticalPreloadFailureStage.None;
+            LastAddressablesCallError = null;
+            HasCompletedRequiredGameBootstrap = false;
+
+            try
+            {
+                string introStatus = bootstrapAlreadyMarked
+                    ? "Checking downloaded game content..."
+                    : "One-time download: preparing required game content...";
+                ReportProgress(0f, introStatus, onProgress);
+
+                yield return EnsureManifestForSession((progress, status) =>
+                {
+                    ReportProgress(Mathf.Lerp(0f, 0.08f, Mathf.Clamp01(progress)), status, onProgress);
+                }, forceRefreshManifest, requester);
+
+                if (!HasManifest)
+                {
+                    if (string.IsNullOrWhiteSpace(LastError))
+                        LastError = "Could not download the content manifest.";
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.ManifestDownload;
+                    yield break;
+                }
+
+                yield return EnsureAddressablesReady((progress, status) =>
+                {
+                    ReportProgress(Mathf.Lerp(0.08f, 0.16f, Mathf.Clamp01(progress)), status, onProgress);
+                }, requester);
+
+                if (!_addressablesReady)
+                {
+                    if (string.IsNullOrWhiteSpace(LastError))
+                        LastError = "Addressables failed to initialize.";
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.AddressablesInitialization;
+                    yield break;
+                }
+
+                yield return PreloadRequiredSceneBundles((progress, status) =>
+                {
+                    ReportProgress(Mathf.Lerp(0.16f, 0.36f, Mathf.Clamp01(progress)), status, onProgress);
+                });
+
+                if (!string.IsNullOrWhiteSpace(LastError))
+                    yield break;
+
+                var bootstrapEntries = BuildRequiredBootstrapContentEntries();
+                yield return CacheCriticalContentEntries(bootstrapEntries, (progress, status) =>
+                {
+                    ReportProgress(Mathf.Lerp(0.36f, 0.84f, Mathf.Clamp01(progress)), status, onProgress);
+                });
+
+                if (!string.IsNullOrWhiteSpace(LastError))
+                    yield break;
+
+                var portraitKeys = BuildRequiredBootstrapPortraitKeys();
+                yield return EnsurePortraitsReady(portraitKeys, (progress, status) =>
+                {
+                    ReportProgress(Mathf.Lerp(0.84f, 0.93f, Mathf.Clamp01(progress)), status, onProgress);
+                }, requester: $"{requester ?? "unknown"}.RequiredBootstrap.Portraits");
+
+                if (!ArePortraitsReady(portraitKeys))
+                {
+                    if (string.IsNullOrWhiteSpace(LastError))
+                        LastError = "Required portraits did not finish preparing.";
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                    yield break;
+                }
+
+                yield return EnsureEnvironmentReady(
+                    GameMlEnvironmentAddress,
+                    onProgress: (progress, status) =>
+                    {
+                        ReportProgress(Mathf.Lerp(0.93f, 0.985f, Mathf.Clamp01(progress)), status, onProgress);
+                    },
+                    requester: $"{requester ?? "unknown"}.RequiredBootstrap.Environment");
+
+                if (!AreEnvironmentAssetsReady(GameMlEnvironmentAddress))
+                {
+                    if (string.IsNullOrWhiteSpace(LastError))
+                        LastError = "Required match environment did not finish preparing.";
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.AssetLoad;
+                    yield break;
+                }
+
+                yield return EnsureEnvironmentReady(
+                    GameMlEnvironmentDressingAddress,
+                    onProgress: (progress, status) =>
+                    {
+                        ReportProgress(Mathf.Lerp(0.985f, 1f, Mathf.Clamp01(progress)), status, onProgress);
+                    },
+                    requester: $"{requester ?? "unknown"}.RequiredBootstrap.EnvironmentDressing",
+                    suppressCatalogWarnings: true);
+
+                if (!AreEnvironmentAssetsReady(GameMlEnvironmentDressingAddress))
+                {
+                    if (IsMissingCatalogLookupError(LastError))
+                    {
+                        Debug.Log(
+                            $"[RemoteContent] Optional environment dressing '{GameMlEnvironmentDressingAddress}' is not in the active catalog; bootstrap will continue without it.");
+                        LastError = null;
+                        LastFailureStage = CriticalPreloadFailureStage.None;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(LastError))
+                    {
+                        yield break;
+                    }
+                }
+
+                HasCompletedRequiredGameBootstrap = true;
+                PlayerPrefs.SetInt(RequiredGameBootstrapStateKey, RequiredGameBootstrapStateVersion);
+                PlayerPrefs.Save();
+                ReportProgress(
+                    1f,
+                    bootstrapAlreadyMarked
+                        ? "Required game content verified."
+                        : "One-time game download complete. Future sessions can reuse this content cache.",
+                    onProgress);
+            }
+            finally
+            {
+                _requiredGameBootstrapRunning = false;
+            }
         }
 
         IEnumerator PreloadManifestPhaseContentForSession(
@@ -579,6 +753,341 @@ namespace CastleDefender.Net
                 if (phase == ManifestPreloadPhase.Loadout) _loadoutPreloadRunning = false;
                 else _wavePreloadRunning = false;
             }
+        }
+
+        IEnumerator PreloadRequiredSceneBundles(Action<float, string> onProgress)
+        {
+            var failures = new List<string>();
+            var remainingSceneAddresses = new List<string>();
+
+            for (int i = 0; i < RequiredSceneAddresses.Length; i++)
+            {
+                string address = RequiredSceneAddresses[i];
+                if (string.IsNullOrWhiteSpace(address) || _preloadedSceneAddresses.Contains(address))
+                    continue;
+
+                AsyncOperationHandle<IList<IResourceLocation>> locationsHandle;
+                try
+                {
+                    locationsHandle = Addressables.LoadResourceLocationsAsync(address, typeof(SceneInstance));
+                }
+                catch (Exception ex)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                    failures.Add($"Failed to resolve remote scene '{address}': {ex.Message}");
+                    continue;
+                }
+
+                if (!locationsHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                    failures.Add($"Addressables returned an invalid lookup handle for remote scene '{address}'.");
+                    continue;
+                }
+
+                yield return locationsHandle;
+                if (!locationsHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                    failures.Add($"Remote scene lookup for '{address}' became invalid before completion.");
+                    continue;
+                }
+
+                bool hasLocations = locationsHandle.Status == AsyncOperationStatus.Succeeded
+                    && locationsHandle.Result != null
+                    && locationsHandle.Result.Count > 0;
+                if (!hasLocations)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                    failures.Add(
+                        $"Remote scene '{address}' is missing from the active Addressables catalog. Active catalog state: {DescribeActiveCatalogState()}.");
+                    if (locationsHandle.IsValid())
+                        Addressables.Release(locationsHandle);
+                    continue;
+                }
+
+                if (locationsHandle.IsValid())
+                    Addressables.Release(locationsHandle);
+
+                AsyncOperationHandle<long> sizeHandle;
+                try
+                {
+                    sizeHandle = Addressables.GetDownloadSizeAsync(address);
+                }
+                catch (Exception ex)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Could not estimate remote scene download size for '{address}': {ex.Message}");
+                    continue;
+                }
+
+                if (!sizeHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Addressables returned an invalid size handle for remote scene '{address}'.");
+                    continue;
+                }
+
+                yield return sizeHandle;
+                if (!sizeHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Remote scene size lookup for '{address}' became invalid before completion.");
+                    continue;
+                }
+
+                if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add(BuildHandleFailureMessage(
+                        $"Could not estimate remote scene download size for '{address}'.",
+                        sizeHandle));
+                    if (sizeHandle.IsValid())
+                        Addressables.Release(sizeHandle);
+                    continue;
+                }
+
+                remainingSceneAddresses.Add(address);
+
+                if (sizeHandle.IsValid())
+                    Addressables.Release(sizeHandle);
+            }
+
+            if (failures.Count > 0)
+            {
+                LastError = string.Join("\n", failures);
+                ReportProgress(1f, "Scene bundle validation failed.", onProgress);
+                yield break;
+            }
+
+            if (remainingSceneAddresses.Count == 0)
+            {
+                ReportProgress(1f, "Scene bundles already cached.", onProgress);
+                yield break;
+            }
+
+            for (int i = 0; i < remainingSceneAddresses.Count; i++)
+            {
+                string address = remainingSceneAddresses[i];
+                string label = $"Preparing scene {i + 1}/{remainingSceneAddresses.Count}: {address}";
+                ReportProgress(Mathf.Clamp01((float)i / remainingSceneAddresses.Count), label, onProgress);
+
+                AsyncOperationHandle downloadHandle;
+                try
+                {
+                    downloadHandle = Addressables.DownloadDependenciesAsync(address, false);
+                }
+                catch (Exception ex)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Failed to queue remote scene '{address}': {ex.Message}");
+                    continue;
+                }
+
+                if (!downloadHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Addressables returned an invalid download handle for remote scene '{address}'.");
+                    continue;
+                }
+
+                while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                {
+                    float aggregateProgress = Mathf.Clamp01((i + downloadHandle.PercentComplete) / remainingSceneAddresses.Count);
+                    ReportProgress(Mathf.Clamp01(aggregateProgress), label, onProgress);
+                    yield return null;
+                }
+
+                if (!downloadHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Remote scene download for '{address}' became invalid before completion.");
+                    continue;
+                }
+
+                if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add(BuildHandleFailureMessage(
+                        $"Failed to download remote scene '{address}'.",
+                        downloadHandle));
+                    if (downloadHandle.IsValid())
+                        Addressables.Release(downloadHandle);
+                    continue;
+                }
+
+                if (downloadHandle.IsValid())
+                    Addressables.Release(downloadHandle);
+
+                _preloadedSceneAddresses.Add(address);
+            }
+
+            if (failures.Count > 0)
+            {
+                LastError = string.Join("\n", failures);
+                ReportProgress(1f, "Scene bundle download failed.", onProgress);
+                yield break;
+            }
+
+            ReportProgress(1f, "Scene bundles ready.", onProgress);
+        }
+
+        IEnumerator CacheCriticalContentEntries(CriticalContentEntry[] criticalEntries, Action<float, string> onProgress)
+        {
+            if (criticalEntries == null || criticalEntries.Length == 0)
+            {
+                ReportProgress(1f, "Required gameplay bundles already cached.", onProgress);
+                yield break;
+            }
+
+            var failures = new List<string>();
+            var requests = BuildDownloadRequests(criticalEntries, failures);
+            if (failures.Count > 0)
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                LastError = string.Join("\n", failures);
+                ReportProgress(1f, "Required content is missing.", onProgress);
+                yield break;
+            }
+
+            if (requests.Count == 0)
+            {
+                ReportProgress(1f, "Required gameplay bundles already cached.", onProgress);
+                yield break;
+            }
+
+            long totalDownloadBytes = 0L;
+            for (int i = 0; i < requests.Count; i++)
+            {
+                AsyncOperationHandle<long> sizeHandle;
+                try
+                {
+                    sizeHandle = Addressables.GetDownloadSizeAsync(requests[i].DownloadKey);
+                }
+                catch (Exception ex)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}': {ex.Message}");
+                    continue;
+                }
+
+                if (!sizeHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because Addressables returned an invalid handle.");
+                    continue;
+                }
+
+                yield return sizeHandle;
+                if (!sizeHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add($"Could not estimate download size for '{requests[i].DisplayKey}' because the Addressables handle became invalid.");
+                    continue;
+                }
+
+                if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    failures.Add(BuildHandleFailureMessage(
+                        $"Could not estimate download size for '{requests[i].DisplayKey}'.",
+                        sizeHandle));
+                }
+                else
+                {
+                    requests[i].DownloadSizeBytes = Math.Max(0L, sizeHandle.Result);
+                    totalDownloadBytes += requests[i].DownloadSizeBytes;
+                }
+
+                if (sizeHandle.IsValid())
+                    Addressables.Release(sizeHandle);
+            }
+
+            if (failures.Count > 0)
+            {
+                LastError = string.Join("\n", failures);
+                ReportProgress(1f, "Required content could not be prepared.", onProgress);
+                yield break;
+            }
+
+            long downloadedBytes = 0L;
+            for (int i = 0; i < requests.Count; i++)
+            {
+                var request = requests[i];
+                string label = $"Caching {request.Kind} {i + 1}/{requests.Count}: {request.DisplayKey}";
+                float baseProgress = totalDownloadBytes > 0L
+                    ? Mathf.Clamp01((float)downloadedBytes / totalDownloadBytes)
+                    : Mathf.Clamp01((float)i / requests.Count);
+
+                ReportProgress(baseProgress, label, onProgress);
+
+                if (request.DownloadSizeBytes <= 0L)
+                {
+                    MarkRequestAsPreloaded(request);
+                    continue;
+                }
+
+                AsyncOperationHandle downloadHandle;
+                try
+                {
+                    downloadHandle = Addressables.DownloadDependenciesAsync(request.DownloadKey, false);
+                }
+                catch (Exception ex)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}': {ex.Message}");
+                    continue;
+                }
+
+                if (!downloadHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Failed to queue required {request.Kind} content '{request.DisplayKey}' because Addressables returned an invalid handle.");
+                    continue;
+                }
+
+                while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                {
+                    float currentPortion = Mathf.Clamp01(downloadHandle.PercentComplete);
+                    float aggregate = totalDownloadBytes > 0L
+                        ? (downloadedBytes + (long)(request.DownloadSizeBytes * currentPortion)) / (float)totalDownloadBytes
+                        : Mathf.Clamp01((i + currentPortion) / requests.Count);
+                    ReportProgress(Mathf.Clamp01(aggregate), label, onProgress);
+                    yield return null;
+                }
+
+                if (!downloadHandle.IsValid())
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add($"Failed to download required {request.Kind} content '{request.DisplayKey}' because the Addressables handle became invalid.");
+                    continue;
+                }
+
+                if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    failures.Add(BuildHandleFailureMessage(
+                        $"Failed to download required {request.Kind} content '{request.DisplayKey}'.",
+                        downloadHandle));
+                }
+                else
+                {
+                    downloadedBytes += request.DownloadSizeBytes;
+                    MarkRequestAsPreloaded(request);
+                }
+
+                if (downloadHandle.IsValid())
+                    Addressables.Release(downloadHandle);
+            }
+
+            if (failures.Count > 0)
+            {
+                LastError = string.Join("\n", failures);
+                ReportProgress(1f, "Required content could not be prepared.", onProgress);
+                yield break;
+            }
+
+            ReportProgress(1f, "Required gameplay bundles cached.", onProgress);
         }
 
         public IEnumerator EnsureManifestForSession(Action<float, string> onProgress = null, bool forceRefreshManifest = false, string requester = null)
@@ -2312,10 +2821,67 @@ namespace CastleDefender.Net
             return string.Join(", ", normalized);
         }
 
+        CriticalContentEntry[] BuildRequiredBootstrapContentEntries()
+        {
+            var combined = new List<CriticalContentEntry>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddEntries(IEnumerable<CriticalContentEntry> entries)
+            {
+                if (entries == null)
+                    return;
+
+                foreach (var entry in entries)
+                {
+                    if (entry == null)
+                        continue;
+
+                    string dedupeKey = $"{entry.kind}:{entry.content_key ?? entry.key ?? string.Empty}";
+                    if (!seen.Add(dedupeKey))
+                        continue;
+
+                    combined.Add(entry);
+                }
+            }
+
+            AddEntries(GetLoadoutCriticalContentEntries());
+            AddEntries(GetWaveCriticalContentEntries());
+
+            return combined.Count == 0 ? Array.Empty<CriticalContentEntry>() : combined.ToArray();
+        }
+
+        List<string> BuildRequiredBootstrapPortraitKeys()
+        {
+            var portraitKeys = new List<string>();
+            foreach (var unit in Manifest?.units ?? Array.Empty<ContentManifestEntry>())
+            {
+                if (unit?.remote_content == null || !unit.remote_content.enabled || string.IsNullOrWhiteSpace(unit.key))
+                    continue;
+
+                portraitKeys.Add(unit.key.Trim());
+            }
+
+            foreach (var skin in Manifest?.skins ?? Array.Empty<ContentManifestSkinEntry>())
+            {
+                if (skin?.remote_content == null || !skin.remote_content.enabled || string.IsNullOrWhiteSpace(skin.skin_key))
+                    continue;
+
+                portraitKeys.Add(skin.skin_key.Trim());
+            }
+
+            return NormalizeUniqueKeys(portraitKeys);
+        }
+
         static string NormalizeAddress(string address, string fallback)
         {
             string normalized = string.IsNullOrWhiteSpace(address) ? fallback : address.Trim();
             return string.IsNullOrWhiteSpace(normalized) ? fallback : normalized;
+        }
+
+        static bool IsMissingCatalogLookupError(string error)
+        {
+            return !string.IsNullOrWhiteSpace(error)
+                && error.IndexOf("missing from the active Addressables catalog", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         CriticalContentEntry[] GetT1ContentEntries()

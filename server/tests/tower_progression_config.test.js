@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const observe = require("../ai/observe");
 const gameConfig = require("../gameConfig");
 const simMl = require("../sim-multilane");
 
@@ -21,7 +22,7 @@ test.afterEach(() => {
   gameConfig.setActiveConfig("multilane", null);
 });
 
-test("public multilane config exposes tower progression categories and live fortress pads", () => {
+test("public multilane config exposes shared walls and turret progression without legacy tower_archer branches", () => {
   gameConfig.setActiveConfig("multilane", VALID_MULTILANE_CONFIG);
 
   const config = simMl.createMLPublicConfig({ laneTeams: ["red", "blue"] });
@@ -66,39 +67,27 @@ test("public multilane config exposes tower progression categories and live fort
     },
     {
       displayName: "Turret",
-      branchLabel: "Base Towers",
-      progressionCategory: "BaseTower",
-      requiresLumberMill: true,
+      branchLabel: "Turrets",
+      progressionCategory: "Defense",
+      requiresLumberMill: false,
       requiresTurretTier3: false,
-      buildCost: 40,
+      buildCost: 20,
       tierDisplayNames: ["Tier 1", "Tier 2", "Tier 3"],
     }
   );
 
-  assert.deepEqual(
-    {
-      displayName: buildingsByType.get("tower_archer").displayName,
-      branchLabel: buildingsByType.get("tower_archer").branchLabel,
-      progressionCategory: buildingsByType.get("tower_archer").progressionCategory,
-      requiresLumberMill: buildingsByType.get("tower_archer").requiresLumberMill,
-      requiresTurretTier3: buildingsByType.get("tower_archer").requiresTurretTier3,
-      buildCost: buildingsByType.get("tower_archer").buildCost,
-      tierDisplayNames: buildingsByType.get("tower_archer").tierDisplayNames.slice(1),
-    },
-    {
-      displayName: "Archer Tower",
-      branchLabel: "Archer Towers",
-      progressionCategory: "ArcherTower",
-      requiresLumberMill: false,
-      requiresTurretTier3: true,
-      buildCost: 180,
-      tierDisplayNames: ["Tier 1", "Tier 2", "Tier 3"],
-    }
-  );
+  assert.equal(buildingsByType.has("tower_archer"), false, "legacy tower_archer progression should be removed from fortress building configs");
 
   assert.equal(padCountsByType.lumber_mill, 1, "lumber mill should have one fortress pad");
   assert.equal(padCountsByType.wall, 20, "authored fortress shell should expose twenty wall pads");
   assert.equal(padCountsByType.gate, 4, "authored fortress shell should expose four gate pads");
   assert.equal(padCountsByType.turret, 17, "authored fortress shell should expose seventeen tower hardpoints");
-  assert.equal(padCountsByType.tower_archer || 0, 0, "archer tower conversion pads are not authored yet");
+  assert.equal(padCountsByType.tower_archer || 0, 0, "legacy tower_archer conversion pads should remain absent");
+});
+
+test("ai observation only tracks the shared wall, gate, and turret defense path", () => {
+  assert.deepEqual(
+    Array.from(observe.DEFENSE_PAD_TYPES).sort(),
+    ["gate", "turret", "wall"]
+  );
 });

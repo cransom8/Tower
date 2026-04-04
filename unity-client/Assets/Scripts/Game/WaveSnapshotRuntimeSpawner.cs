@@ -1615,11 +1615,9 @@ namespace CastleDefender.Game
                 + (lateralWorldDir * (lateralOffset * worldUnitsPerSimUnit))
                 + (forwardWorldDir * (forwardOffset * worldUnitsPerSimUnit));
 
-            Vector3 faceTowardCore = townCoreWorld - worldPos;
-            faceTowardCore.y = 0f;
-            routeForward = faceTowardCore.sqrMagnitude > 0.0001f
-                ? faceTowardCore.normalized
-                : -forwardWorldDir;
+            routeForward = forwardWorldDir.sqrMagnitude > 0.0001f
+                ? forwardWorldDir
+                : BattlefieldSpaceMapper.GetLaneForwardDir(targetLaneIndex);
             resolvedRouteSource = $"combat_space:lane={laneKey}";
             return true;
         }

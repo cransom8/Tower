@@ -578,6 +578,31 @@ namespace CastleDefender.Net
     }
 
     [Serializable]
+    public class MLBuildingUpgrade
+    {
+        public string buildingType;
+        public string upgradeKey;
+        public string upgradeName;
+        public string affectedLabel;
+        public string description;
+        public string section;
+        public string sectionLabel;
+        public int    sortIndex;
+        public int    cost;
+        public int    purchaseCount;
+        public int    totalSpent;
+        public bool   isRepeatable;
+        public bool   isOneTime;
+        public bool   isPurchased;
+        public bool   canPurchase;
+        public string lockedReason;
+        public float  currentBonusPct;
+        public float  nextBonusPct;
+        public string currentBonusText;
+        public string nextBonusText;
+    }
+
+    [Serializable]
     public class MLFortressPad
     {
         public string padId;
@@ -611,6 +636,12 @@ namespace CastleDefender.Net
         public int    upgradeCost;
         public int    requiredTownCoreTier;
         public string requiredTownCoreTierName;
+        public int    foodLimit;
+        public int    foodUsed;
+        public int    foodRemaining;
+        public bool   isAtFoodLimit;
+        public string upgradePanelDescription;
+        public MLBuildingUpgrade[] buildingUpgrades;
         public float  hp;
         public float  maxHp;
         public string lockedReason;
@@ -635,6 +666,7 @@ namespace CastleDefender.Net
         public string productionBuildingType;
         public string productionBuildingName;
         public int    tier;
+        public int    foodCost;
         public bool   availableForPurchase;
         public bool   currentTier;
         public int    ownedCount;
@@ -669,6 +701,7 @@ namespace CastleDefender.Net
         public string productionBuildingType;
         public string productionBuildingName;
         public int    tier;
+        public int    foodCost;
         public bool   availableForPurchase;
         public bool   currentTier;
         public int    ownedCount;
@@ -721,6 +754,11 @@ namespace CastleDefender.Net
         public int    sendIntervalTicks;
         public int    sendTimerTicksRemaining;
         public int    sendTimerTotalTicks;
+        public string commandState;
+        public int    foodLimit;
+        public int    foodUsed;
+        public int    foodRemaining;
+        public bool   isAtFoodLimit;
         public string lockedReason;
         public float  hp;
         public float  maxHp;
@@ -1132,6 +1170,38 @@ namespace CastleDefender.Net
         public string message;
         public string timestampUtc;
         public string team;
+    }
+
+    [Serializable]
+    public class FriendListEntryPayload
+    {
+        public string playerId;
+        public string displayName;
+        public string status;       // "accepted" | "pending_sent" | "pending_received"
+        public bool online;
+    }
+
+    [Serializable]
+    public class FriendPresencePayload
+    {
+        public string playerId;
+        public string displayName;
+    }
+
+    [Serializable]
+    public class LobbyInvitePayload
+    {
+        public string lobbyId;
+        public string code;
+        public string fromPlayerId;
+        public string fromDisplayName;
+    }
+
+    [Serializable]
+    public class LobbyInviteSentPayload
+    {
+        public string playerId;
+        public string displayName;
     }
 
     [Serializable]

@@ -15,7 +15,7 @@ const TRACKED_BRANCH_TYPES = Object.freeze([
   "workshop",
   "library",
 ]);
-const DEFENSE_PAD_TYPES = new Set(["wall", "gate", "turret", "tower_archer"]);
+const DEFENSE_PAD_TYPES = new Set(["wall", "gate", "turret"]);
 const ROLE_WEIGHTS = Object.freeze({ melee: 1.1, ranged: 1.0, support: 0.7, hero: 1.5 });
 const COMMAND_STATES = simMl.LANE_COMMAND_STATES || Object.freeze({
   ATTACK: "ATTACK",
@@ -202,7 +202,7 @@ function estimateLaneDefense(game, lane) {
     if (pad.buildingType === "town_core") weight = 0.55;
     else if (pad.buildingType === "gate") weight = 1.4;
     else if (pad.buildingType === "wall") weight = 1.2;
-    else if (pad.buildingType === "turret" || pad.buildingType === "tower_archer") weight = 1.1;
+    else if (pad.buildingType === "turret") weight = 1.1;
     score += Math.max(0, hpRatio) * Math.max(0, tier) * weight;
   }
 
@@ -262,7 +262,7 @@ function summarizeLaneForAi(game, laneIndex, runtime, unitDefMap) {
   const hostileUnits = Array.isArray(lane.units)
     ? lane.units.filter((unit) => unit && unit.hp > 0 && (Number.isInteger(unit.sourceLaneIndex) ? unit.sourceLaneIndex !== laneIndex : true)).length
     : 0;
-  const frontDefensePads = ["gate", "wall", "turret", "tower_archer"]
+  const frontDefensePads = ["gate", "wall", "turret"]
     .flatMap((buildingType) => padsByType[buildingType] || []);
 
   return {

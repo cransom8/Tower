@@ -313,7 +313,7 @@ namespace CastleDefender.Net
         {
             bool changed = false;
             changed |= UpdateNullableFloat(ref _current.camera.tilt, Clamp(tilt, 0f, 52f));
-            changed |= UpdateNullableFloat(ref _current.camera.zoom, Clamp(zoom, 4f, 120f));
+            changed |= UpdateNullableFloat(ref _current.camera.zoom, Clamp(zoom, 1f, 1000f));
             changed |= UpdateNullableFloat(ref _current.camera.rotation, NormalizeRotation(rotation));
 
             if (!changed)
@@ -559,7 +559,7 @@ namespace CastleDefender.Net
             if (preferences.camera != null)
             {
                 normalized.camera.tilt = NormalizeNullableCameraValue(preferences.camera.tilt, 0f, 52f);
-                normalized.camera.zoom = NormalizeNullableCameraValue(preferences.camera.zoom, 4f, 120f);
+                normalized.camera.zoom = NormalizeNullableCameraValue(preferences.camera.zoom, 1f, 1000f);
                 normalized.camera.rotation = preferences.camera.rotation.HasValue
                     ? NormalizeRotation(preferences.camera.rotation.Value)
                     : null;
@@ -598,7 +598,11 @@ namespace CastleDefender.Net
 
         static float NormalizeRotation(float value)
         {
-            return Mathf.DeltaAngle(0f, value);
+            float normalized = Mathf.Repeat(value, 360f);
+            if (Mathf.Approximately(normalized, 0f) && value > 0.001f)
+                return 360f;
+
+            return normalized;
         }
 
         static float Clamp(float value, float min, float max)
@@ -667,6 +671,10 @@ namespace CastleDefender.Net
     [Serializable]
     public sealed class UserCameraPreferences
     {
+        public const float DefaultTilt = 28f;
+        public const float DefaultZoom = 41f;
+        public const float DefaultRotation = 90f;
+
         public float? tilt;
         public float? zoom;
         public float? rotation;
@@ -674,6 +682,21 @@ namespace CastleDefender.Net
         public static UserCameraPreferences CreateDefault()
         {
             return new UserCameraPreferences();
+        }
+
+        public static float ResolveTilt(float? value)
+        {
+            return value ?? DefaultTilt;
+        }
+
+        public static float ResolveZoom(float? value)
+        {
+            return value ?? DefaultZoom;
+        }
+
+        public static float ResolveRotation(float? value)
+        {
+            return value ?? DefaultRotation;
         }
 
         public UserCameraPreferences Clone()

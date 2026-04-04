@@ -555,10 +555,23 @@ test("route initialization reflects the active lane-command contract for every b
     sourceBarracksId: "left",
   });
   simMl.initializeMovingUnitRouteState(game, targetLane, attackUnit, { x: 5, y: 0 });
-  assert.equal(attackUnit.pathContractType, "barracks_cross");
+  assert.equal(attackUnit.routeType, simMl.ROUTE_TYPES.OUTER_LOOP);
+  assert.equal(attackUnit.pathContractType, "barracks_loop");
   assert.equal(attackUnit.stance, "ATTACK");
   assert.equal(attackUnit.routeTargetNode, "C");
-  assert.deepEqual(attackUnit.routeSegments, ["ALFT_A", "A_M", "M_C"]);
+  assert.deepEqual(attackUnit.routeSegments, ["ALFT_A", "A_B", "B_C", "C_D", "D_A"]);
+
+  const reverseAttackUnit = createAttacker({
+    id: "attack_reverse_outer_unit",
+    sourceLaneIndex: 0,
+    sourceBarracksId: "right",
+  });
+  simMl.initializeMovingUnitRouteState(game, targetLane, reverseAttackUnit, { x: 5, y: 0 });
+  assert.equal(reverseAttackUnit.routeType, simMl.ROUTE_TYPES.OUTER_LOOP);
+  assert.equal(reverseAttackUnit.pathContractType, "barracks_loop");
+  assert.equal(reverseAttackUnit.stance, "ATTACK");
+  assert.equal(reverseAttackUnit.routeTargetNode, "C");
+  assert.deepEqual(reverseAttackUnit.routeSegments, ["ARGT_A", "A_D", "D_C", "C_B", "B_A"]);
 });
 
 test("barracks route initialization preserves lateral travel spread before units reach the anchor", () => {
@@ -1808,6 +1821,53 @@ test("lane-controlled defenders keep authoritative slot indices at the rally anc
       `expected ${unit.id} to expose an anchor center for leash and slot logic.`
     );
   }
+});
+
+test("defend rally progress keeps the command anchor away from the fixed outside-gate rally", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0.5 });
+
+  assert.ok(lane.commandAnchor, "expected a live command anchor after updating the defend rally.");
+  assert.ok(lane.outsideGateAnchor, "expected the fixed outside-gate helper anchor to remain available.");
+  assert.ok(
+    Math.abs(Number(lane.commandAnchorProgress) - 0.5) <= 0.001,
+    `expected defend rally progress to stay at 0.5, got ${lane.commandAnchorProgress}`
+  );
+
+  const rallyShift = Math.hypot(
+    Number(lane.commandAnchor.x) - Number(lane.outsideGateAnchor.x),
+    Number(lane.commandAnchor.y) - Number(lane.outsideGateAnchor.y)
+  );
+  assert.ok(
+    rallyShift > 5,
+    `expected a mid-lane defend rally to move away from the fixed outside gate, got shift ${rallyShift.toFixed(3)}`
+  );
+});
+
+test("defend rally world anchors preserve the sampled command anchor instead of snapping back to the gate", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0.5 });
+  const sampledAnchor = {
+    x: Number(lane.commandAnchor && lane.commandAnchor.x),
+    y: Number(lane.commandAnchor && lane.commandAnchor.y),
+  };
+
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", sampledAnchor);
+
+  assert.ok(lane.commandAnchor, "expected the defend command to keep exposing a sampled command anchor.");
+  assert.ok(
+    Math.abs(Number(lane.commandAnchorProgress) - 0.5) <= 0.05,
+    `expected defend world-anchor requests to preserve mid-lane rally progress, got ${lane.commandAnchorProgress}`
+  );
+  assert.ok(
+    Math.abs(Number(lane.commandAnchor.x) - sampledAnchor.x) <= 0.35
+      && Math.abs(Number(lane.commandAnchor.y) - sampledAnchor.y) <= 0.35,
+    `expected defend world-anchor requests to stay near (${sampledAnchor.x.toFixed(3)}, ${sampledAnchor.y.toFixed(3)}), got (${Number(lane.commandAnchor.x).toFixed(3)}, ${Number(lane.commandAnchor.y).toFixed(3)})`
+  );
 });
 
 test("lane-controlled defenders use combat pocket movement instead of simple contact memory against unit targets", () => {

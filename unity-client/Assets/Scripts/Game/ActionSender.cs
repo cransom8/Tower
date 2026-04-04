@@ -25,6 +25,9 @@ namespace CastleDefender.Game
         public static void UpgradeBuilding(string padId, string buildingType = null)
             => SendAction("upgrade_building", new { padId, buildingType });
 
+        public static void PurchaseBuildingUpgrade(string padId, string upgradeKey)
+            => SendAction("purchase_building_upgrade", new { padId, upgradeKey });
+
         public static void BuildBarracksSite(string barracksId)
             => SendAction("build_barracks_site", new { barracksId });
 
@@ -93,8 +96,14 @@ namespace CastleDefender.Game
         public static void SetLaneAttack()
             => SendAction("set_lane_attack");
 
+        public static void SetBarracksAttack(string barracksId)
+            => SendAction("set_lane_attack", new { barracksId });
+
         public static void SetLaneDefend()
             => SendAction("set_lane_defend");
+
+        public static void SetBarracksDefend(string barracksId)
+            => SendAction("set_lane_defend", new { barracksId });
 
         public static void SetLaneDefendProgress(float progress)
             => SendAction("set_lane_defend_point", new { progress });
@@ -104,6 +113,9 @@ namespace CastleDefender.Game
 
         public static void SetLaneRetreat()
             => SendAction("set_lane_retreat");
+
+        public static void SetBarracksRetreat(string barracksId)
+            => SendAction("set_lane_retreat", new { barracksId });
 
         public static void SetLaneRetreatProgress(float progress)
             => SendAction("set_lane_retreat", new { progress });

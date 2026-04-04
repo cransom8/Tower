@@ -16,11 +16,20 @@ namespace CastleDefender.Editor
         const string LegacyRegistryPath = "Assets/UnitPrefabRegistry.asset";
         const string RemoteUnitsGroupPrefix = "Remote Units";
         const string RemoteSkinsGroupPrefix = "Remote Skins";
+        const string RemoteSkinsSharedGroupName = "Remote Skins Shared";
         const string RemoteBuildPathProfileId = "165fb4a3ad8d19e4aa002d6fc764a7ce";
         const string RemoteLoadPathProfileId = "247226ff3fd294f46b8dfca266320b8c";
         const int DefaultUnitGroupCount = 6;
         const int UnitGroupCount = 10;
         const int SkinGroupCount = 3;
+        const string SharedLabel = "shared";
+        const string SharedSkinLabel = "skin-shared";
+        static readonly string[] SharedSkinDependencyRoots =
+        {
+            "Assets/ExplosiveLLC/",
+            "Assets/Materials/TT/",
+            "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/models/",
+        };
         static readonly Dictionary<string, int> UnitGroupOverrides = new(StringComparer.OrdinalIgnoreCase)
         {
             // Slimming pass 1: split the heaviest legacy bucket (Remote Units 03)
@@ -59,6 +68,7 @@ namespace CastleDefender.Editor
 
             int synced = 0;
             int warnings = 0;
+            int sharedSynced = 0;
 
             if (registry.entries != null)
             {
@@ -82,9 +92,35 @@ namespace CastleDefender.Editor
                 }
             }
 
+            sharedSynced = SyncSharedSkinDependencies(api, registry);
+
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log($"[RemoteContentAddressablesSync] Synced={synced} warnings={warnings}");
+            Debug.Log($"[RemoteContentAddressablesSync] Synced={synced} shared={sharedSynced} warnings={warnings}");
+        }
+
+        [MenuItem("Castle Defender/Remote Content/Sync Shared Skin Dependencies To Addressables")]
+        static void SyncSharedSkinDependenciesToAddressables()
+        {
+            var registry = AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(RegistryPath)
+                ?? AssetDatabase.LoadAssetAtPath<UnitPrefabRegistry>(LegacyRegistryPath);
+            if (registry == null)
+            {
+                Debug.LogError("[RemoteContentAddressablesSync] UnitPrefabRegistry not found.");
+                return;
+            }
+
+            var api = AddressablesSyncApi.TryCreate();
+            if (!api.IsAvailable)
+            {
+                Debug.LogError("[RemoteContentAddressablesSync] Addressables API unavailable. Make sure Addressables is installed and initialized.");
+                return;
+            }
+
+            int sharedSynced = SyncSharedSkinDependencies(api, registry);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log($"[RemoteContentAddressablesSync] Shared skin dependencies synced={sharedSynced}");
         }
 
         static bool TrySyncEntry(AddressablesSyncApi api, string kindLabel, string key, GameObject prefab, string address)
@@ -156,6 +192,105 @@ namespace CastleDefender.Editor
 
                 return (int)(hash % Math.Max(1, bucketCount));
             }
+        }
+
+        static int SyncSharedSkinDependencies(AddressablesSyncApi api, UnitPrefabRegistry registry)
+        {
+            if (api == null || !api.IsAvailable || registry == null)
+                return 0;
+
+            var dependencyUsageCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var skinPrefabPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (registry.skinEntries == null)
+                return 0;
+
+            foreach (var entry in registry.skinEntries)
+            {
+                if (entry.prefab == null || string.IsNullOrWhiteSpace(entry.skinKey))
+                    continue;
+
+                string skinPrefabPath = AssetDatabase.GetAssetPath(entry.prefab);
+                if (string.IsNullOrWhiteSpace(skinPrefabPath))
+                    continue;
+
+                skinPrefabPaths.Add(skinPrefabPath);
+
+                var perPrefabDependencies = AssetDatabase.GetDependencies(skinPrefabPath, true)
+                    .Where(IsSharedSkinDependencyCandidate)
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+
+                foreach (string dependencyPath in perPrefabDependencies)
+                {
+                    dependencyUsageCounts.TryGetValue(dependencyPath, out int count);
+                    dependencyUsageCounts[dependencyPath] = count + 1;
+                }
+            }
+
+            var sharedDependencyPaths = dependencyUsageCounts
+                .Where(pair => pair.Value > 1 && !skinPrefabPaths.Contains(pair.Key))
+                .Select(pair => pair.Key)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            api.ClearManagedEntries(RemoteSkinsSharedGroupName);
+            api.RegisterLabel(SharedLabel);
+            api.RegisterLabel(SharedSkinLabel);
+
+            int synced = 0;
+            for (int i = 0; i < sharedDependencyPaths.Length; i++)
+            {
+                string dependencyPath = sharedDependencyPaths[i];
+                string guid = AssetDatabase.AssetPathToGUID(dependencyPath);
+                if (string.IsNullOrWhiteSpace(guid))
+                    continue;
+
+                var entry = api.CreateOrMoveEntry(guid, RemoteSkinsSharedGroupName);
+                if (entry == null)
+                    continue;
+
+                string address = BuildSharedDependencyAddress(dependencyPath);
+                entry.GetType().GetProperty("address", BindingFlags.Public | BindingFlags.Instance)?.SetValue(entry, address);
+
+                api.SetEntryLabel(entry, SharedLabel);
+                api.SetEntryLabel(entry, SharedSkinLabel);
+                synced++;
+            }
+
+            return synced;
+        }
+
+        static bool IsSharedSkinDependencyCandidate(string assetPath)
+        {
+            if (string.IsNullOrWhiteSpace(assetPath))
+                return false;
+
+            if (assetPath.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)
+                || assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || assetPath.EndsWith(".asmdef", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < SharedSkinDependencyRoots.Length; i++)
+            {
+                if (assetPath.StartsWith(SharedSkinDependencyRoots[i], StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static string BuildSharedDependencyAddress(string assetPath)
+        {
+            string withoutExtension = System.IO.Path.ChangeExtension(assetPath, null)?.Replace('\\', '/')
+                ?? assetPath.Replace('\\', '/');
+            const string assetsPrefix = "Assets/";
+            if (withoutExtension.StartsWith(assetsPrefix, StringComparison.OrdinalIgnoreCase))
+                withoutExtension = withoutExtension.Substring(assetsPrefix.Length);
+
+            return $"skins/shared/{withoutExtension}";
         }
 
         sealed class AddressablesSyncApi
@@ -263,6 +398,7 @@ namespace CastleDefender.Editor
                     EnsureGroup($"{RemoteUnitsGroupPrefix} {i + 1:D2}");
                 for (int i = 0; i < SkinGroupCount; i++)
                     EnsureGroup($"{RemoteSkinsGroupPrefix} {i + 1:D2}");
+                EnsureGroup(RemoteSkinsSharedGroupName);
             }
 
             public void ClearLegacyEntries()
@@ -272,6 +408,22 @@ namespace CastleDefender.Editor
                 var serialized = new SerializedObject(groupObject);
                 var entries = serialized.FindProperty("m_SerializeEntries");
                 if (entries == null || entries.arraySize == 0) return;
+
+                entries.ClearArray();
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(groupObject);
+            }
+
+            public void ClearManagedEntries(string groupName)
+            {
+                var group = EnsureGroup(groupName);
+                if (!(group is UnityEngine.Object groupObject))
+                    return;
+
+                var serialized = new SerializedObject(groupObject);
+                var entries = serialized.FindProperty("m_SerializeEntries");
+                if (entries == null || entries.arraySize == 0)
+                    return;
 
                 entries.ClearArray();
                 serialized.ApplyModifiedPropertiesWithoutUndo();

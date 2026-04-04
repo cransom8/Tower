@@ -8,6 +8,7 @@ const TICK_MS = Math.floor(1000 / TICK_HZ);
 const INCOME_INTERVAL_TICKS = 240;
 const TOWER_MAX_LEVEL = 10;
 const MAX_UNITS_PER_LANE = 200;
+const ENABLE_SPAWN_AUDIT_LOGS = process.env.ENABLE_SPAWN_AUDIT_LOGS === "1";
 const ENABLE_WAVE_UNIT_TRACE = process.env.ENABLE_WAVE_UNIT_TRACE === "1";
 
 const WAVE_UNIT_STATES = Object.freeze({
@@ -34,8 +35,10 @@ const CONTACT_SLOT_TOLERANCE = 0.10;
 const USE_PER_UNIT_ANCHOR_SLOTS = true;
 
 const TEAM_HP_START = 20;
-const BARRACKS_SEND_TIMER_TICKS = 30 * TICK_HZ;
 const WAVE_TIMER_TICKS = 120 * TICK_HZ;
+const WAVE_GROUP_INTERVAL_TICKS = 30 * TICK_HZ;
+const BARRACKS_SEND_TIMER_TICKS = WAVE_GROUP_INTERVAL_TICKS;
+const INITIAL_WAVE_DELAY_TICKS = WAVE_GROUP_INTERVAL_TICKS;
 const BUILD_PHASE_TICKS = 600;
 const TRANSITION_PHASE_TICKS = 200;
 const ESCALATION_PER_EXTRA_ROUND = 0.10;
@@ -194,7 +197,7 @@ const LEGACY_ACTION_REJECTION_REASONS = Object.freeze({
   upgrade_tower: "Tile-grid defender upgrades are disabled in fortress mode",
   bulk_upgrade_towers: "Tile-grid defender upgrades are disabled in fortress mode",
   set_tower_target: "Tile-grid defender targeting is disabled in fortress mode",
-  upgrade_barracks: "Select Barracks Left, Center, or Right to upgrade that building.",
+  upgrade_barracks: "Use Town Core to manage Barracks upgrades.",
   sell_tower: "Tile-grid defender selling is disabled in fortress mode",
   set_autosend: "CMD autosend was removed. Units must come from Barracks.",
 });
@@ -264,6 +267,7 @@ module.exports = {
   INCOME_INTERVAL_TICKS,
   TOWER_MAX_LEVEL,
   MAX_UNITS_PER_LANE,
+  ENABLE_SPAWN_AUDIT_LOGS,
   ENABLE_WAVE_UNIT_TRACE,
   WAVE_UNIT_STATES,
   GRID_W,
@@ -283,6 +287,8 @@ module.exports = {
   TEAM_HP_START,
   BARRACKS_SEND_TIMER_TICKS,
   WAVE_TIMER_TICKS,
+  WAVE_GROUP_INTERVAL_TICKS,
+  INITIAL_WAVE_DELAY_TICKS,
   BUILD_PHASE_TICKS,
   TRANSITION_PHASE_TICKS,
   ESCALATION_PER_EXTRA_ROUND,

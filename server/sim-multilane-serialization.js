@@ -72,6 +72,21 @@ function getSerializedLaneBuildValue(lane, barracksRoster, deps) {
     }
   }
 
+  if (lane && lane.buildingUpgradeState && typeof lane.buildingUpgradeState === "object") {
+    for (const buildingBucket of Object.values(lane.buildingUpgradeState)) {
+      if (!buildingBucket || typeof buildingBucket !== "object")
+        continue;
+
+      for (const upgradeState of Object.values(buildingBucket)) {
+        if (!upgradeState || !Array.isArray(upgradeState.costHistory))
+          continue;
+
+        for (const entry of upgradeState.costHistory)
+          total += Number(entry && entry.cost) || 0;
+      }
+    }
+  }
+
   if (Array.isArray(barracksRoster)) {
     for (const entry of barracksRoster) {
       if (!entry)
@@ -290,7 +305,11 @@ function createMLSnapshot(game, deps) {
     resolveWaveCombatTarget,
     getWaveUnitTargetDistance,
     getUnitStopDistance,
+    getLaneTotalIncome,
+    recomputeTeamHpState,
   } = deps;
+  if (typeof recomputeTeamHpState === "function")
+    recomputeTeamHpState(game);
   const survivalTicks = game.continuedIntoSurvival && Number.isInteger(game.survivalStartedAtTick)
     ? Math.max(0, game.tick - game.survivalStartedAtTick)
     : 0;
@@ -521,7 +540,9 @@ function createMLSnapshot(game, deps) {
         engagementRadius: Number.isFinite(Number(lane.engagementRadius)) ? Number(lane.engagementRadius) : 0,
         combatEnabled: !!lane.combatEnabled,
         gold: lane.gold,
-        income: lane.income,
+        income: typeof getLaneTotalIncome === "function"
+          ? getLaneTotalIncome(lane)
+          : lane.income,
         buildValue: getSerializedLaneBuildValue(lane, barracksRoster, deps),
         lives: lane.lives,
         barracksLevel: Math.max(1, Math.floor(Number(lane.barracks && lane.barracks.level) || 1)),

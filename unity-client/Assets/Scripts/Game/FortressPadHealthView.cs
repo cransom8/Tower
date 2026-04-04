@@ -161,6 +161,7 @@ namespace CastleDefender.Game
             if (_labelRoot != null)
             {
                 _labelRoot.localPosition = Vector3.zero;
+                HpBarVisuals.ConfigureBuildingHud(_labelRoot);
                 FaceToCamera(_labelRoot);
             }
 
@@ -216,7 +217,7 @@ namespace CastleDefender.Game
                 if (!constructing)
                 {
                     _hpBarRoot.localPosition = new Vector3(0f, -0.10f, 0f);
-                    _hpBarRoot.localScale = Vector3.one * 0.92f;
+                    _hpBarRoot.localScale = Vector3.one;
                     HpBarVisuals.ApplyFill(_hpBarFill, _hpBarImage, hp01);
                     if (_hpBarFill != null)
                     {
@@ -243,6 +244,7 @@ namespace CastleDefender.Game
 
             _labelRoot = new GameObject("Hud").transform;
             _labelRoot.SetParent(_overlayRoot, false);
+            HpBarVisuals.ConfigureBuildingHud(_labelRoot);
 
             _statusLabel = CreateWorldLabel("Status", _labelRoot, 1.15f);
             _healthLabel = CreateWorldLabel("Health", _labelRoot, 1.35f);

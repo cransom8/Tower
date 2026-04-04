@@ -23,9 +23,24 @@ namespace CastleDefender.UI
         const string LegacyRuntimeBarracksPanelHostName = "RuntimeBarracksPanelHost";
         const string ProgressionDockWidgetName = "ProgressionDockWidget";
         const string QuitConfirmationModalName = "QuitConfirmationModal";
-        static readonly string[] WaveTowerBuildingOrder = { "blacksmith", "archery_tower", "temple", "wizard_tower" };
+        const float HudWidgetMinimumFontSize = 12f;
+        static readonly string[] WaveBranchBuildingOrder = { "blacksmith", "archery_tower", "temple", "wizard_tower" };
 
-        sealed class TowerStatusView
+        enum SettingsMenuTab
+        {
+            General,
+            Graphics,
+            Sound,
+        }
+
+        enum SettingsConfirmationAction
+        {
+            None,
+            Logout,
+            QuitGame,
+        }
+
+        sealed class BranchStatusView
         {
             public string buildingType;
             public TMP_Text nameLabel;
@@ -53,6 +68,31 @@ namespace CastleDefender.UI
             public TMP_Text waveLabel;
             public TMP_Text countLabel;
             public TMP_Text summaryLabel;
+        }
+
+        sealed class SettingsMenuTabView
+        {
+            public SettingsMenuTab Tab;
+            public Button Button;
+            public TMP_Text Label;
+            public Image Background;
+            public Image Accent;
+        }
+
+        sealed class SettingsMenuRowView
+        {
+            public SettingsMenuTab Tab;
+            public GameObject Root;
+            public Button Button;
+            public TMP_Text Eyebrow;
+            public TMP_Text Title;
+            public TMP_Text Detail;
+            public TMP_Text Value;
+            public Image Accent;
+            public Image Divider;
+            public Image ValueFrame;
+            public string LabelText;
+            public string DetailText;
         }
 
         [Header("Top Ribbon")]
@@ -96,6 +136,9 @@ namespace CastleDefender.UI
 
         [Header("Wave Status Widget")]
         [SerializeField] bool showWaveStatusWidget = true;
+
+        [Header("Mini Map Widget")]
+        [SerializeField] bool showMiniMapWidget = true;
 
         [Header("Settings Panel")]
         [SerializeField] bool showSettingsPanel = true;
@@ -154,12 +197,17 @@ namespace CastleDefender.UI
         TMP_Text _playerStatsText;
         TMP_Text _waveIntelText;
         MyStatsHudWidget _myStatsWidget;
+        BattlefieldMiniMapWidget _miniMapWidget;
         DraggableHudPanel _waveOverviewWidget;
         DraggableHudPanel _progressionDockWidget;
         GameObject _settingsOverlay;
         RectTransform _settingsOverlayPanelRoot;
         Button _settingsMenuButton;
         TMP_Text _settingsMenuButtonLabel;
+        TMP_Text _settingsOverlaySubtitle;
+        TMP_Text _settingsInfoCategoryValue;
+        TMP_Text _settingsInfoDescriptionValue;
+        TMP_Text _settingsInfoPresetValue;
         TMP_Text _txtSettingsTiltValue;
         TMP_Text _txtSettingsZoomValue;
         TMP_Text _txtSettingsRotationValue;
@@ -195,16 +243,23 @@ namespace CastleDefender.UI
         Button _quitConfirmationConfirmButton;
         Button _quitConfirmationCancelButton;
         TMP_Text _quitConfirmationConfirmLabel;
+        TMP_Text _quitConfirmationTitleLabel;
+        TMP_Text _quitConfirmationBodyLabel;
         bool _isLeavingMatch;
+        SettingsMenuTab _activeSettingsTab = SettingsMenuTab.General;
+        SettingsMenuRowView _selectedSettingsRow;
+        SettingsConfirmationAction _pendingSettingsConfirmationAction;
 
         CollapsibleHudCard _teamStatsCard;
         CollapsibleHudCard _playerStatsCard;
         CollapsibleHudCard _waveIntelCard;
 
         readonly Dictionary<string, UnitCatalogEntry> _catalogByKey = new();
-        readonly Dictionary<string, TowerStatusView> _towerStatusViews = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, BranchStatusView> _branchStatusViews = new(StringComparer.OrdinalIgnoreCase);
         readonly List<UpcomingWaveQueueView> _upcomingWaveQueueViews = new();
         readonly List<UpcomingWavePortraitView> _upcomingWavePortraitViews = new();
+        readonly List<SettingsMenuTabView> _settingsTabViews = new();
+        readonly List<SettingsMenuRowView> _settingsRowViews = new();
         readonly HashSet<string> _missingUpcomingWavePortraitLogs = new(StringComparer.OrdinalIgnoreCase);
         Coroutine _wavePortraitLoadCoroutine;
         string _lastUpcomingWaveQueueSignature;
@@ -271,6 +326,10 @@ namespace CastleDefender.UI
                 BuildWaveStatusWidget();
             else
                 DestroyCanvasChildren("WaveStatusWidget");
+            if (showMiniMapWidget)
+                BuildMiniMapWidget();
+            else
+                DestroyCanvasChildren("MiniMapWidget");
             if (showSettingsPanel)
             {
                 BuildSettingsPanel();
@@ -340,6 +399,7 @@ namespace CastleDefender.UI
             DestroyCanvasChildren("RightHudRail");
             DestroyCanvasChildren("MyStatsWidget");
             DestroyCanvasChildren("WaveStatusWidget");
+            DestroyCanvasChildren("MiniMapWidget");
             DestroyCanvasChildren(ProgressionDockWidgetName);
             DestroyCanvasChildren(RuntimeBarracksButtonName);
             DestroyCanvasChildren(LegacyRuntimeBarracksButtonName);
@@ -350,6 +410,7 @@ namespace CastleDefender.UI
             _quitConfirmationConfirmButton = null;
             _quitConfirmationCancelButton = null;
             _quitConfirmationConfirmLabel = null;
+            _miniMapWidget = null;
             _waveOverviewWidget = null;
             _progressionDockWidget = null;
             _runtimeBarracksButton = null;
@@ -374,7 +435,7 @@ namespace CastleDefender.UI
             _waveDetailSource = null;
             _progressionDockStatus = null;
             _txtBarracksLevel = null;
-            _towerStatusViews.Clear();
+            _branchStatusViews.Clear();
             _upcomingWaveQueueViews.Clear();
             _upcomingWavePortraitViews.Clear();
             _missingUpcomingWavePortraitLogs.Clear();
@@ -782,6 +843,8 @@ namespace CastleDefender.UI
                 badgeGlowImage,
                 false,
                 "hud.my_stats_widget");
+
+            toggle.transform.SetAsLastSibling();
         }
 
         void BuildWaveStatusWidget()
@@ -790,7 +853,7 @@ namespace CastleDefender.UI
                 return;
 
             DestroyCanvasChildren("WaveStatusWidget");
-            _towerStatusViews.Clear();
+            _branchStatusViews.Clear();
             _upcomingWaveQueueViews.Clear();
             _upcomingWavePortraitViews.Clear();
             _waveQueueStrip = null;
@@ -851,11 +914,12 @@ namespace CastleDefender.UI
             _waveOverviewTitle.rectTransform.sizeDelta = new Vector2(0f, 20f);
             _waveOverviewTitle.rectTransform.anchoredPosition = new Vector2(10f, -6f);
 
-            _waveOverviewPhase = CreateText(header.transform, "PhaseLabel", "Wave timer -- | Send --", 10, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            _waveOverviewPhase = CreateText(header.transform, "PhaseLabel", "Wave timer -- | Send --", 12, TextAlignmentOptions.Left, new Color(0.84f, 0.90f, 0.97f, 0.94f));
+            EnsureMinimumFontSize(_waveOverviewPhase);
             _waveOverviewPhase.rectTransform.anchorMin = new Vector2(0f, 0f);
             _waveOverviewPhase.rectTransform.anchorMax = new Vector2(0.64f, 0f);
             _waveOverviewPhase.rectTransform.pivot = new Vector2(0f, 0f);
-            _waveOverviewPhase.rectTransform.sizeDelta = new Vector2(0f, 18f);
+            _waveOverviewPhase.rectTransform.sizeDelta = new Vector2(0f, 20f);
             _waveOverviewPhase.rectTransform.anchoredPosition = new Vector2(10f, 5f);
 
             _startWaveButton = CreateHudActionButton(header.transform, "StartWaveButton", "Start Wave", new Color(0.18f, 0.34f, 0.22f, 0.98f), out _startWaveButtonLabel);
@@ -868,11 +932,12 @@ namespace CastleDefender.UI
             _startWaveButton.onClick.RemoveAllListeners();
             _startWaveButton.onClick.AddListener(OnStartWavePressed);
 
-            _waveOverviewReady = CreateText(header.transform, "ReadyLabel", "Ready --/--", 10, TextAlignmentOptions.Right, new Color(0.80f, 0.88f, 0.96f, 0.96f));
+            _waveOverviewReady = CreateText(header.transform, "ReadyLabel", "Ready --/--", 12, TextAlignmentOptions.Right, new Color(0.80f, 0.88f, 0.96f, 0.96f));
+            EnsureMinimumFontSize(_waveOverviewReady);
             _waveOverviewReady.rectTransform.anchorMin = new Vector2(0.62f, 0f);
             _waveOverviewReady.rectTransform.anchorMax = new Vector2(1f, 0f);
             _waveOverviewReady.rectTransform.pivot = new Vector2(1f, 0f);
-            _waveOverviewReady.rectTransform.sizeDelta = new Vector2(-136f, 18f);
+            _waveOverviewReady.rectTransform.sizeDelta = new Vector2(-136f, 20f);
             _waveOverviewReady.rectTransform.anchoredPosition = new Vector2(-140f, 6f);
 
             var queueShelf = new GameObject("QueueShelf", typeof(RectTransform), typeof(Image));
@@ -887,11 +952,12 @@ namespace CastleDefender.UI
             queueShelfImage.color = new Color(0.09f, 0.13f, 0.17f, 0.98f);
             ApplyPanelFrame(queueShelf, queueShelfImage.color, new Color(0.98f, 0.68f, 0.30f, 0.96f));
 
-            var queueHeader = CreateText(queueShelf.transform, "QueueHeader", "WAVE QUEUE", 10, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            var queueHeader = CreateText(queueShelf.transform, "QueueHeader", "WAVE QUEUE", 12, TextAlignmentOptions.Left, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            EnsureMinimumFontSize(queueHeader);
             queueHeader.rectTransform.anchorMin = new Vector2(0f, 1f);
             queueHeader.rectTransform.anchorMax = new Vector2(1f, 1f);
             queueHeader.rectTransform.pivot = new Vector2(0f, 1f);
-            queueHeader.rectTransform.sizeDelta = new Vector2(-16f, 16f);
+            queueHeader.rectTransform.sizeDelta = new Vector2(-16f, 18f);
             queueHeader.rectTransform.anchoredPosition = new Vector2(10f, -6f);
 
             var queueViewport = new GameObject("QueueViewport", typeof(RectTransform), typeof(Image), typeof(Mask), typeof(ScrollRect));
@@ -931,7 +997,8 @@ namespace CastleDefender.UI
             queueScrollRect.content = _waveQueueStrip;
             queueScrollRect.scrollSensitivity = 20f;
 
-            _waveQueueEmptyLabel = CreateText(queueViewport.transform, "EmptyLabel", "Waiting for wave queue...", 11, TextAlignmentOptions.Center, new Color(0.74f, 0.82f, 0.90f, 0.9f));
+            _waveQueueEmptyLabel = CreateText(queueViewport.transform, "EmptyLabel", "Waiting for wave queue...", 12, TextAlignmentOptions.Center, new Color(0.74f, 0.82f, 0.90f, 0.9f));
+            EnsureMinimumFontSize(_waveQueueEmptyLabel);
             _waveQueueEmptyLabel.rectTransform.anchorMin = Vector2.zero;
             _waveQueueEmptyLabel.rectTransform.anchorMax = Vector2.one;
             _waveQueueEmptyLabel.rectTransform.offsetMin = Vector2.zero;
@@ -978,6 +1045,139 @@ namespace CastleDefender.UI
                 "hud.wave_overview_widget",
                 new Vector2(560f, 148f),
                 new Vector2(82f, 58f));
+
+            toggle.transform.SetAsLastSibling();
+        }
+
+        void BuildMiniMapWidget()
+        {
+            if (_canvasRect == null)
+                return;
+
+            DestroyCanvasChildren("MiniMapWidget");
+
+            var root = new GameObject("MiniMapWidget", typeof(RectTransform), typeof(Image), typeof(DraggableHudPanel), typeof(BattlefieldMiniMapWidget));
+            root.transform.SetParent(_canvasRect, false);
+            var rect = root.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.5f, 1f);
+            rect.anchorMax = new Vector2(0.5f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.sizeDelta = new Vector2(220f, 220f);
+            rect.anchoredPosition = new Vector2(0f, showWaveStatusWidget ? -172f : -16f);
+
+            var rootImage = root.GetComponent<Image>();
+            rootImage.sprite = null;
+            rootImage.type = Image.Type.Simple;
+            rootImage.color = new Color(0.02f, 0.03f, 0.04f, 0.68f);
+
+            var toggle = new GameObject("Toggle", typeof(RectTransform), typeof(Image), typeof(Button));
+            toggle.transform.SetParent(root.transform, false);
+            var toggleRect = toggle.GetComponent<RectTransform>();
+            toggleRect.anchorMin = new Vector2(1f, 1f);
+            toggleRect.anchorMax = new Vector2(1f, 1f);
+            toggleRect.pivot = new Vector2(1f, 1f);
+            toggleRect.sizeDelta = new Vector2(24f, 24f);
+            toggleRect.anchoredPosition = new Vector2(-4f, -4f);
+            var toggleImage = toggle.GetComponent<Image>();
+            toggleImage.sprite = null;
+            toggleImage.type = Image.Type.Simple;
+            toggleImage.color = new Color(0.05f, 0.06f, 0.08f, 0.94f);
+            var toggleLabel = CreateText(toggle.transform, "Label", "-", 13, TextAlignmentOptions.Center, Color.white);
+            toggleLabel.rectTransform.anchorMin = Vector2.zero;
+            toggleLabel.rectTransform.anchorMax = Vector2.one;
+            toggleLabel.rectTransform.offsetMin = Vector2.zero;
+            toggleLabel.rectTransform.offsetMax = Vector2.zero;
+            toggleLabel.fontStyle = FontStyles.Bold;
+            toggleLabel.fontSize = Mathf.RoundToInt(13f * GetFontScale());
+
+            var body = new GameObject("Body", typeof(RectTransform));
+            body.transform.SetParent(root.transform, false);
+            var bodyRect = body.GetComponent<RectTransform>();
+            bodyRect.anchorMin = Vector2.zero;
+            bodyRect.anchorMax = Vector2.one;
+            bodyRect.offsetMin = new Vector2(3f, 3f);
+            bodyRect.offsetMax = new Vector2(-3f, -3f);
+
+            var viewport = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(RectMask2D));
+            viewport.transform.SetParent(body.transform, false);
+            var viewportRect = viewport.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+            var viewportImage = viewport.GetComponent<Image>();
+            viewportImage.sprite = null;
+            viewportImage.type = Image.Type.Simple;
+            viewportImage.color = new Color(0.04f, 0.05f, 0.06f, 0.96f);
+
+            var map = new GameObject("Map", typeof(RectTransform), typeof(RawImage));
+            map.transform.SetParent(viewport.transform, false);
+            var mapRect = map.GetComponent<RectTransform>();
+            mapRect.anchorMin = Vector2.zero;
+            mapRect.anchorMax = Vector2.one;
+            mapRect.offsetMin = Vector2.zero;
+            mapRect.offsetMax = Vector2.zero;
+            var mapImage = map.GetComponent<RawImage>();
+            mapImage.color = Color.white;
+            mapImage.raycastTarget = false;
+
+            var focusIndicator = new GameObject("FocusIndicator", typeof(RectTransform), typeof(Image), typeof(Outline));
+            focusIndicator.transform.SetParent(viewport.transform, false);
+            var focusIndicatorRect = focusIndicator.GetComponent<RectTransform>();
+            focusIndicatorRect.anchorMin = new Vector2(0.5f, 0.5f);
+            focusIndicatorRect.anchorMax = new Vector2(0.5f, 0.5f);
+            focusIndicatorRect.pivot = new Vector2(0.5f, 0.5f);
+            focusIndicatorRect.sizeDelta = new Vector2(10f, 10f);
+            var focusIndicatorImage = focusIndicator.GetComponent<Image>();
+            focusIndicatorImage.color = new Color(0.95f, 0.82f, 0.28f, 0.98f);
+            var focusOutline = focusIndicator.GetComponent<Outline>();
+            focusOutline.effectColor = new Color(0f, 0f, 0f, 0.9f);
+            focusOutline.effectDistance = new Vector2(1f, -1f);
+            focusIndicator.SetActive(false);
+
+            var collapsed = new GameObject("CollapsedView", typeof(RectTransform), typeof(Image));
+            collapsed.transform.SetParent(root.transform, false);
+            var collapsedRect = collapsed.GetComponent<RectTransform>();
+            collapsedRect.anchorMin = Vector2.zero;
+            collapsedRect.anchorMax = Vector2.one;
+            collapsedRect.offsetMin = Vector2.zero;
+            collapsedRect.offsetMax = Vector2.zero;
+            var collapsedImage = collapsed.GetComponent<Image>();
+            collapsedImage.sprite = null;
+            collapsedImage.type = Image.Type.Simple;
+            collapsedImage.color = new Color(0.03f, 0.04f, 0.05f, 0.90f);
+            collapsed.SetActive(false);
+
+            var collapsedLabel = CreateText(collapsed.transform, "CollapsedLabel", "MAP", 13, TextAlignmentOptions.Center, Color.white);
+            collapsedLabel.rectTransform.anchorMin = Vector2.zero;
+            collapsedLabel.rectTransform.anchorMax = Vector2.one;
+            collapsedLabel.rectTransform.offsetMin = Vector2.zero;
+            collapsedLabel.rectTransform.offsetMax = Vector2.zero;
+            collapsedLabel.fontStyle = FontStyles.Bold;
+
+            var panel = root.GetComponent<DraggableHudPanel>();
+            panel.Configure(
+                rect,
+                bodyRect,
+                collapsedRect,
+                toggle.GetComponent<Button>(),
+                toggleLabel,
+                collapsedLabel,
+                false,
+                "hud.minimap_widget",
+                new Vector2(220f, 220f),
+                new Vector2(72f, 48f));
+
+            _miniMapWidget = root.GetComponent<BattlefieldMiniMapWidget>();
+            _miniMapWidget.Configure(
+                panel,
+                viewportRect,
+                mapImage,
+                focusIndicatorRect,
+                null,
+                null);
+
+            toggle.transform.SetAsLastSibling();
         }
 
         void OnStartWavePressed()
@@ -1004,11 +1204,11 @@ namespace CastleDefender.UI
                 return;
 
             var townCore = SnapshotApplier.Instance?.GetTownCorePad(myLane?.laneIndex ?? -1);
-            int builtTowers = CountBuiltTowerPads(myLane);
+            int builtBranches = CountBuiltBranchPads(myLane);
             string townCoreText = townCore != null
                 ? $"Town Core T{Mathf.Max(1, townCore.tier)}"
                 : "Town Core --";
-            _progressionDockStatus.text = $"{townCoreText} | Towers {builtTowers}/4 | Drag or minimize";
+            _progressionDockStatus.text = $"{townCoreText} | Branches {builtBranches}/4 | Drag or minimize";
         }
 
         void RefreshProgressionDockPreview()
@@ -1018,7 +1218,7 @@ namespace CastleDefender.UI
             if (_progressionDockWidget != null)
                 _progressionDockWidget.SetCollapsedLabel("TECH");
             if (_progressionDockStatus != null)
-                _progressionDockStatus.text = "Town Core T2 | Towers 4/4 | Drag or minimize";
+                _progressionDockStatus.text = "Town Core T2 | Branches 4/4 | Drag or minimize";
         }
 
         void RefreshWaveOverview(MLLaneSnap myLane, MLSnapshot snap, float recommendedBuild, Color accentColor)
@@ -1035,9 +1235,9 @@ namespace CastleDefender.UI
 
             if (_waveOverviewTitle != null)
                 _waveOverviewTitle.text = $"UPCOMING WAVES | START W{upcomingWaveNumber}";
+            int waveSeconds = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetWaveTimerSecondsRemaining() : 0;
             if (_waveOverviewPhase != null)
             {
-                int waveSeconds = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetWaveTimerSecondsRemaining() : 0;
                 int sendSeconds = SnapshotApplier.Instance != null ? SnapshotApplier.Instance.GetBarracksSendSecondsRemaining(myLane.laneIndex) : 0;
                 _waveOverviewPhase.text = $"Wave {waveSeconds}s | Send {sendSeconds}s | Target {Mathf.RoundToInt(recommendedBuild)}";
                 _waveOverviewPhase.color = accentColor;
@@ -1057,7 +1257,9 @@ namespace CastleDefender.UI
             if (_waveOverviewReady != null)
             {
                 _waveOverviewReady.text = !currentWaveComplete
-                    ? $"{remainingWaveMobCount} mobs left before the next wave can start"
+                    ? waveSeconds > 0
+                        ? $"{remainingWaveMobCount} mobs remaining this wave | Next wave in {waveSeconds}s"
+                        : $"{remainingWaveMobCount} mobs remaining this wave"
                     : requiredReadyCount > 0
                     ? $"{readyCount}/{requiredReadyCount} lanes ready{(isReady ? " | You are ready" : eligible ? " | Awaiting your vote" : string.Empty)}"
                     : "Wave timer is running";
@@ -1125,17 +1327,17 @@ namespace CastleDefender.UI
             CloseUpcomingWavePopup();
         }
 
-        void RefreshTowerStatusCards(MLLaneSnap myLane)
+        void RefreshBranchStatusCards(MLLaneSnap myLane)
         {
-            for (int i = 0; i < WaveTowerBuildingOrder.Length; i++)
+            for (int i = 0; i < WaveBranchBuildingOrder.Length; i++)
             {
-                string buildingType = WaveTowerBuildingOrder[i];
-                if (!_towerStatusViews.TryGetValue(buildingType, out var view))
+                string buildingType = WaveBranchBuildingOrder[i];
+                if (!_branchStatusViews.TryGetValue(buildingType, out var view))
                     continue;
 
                 var pad = FindFortressPad(myLane, buildingType);
                 if (view.nameLabel != null)
-                    view.nameLabel.text = ResolveTowerDisplayName(buildingType);
+                    view.nameLabel.text = ResolveBranchDisplayName(buildingType);
 
                 if (pad == null)
                 {
@@ -1153,7 +1355,7 @@ namespace CastleDefender.UI
 
                 float ratio = pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : (pad.isBuilt ? 1f : 0f);
                 if (view.tierLabel != null)
-                    view.tierLabel.text = ResolveTowerTierLabel(pad);
+                        view.tierLabel.text = ResolveBranchTierLabel(pad);
                 if (view.hpLabel != null)
                 {
                     view.hpLabel.text = pad.maxHp > 0f
@@ -1261,7 +1463,7 @@ namespace CastleDefender.UI
             ApplyPanelFrame(root, image.color, new Color(0.95f, 0.76f, 0.38f, 0.84f));
 
             var layout = root.GetComponent<LayoutElement>();
-            layout.preferredWidth = 86f;
+            layout.preferredWidth = 98f;
             layout.preferredHeight = 46f;
 
             var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(RawImage), typeof(AspectRatioFitter));
@@ -1279,28 +1481,31 @@ namespace CastleDefender.UI
             portraitFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
             portraitFitter.aspectRatio = 1f;
 
-            var waveLabel = CreateText(root.transform, "WaveLabel", $"W{upcomingWave.waveNumber}", 8, TextAlignmentOptions.Left, Color.white);
+            var waveLabel = CreateText(root.transform, "WaveLabel", $"W{upcomingWave.waveNumber}", 12, TextAlignmentOptions.Left, Color.white);
+            EnsureMinimumFontSize(waveLabel);
             waveLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
             waveLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
             waveLabel.rectTransform.pivot = new Vector2(0f, 1f);
-            waveLabel.rectTransform.sizeDelta = new Vector2(-12f, 10f);
+            waveLabel.rectTransform.sizeDelta = new Vector2(-12f, 14f);
             waveLabel.rectTransform.anchoredPosition = new Vector2(6f, -2f);
             waveLabel.raycastTarget = false;
 
-            var countLabel = CreateText(root.transform, "CountLabel", $"x{Mathf.Max(1, upcomingWave.totalUnits)}", 8, TextAlignmentOptions.Right, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            var countLabel = CreateText(root.transform, "CountLabel", $"x{Mathf.Max(1, upcomingWave.totalUnits)}", 12, TextAlignmentOptions.Right, new Color(0.98f, 0.84f, 0.56f, 0.98f));
+            EnsureMinimumFontSize(countLabel);
             countLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
             countLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
             countLabel.rectTransform.pivot = new Vector2(1f, 1f);
-            countLabel.rectTransform.sizeDelta = new Vector2(-12f, 10f);
+            countLabel.rectTransform.sizeDelta = new Vector2(-12f, 14f);
             countLabel.rectTransform.anchoredPosition = new Vector2(-6f, -2f);
             countLabel.raycastTarget = false;
 
-            var summaryLabel = CreateText(root.transform, "SummaryLabel", BuildUpcomingWaveCardSummary(upcomingWave), 7, TextAlignmentOptions.Left, new Color(0.90f, 0.94f, 0.98f, 0.96f));
+            var summaryLabel = CreateText(root.transform, "SummaryLabel", BuildUpcomingWaveCardSummary(upcomingWave), 12, TextAlignmentOptions.Left, new Color(0.90f, 0.94f, 0.98f, 0.96f));
+            EnsureMinimumFontSize(summaryLabel);
             summaryLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
             summaryLabel.rectTransform.anchorMax = new Vector2(1f, 0f);
             summaryLabel.rectTransform.pivot = new Vector2(0f, 0f);
-            summaryLabel.rectTransform.sizeDelta = new Vector2(-36f, 10f);
-            summaryLabel.rectTransform.anchoredPosition = new Vector2(34f, 3f);
+            summaryLabel.rectTransform.sizeDelta = new Vector2(-42f, 14f);
+            summaryLabel.rectTransform.anchoredPosition = new Vector2(38f, 2f);
             summaryLabel.raycastTarget = false;
 
             var button = root.GetComponent<Button>();
@@ -1814,19 +2019,19 @@ namespace CastleDefender.UI
             return unitKeys;
         }
 
-        void CreateTowerStatusCard(Transform parent, string buildingType)
+        void CreateBranchStatusCard(Transform parent, string buildingType)
         {
             var card = new GameObject($"{buildingType}_Status", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             card.transform.SetParent(parent, false);
             var image = card.GetComponent<Image>();
             image.color = new Color(0.13f, 0.17f, 0.22f, 0.98f);
-            ApplyPanelFrame(card, image.color, ResolveTowerAccentColor(buildingType));
+            ApplyPanelFrame(card, image.color, ResolveBranchAccentColor(buildingType));
 
             var layout = card.GetComponent<LayoutElement>();
             layout.preferredWidth = 126f;
             layout.preferredHeight = 48f;
 
-            var nameLabel = CreateText(card.transform, "Title", ResolveTowerDisplayName(buildingType), 11, TextAlignmentOptions.Left, Color.white);
+            var nameLabel = CreateText(card.transform, "Title", ResolveBranchDisplayName(buildingType), 11, TextAlignmentOptions.Left, Color.white);
             nameLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
             nameLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
             nameLabel.rectTransform.pivot = new Vector2(0f, 1f);
@@ -1871,7 +2076,7 @@ namespace CastleDefender.UI
             hpLabel.rectTransform.sizeDelta = new Vector2(-16f, 10f);
             hpLabel.rectTransform.anchoredPosition = new Vector2(-8f, 16f);
 
-            _towerStatusViews[buildingType] = new TowerStatusView
+            _branchStatusViews[buildingType] = new BranchStatusView
             {
                 buildingType = buildingType,
                 nameLabel = nameLabel,
@@ -1889,7 +2094,8 @@ namespace CastleDefender.UI
             image.color = backgroundColor;
             ApplyPanelFrame(buttonGo, backgroundColor, new Color(0.92f, 0.95f, 0.98f, 0.86f));
 
-            labelText = CreateText(buttonGo.transform, "Label", label, 11, TextAlignmentOptions.Center, Color.white);
+            labelText = CreateText(buttonGo.transform, "Label", label, 12, TextAlignmentOptions.Center, Color.white);
+            EnsureMinimumFontSize(labelText);
             labelText.rectTransform.anchorMin = Vector2.zero;
             labelText.rectTransform.anchorMax = Vector2.one;
             labelText.rectTransform.offsetMin = Vector2.zero;
@@ -1928,15 +2134,15 @@ namespace CastleDefender.UI
             return false;
         }
 
-        static int CountBuiltTowerPads(MLLaneSnap lane)
+        static int CountBuiltBranchPads(MLLaneSnap lane)
         {
             int count = 0;
             if (lane?.fortressPads == null)
                 return count;
 
-            for (int i = 0; i < WaveTowerBuildingOrder.Length; i++)
+            for (int i = 0; i < WaveBranchBuildingOrder.Length; i++)
             {
-                var pad = FindFortressPad(lane, WaveTowerBuildingOrder[i]);
+                var pad = FindFortressPad(lane, WaveBranchBuildingOrder[i]);
                 if (pad != null && pad.isBuilt)
                     count++;
             }
@@ -2229,19 +2435,19 @@ namespace CastleDefender.UI
             Debug.LogWarning($"[MobileMatchHud] Missing upcoming-wave portrait for '{key}'. {reason}");
         }
 
-        static string ResolveTowerDisplayName(string buildingType)
+        static string ResolveBranchDisplayName(string buildingType)
         {
             return buildingType switch
             {
                 "blacksmith" => "Blacksmith",
-                "archery_tower" => "Archery Tower",
+                "archery_tower" => "Archery",
                 "temple" => "Temple",
-                "wizard_tower" => "Wizard Tower",
+                "wizard_tower" => "Mage Tower",
                 _ => HumanizeIdentifier(buildingType),
             };
         }
 
-        static string ResolveTowerTierLabel(MLFortressPad pad)
+        static string ResolveBranchTierLabel(MLFortressPad pad)
         {
             if (pad == null)
                 return "Unavailable";
@@ -2261,7 +2467,7 @@ namespace CastleDefender.UI
             return $"Tier {Mathf.Max(1, pad.tier)}";
         }
 
-        static Color ResolveTowerAccentColor(string buildingType)
+        static Color ResolveBranchAccentColor(string buildingType)
         {
             return buildingType switch
             {
@@ -2319,6 +2525,13 @@ namespace CastleDefender.UI
                 return;
 
             DestroyCanvasChildren("SettingsPanel");
+            _settingsTabViews.Clear();
+            _settingsRowViews.Clear();
+            _settingsOverlaySubtitle = null;
+            _settingsInfoCategoryValue = null;
+            _settingsInfoDescriptionValue = null;
+            _settingsInfoPresetValue = null;
+            _selectedSettingsRow = null;
 
             var root = new GameObject("SettingsPanel", typeof(RectTransform));
             root.transform.SetParent(_canvasRect, false);
@@ -2355,48 +2568,137 @@ namespace CastleDefender.UI
 
             var panelImage = panel.GetComponent<Image>();
             panelImage.color = new Color(0.06f, 0.10f, 0.14f, 0.98f);
-            ApplyPanelFrame(panel, panelImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
+            StyleFlatSettingsSurface(panel, panelImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
 
             var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
             panelLayout.childAlignment = TextAnchor.UpperCenter;
             panelLayout.childControlWidth = true;
-            panelLayout.childControlHeight = false;
+            panelLayout.childControlHeight = true;
             panelLayout.childForceExpandWidth = true;
             panelLayout.childForceExpandHeight = false;
             panelLayout.spacing = 12f;
             panelLayout.padding = new RectOffset(18, 18, 18, 18);
 
-            var eyebrow = CreateText(panel.transform, "Eyebrow", "COMMAND MENU", 11, TextAlignmentOptions.Center, new Color(0.95f, 0.79f, 0.42f, 0.98f));
+            var eyebrow = CreateFlatSettingsText(panel.transform, "Eyebrow", "COMMAND MENU", 11f, new Color(0.95f, 0.79f, 0.42f, 0.98f));
             eyebrow.fontStyle = FontStyles.SmallCaps;
             eyebrow.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
 
-            var title = CreateText(panel.transform, "Title", "Settings", 24, TextAlignmentOptions.Center, Color.white);
+            var title = CreateFlatSettingsText(panel.transform, "Title", "Settings", 24f, Color.white);
             title.gameObject.AddComponent<LayoutElement>().preferredHeight = 30f;
 
-            var subtitle = CreateText(panel.transform, "Subtitle", "Tap each selector to cycle its saved option.", 12, TextAlignmentOptions.Center, new Color(0.84f, 0.89f, 0.95f, 0.96f));
-            subtitle.textWrappingMode = TextWrappingModes.Normal;
-            subtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = 34f;
+            _settingsOverlaySubtitle = CreateFlatSettingsText(
+                panel.transform,
+                "Subtitle",
+                "Tap each selector to cycle its saved option.",
+                12f,
+                new Color(0.84f, 0.89f, 0.95f, 0.96f));
+            _settingsOverlaySubtitle.textWrappingMode = TextWrappingModes.Normal;
+            _settingsOverlaySubtitle.gameObject.AddComponent<LayoutElement>().preferredHeight = 34f;
 
-            var rows = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
-            rows.transform.SetParent(panel.transform, false);
-            rows.GetComponent<LayoutElement>().flexibleHeight = 1f;
+            var scrollBody = new GameObject("ScrollBody", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            scrollBody.transform.SetParent(panel.transform, false);
+            var scrollBodyImage = scrollBody.GetComponent<Image>();
+            scrollBodyImage.color = new Color(0.04f, 0.07f, 0.10f, 0.52f);
+            var scrollBodyLayoutElement = scrollBody.GetComponent<LayoutElement>();
+            scrollBodyLayoutElement.flexibleHeight = 1f;
+            scrollBodyLayoutElement.minHeight = 0f;
+
+            var scrollBodyLayout = scrollBody.GetComponent<HorizontalLayoutGroup>();
+            scrollBodyLayout.childAlignment = TextAnchor.UpperCenter;
+            scrollBodyLayout.childControlWidth = true;
+            scrollBodyLayout.childControlHeight = true;
+            scrollBodyLayout.childForceExpandWidth = false;
+            scrollBodyLayout.childForceExpandHeight = true;
+            scrollBodyLayout.spacing = 10f;
+            scrollBodyLayout.padding = new RectOffset(0, 0, 0, 0);
+
+            var viewport = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask), typeof(ScrollRect), typeof(LayoutElement));
+            viewport.transform.SetParent(scrollBody.transform, false);
+            var viewportRect = viewport.GetComponent<RectTransform>();
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = Vector2.zero;
+            viewportRect.offsetMax = Vector2.zero;
+            viewport.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.01f);
+            viewport.GetComponent<Mask>().showMaskGraphic = false;
+
+            var viewportLayout = viewport.GetComponent<LayoutElement>();
+            viewportLayout.flexibleWidth = 1f;
+            viewportLayout.flexibleHeight = 1f;
+            viewportLayout.minHeight = 0f;
+            viewportLayout.minWidth = 0f;
+
+            var rows = new GameObject("Rows", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            rows.transform.SetParent(viewport.transform, false);
+            var rowsRect = rows.GetComponent<RectTransform>();
+            rowsRect.anchorMin = new Vector2(0f, 1f);
+            rowsRect.anchorMax = new Vector2(1f, 1f);
+            rowsRect.pivot = new Vector2(0.5f, 1f);
+            rowsRect.anchoredPosition = Vector2.zero;
+            rowsRect.sizeDelta = Vector2.zero;
 
             var rowsLayout = rows.GetComponent<VerticalLayoutGroup>();
             rowsLayout.childAlignment = TextAnchor.UpperCenter;
             rowsLayout.childControlWidth = true;
-            rowsLayout.childControlHeight = false;
+            rowsLayout.childControlHeight = true;
             rowsLayout.childForceExpandWidth = true;
             rowsLayout.childForceExpandHeight = false;
             rowsLayout.spacing = 10f;
 
-            var tiltButton = CreateSettingsSelectorRow(rows.transform, "TiltRow", "Camera Tilt", "Cycle the battlefield viewing angle.", new Color(0.16f, 0.24f, 0.32f, 0.98f), out _txtSettingsTiltValue);
-            var zoomButton = CreateSettingsSelectorRow(rows.transform, "ZoomRow", "Camera Zoom", "Cycle how close your command view sits.", new Color(0.18f, 0.28f, 0.22f, 0.98f), out _txtSettingsZoomValue);
-            var rotationButton = CreateSettingsSelectorRow(rows.transform, "RotateRow", "Camera Rotation", "Cycle your battlefield facing.", new Color(0.28f, 0.20f, 0.16f, 0.98f), out _txtSettingsRotationValue);
-            var sfxButton = CreateSettingsSelectorRow(rows.transform, "SfxRow", "Sound Effects", "Cycle combat, build, and UI volume.", new Color(0.20f, 0.22f, 0.34f, 0.98f), out _txtSettingsSfxValue);
-            var musicButton = CreateSettingsSelectorRow(rows.transform, "MusicRow", "Music Loop", "Cycle the background soundtrack level.", new Color(0.16f, 0.26f, 0.30f, 0.98f), out _txtSettingsMusicValue);
-            var engagementButton = CreateSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
-            var healthBarsButton = CreateSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
-            var tooltipsButton = CreateSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
+            var rowsFitter = rows.GetComponent<ContentSizeFitter>();
+            rowsFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            rowsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var scrollbarRoot = new GameObject("Scrollbar", typeof(RectTransform), typeof(Image), typeof(Scrollbar), typeof(LayoutElement));
+            scrollbarRoot.transform.SetParent(scrollBody.transform, false);
+            scrollbarRoot.GetComponent<Image>().color = new Color(0.10f, 0.14f, 0.18f, 0.96f);
+
+            var scrollbarLayoutElement = scrollbarRoot.GetComponent<LayoutElement>();
+            scrollbarLayoutElement.preferredWidth = 16f;
+            scrollbarLayoutElement.minWidth = 16f;
+            scrollbarLayoutElement.flexibleHeight = 1f;
+
+            var slidingArea = new GameObject("SlidingArea", typeof(RectTransform));
+            slidingArea.transform.SetParent(scrollbarRoot.transform, false);
+            var slidingAreaRect = slidingArea.GetComponent<RectTransform>();
+            slidingAreaRect.anchorMin = Vector2.zero;
+            slidingAreaRect.anchorMax = Vector2.one;
+            slidingAreaRect.offsetMin = new Vector2(3f, 3f);
+            slidingAreaRect.offsetMax = new Vector2(-3f, -3f);
+
+            var handle = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+            handle.transform.SetParent(slidingArea.transform, false);
+            var handleRect = handle.GetComponent<RectTransform>();
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = Vector2.one;
+            handleRect.offsetMin = Vector2.zero;
+            handleRect.offsetMax = Vector2.zero;
+            handle.GetComponent<Image>().color = new Color(0.86f, 0.66f, 0.28f, 0.96f);
+
+            var scrollbar = scrollbarRoot.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handle.GetComponent<Image>();
+
+            var scrollRect = viewport.GetComponent<ScrollRect>();
+            scrollRect.horizontal = false;
+            scrollRect.vertical = true;
+            scrollRect.viewport = viewportRect;
+            scrollRect.content = rowsRect;
+            scrollRect.verticalScrollbar = scrollbar;
+            scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            scrollRect.movementType = ScrollRect.MovementType.Clamped;
+            scrollRect.scrollSensitivity = 28f;
+            scrollRect.verticalNormalizedPosition = 1f;
+
+            var tiltButton = CreateFlatSettingsSelectorRow(rows.transform, "TiltRow", "Camera Tilt", "Cycle the battlefield viewing angle.", new Color(0.16f, 0.24f, 0.32f, 0.98f), out _txtSettingsTiltValue);
+            var zoomButton = CreateFlatSettingsSelectorRow(rows.transform, "ZoomRow", "Camera Zoom", "Cycle how close your command view sits.", new Color(0.18f, 0.28f, 0.22f, 0.98f), out _txtSettingsZoomValue);
+            var rotationButton = CreateFlatSettingsSelectorRow(rows.transform, "RotateRow", "Camera Rotation", "Cycle your battlefield facing.", new Color(0.28f, 0.20f, 0.16f, 0.98f), out _txtSettingsRotationValue);
+            var sfxButton = CreateFlatSettingsSelectorRow(rows.transform, "SfxRow", "Sound Effects", "Cycle combat, build, and UI volume.", new Color(0.20f, 0.22f, 0.34f, 0.98f), out _txtSettingsSfxValue);
+            var musicButton = CreateFlatSettingsSelectorRow(rows.transform, "MusicRow", "Music Loop", "Cycle the background soundtrack level.", new Color(0.16f, 0.26f, 0.30f, 0.98f), out _txtSettingsMusicValue);
+            var engagementButton = CreateFlatSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
+            var healthBarsButton = CreateFlatSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
+            var tooltipsButton = CreateFlatSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
 
             var footer = new GameObject("Footer", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             footer.transform.SetParent(panel.transform, false);
@@ -2409,15 +2711,11 @@ namespace CastleDefender.UI
             footerLayout.childForceExpandHeight = false;
             footerLayout.spacing = 12f;
 
-            var closeButton = CreateSettingsActionButton(footer.transform, "CloseButton", "Close", new Color(0.18f, 0.24f, 0.30f, 0.98f));
-            var closeLayout = closeButton.GetComponent<LayoutElement>();
-            if (closeLayout != null)
-                closeLayout.preferredHeight = 46f;
-
-            var quitButton = CreateSettingsActionButton(footer.transform, "QuitButton", "Quit", new Color(0.42f, 0.17f, 0.17f, 0.98f));
-            var quitLayout = quitButton.GetComponent<LayoutElement>();
-            if (quitLayout != null)
-                quitLayout.preferredHeight = 46f;
+            var closeButton = CreateFlatSettingsButton(footer.transform, "CloseButton", "Close", new Color(0.18f, 0.24f, 0.30f, 0.98f), 46f);
+            Button logoutButton = null;
+            if (AuthManager.IsAuthenticated)
+                logoutButton = CreateFlatSettingsButton(footer.transform, "LogoutButton", "Log Out", new Color(0.34f, 0.24f, 0.12f, 0.98f), 46f);
+            var quitButton = CreateFlatSettingsButton(footer.transform, "QuitButton", "Quit Game", new Color(0.42f, 0.17f, 0.17f, 0.98f), 46f);
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
@@ -2432,9 +2730,9 @@ namespace CastleDefender.UI
 
             var gearImage = gear.GetComponent<Image>();
             gearImage.color = new Color(0.11f, 0.15f, 0.19f, 0.98f);
-            ApplyPanelFrame(gear, gearImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
+            StyleFlatSettingsSurface(gear, gearImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
 
-            _settingsMenuButtonLabel = CreateText(gear.transform, "Label", "Menu", 14, TextAlignmentOptions.Center, new Color(0.96f, 0.97f, 0.99f, 1f));
+            _settingsMenuButtonLabel = CreateFlatSettingsText(gear.transform, "Label", "Menu", 14f, new Color(0.96f, 0.97f, 0.99f, 1f));
             _settingsMenuButtonLabel.rectTransform.anchorMin = Vector2.zero;
             _settingsMenuButtonLabel.rectTransform.anchorMax = Vector2.one;
             _settingsMenuButtonLabel.rectTransform.offsetMin = Vector2.zero;
@@ -2450,79 +2748,15 @@ namespace CastleDefender.UI
             healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
             tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
             closeButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
+            if (logoutButton != null)
+                logoutButton.onClick.AddListener(OnLogoutPressed);
             quitButton.onClick.AddListener(OnQuitPressed);
 
             RefreshSettingsPanelValues();
             SetSettingsOverlayVisible(false, immediate: true);
         }
 
-        void BuildQuitConfirmationModal()
-        {
-            if (_canvasRect == null)
-                return;
-
-            DestroyCanvasChildren(QuitConfirmationModalName);
-
-            var overlay = new GameObject(QuitConfirmationModalName, typeof(RectTransform), typeof(Image));
-            overlay.transform.SetParent(_canvasRect, false);
-            overlay.transform.SetAsLastSibling();
-            var overlayRect = overlay.GetComponent<RectTransform>();
-            overlayRect.anchorMin = Vector2.zero;
-            overlayRect.anchorMax = Vector2.one;
-            overlayRect.offsetMin = Vector2.zero;
-            overlayRect.offsetMax = Vector2.zero;
-            overlay.GetComponent<Image>().color = new Color(0.02f, 0.04f, 0.07f, 0.84f);
-
-            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
-            panel.transform.SetParent(overlay.transform, false);
-            var panelRect = panel.GetComponent<RectTransform>();
-            panelRect.anchorMin = new Vector2(0.5f, 0.5f);
-            panelRect.anchorMax = new Vector2(0.5f, 0.5f);
-            panelRect.pivot = new Vector2(0.5f, 0.5f);
-            panelRect.sizeDelta = new Vector2(320f, 184f);
-
-            var panelImage = panel.GetComponent<Image>();
-            panelImage.color = new Color(0.08f, 0.11f, 0.15f, 0.98f);
-            ApplyPanelFrame(panel, panelImage.color, new Color(0.86f, 0.66f, 0.28f, 0.98f));
-
-            var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
-            panelLayout.childAlignment = TextAnchor.UpperCenter;
-            panelLayout.childControlWidth = true;
-            panelLayout.childControlHeight = false;
-            panelLayout.childForceExpandWidth = true;
-            panelLayout.childForceExpandHeight = false;
-            panelLayout.spacing = 10f;
-            panelLayout.padding = new RectOffset(18, 18, 18, 18);
-
-            var title = CreateText(panel.transform, "Title", "Quit Game?", 20, TextAlignmentOptions.Center, Color.white);
-            title.gameObject.AddComponent<LayoutElement>().preferredHeight = 30f;
-
-            var body = CreateText(panel.transform, "Body", "Are you sure you want to quit?", 13, TextAlignmentOptions.Center, new Color(0.88f, 0.91f, 0.96f, 0.96f));
-            body.fontStyle = FontStyles.Normal;
-            body.textWrappingMode = TextWrappingModes.Normal;
-            body.gameObject.AddComponent<LayoutElement>().preferredHeight = 54f;
-
-            var buttons = new GameObject("Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
-            buttons.transform.SetParent(panel.transform, false);
-            var buttonsLayout = buttons.GetComponent<HorizontalLayoutGroup>();
-            buttonsLayout.childAlignment = TextAnchor.MiddleCenter;
-            buttonsLayout.childControlWidth = true;
-            buttonsLayout.childControlHeight = true;
-            buttonsLayout.childForceExpandWidth = true;
-            buttonsLayout.childForceExpandHeight = false;
-            buttonsLayout.spacing = 12f;
-            buttons.GetComponent<LayoutElement>().preferredHeight = 44f;
-
-            _quitConfirmationCancelButton = CreateQuitConfirmationButton(buttons.transform, "CancelButton", "Cancel", new Color(0.18f, 0.24f, 0.30f, 0.98f), out _);
-            _quitConfirmationConfirmButton = CreateQuitConfirmationButton(buttons.transform, "ConfirmButton", "Confirm", new Color(0.42f, 0.17f, 0.17f, 0.98f), out _quitConfirmationConfirmLabel);
-            _quitConfirmationCancelButton.onClick.AddListener(CancelQuit);
-            _quitConfirmationConfirmButton.onClick.AddListener(ConfirmQuit);
-
-            _quitConfirmationModal = overlay;
-            HideQuitConfirmation();
-        }
-
-        Button CreateSettingsSelectorRow(
+        Button CreateFlatSettingsSelectorRow(
             Transform parent,
             string name,
             string labelText,
@@ -2534,7 +2768,7 @@ namespace CastleDefender.UI
             row.transform.SetParent(parent, false);
             var rowImage = row.GetComponent<Image>();
             rowImage.color = new Color(0.09f, 0.14f, 0.18f, 0.98f);
-            ApplyPanelFrame(row, rowImage.color, selectorColor);
+            StyleFlatSettingsSurface(row, rowImage.color, selectorColor);
 
             var rowLayoutElement = row.GetComponent<LayoutElement>();
             rowLayoutElement.preferredHeight = 54f;
@@ -2561,18 +2795,540 @@ namespace CastleDefender.UI
             copyLayout.childForceExpandHeight = false;
             copyLayout.spacing = 2f;
 
-            var title = CreateText(copy.transform, "Title", labelText, 13, TextAlignmentOptions.Left, Color.white);
+            var title = CreateFlatSettingsText(copy.transform, "Title", labelText, 13f, Color.white);
             title.fontStyle = FontStyles.SmallCaps;
             title.textWrappingMode = TextWrappingModes.NoWrap;
             title.overflowMode = TextOverflowModes.Ellipsis;
             title.gameObject.AddComponent<LayoutElement>().preferredHeight = 16f;
 
-            var detail = CreateText(copy.transform, "Detail", detailText, 10, TextAlignmentOptions.Left, new Color(0.78f, 0.85f, 0.92f, 0.94f));
+            var detail = CreateFlatSettingsText(copy.transform, "Detail", detailText, 10f, new Color(0.78f, 0.85f, 0.92f, 0.94f));
             detail.textWrappingMode = TextWrappingModes.Normal;
             detail.overflowMode = TextOverflowModes.Ellipsis;
             detail.gameObject.AddComponent<LayoutElement>().preferredHeight = 20f;
 
-            return CreateSettingsSelectorButton(row.transform, "Selector", selectorColor, out valueLabel);
+            return CreateFlatSettingsSelectorButton(row.transform, "Selector", selectorColor, out valueLabel);
+        }
+
+        Button CreateFlatSettingsButton(Transform parent, string name, string label, Color backgroundColor, float preferredHeight = 0f)
+        {
+            var buttonGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            buttonGo.transform.SetParent(parent, false);
+            buttonGo.GetComponent<Image>().color = backgroundColor;
+
+            var layout = buttonGo.GetComponent<LayoutElement>();
+            layout.minWidth = 44f;
+            layout.flexibleWidth = 1f;
+            layout.flexibleHeight = 1f;
+            if (preferredHeight > 0f)
+                layout.preferredHeight = preferredHeight;
+
+            var labelText = CreateFlatSettingsText(buttonGo.transform, "Label", label, 10f, new Color(0.96f, 0.97f, 0.99f, 1f));
+            labelText.rectTransform.anchorMin = Vector2.zero;
+            labelText.rectTransform.anchorMax = Vector2.one;
+            labelText.rectTransform.offsetMin = new Vector2(4f, 2f);
+            labelText.rectTransform.offsetMax = new Vector2(-4f, -2f);
+            labelText.alignment = TextAlignmentOptions.Center;
+            return buttonGo.GetComponent<Button>();
+        }
+
+        Button CreateFlatSettingsSelectorButton(Transform parent, string name, Color backgroundColor, out TMP_Text valueLabel)
+        {
+            var button = CreateFlatSettingsButton(parent, name, "--", backgroundColor, 42f);
+            var layout = button.GetComponent<LayoutElement>();
+            if (layout != null)
+            {
+                float selectorMinWidth = Mathf.Max(118f, settingsValueWidth * 4f);
+                float selectorPreferredWidth = Mathf.Max(132f, settingsValueWidth * 4.4f);
+                layout.minWidth = selectorMinWidth;
+                layout.preferredWidth = selectorPreferredWidth;
+                layout.flexibleWidth = 0f;
+            }
+
+            StyleFlatSettingsSurface(button.gameObject, backgroundColor, new Color(0.94f, 0.96f, 0.99f, 0.42f));
+            valueLabel = button.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
+            if (valueLabel != null)
+            {
+                valueLabel.fontSize = Mathf.RoundToInt(12f * GetFontScale());
+                valueLabel.fontStyle = FontStyles.Bold;
+            }
+
+            return button;
+        }
+
+        TMP_Text CreateFlatSettingsText(Transform parent, string name, string value, float fontSize, Color color)
+        {
+            var textGo = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+            textGo.transform.SetParent(parent, false);
+            var text = textGo.GetComponent<TextMeshProUGUI>();
+            text.text = value;
+            text.fontSize = fontSize * GetFontScale();
+            text.color = color;
+            text.alignment = TextAlignmentOptions.Center;
+            if (TMP_Settings.defaultFontAsset != null)
+                text.font = TMP_Settings.defaultFontAsset;
+            return text;
+        }
+
+        void StyleFlatSettingsSurface(GameObject target, Color backgroundColor, Color accentColor)
+        {
+            if (target == null)
+                return;
+
+            var outline = target.GetComponent<Outline>();
+            if (outline == null)
+                outline = target.AddComponent<Outline>();
+            outline.effectDistance = new Vector2(1.2f, -1.2f);
+            outline.effectColor = accentColor;
+            outline.useGraphicAlpha = true;
+
+            var shadow = target.GetComponent<Shadow>();
+            if (shadow == null)
+                shadow = target.AddComponent<Shadow>();
+            shadow.effectDistance = new Vector2(2f, -2f);
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.30f);
+            shadow.useGraphicAlpha = true;
+
+            var image = target.GetComponent<Image>();
+            if (image != null)
+                image.color = backgroundColor;
+        }
+
+        void BuildQuitConfirmationModal()
+        {
+            if (_canvasRect == null)
+                return;
+
+            DestroyCanvasChildren(QuitConfirmationModalName);
+
+            var overlay = new GameObject(QuitConfirmationModalName, typeof(RectTransform), typeof(Image));
+            overlay.transform.SetParent(_canvasRect, false);
+            overlay.transform.SetAsLastSibling();
+            var overlayRect = overlay.GetComponent<RectTransform>();
+            overlayRect.anchorMin = Vector2.zero;
+            overlayRect.anchorMax = Vector2.one;
+            overlayRect.offsetMin = Vector2.zero;
+            overlayRect.offsetMax = Vector2.zero;
+            overlay.GetComponent<Image>().color = new Color(0.02f, 0.04f, 0.07f, 0.84f);
+
+            var panel = new GameObject("Panel", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
+            panel.transform.SetParent(overlay.transform, false);
+            var panelRect = panel.GetComponent<RectTransform>();
+            panelRect.anchorMin = new Vector2(0.5f, 0.5f);
+            panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+            panelRect.pivot = new Vector2(0.5f, 0.5f);
+            panelRect.sizeDelta = new Vector2(360f, 220f);
+
+            var panelImage = panel.GetComponent<Image>();
+            panelImage.color = new Color(0.06f, 0.06f, 0.08f, 0.95f);
+            StyleCommandMenuSurface(panel, panelImage.color, new Color(0.90f, 0.84f, 0.72f, 0.54f));
+
+            var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
+            panelLayout.childAlignment = TextAnchor.UpperCenter;
+            panelLayout.childControlWidth = true;
+            panelLayout.childControlHeight = false;
+            panelLayout.childForceExpandWidth = true;
+            panelLayout.childForceExpandHeight = false;
+            panelLayout.spacing = 12f;
+            panelLayout.padding = new RectOffset(18, 18, 18, 18);
+
+            var eyebrow = CreateText(panel.transform, "Eyebrow", "FIELD COMMAND", 10, TextAlignmentOptions.Center, new Color(0.95f, 0.79f, 0.42f, 0.98f));
+            eyebrow.fontStyle = FontStyles.SmallCaps;
+            eyebrow.gameObject.AddComponent<LayoutElement>().preferredHeight = 16f;
+
+            var titlePlate = new GameObject("TitlePlate", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            titlePlate.transform.SetParent(panel.transform, false);
+            var titlePlateLayout = titlePlate.GetComponent<LayoutElement>();
+            titlePlateLayout.preferredWidth = 260f;
+            titlePlateLayout.preferredHeight = 62f;
+            ClassicRpgUiRuntime.ApplyPanel(titlePlate.GetComponent<Image>(), ClassicRpgPanelSkin.TitleLong, false, Color.white);
+
+            _quitConfirmationTitleLabel = CreateText(titlePlate.transform, "Title", "Log Out", 20, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+            _quitConfirmationTitleLabel.rectTransform.anchorMin = Vector2.zero;
+            _quitConfirmationTitleLabel.rectTransform.anchorMax = Vector2.one;
+            _quitConfirmationTitleLabel.rectTransform.offsetMin = new Vector2(18f, 8f);
+            _quitConfirmationTitleLabel.rectTransform.offsetMax = new Vector2(-18f, -12f);
+
+            _quitConfirmationBodyLabel = CreateText(
+                panel.transform,
+                "Body",
+                "Leave the current match, clear your commander session, and return to sign-in?",
+                13,
+                TextAlignmentOptions.Center,
+                new Color(0.90f, 0.86f, 0.80f, 0.96f));
+            _quitConfirmationBodyLabel.fontStyle = FontStyles.Normal;
+            _quitConfirmationBodyLabel.textWrappingMode = TextWrappingModes.Normal;
+            _quitConfirmationBodyLabel.gameObject.AddComponent<LayoutElement>().preferredHeight = 54f;
+
+            var buttons = new GameObject("Buttons", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            buttons.transform.SetParent(panel.transform, false);
+            var buttonsLayout = buttons.GetComponent<HorizontalLayoutGroup>();
+            buttonsLayout.childAlignment = TextAnchor.MiddleCenter;
+            buttonsLayout.childControlWidth = true;
+            buttonsLayout.childControlHeight = true;
+            buttonsLayout.childForceExpandWidth = true;
+            buttonsLayout.childForceExpandHeight = false;
+            buttonsLayout.spacing = 12f;
+            buttons.GetComponent<LayoutElement>().preferredHeight = 44f;
+
+            _quitConfirmationCancelButton = CreateQuitConfirmationButton(buttons.transform, "CancelButton", "Stay", new Color(0.18f, 0.24f, 0.30f, 0.98f), out _);
+            _quitConfirmationConfirmButton = CreateQuitConfirmationButton(buttons.transform, "ConfirmButton", "Log Out", new Color(0.42f, 0.17f, 0.17f, 0.98f), out _quitConfirmationConfirmLabel);
+            ApplyCommandMenuButtonStyle(_quitConfirmationConfirmButton, ClassicRpgButtonSkin.MiniGold, 44f);
+            _quitConfirmationCancelButton.onClick.AddListener(CancelSettingsAction);
+            _quitConfirmationConfirmButton.onClick.AddListener(ConfirmSettingsAction);
+
+            _quitConfirmationModal = overlay;
+            HideQuitConfirmation();
+        }
+
+        Vector2 ResolveSettingsOverlayPanelSize(float safeWidth, float safeHeight)
+        {
+            float maxWidth = Mathf.Max(340f, safeWidth - 28f);
+            float maxHeight = Mathf.Max(420f, safeHeight - 28f);
+
+            float targetWidth = safeWidth >= 1080f ? 1080f : safeWidth * 0.92f;
+            float targetHeight = safeHeight >= 820f ? 760f : safeHeight * 0.94f;
+
+            float width = Mathf.Clamp(targetWidth, Mathf.Min(620f, maxWidth), Mathf.Min(1180f, maxWidth));
+            float height = Mathf.Clamp(targetHeight, Mathf.Min(540f, maxHeight), Mathf.Min(820f, maxHeight));
+            return new Vector2(width, height);
+        }
+
+        Button CreateSettingsTabButton(Transform parent, string name, string label, SettingsMenuTab tab)
+        {
+            bool compact = parent != null && parent.GetComponent<HorizontalLayoutGroup>() != null;
+
+            var buttonGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            buttonGo.transform.SetParent(parent, false);
+            var layout = buttonGo.GetComponent<LayoutElement>();
+            layout.preferredHeight = compact ? 56f : 62f;
+            layout.minHeight = layout.preferredHeight;
+            layout.flexibleWidth = compact ? 1f : 0f;
+            layout.minWidth = 0f;
+            if (!compact)
+                layout.preferredWidth = 186f;
+
+            var background = buttonGo.GetComponent<Image>();
+            var fill = new Color(0.12f, 0.16f, 0.22f, 0.98f);
+            StyleSettingsBuildingCard(buttonGo, fill, ResolveSettingsTabAccent(tab), false);
+
+            var button = buttonGo.GetComponent<Button>();
+            button.transition = Selectable.Transition.None;
+            button.targetGraphic = background;
+
+            var accentImage = buttonGo.transform.Find("CardAccent")?.GetComponent<Image>();
+            var labelText = CreateText(buttonGo.transform, "Label", label, compact ? 12 : 13, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText);
+            labelText.rectTransform.anchorMin = Vector2.zero;
+            labelText.rectTransform.anchorMax = Vector2.one;
+            labelText.rectTransform.offsetMin = new Vector2(14f, 8f);
+            labelText.rectTransform.offsetMax = new Vector2(-14f, -10f);
+            labelText.fontStyle = FontStyles.SmallCaps;
+
+            _settingsTabViews.Add(new SettingsMenuTabView
+            {
+                Tab = tab,
+                Button = button,
+                Label = labelText,
+                Background = background,
+                Accent = accentImage,
+            });
+            return button;
+        }
+
+        void BindSettingsRow(SettingsMenuRowView rowView, UnityEngine.Events.UnityAction action)
+        {
+            if (rowView?.Button == null)
+                return;
+
+            rowView.Button.onClick.AddListener(() => SelectSettingsRow(rowView));
+            if (action != null)
+                rowView.Button.onClick.AddListener(action);
+        }
+
+        void SetSettingsMenuTab(SettingsMenuTab tab, bool playSound = true)
+        {
+            bool changed = _activeSettingsTab != tab;
+            _activeSettingsTab = tab;
+
+            for (int i = 0; i < _settingsRowViews.Count; i++)
+            {
+                var row = _settingsRowViews[i];
+                if (row?.Root != null)
+                    row.Root.SetActive(row.Tab == tab);
+            }
+
+            if (_settingsOverlaySubtitle != null)
+                _settingsOverlaySubtitle.text = BuildSettingsTabSubtitle(tab);
+
+            if (_selectedSettingsRow == null || _selectedSettingsRow.Tab != tab)
+                _selectedSettingsRow = GetFirstSettingsRowForTab(tab);
+
+            RefreshSettingsMenuTabVisuals();
+            RefreshSettingsRowVisuals();
+            RefreshSettingsInfoRail();
+
+            if (changed && playSound)
+                AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+        }
+
+        void RefreshSettingsMenuTabVisuals()
+        {
+            for (int i = 0; i < _settingsTabViews.Count; i++)
+            {
+                var view = _settingsTabViews[i];
+                if (view?.Button == null)
+                    continue;
+
+                bool selected = view.Tab == _activeSettingsTab;
+                Color fill = selected
+                    ? new Color(0.24f, 0.19f, 0.10f, 0.98f)
+                    : new Color(0.12f, 0.16f, 0.22f, 0.98f);
+                var accent = selected
+                    ? new Color(0.97f, 0.80f, 0.42f, 0.98f)
+                    : ResolveSettingsTabAccent(view.Tab);
+                StyleSettingsBuildingCard(view.Button.gameObject, fill, accent, selected);
+
+                if (view.Label != null)
+                    view.Label.color = selected
+                        ? ClassicRpgUiRuntime.WarmGold
+                        : new Color(0.86f, 0.89f, 0.94f, 0.90f);
+            }
+        }
+
+        void SelectSettingsRow(SettingsMenuRowView rowView, bool playSound = true)
+        {
+            if (rowView == null)
+                return;
+
+            bool changed = _selectedSettingsRow != rowView;
+            _selectedSettingsRow = rowView;
+            RefreshSettingsRowVisuals();
+            RefreshSettingsInfoRail();
+
+            if (changed && playSound)
+                AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+        }
+
+        SettingsMenuRowView GetFirstSettingsRowForTab(SettingsMenuTab tab)
+        {
+            for (int i = 0; i < _settingsRowViews.Count; i++)
+            {
+                var row = _settingsRowViews[i];
+                if (row != null && row.Tab == tab)
+                    return row;
+            }
+
+            return null;
+        }
+
+        void RefreshSettingsRowVisuals()
+        {
+            for (int i = 0; i < _settingsRowViews.Count; i++)
+            {
+                var row = _settingsRowViews[i];
+                if (row?.Root == null)
+                    continue;
+
+                bool isActive = row.Tab == _activeSettingsTab;
+                row.Root.SetActive(isActive);
+                if (!isActive)
+                    continue;
+
+                bool selected = row == _selectedSettingsRow;
+                var fill = selected
+                    ? new Color(0.24f, 0.19f, 0.10f, 0.98f)
+                    : new Color(0.12f, 0.16f, 0.21f, 0.98f);
+                var accent = selected
+                    ? new Color(0.97f, 0.80f, 0.42f, 0.98f)
+                    : ResolveSettingsTabAccent(row.Tab);
+                StyleSettingsBuildingCard(row.Root, fill, accent, selected);
+
+                if (row.Divider != null)
+                    row.Divider.color = selected
+                        ? new Color(0.92f, 0.84f, 0.66f, 0.28f)
+                        : new Color(0.26f, 0.31f, 0.38f, 0.14f);
+
+                if (row.Eyebrow != null)
+                    row.Eyebrow.color = selected
+                        ? ClassicRpgUiRuntime.WarmGold
+                        : new Color(0.92f, 0.79f, 0.44f, 0.96f);
+
+                if (row.Title != null)
+                    row.Title.color = selected
+                        ? ClassicRpgUiRuntime.WarmGold
+                        : new Color(0.94f, 0.94f, 0.92f, 0.96f);
+
+                if (row.Detail != null)
+                    row.Detail.color = selected
+                        ? new Color(0.90f, 0.88f, 0.84f, 0.96f)
+                        : new Color(0.72f, 0.76f, 0.82f, 0.92f);
+
+                if (row.ValueFrame != null)
+                {
+                    row.ValueFrame.color = selected
+                        ? new Color(0.30f, 0.22f, 0.11f, 0.98f)
+                        : new Color(0.18f, 0.15f, 0.09f, 0.98f);
+                    ClassicRpgUiRuntime.ApplyPanel(row.ValueFrame, ClassicRpgPanelSkin.InventoryTitle, true, Color.white);
+                }
+
+                if (row.Value != null)
+                    row.Value.color = selected
+                        ? new Color(0.99f, 0.94f, 0.76f, 1f)
+                        : ClassicRpgUiRuntime.WarmGold;
+            }
+        }
+
+        void RefreshSettingsInfoRail()
+        {
+            if (_settingsInfoCategoryValue != null)
+                _settingsInfoCategoryValue.text = GetSettingsTabLabel(_activeSettingsTab);
+
+            if (_settingsInfoDescriptionValue != null)
+            {
+                var focusedRow = _selectedSettingsRow != null && _selectedSettingsRow.Tab == _activeSettingsTab
+                    ? _selectedSettingsRow
+                    : GetFirstSettingsRowForTab(_activeSettingsTab);
+                string title = focusedRow != null ? focusedRow.LabelText : GetSettingsTabLabel(_activeSettingsTab);
+                string detail = focusedRow != null ? focusedRow.DetailText : BuildSettingsTabSubtitle(_activeSettingsTab);
+                _settingsInfoDescriptionValue.text = $"<b>{title}</b>\n<size=78%>{detail}</size>";
+            }
+
+            if (_settingsInfoPresetValue != null)
+                _settingsInfoPresetValue.text = BuildSettingsPresetSummary(_activeSettingsTab);
+        }
+
+        static string GetSettingsTabLabel(SettingsMenuTab tab)
+        {
+            return tab switch
+            {
+                SettingsMenuTab.General => "General",
+                SettingsMenuTab.Graphics => "Graphics",
+                SettingsMenuTab.Sound => "Sound",
+                _ => "Settings",
+            };
+        }
+
+        static Color ResolveSettingsTabAccent(SettingsMenuTab tab)
+        {
+            return tab switch
+            {
+                SettingsMenuTab.General => new Color(0.53f, 0.72f, 0.90f, 0.92f),
+                SettingsMenuTab.Graphics => new Color(0.55f, 0.85f, 0.66f, 0.92f),
+                SettingsMenuTab.Sound => new Color(0.88f, 0.62f, 0.38f, 0.92f),
+                _ => new Color(0.76f, 0.70f, 0.52f, 0.92f),
+            };
+        }
+
+        string BuildSettingsPresetSummary(SettingsMenuTab tab)
+        {
+            var preferences = UserPreferencesManager.CurrentPreferenceView;
+            switch (tab)
+            {
+                case SettingsMenuTab.Graphics:
+                {
+                    int enabledCount = 0;
+                    if (preferences.visuals.showEngagementCircles)
+                        enabledCount++;
+                    if (preferences.visuals.showHealthBars)
+                        enabledCount++;
+                    if (preferences.visuals.showTooltips)
+                        enabledCount++;
+
+                    return enabledCount switch
+                    {
+                        3 => "High",
+                        2 => "Medium",
+                        0 => "Low",
+                        _ => "Custom",
+                    };
+                }
+                case SettingsMenuTab.Sound:
+                {
+                    float musicVolume = preferences.audio.gameplayMusicVolume
+                        ?? preferences.audio.menuMusicVolume
+                        ?? preferences.audio.ambientVolume;
+                    float averageVolume = (preferences.audio.sfxVolume + musicVolume) * 0.5f;
+                    if (averageVolume >= 0.75f)
+                        return "High";
+                    if (averageVolume >= 0.35f)
+                        return "Medium";
+                    return averageVolume > 0.01f ? "Low" : "Muted";
+                }
+                default:
+                {
+                    ResolveCurrentCameraValues(out float tilt, out float zoom, out float rotation);
+                    float expectedRotation = UserPreferencesManager.CurrentPreferenceView.camera.rotation ?? rotation;
+                    bool defaultView = Mathf.Abs(tilt - UserCameraPreferences.DefaultTilt) <= 0.1f
+                        && Mathf.Abs(zoom - UserCameraPreferences.DefaultZoom) <= 0.1f
+                        && Mathf.Abs(rotation - expectedRotation) <= 0.1f;
+                    return defaultView ? "Standard" : "Custom";
+                }
+            }
+        }
+
+        static string BuildSettingsTabSubtitle(SettingsMenuTab tab)
+        {
+            return tab switch
+            {
+                SettingsMenuTab.General => "Adjust camera framing and battlefield control comfort.",
+                SettingsMenuTab.Graphics => "Tune combat readability, markers, and on-field clarity.",
+                SettingsMenuTab.Sound => "Balance war drums, effects, and battlefield audio.",
+                _ => "Adjust battlefield settings.",
+            };
+        }
+
+        RectTransform CreateSettingsInfoCard(
+            Transform parent,
+            string name,
+            string header,
+            float preferredHeight,
+            TextAlignmentOptions alignment,
+            out TMP_Text valueLabel)
+        {
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_canvasRect);
+            var card = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            card.transform.SetParent(parent, false);
+
+            var layoutElement = card.GetComponent<LayoutElement>();
+            layoutElement.preferredHeight = preferredHeight;
+            layoutElement.flexibleWidth = 1f;
+
+            var image = card.GetComponent<Image>();
+            var fill = new Color(0.12f, 0.16f, 0.21f, 0.98f);
+            StyleSettingsBuildingCard(card, fill, new Color(0.57f, 0.65f, 0.75f, 0.86f), false);
+
+            var layout = card.GetComponent<VerticalLayoutGroup>();
+            layout.childAlignment = alignment == TextAlignmentOptions.Left ? TextAnchor.UpperLeft : TextAnchor.MiddleCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = false;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.spacing = 6f;
+            layout.padding = new RectOffset(16, 16, 16, 16);
+
+            var headerLabel = CreateText(
+                card.transform,
+                "Header",
+                header,
+                compact ? 10 : 11,
+                alignment == TextAlignmentOptions.Left ? TextAlignmentOptions.Left : TextAlignmentOptions.Center,
+                ClassicRpgUiRuntime.SoftGold);
+            headerLabel.fontStyle = FontStyles.SmallCaps;
+            headerLabel.gameObject.AddComponent<LayoutElement>().preferredHeight = 18f;
+
+            valueLabel = CreateText(
+                card.transform,
+                "Value",
+                "--",
+                alignment == TextAlignmentOptions.Left ? (compact ? 12 : 13) : (compact ? 17 : 19),
+                alignment == TextAlignmentOptions.Left ? TextAlignmentOptions.TopLeft : TextAlignmentOptions.Center,
+                alignment == TextAlignmentOptions.Left ? new Color(0.92f, 0.90f, 0.84f, 0.96f) : ClassicRpgUiRuntime.WarmGold);
+            valueLabel.fontStyle = alignment == TextAlignmentOptions.Left ? FontStyles.Normal : FontStyles.Bold;
+            valueLabel.textWrappingMode = TextWrappingModes.Normal;
+            valueLabel.overflowMode = TextOverflowModes.Ellipsis;
+            var valueLayout = valueLabel.gameObject.AddComponent<LayoutElement>();
+            valueLayout.preferredHeight = Mathf.Max(42f, preferredHeight - 46f);
+            valueLayout.flexibleWidth = 1f;
+            return card.GetComponent<RectTransform>();
         }
 
         Button CreateSettingsActionButton(Transform parent, string name, string label, Color backgroundColor)
@@ -2591,7 +3347,135 @@ namespace CastleDefender.UI
             labelText.rectTransform.offsetMin = new Vector2(4f, 2f);
             labelText.rectTransform.offsetMax = new Vector2(-4f, -2f);
 
-            return buttonGo.GetComponent<Button>();
+            var button = buttonGo.GetComponent<Button>();
+            ApplyCommandMenuButtonStyle(button, ClassicRpgButtonSkin.MiniBrown, 44f);
+            return button;
+        }
+
+        GameObject CreateSettingsFooterSpacer(Transform parent)
+        {
+            var spacer = new GameObject("Spacer", typeof(RectTransform), typeof(LayoutElement));
+            spacer.transform.SetParent(parent, false);
+            spacer.GetComponent<LayoutElement>().flexibleWidth = 1f;
+            return spacer;
+        }
+
+        SettingsMenuRowView CreateSettingsSelectorRow(
+            Transform parent,
+            string name,
+            SettingsMenuTab tab,
+            string labelText,
+            string detailText,
+            out TMP_Text valueLabel)
+        {
+            bool compact = ClassicRpgUiRuntime.IsCompactLayout(_canvasRect);
+
+            var row = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+            row.transform.SetParent(parent, false);
+
+            var rowImage = row.GetComponent<Image>();
+            var baseFill = new Color(0.12f, 0.16f, 0.21f, 0.98f);
+            StyleSettingsBuildingCard(row, baseFill, ResolveSettingsTabAccent(tab), false);
+
+            var button = row.GetComponent<Button>();
+            button.transition = Selectable.Transition.None;
+            button.targetGraphic = rowImage;
+
+            var rowLayoutElement = row.GetComponent<LayoutElement>();
+            rowLayoutElement.preferredHeight = compact ? 104f : 112f;
+            rowLayoutElement.minHeight = rowLayoutElement.preferredHeight;
+            rowLayoutElement.flexibleWidth = 1f;
+
+            var rowLayout = row.GetComponent<VerticalLayoutGroup>();
+            rowLayout.childAlignment = TextAnchor.UpperLeft;
+            rowLayout.childControlWidth = true;
+            rowLayout.childControlHeight = false;
+            rowLayout.childForceExpandWidth = true;
+            rowLayout.childForceExpandHeight = false;
+            rowLayout.spacing = compact ? 4f : 6f;
+            rowLayout.padding = compact
+                ? new RectOffset(14, 14, 12, 12)
+                : new RectOffset(16, 16, 14, 14);
+
+            var accentImage = row.transform.Find("CardAccent")?.GetComponent<Image>();
+
+            var eyebrow = CreateText(row.transform, "Eyebrow", GetSettingsTabLabel(tab).ToUpperInvariant(), compact ? 9 : 10, TextAlignmentOptions.Left, ClassicRpgUiRuntime.SoftGold);
+            eyebrow.fontStyle = FontStyles.SmallCaps;
+            eyebrow.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 12f : 14f;
+
+            var header = new GameObject("Header", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            header.transform.SetParent(row.transform, false);
+            var headerLayout = header.GetComponent<HorizontalLayoutGroup>();
+            headerLayout.childAlignment = TextAnchor.MiddleCenter;
+            headerLayout.childControlWidth = true;
+            headerLayout.childControlHeight = true;
+            headerLayout.childForceExpandWidth = false;
+            headerLayout.childForceExpandHeight = false;
+            headerLayout.spacing = compact ? 10f : 12f;
+
+            var title = CreateText(header.transform, "Title", labelText, compact ? 15 : 16, TextAlignmentOptions.Left, new Color(0.94f, 0.94f, 0.92f, 0.96f));
+            title.textWrappingMode = TextWrappingModes.NoWrap;
+            title.overflowMode = TextOverflowModes.Ellipsis;
+            var titleLayout = title.gameObject.AddComponent<LayoutElement>();
+            titleLayout.preferredHeight = compact ? 22f : 24f;
+            titleLayout.flexibleWidth = 1f;
+            titleLayout.minWidth = 0f;
+
+            var valueFrame = new GameObject("ValueFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            valueFrame.transform.SetParent(header.transform, false);
+            var valueLayoutElement = valueFrame.GetComponent<LayoutElement>();
+            valueLayoutElement.preferredWidth = Mathf.Max(132f, settingsValueWidth * 4.4f);
+            valueLayoutElement.minWidth = Mathf.Max(120f, settingsValueWidth * 4.0f);
+            valueLayoutElement.preferredHeight = compact ? 30f : 34f;
+            var valueFrameImage = valueFrame.GetComponent<Image>();
+            valueFrameImage.color = new Color(0.19f, 0.15f, 0.09f, 0.98f);
+            ClassicRpgUiRuntime.ApplyPanel(valueFrameImage, ClassicRpgPanelSkin.InventoryTitle, true, Color.white);
+
+            valueLabel = CreateText(valueFrame.transform, "Value", "--", compact ? 12 : 13, TextAlignmentOptions.Center, ClassicRpgUiRuntime.WarmGold);
+            valueLabel.rectTransform.anchorMin = Vector2.zero;
+            valueLabel.rectTransform.anchorMax = Vector2.one;
+            valueLabel.rectTransform.offsetMin = new Vector2(8f, 3f);
+            valueLabel.rectTransform.offsetMax = new Vector2(-8f, -4f);
+            valueLabel.overflowMode = TextOverflowModes.Ellipsis;
+            valueLabel.textWrappingMode = TextWrappingModes.NoWrap;
+            valueLabel.fontStyle = FontStyles.SmallCaps;
+
+            var detail = CreateText(row.transform, "Detail", detailText, compact ? 10 : 11, TextAlignmentOptions.Left, new Color(0.72f, 0.76f, 0.82f, 0.92f));
+            detail.fontStyle = FontStyles.Normal;
+            detail.textWrappingMode = TextWrappingModes.Normal;
+            detail.overflowMode = TextOverflowModes.Ellipsis;
+            detail.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 28f;
+
+            var divider = new GameObject("Divider", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            divider.transform.SetParent(row.transform, false);
+            divider.GetComponent<LayoutElement>().ignoreLayout = true;
+            var dividerRect = divider.GetComponent<RectTransform>();
+            dividerRect.anchorMin = new Vector2(0f, 0f);
+            dividerRect.anchorMax = new Vector2(1f, 0f);
+            dividerRect.pivot = new Vector2(0.5f, 0f);
+            dividerRect.anchoredPosition = new Vector2(0f, 1f);
+            dividerRect.sizeDelta = new Vector2(0f, 1f);
+            var dividerImage = divider.GetComponent<Image>();
+            dividerImage.raycastTarget = false;
+            dividerImage.color = new Color(0.24f, 0.30f, 0.38f, 0.16f);
+
+            var view = new SettingsMenuRowView
+            {
+                Tab = tab,
+                Root = row,
+                Button = button,
+                Eyebrow = eyebrow,
+                Title = title,
+                Detail = detail,
+                Value = valueLabel,
+                Accent = accentImage,
+                Divider = dividerImage,
+                ValueFrame = valueFrameImage,
+                LabelText = labelText,
+                DetailText = detailText,
+            };
+            _settingsRowViews.Add(view);
+            return view;
         }
 
         Button CreateQuitConfirmationButton(Transform parent, string name, string label, Color backgroundColor, out TMP_Text labelText)
@@ -2611,30 +3495,66 @@ namespace CastleDefender.UI
             return button;
         }
 
-        Button CreateSettingsSelectorButton(Transform parent, string name, Color backgroundColor, out TMP_Text labelText)
+        void AddSettingsPanelAtmosphere(RectTransform panelRect, bool compact)
         {
-            var button = CreateSettingsActionButton(parent, name, "--", backgroundColor);
-            var layout = button.GetComponent<LayoutElement>();
-            if (layout != null)
-            {
-                float selectorMinWidth = Mathf.Max(118f, settingsValueWidth * 4f);
-                float selectorPreferredWidth = Mathf.Max(132f, settingsValueWidth * 4.4f);
-                layout.minWidth = selectorMinWidth;
-                layout.preferredWidth = selectorPreferredWidth;
-                layout.flexibleWidth = 0f;
-                layout.preferredHeight = 42f;
-                layout.flexibleHeight = 0f;
-            }
+            if (panelRect == null)
+                return;
 
-            ApplyPanelFrame(button.gameObject, backgroundColor, new Color(0.94f, 0.96f, 0.99f, 0.42f));
-            labelText = button.transform.Find("Label")?.GetComponent<TextMeshProUGUI>();
-            if (labelText != null)
-            {
-                labelText.fontSize = Mathf.RoundToInt(12f * GetFontScale());
-                labelText.fontStyle = FontStyles.Bold;
-            }
+            CreateSettingsTintLayer(
+                panelRect,
+                "TopGlow",
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(0.5f, 1f),
+                new Vector2(0f, compact ? -6f : -10f),
+                new Vector2(0f, compact ? 150f : 210f),
+                new Color(0.07f, 0.10f, 0.16f, 0.28f));
+            CreateSettingsTintLayer(
+                panelRect,
+                "CenterVeil",
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                Vector2.zero,
+                new Color(0.02f, 0.04f, 0.08f, 0.10f));
+            CreateSettingsTintLayer(
+                panelRect,
+                "BottomGlow",
+                new Vector2(0f, 0f),
+                new Vector2(1f, 0f),
+                new Vector2(0.5f, 0f),
+                new Vector2(0f, compact ? 6f : 10f),
+                new Vector2(0f, compact ? 104f : 132f),
+                new Color(0.12f, 0.09f, 0.04f, 0.20f));
+        }
 
-            return button;
+        static void CreateSettingsTintLayer(
+            RectTransform parent,
+            string name,
+            Vector2 anchorMin,
+            Vector2 anchorMax,
+            Vector2 pivot,
+            Vector2 anchoredPosition,
+            Vector2 sizeDelta,
+            Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            go.transform.SetParent(parent, false);
+            go.GetComponent<LayoutElement>().ignoreLayout = true;
+
+            var rect = go.GetComponent<RectTransform>();
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.pivot = pivot;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = sizeDelta;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
+
+            var image = go.GetComponent<Image>();
+            image.color = color;
+            image.raycastTarget = false;
         }
 
         void ToggleSettingsOverlay()
@@ -2656,6 +3576,9 @@ namespace CastleDefender.UI
 
             if (visible && _settingsOverlay != null && _settingsOverlay.transform.parent != null)
                 _settingsOverlay.transform.parent.SetAsLastSibling();
+
+            if (!visible)
+                HideQuitConfirmation();
 
             if (!immediate && wasVisible != visible)
                 AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
@@ -2679,7 +3602,7 @@ namespace CastleDefender.UI
             }
 
             ResolveCurrentCameraValues(out _, out float zoom, out float rotation);
-            float nextTilt = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.tilt ?? 28f, 0f, 52f, settingsTiltStep);
+            float nextTilt = GetWrappedSelectorValue(UserCameraPreferences.ResolveTilt(UserPreferencesManager.CurrentPreferenceView.camera.tilt), 0f, 52f, settingsTiltStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(nextTilt, zoom, rotation);
         }
 
@@ -2688,12 +3611,12 @@ namespace CastleDefender.UI
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
             {
-                controller.SetZoom(GetWrappedSelectorValue(controller.CurrentZoom, controller.OrthoSizeMin, controller.OrthoSizeMax, settingsZoomStep));
+                controller.SetZoom(GetWrappedSelectorValue(controller.CurrentZoom, controller.ZoomMin, controller.ZoomMax, settingsZoomStep));
                 return;
             }
 
             ResolveCurrentCameraValues(out float tilt, out _, out float rotation);
-            float nextZoom = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.zoom ?? 24f, 4f, 80f, settingsZoomStep);
+            float nextZoom = GetWrappedSelectorValue(UserCameraPreferences.ResolveZoom(UserPreferencesManager.CurrentPreferenceView.camera.zoom), 1f, 1000f, settingsZoomStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, nextZoom, rotation);
         }
 
@@ -2702,12 +3625,12 @@ namespace CastleDefender.UI
             var controller = FindFirstObjectByType<global::CameraController>();
             if (controller != null)
             {
-                controller.SetRotation(GetWrappedSelectorValue(controller.CurrentRotation, -180f, 180f, settingsRotateStep));
+                controller.SetRotation(GetWrappedRotationSelectorValue(controller.CurrentRotation, settingsRotateStep));
                 return;
             }
 
             ResolveCurrentCameraValues(out float tilt, out float zoom, out _);
-            float nextRotation = GetWrappedSelectorValue(UserPreferencesManager.CurrentPreferenceView.camera.rotation ?? 0f, -180f, 180f, settingsRotateStep);
+            float nextRotation = GetWrappedRotationSelectorValue(UserCameraPreferences.ResolveRotation(UserPreferencesManager.CurrentPreferenceView.camera.rotation), settingsRotateStep);
             UserPreferencesManager.NotifyCameraPreferencesChanged(tilt, zoom, nextRotation);
         }
 
@@ -2759,9 +3682,9 @@ namespace CastleDefender.UI
             }
 
             var preferences = UserPreferencesManager.CurrentPreferenceView.camera;
-            tilt = preferences.tilt ?? 28f;
-            zoom = preferences.zoom ?? 24f;
-            rotation = preferences.rotation ?? 0f;
+            tilt = UserCameraPreferences.ResolveTilt(preferences.tilt);
+            zoom = UserCameraPreferences.ResolveZoom(preferences.zoom);
+            rotation = UserCameraPreferences.ResolveRotation(preferences.rotation);
         }
 
         static float GetWrappedSelectorValue(float current, float min, float max, float step)
@@ -2792,6 +3715,54 @@ namespace CastleDefender.UI
             }
 
             return options[(closestIndex + 1) % options.Count];
+        }
+
+        static float GetWrappedRotationSelectorValue(float current, float step)
+        {
+            step = Mathf.Max(0.01f, step);
+            var options = new List<float>();
+
+            for (float value = 0f; value < 360f - 0.001f; value += step)
+                AddUniqueRotationOption(options, value);
+
+            AddUniqueRotationOption(options, 90f);
+            AddUniqueRotationOption(options, 180f);
+            AddUniqueRotationOption(options, 270f);
+            AddUniqueRotationOption(options, 360f);
+            options.Sort();
+
+            float normalizedCurrent = Mathf.Repeat(current, 360f);
+            if (Mathf.Approximately(normalizedCurrent, 0f) && current > 0.001f)
+                normalizedCurrent = 360f;
+
+            int closestIndex = 0;
+            float closestDelta = float.MaxValue;
+            for (int i = 0; i < options.Count; i++)
+            {
+                float delta = Mathf.Abs(options[i] - normalizedCurrent);
+                if (delta < closestDelta)
+                {
+                    closestDelta = delta;
+                    closestIndex = i;
+                }
+            }
+
+            return options[(closestIndex + 1) % options.Count];
+        }
+
+        static void AddUniqueRotationOption(List<float> options, float value)
+        {
+            float normalized = Mathf.Repeat(value, 360f);
+            if (Mathf.Approximately(normalized, 0f) && value > 0.001f)
+                normalized = 360f;
+
+            for (int i = 0; i < options.Count; i++)
+            {
+                if (Mathf.Abs(options[i] - normalized) < 0.001f)
+                    return;
+            }
+
+            options.Add(normalized);
         }
 
         void RefreshSettingsPanelValues()
@@ -2878,13 +3849,25 @@ namespace CastleDefender.UI
             return $"{Mathf.RoundToInt(Mathf.Clamp01(linear) * 100f)}%";
         }
 
-        void OnQuitPressed()
+        void OnLogoutPressed()
         {
+            if (LoadingScreen.IsTransitionInProgress)
+                return;
+
             AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
-            ShowQuitConfirmation();
+            ShowSettingsConfirmation(SettingsConfirmationAction.Logout);
         }
 
-        void ShowQuitConfirmation()
+        void OnQuitPressed()
+        {
+            if (LoadingScreen.IsTransitionInProgress)
+                return;
+
+            AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
+            ShowSettingsConfirmation(SettingsConfirmationAction.QuitGame);
+        }
+
+        void ShowSettingsConfirmation(SettingsConfirmationAction action)
         {
             if (_quitConfirmationModal == null)
                 BuildQuitConfirmationModal();
@@ -2892,9 +3875,35 @@ namespace CastleDefender.UI
             if (_quitConfirmationModal == null)
                 return;
 
+            _pendingSettingsConfirmationAction = action;
             _isLeavingMatch = false;
+            if (_quitConfirmationTitleLabel != null)
+            {
+                _quitConfirmationTitleLabel.text = action switch
+                {
+                    SettingsConfirmationAction.Logout => "Log Out",
+                    SettingsConfirmationAction.QuitGame => "Quit Game",
+                    _ => "Confirm Action",
+                };
+            }
+
+            if (_quitConfirmationBodyLabel != null)
+            {
+                _quitConfirmationBodyLabel.text = action switch
+                {
+                    SettingsConfirmationAction.Logout => "Leave the current match, clear your commander session, and return to sign-in?",
+                    SettingsConfirmationAction.QuitGame => "Leave the battlefield and close the game?",
+                    _ => "Confirm this action.",
+                };
+            }
+
             if (_quitConfirmationConfirmLabel != null)
-                _quitConfirmationConfirmLabel.text = "Confirm";
+                _quitConfirmationConfirmLabel.text = action switch
+                {
+                    SettingsConfirmationAction.Logout => "Log Out",
+                    SettingsConfirmationAction.QuitGame => "Quit Game",
+                    _ => "Confirm",
+                };
             if (_quitConfirmationConfirmButton != null)
                 _quitConfirmationConfirmButton.interactable = true;
             if (_quitConfirmationCancelButton != null)
@@ -2908,7 +3917,12 @@ namespace CastleDefender.UI
             if (_quitConfirmationModal != null)
                 _quitConfirmationModal.SetActive(false);
 
+            _pendingSettingsConfirmationAction = SettingsConfirmationAction.None;
             _isLeavingMatch = false;
+            if (_quitConfirmationTitleLabel != null)
+                _quitConfirmationTitleLabel.text = "Confirm Action";
+            if (_quitConfirmationBodyLabel != null)
+                _quitConfirmationBodyLabel.text = "Confirm this action.";
             if (_quitConfirmationConfirmLabel != null)
                 _quitConfirmationConfirmLabel.text = "Confirm";
             if (_quitConfirmationConfirmButton != null)
@@ -2917,7 +3931,7 @@ namespace CastleDefender.UI
                 _quitConfirmationCancelButton.interactable = true;
         }
 
-        void ConfirmQuit()
+        void ConfirmSettingsAction()
         {
             if (_isLeavingMatch)
                 return;
@@ -2925,19 +3939,40 @@ namespace CastleDefender.UI
             AudioManager.I?.Play(AudioManager.SFX.ButtonClick);
             _isLeavingMatch = true;
             if (_quitConfirmationConfirmLabel != null)
-                _quitConfirmationConfirmLabel.text = "Leaving...";
+                _quitConfirmationConfirmLabel.text = _pendingSettingsConfirmationAction switch
+                {
+                    SettingsConfirmationAction.Logout => "Logging Out...",
+                    SettingsConfirmationAction.QuitGame => "Quitting...",
+                    _ => "Working...",
+                };
             if (_quitConfirmationConfirmButton != null)
                 _quitConfirmationConfirmButton.interactable = false;
             if (_quitConfirmationCancelButton != null)
                 _quitConfirmationCancelButton.interactable = false;
 
-            ClearReconnectPrefs();
-            NetworkManager.Instance?.Emit("leave_game", null);
-            Debug.Log("[MobileMatchHud] Quit confirmed. Returning to Lobby.");
-            LoadingScreen.LoadScene("Lobby");
+            if (_pendingSettingsConfirmationAction == SettingsConfirmationAction.Logout)
+            {
+                SetSettingsOverlayVisible(false, immediate: true);
+                ClearReconnectPrefs();
+                NetworkManager.Instance?.Emit("leave_game", null);
+                AuthManager.BeginLogout(NetworkManager.Instance != null ? NetworkManager.Instance.ResolvedServerUrl : null);
+                NetworkManager.Instance?.ReconnectForCurrentAuth("match logout");
+                Debug.Log("[MobileMatchHud] Logout confirmed. Returning to Login.");
+                LoadingScreen.LoadScene("Login");
+                return;
+            }
+
+            if (_pendingSettingsConfirmationAction == SettingsConfirmationAction.QuitGame)
+            {
+                SetSettingsOverlayVisible(false, immediate: true);
+                TryQuitGameFromMatch();
+                return;
+            }
+
+            HideQuitConfirmation();
         }
 
-        void CancelQuit()
+        void CancelSettingsAction()
         {
             if (_isLeavingMatch)
                 return;
@@ -2953,6 +3988,17 @@ namespace CastleDefender.UI
             PlayerPrefs.DeleteKey("reconnect_lane");
             PlayerPrefs.DeleteKey("reconnect_gametype");
             PlayerPrefs.Save();
+        }
+
+        static void TryQuitGameFromMatch()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            Debug.LogWarning("[MobileMatchHud] Quit Game is not supported on WebGL. Close the browser tab to leave the game.");
+#elif UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
         }
 
         void CreateWaveStatusChip(Transform parent, string name, string tag, string value, Color accentColor)
@@ -3294,6 +4340,19 @@ namespace CastleDefender.UI
             return image;
         }
 
+        void EnsureMinimumFontSize(TMP_Text text, float minimum = HudWidgetMinimumFontSize)
+        {
+            if (text == null)
+                return;
+
+            text.fontSize = Mathf.Max(text.fontSize, minimum);
+            if (text.enableAutoSizing)
+            {
+                text.fontSizeMin = Mathf.Max(text.fontSizeMin, minimum);
+                text.fontSizeMax = Mathf.Max(text.fontSizeMax, text.fontSize);
+            }
+        }
+
         void CreateLinkedStatPair(Transform parent, string name,
             Color leftColor, string leftLabel, out TMP_Text leftValue,
             Color rightColor, string rightLabel, out TMP_Text rightValue)
@@ -3301,8 +4360,8 @@ namespace CastleDefender.UI
             var root = new GameObject(name, typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             root.transform.SetParent(parent, false);
             var rootLayoutElement = root.GetComponent<LayoutElement>();
-            rootLayoutElement.preferredHeight = 16f;
-            rootLayoutElement.minHeight = 16f;
+            rootLayoutElement.preferredHeight = 18f;
+            rootLayoutElement.minHeight = 18f;
 
             var layout = root.GetComponent<HorizontalLayoutGroup>();
             layout.childAlignment = TextAnchor.MiddleCenter;
@@ -3316,9 +4375,9 @@ namespace CastleDefender.UI
             var leftGroup = new GameObject("LeftGroup", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             leftGroup.transform.SetParent(root.transform, false);
             var leftGroupLayoutElement = leftGroup.GetComponent<LayoutElement>();
-            leftGroupLayoutElement.preferredWidth = 86f;
-            leftGroupLayoutElement.minWidth = 86f;
-            leftGroupLayoutElement.preferredHeight = 16f;
+            leftGroupLayoutElement.preferredWidth = 92f;
+            leftGroupLayoutElement.minWidth = 92f;
+            leftGroupLayoutElement.preferredHeight = 18f;
             var leftLayout = leftGroup.GetComponent<HorizontalLayoutGroup>();
             leftLayout.childAlignment = TextAnchor.MiddleLeft;
             leftLayout.childControlWidth = false;
@@ -3333,28 +4392,29 @@ namespace CastleDefender.UI
             leftIcon.GetComponent<RectTransform>().sizeDelta = new Vector2(7f, 7f);
             leftIcon.GetComponent<Image>().color = leftColor;
 
-            var leftTag = CreateText(leftGroup.transform, "LeftTag", leftLabel, 9, TextAlignmentOptions.Left, leftColor);
+            var leftTag = CreateText(leftGroup.transform, "LeftTag", leftLabel, 12, TextAlignmentOptions.Left, leftColor);
+            EnsureMinimumFontSize(leftTag);
             leftTag.fontStyle = FontStyles.SmallCaps;
             leftTag.textWrappingMode = TextWrappingModes.NoWrap;
             leftTag.overflowMode = TextOverflowModes.Overflow;
-            leftTag.rectTransform.sizeDelta = new Vector2(22f, 14f);
+            leftTag.rectTransform.sizeDelta = new Vector2(28f, 16f);
 
-            leftValue = CreateText(leftGroup.transform, "LeftValue", "0", 14, TextAlignmentOptions.Left, new Color(0.94f, 0.96f, 0.99f, 1f));
+            leftValue = CreateText(leftGroup.transform, "LeftValue", "0", 15, TextAlignmentOptions.Left, new Color(0.94f, 0.96f, 0.99f, 1f));
             leftValue.fontStyle = FontStyles.Bold;
-            leftValue.rectTransform.sizeDelta = new Vector2(54f, 16f);
+            leftValue.rectTransform.sizeDelta = new Vector2(56f, 18f);
             leftValue.enableAutoSizing = true;
-            leftValue.fontSizeMin = 12f;
-            leftValue.fontSizeMax = Mathf.RoundToInt(14 * GetFontScale());
+            EnsureMinimumFontSize(leftValue);
 
             var arrow = CreateText(root.transform, "Arrow", "<", 12, TextAlignmentOptions.Center, new Color(0.55f, 0.76f, 0.96f, 0.96f));
-            arrow.rectTransform.sizeDelta = new Vector2(12f, 16f);
+            EnsureMinimumFontSize(arrow);
+            arrow.rectTransform.sizeDelta = new Vector2(14f, 18f);
 
             var rightGroup = new GameObject("RightGroup", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             rightGroup.transform.SetParent(root.transform, false);
             var rightGroupLayoutElement = rightGroup.GetComponent<LayoutElement>();
-            rightGroupLayoutElement.preferredWidth = 86f;
-            rightGroupLayoutElement.minWidth = 86f;
-            rightGroupLayoutElement.preferredHeight = 16f;
+            rightGroupLayoutElement.preferredWidth = 92f;
+            rightGroupLayoutElement.minWidth = 92f;
+            rightGroupLayoutElement.preferredHeight = 18f;
             var rightLayout = rightGroup.GetComponent<HorizontalLayoutGroup>();
             rightLayout.childAlignment = TextAnchor.MiddleLeft;
             rightLayout.childControlWidth = false;
@@ -3369,18 +4429,18 @@ namespace CastleDefender.UI
             rightIcon.GetComponent<RectTransform>().sizeDelta = new Vector2(7f, 7f);
             rightIcon.GetComponent<Image>().color = rightColor;
 
-            var rightTag = CreateText(rightGroup.transform, "RightTag", rightLabel, 9, TextAlignmentOptions.Left, rightColor);
+            var rightTag = CreateText(rightGroup.transform, "RightTag", rightLabel, 12, TextAlignmentOptions.Left, rightColor);
+            EnsureMinimumFontSize(rightTag);
             rightTag.fontStyle = FontStyles.SmallCaps;
             rightTag.textWrappingMode = TextWrappingModes.NoWrap;
             rightTag.overflowMode = TextOverflowModes.Overflow;
-            rightTag.rectTransform.sizeDelta = new Vector2(22f, 14f);
+            rightTag.rectTransform.sizeDelta = new Vector2(28f, 16f);
 
-            rightValue = CreateText(rightGroup.transform, "RightValue", "0", 14, TextAlignmentOptions.Left, new Color(0.94f, 0.96f, 0.99f, 1f));
+            rightValue = CreateText(rightGroup.transform, "RightValue", "0", 15, TextAlignmentOptions.Left, new Color(0.94f, 0.96f, 0.99f, 1f));
             rightValue.fontStyle = FontStyles.Bold;
-            rightValue.rectTransform.sizeDelta = new Vector2(54f, 16f);
+            rightValue.rectTransform.sizeDelta = new Vector2(56f, 18f);
             rightValue.enableAutoSizing = true;
-            rightValue.fontSizeMin = 12f;
-            rightValue.fontSizeMax = Mathf.RoundToInt(14 * GetFontScale());
+            EnsureMinimumFontSize(rightValue);
         }
 
         void CreateMiniStat(Transform parent, string name, string tag, Color accentColor, out TMP_Text valueLabel)
@@ -3417,6 +4477,171 @@ namespace CastleDefender.UI
             if (TMP_Settings.defaultFontAsset != null)
                 text.font = TMP_Settings.defaultFontAsset;
             return text;
+        }
+
+        void StyleCommandMenuSurface(GameObject target, Color backgroundColor, Color frameTint)
+        {
+            if (target == null)
+                return;
+
+            var image = target.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = backgroundColor;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PortraitBackdrop, true, backgroundColor);
+            }
+
+            var shadow = target.GetComponent<Shadow>();
+            if (shadow == null)
+                shadow = target.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.30f);
+            shadow.effectDistance = new Vector2(2f, -2f);
+            shadow.useGraphicAlpha = true;
+
+            EnsureCommandMenuFrame(target.transform as RectTransform, frameTint);
+        }
+
+        void StyleSettingsBuildingCard(GameObject target, Color backgroundColor, Color accentColor, bool highlighted)
+        {
+            if (target == null)
+                return;
+
+            var image = target.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = backgroundColor;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.PaperMedium, true, backgroundColor);
+            }
+
+            var shadow = target.GetComponent<Shadow>();
+            if (shadow == null)
+                shadow = target.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, highlighted ? 0.40f : 0.32f);
+            shadow.effectDistance = highlighted ? new Vector2(3f, -3f) : new Vector2(2f, -2f);
+            shadow.useGraphicAlpha = true;
+
+            var outline = target.GetComponent<Outline>();
+            if (outline == null)
+                outline = target.AddComponent<Outline>();
+            outline.effectColor = highlighted
+                ? new Color(0.97f, 0.80f, 0.42f, 0.96f)
+                : new Color(backgroundColor.r * 0.58f, backgroundColor.g * 0.58f, backgroundColor.b * 0.58f, 0.92f);
+            outline.effectDistance = new Vector2(1f, -1f);
+            outline.useGraphicAlpha = true;
+
+            EnsureSettingsCardAccent(target.transform as RectTransform, accentColor);
+        }
+
+        static void EnsureSettingsCardAccent(RectTransform rect, Color tint)
+        {
+            if (rect == null)
+                return;
+
+            var accent = rect.Find("CardAccent") as RectTransform;
+            if (accent == null)
+            {
+                var go = new GameObject("CardAccent", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+                go.transform.SetParent(rect, false);
+                accent = go.GetComponent<RectTransform>();
+            }
+
+            accent.SetAsFirstSibling();
+            var layout = accent.GetComponent<LayoutElement>() ?? accent.gameObject.AddComponent<LayoutElement>();
+            layout.ignoreLayout = true;
+
+            accent.anchorMin = new Vector2(0f, 1f);
+            accent.anchorMax = new Vector2(1f, 1f);
+            accent.pivot = new Vector2(0.5f, 1f);
+            accent.anchoredPosition = Vector2.zero;
+            accent.sizeDelta = new Vector2(0f, 4f);
+
+            var image = accent.GetComponent<Image>();
+            image.color = tint;
+            image.raycastTarget = false;
+        }
+
+        void EnsureCommandMenuFrame(RectTransform rect, Color tint)
+        {
+            if (rect == null)
+                return;
+
+            var existing = rect.Find("PremiumFrame") as RectTransform;
+            if (existing != null)
+            {
+                var existingLayout = existing.GetComponent<LayoutElement>() ?? existing.gameObject.AddComponent<LayoutElement>();
+                existingLayout.ignoreLayout = true;
+                var existingImage = existing.GetComponent<Image>();
+                if (existingImage != null)
+                    ClassicRpgUiRuntime.ApplyPanel(existingImage, ClassicRpgPanelSkin.Frame, true, tint);
+                existing.gameObject.SetActive(true);
+                return;
+            }
+
+            var frame = new GameObject("PremiumFrame", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            frame.transform.SetParent(rect, false);
+            var image = frame.GetComponent<Image>();
+            image.raycastTarget = false;
+            frame.GetComponent<LayoutElement>().ignoreLayout = true;
+            ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.Frame, true, tint);
+            ClassicRpgUiRuntime.Stretch(frame.GetComponent<RectTransform>(), new Vector2(-4f, -4f), new Vector2(4f, 4f));
+        }
+
+        void ApplyCommandMenuButtonStyle(Button button, ClassicRpgButtonSkin skin, float height, float preferredWidth = 0f)
+        {
+            if (button == null)
+                return;
+
+            var layout = button.GetComponent<LayoutElement>() ?? button.gameObject.AddComponent<LayoutElement>();
+            layout.preferredHeight = height;
+            layout.minHeight = height;
+            if (preferredWidth > 0f)
+            {
+                layout.preferredWidth = preferredWidth;
+                layout.minWidth = preferredWidth;
+            }
+
+            var image = button.targetGraphic as Image ?? button.GetComponent<Image>();
+            if (image != null)
+            {
+                button.targetGraphic = image;
+                ClassicRpgUiRuntime.ApplyPanel(image, ClassicRpgPanelSkin.InventoryTitle, true, Color.white);
+                image.raycastTarget = true;
+            }
+
+            var label = button.GetComponentInChildren<TMP_Text>(true);
+            if (label != null)
+            {
+                var labelColor = skin switch
+                {
+                    ClassicRpgButtonSkin.MiniGreen => ClassicRpgUiRuntime.SuccessText,
+                    ClassicRpgButtonSkin.MiniBrown => ClassicRpgUiRuntime.BrightText,
+                    _ => ClassicRpgUiRuntime.WarmGold,
+                };
+
+                ClassicRpgUiRuntime.ApplyTextStyle(
+                    label,
+                    ClassicRpgTextStyle.ButtonLabel,
+                    TextAlignmentOptions.Center,
+                    labelColor,
+                    allowWrap: false);
+                label.fontSize = Mathf.RoundToInt((height >= 54f ? 24f : height >= 46f ? 19f : 17f) * GetFontScale());
+                label.raycastTarget = false;
+            }
+
+            var colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(0.95f, 0.98f, 1f, 1f);
+            colors.pressedColor = skin switch
+            {
+                ClassicRpgButtonSkin.MiniGreen => new Color(0.84f, 0.95f, 0.86f, 1f),
+                ClassicRpgButtonSkin.MiniBrown => new Color(0.84f, 0.88f, 0.94f, 1f),
+                _ => new Color(0.88f, 0.93f, 1f, 1f),
+            };
+            colors.selectedColor = new Color(0.97f, 0.99f, 1f, 1f);
+            colors.disabledColor = new Color(1f, 1f, 1f, 0.44f);
+            colors.fadeDuration = 0.10f;
+            button.transition = Selectable.Transition.ColorTint;
+            button.colors = colors;
         }
 
         void ApplyPanelFrame(GameObject target, Color backgroundColor, Color accentColor)
@@ -4155,10 +5380,25 @@ namespace CastleDefender.UI
 
             if (_settingsOverlayPanelRoot != null)
             {
-                float panelHorizontalInset = Mathf.Max(18f, settingsPanelGap + 12f);
-                float panelVerticalInset = Mathf.Max(18f, settingsPanelGap + 8f);
-                _settingsOverlayPanelRoot.offsetMin = new Vector2(panelHorizontalInset + leftInset, panelVerticalInset + bottomInset);
-                _settingsOverlayPanelRoot.offsetMax = new Vector2(-panelHorizontalInset - rightInset, -panelVerticalInset - topInset);
+                bool centeredPanel = Mathf.Approximately(_settingsOverlayPanelRoot.anchorMin.x, 0.5f)
+                    && Mathf.Approximately(_settingsOverlayPanelRoot.anchorMax.x, 0.5f)
+                    && Mathf.Approximately(_settingsOverlayPanelRoot.anchorMin.y, 0.5f)
+                    && Mathf.Approximately(_settingsOverlayPanelRoot.anchorMax.y, 0.5f);
+
+                if (centeredPanel)
+                {
+                    float safeWidth = Mathf.Max(320f, _canvasRect.rect.width - leftInset - rightInset);
+                    float safeHeight = Mathf.Max(320f, _canvasRect.rect.height - topInset - bottomInset);
+                    _settingsOverlayPanelRoot.sizeDelta = ResolveSettingsOverlayPanelSize(safeWidth, safeHeight);
+                    _settingsOverlayPanelRoot.anchoredPosition = new Vector2((leftInset - rightInset) * 0.5f, (bottomInset - topInset) * 0.5f);
+                }
+                else
+                {
+                    float panelHorizontalInset = Mathf.Max(18f, settingsPanelGap + 12f);
+                    float panelVerticalInset = Mathf.Max(18f, settingsPanelGap + 8f);
+                    _settingsOverlayPanelRoot.offsetMin = new Vector2(panelHorizontalInset + leftInset, panelVerticalInset + bottomInset);
+                    _settingsOverlayPanelRoot.offsetMax = new Vector2(-panelHorizontalInset - rightInset, -panelVerticalInset - topInset);
+                }
             }
         }
 

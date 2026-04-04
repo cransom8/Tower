@@ -35,6 +35,7 @@ namespace CastleDefender.Editor
 
             try
             {
+                SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
                 SyncRegistryToAddressables();
 
                 var cleanPlayerContent = settingsType.GetMethod("CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);

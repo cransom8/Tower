@@ -67,6 +67,7 @@ namespace CastleDefender.Editor
                 EnsureFolder("Assets/AddressableContent");
                 EnsureFolder(EnvironmentFolder);
 
+                SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
                 BuildOptionalEnvironmentPrefab();
                 EnsureAddressablesEntry(CriticalPrefabPath, RemoteContentManager.GameMlEnvironmentAddress, CriticalGroupName);
                 EnsureAddressablesEntry(OptionalPrefabPath, RemoteContentManager.GameMlEnvironmentDressingAddress, OptionalGroupName);

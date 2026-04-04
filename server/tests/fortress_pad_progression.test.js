@@ -58,6 +58,19 @@ function finishPadConstruction(game, laneIndex, padId) {
   });
 }
 
+function upgradeTownCoreToTier(game, laneIndex, targetTier) {
+  let lane = laneSnapshot(game, laneIndex);
+  let townCore = findPad(lane, "town_core_pad");
+  assert.ok(townCore, "expected the Town Core pad to exist");
+
+  while ((townCore && townCore.tier) < targetTier) {
+    act(game, laneIndex, "upgrade_building", { padId: "town_core_pad" });
+    finishPadConstruction(game, laneIndex, "town_core_pad");
+    lane = laneSnapshot(game, laneIndex);
+    townCore = findPad(lane, "town_core_pad");
+  }
+}
+
 function act(game, laneIndex, type, data) {
   const result = simMl.applyMLAction(game, laneIndex, { type, data });
   assert.equal(result.ok, true, result.reason || `Expected '${type}' to succeed`);
@@ -70,6 +83,37 @@ function fail(game, laneIndex, type, data, pattern) {
   assert.match(String(result.reason || ""), pattern);
   return result;
 }
+
+test("Town Core starts built at House tier", () => {
+  const game = createGame();
+  const townCore = findPad(laneSnapshot(game, 0), "town_core_pad");
+
+  assert.ok(townCore, "expected the Town Core pad to exist");
+  assert.equal(townCore.isBuilt, true);
+  assert.equal(townCore.tier, 1);
+  assert.equal(townCore.currentTierName, "House");
+});
+
+test("invalid startup Town Core state is restored before snapshotting", () => {
+  const game = createGame();
+  const liveTownCore = game.lanes[0].fortressPads.find((pad) => pad && pad.padId === "town_core_pad");
+  assert.ok(liveTownCore, "expected live Town Core state");
+
+  liveTownCore.tier = 0;
+  liveTownCore.hp = 0;
+  liveTownCore.maxHp = 0;
+  liveTownCore.constructionKind = "build";
+  liveTownCore.constructionTargetTier = 1;
+  liveTownCore.constructionEndTick = 10;
+  liveTownCore.constructionTotalTicks = 10;
+
+  const townCore = findPad(laneSnapshot(game, 0), "town_core_pad");
+  assert.ok(townCore, "expected the Town Core pad to exist");
+  assert.equal(townCore.isBuilt, true);
+  assert.equal(townCore.tier, 1);
+  assert.equal(townCore.currentTierName, "House");
+  assert.equal(townCore.isConstructing, false);
+});
 
 test("public multilane config exposes the new branch pads and authored defense pad counts", () => {
   const config = simMl.createMLPublicConfig({ laneTeams: ["red", "blue"] });
@@ -102,46 +146,60 @@ test("public multilane config exposes the new branch pads and authored defense p
   assert.equal(padCountsByType.tower_archer || 0, 0);
 });
 
-test("live fortress pad actions honor new civic and lumber mill prerequisites", () => {
+test("live fortress pad actions honor Town Core gating and shared wall progression", () => {
   const game = createGame();
 
   fail(game, 0, "build_on_pad", { padId: "stable_pad" }, /Town Hall/i);
   fail(game, 0, "build_on_pad", { padId: "workshop_pad" }, /Town Hall/i);
   fail(game, 0, "build_on_pad", { padId: "library_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Lumber Mill:\s*Tier 1/i);
+  fail(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" }, /Town Hall/i);
+  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Town Hall/i);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" });
-  act(game, 0, "build_on_pad", { padId: "gate_front_pad" });
+
+  let lane = laneSnapshot(game, 0);
+  let wallPad = findPad(lane, "wall_front_left_01_pad");
+  let gatePad = findPad(lane, "gate_front_pad");
+  let turretPad = findPad(lane, "turret_front_left_pad");
+  assert.equal(wallPad && wallPad.isConstructing, true);
+  assert.equal(gatePad && gatePad.isConstructing, true);
+  assert.equal(turretPad && turretPad.isConstructing, true);
+
   finishPadConstruction(game, 0, "wall_front_left_01_pad");
-  finishPadConstruction(game, 0, "gate_front_pad");
-
-  fail(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" }, /Lumber Mill:\s*Tier 2/i);
-  fail(game, 0, "upgrade_building", { padId: "gate_front_pad" }, /Lumber Mill:\s*Tier 2/i);
-
-  act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
-  finishPadConstruction(game, 0, "lumber_mill_pad");
-  act(game, 0, "build_on_pad", { padId: "turret_front_left_pad" });
   finishPadConstruction(game, 0, "turret_front_left_pad");
+  lane = laneSnapshot(game, 0);
+  wallPad = findPad(lane, "wall_front_left_01_pad");
+  gatePad = findPad(lane, "gate_front_pad");
+  turretPad = findPad(lane, "turret_front_left_pad");
+  assert.equal(wallPad && wallPad.isBuilt, true);
+  assert.equal(gatePad && gatePad.isBuilt, true);
+  assert.equal(turretPad && turretPad.isBuilt, true);
 
-  fail(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" }, /Lumber Mill:\s*Tier 2/i);
+  fail(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" }, /Keep/i);
 
-  act(game, 0, "upgrade_building", { padId: "town_core_pad" });
-  finishPadConstruction(game, 0, "town_core_pad");
   act(game, 0, "build_on_pad", { padId: "stable_pad" });
   act(game, 0, "build_on_pad", { padId: "workshop_pad" });
   act(game, 0, "build_on_pad", { padId: "library_pad" });
 
-  act(game, 0, "upgrade_building", { padId: "lumber_mill_pad" });
-  finishPadConstruction(game, 0, "lumber_mill_pad");
+  upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" });
   finishPadConstruction(game, 0, "wall_front_left_01_pad");
-  act(game, 0, "upgrade_building", { padId: "gate_front_pad" });
-  finishPadConstruction(game, 0, "gate_front_pad");
+  finishPadConstruction(game, 0, "turret_front_left_pad");
+
+  lane = laneSnapshot(game, 0);
+  wallPad = findPad(lane, "wall_front_left_01_pad");
+  gatePad = findPad(lane, "gate_front_pad");
+  turretPad = findPad(lane, "turret_front_left_pad");
+  assert.equal(wallPad && wallPad.tier, 2);
+  assert.equal(gatePad && gatePad.tier, 2);
+  assert.equal(turretPad && turretPad.tier, 2);
 });
 
 test("fortress pad snapshots expose construction timers and destroyed state", () => {
   const game = createGame();
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "blacksmith_pad" });
 
   let pad = findPad(laneSnapshot(game, 0), "blacksmith_pad");
@@ -157,7 +215,7 @@ test("fortress pad snapshots expose construction timers and destroyed state", ()
   pad = findPad(laneSnapshot(game, 0), "blacksmith_pad");
   assert.equal(pad.isBuilt, true);
   assert.equal(pad.isConstructing, false);
-  assert.equal(pad.buildState, "upgrade_available");
+  assert.equal(pad.buildState, "built");
 
   const statePad = game.lanes[0].fortressPads.find((entry) => entry && entry.padId === "blacksmith_pad");
   assert.ok(statePad, "expected live blacksmith state");
@@ -177,7 +235,7 @@ test("legacy classic actions stay disabled in fortress mode", () => {
   fail(game, 0, "set_tower_target", { gridX: 5, gridY: 10, targetMode: "first" }, /disabled in fortress mode/i);
   fail(game, 0, "sell_tower", { gridX: 5, gridY: 10 }, /disabled in fortress mode/i);
   fail(game, 0, "set_autosend", { enabled: true }, /Barracks/i);
-  fail(game, 0, "upgrade_barracks", {}, /Select Barracks Left, Center, or Right/i);
+  fail(game, 0, "upgrade_barracks", {}, /Town Core/i);
 });
 
 test("lane build value ignores legacy grid towers and only counts fortress investments", () => {
@@ -187,6 +245,7 @@ test("lane build value ignores legacy grid towers and only counts fortress inves
   const baseline = simMl.getLaneBuildValue(lane);
   assert.equal(simMl.createMLSnapshot(game).lanes[0].buildValue, baseline);
 
+  upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
   const investedValue = simMl.getLaneBuildValue(lane);
   assert.ok(investedValue > baseline, "expected fortress pad spend to increase build value");

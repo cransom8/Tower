@@ -307,8 +307,7 @@ namespace CastleDefender.Game
         {
             bool showHud = site != null
                 && (site.isBuilt
-                    || site.isConstructing
-                    || (!site.isBuilt && _selected));
+                    || site.isConstructing);
 
             if (!showHud)
             {
@@ -334,6 +333,7 @@ namespace CastleDefender.Game
             if (_labelRoot != null)
             {
                 _labelRoot.localPosition = Vector3.zero;
+                HpBarVisuals.ConfigureBuildingHud(_labelRoot);
                 FaceToCamera(_labelRoot);
             }
 
@@ -379,9 +379,7 @@ namespace CastleDefender.Game
                 }
                 else
                 {
-                    _healthLabel.text = site.canBuild
-                        ? $"Buy Building {Mathf.Max(0, site.buildCost)}g"
-                        : site.lockedReason ?? "Locked";
+                    _healthLabel.text = "Manage in Town Core";
                     _healthLabel.color = new Color(0.94f, 0.90f, 0.66f, 0.98f);
                 }
             }
@@ -412,20 +410,21 @@ namespace CastleDefender.Game
         void ApplyVisualState(MLBarracksSite site)
         {
             bool built = site != null && site.isBuilt;
+            bool visible = site != null && (site.isBuilt || site.isConstructing);
             if (builtVisualRoot != null)
-                builtVisualRoot.SetActive(built);
+                builtVisualRoot.SetActive(visible);
             if (ghostVisualRoot != null)
-                ghostVisualRoot.SetActive(!built);
+                ghostVisualRoot.SetActive(false);
 
             _visualBridge ??= GetComponent<SnapshotBuildingVisualBridge>();
             if (_visualBridge != null)
                 return;
 
-            ApplyRendererVisualState(GetPrimaryRenderers(), built);
+            ApplyRendererVisualState(GetPrimaryRenderers(), visible);
             if (builtVisualRoot != null)
-                ApplyRendererVisualState(GetBuiltRenderers(), built);
+                ApplyRendererVisualState(GetBuiltRenderers(), visible);
             if (ghostVisualRoot != null)
-                ApplyRendererVisualState(GetGhostRenderers(), !built);
+                ApplyRendererVisualState(GetGhostRenderers(), false);
         }
 
         void ApplyRendererVisualState(Renderer[] renderers, bool activeState)
@@ -464,6 +463,7 @@ namespace CastleDefender.Game
                 }
 
                 renderer.SetPropertyBlock(_propertyBlock);
+                renderer.enabled = activeState;
                 renderer.shadowCastingMode = activeState ? ShadowCastingMode.On : ShadowCastingMode.Off;
             }
         }
@@ -517,6 +517,7 @@ namespace CastleDefender.Game
 
             _labelRoot = new GameObject("Hud").transform;
             _labelRoot.SetParent(_overlayRoot, false);
+            HpBarVisuals.ConfigureBuildingHud(_labelRoot);
 
             _statusLabel = CreateWorldLabel("Status", _labelRoot, 1.15f);
             _healthLabel = CreateWorldLabel("Health", _labelRoot, 1.55f);

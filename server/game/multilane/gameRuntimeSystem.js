@@ -10,8 +10,10 @@ const DEFAULT_TEAM_HP_START = 20;
 const DEFAULT_BUILD_PHASE_TICKS = 600;
 const DEFAULT_TRANSITION_PHASE_TICKS = 200;
 const DEFAULT_INCOME_INTERVAL_TICKS = 240;
-const DEFAULT_BARRACKS_SEND_TIMER_TICKS = 600;
 const DEFAULT_WAVE_TIMER_TICKS = 2400;
+const DEFAULT_WAVE_GROUP_INTERVAL_TICKS = 600;
+const DEFAULT_INITIAL_WAVE_DELAY_TICKS = 600;
+const DEFAULT_BARRACKS_SEND_TIMER_TICKS = DEFAULT_WAVE_GROUP_INTERVAL_TICKS;
 const DEFAULT_LANE_COMMAND_COMBAT_LEASH = 8.0;
 
 const DEFAULT_ALLEGIANCE_KEYS = Object.freeze({
@@ -129,6 +131,16 @@ function getBarracksSendTimerTicks(deps = {}) {
 function getWaveTimerTicks(deps = {}) {
   const value = Math.floor(Number(deps.WAVE_TIMER_TICKS));
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_WAVE_TIMER_TICKS;
+}
+
+function getWaveGroupIntervalTicks(deps = {}) {
+  const value = Math.floor(Number(deps.WAVE_GROUP_INTERVAL_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_WAVE_GROUP_INTERVAL_TICKS;
+}
+
+function getInitialWaveDelayTicks(deps = {}) {
+  const value = Math.floor(Number(deps.INITIAL_WAVE_DELAY_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_INITIAL_WAVE_DELAY_TICKS;
 }
 
 function getLaneCommandCombatLeash(deps = {}) {
@@ -336,6 +348,7 @@ function createMLGame(playerCount, options, deps = {}) {
   const buildSampledPathFromSegments = requireDepFunction(deps, "buildSampledPathFromSegments");
   const getBarracksLevelDef = requireDepFunction(deps, "getBarracksLevelDef");
   const createFortressPadStates = requireDepFunction(deps, "createFortressPadStates");
+  const createBuildingUpgradeState = requireDepFunction(deps, "createBuildingUpgradeState");
   const createBarracksSiteStates = requireDepFunction(deps, "createBarracksSiteStates");
   const createBarracksSiteRosterCounts = requireDepFunction(deps, "createBarracksSiteRosterCounts");
   const createMarketRosterCounts = requireDepFunction(deps, "createMarketRosterCounts");
@@ -399,6 +412,7 @@ function createMLGame(playerCount, options, deps = {}) {
       barracks: Object.assign({ level: 1 }, getBarracksLevelDef(1)),
       waveSpeedMult: 1,
       fortressPads: createFortressPadStates(opt.teamHpStart),
+      buildingUpgradeState: createBuildingUpgradeState(),
       barracksSiteStates: createBarracksSiteStates(opt.teamHpStart, 1),
       barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
       marketRosterCounts: createMarketRosterCounts(),
@@ -425,6 +439,12 @@ function createMLGame(playerCount, options, deps = {}) {
     });
   }
 
+  const incomeIntervalTicks = getIncomeIntervalTicks(deps);
+  const barracksSendIntervalTicks = getBarracksSendTimerTicks(deps);
+  const waveIntervalTicks = getWaveTimerTicks(deps);
+  const waveGroupIntervalTicks = getWaveGroupIntervalTicks(deps);
+  const initialWaveDelayTicks = getInitialWaveDelayTicks(deps);
+
   const game = {
     tick: 0,
     phase: "playing",
@@ -449,17 +469,20 @@ function createMLGame(playerCount, options, deps = {}) {
     teamHpMax: opt.teamHpStart,
     buildPhaseTicks: opt.buildPhaseTicks,
     transitionPhaseTicks: opt.transitionPhaseTicks,
-    incomeIntervalTicks: getIncomeIntervalTicks(deps),
-    barracksSendIntervalTicks: getBarracksSendTimerTicks(deps),
-    waveIntervalTicks: getWaveTimerTicks(deps),
+    incomeIntervalTicks,
+    barracksSendIntervalTicks,
+    waveIntervalTicks,
+    waveGroupIntervalTicks,
+    initialWaveDelayTicks,
     roundState: "combat",
     roundNumber: 1,
     roundStateTicks: 0,
-    nextIncomeTick: getIncomeIntervalTicks(deps),
-    nextBarracksSendTick: getBarracksSendTimerTicks(deps),
-    nextWaveTick: getWaveTimerTicks(deps),
+    nextIncomeTick: incomeIntervalTicks,
+    nextBarracksSendTick: barracksSendIntervalTicks,
+    nextWaveTick: initialWaveDelayTicks,
     lastWaveSpawnTick: null,
     hasSpawnedWave: false,
+    activeWaveSession: null,
     waveConfig: [],
     roundSnapshots: [],
     startedAt: null,
@@ -498,6 +521,18 @@ function getLaneBuildValue(lane, deps = {}) {
         continue;
       for (const entry of siteState.costHistory)
         total += Number(entry && entry.cost) || 0;
+    }
+  }
+  if (lane && lane.buildingUpgradeState && typeof lane.buildingUpgradeState === "object") {
+    for (const buildingBucket of Object.values(lane.buildingUpgradeState)) {
+      if (!buildingBucket || typeof buildingBucket !== "object")
+        continue;
+      for (const upgradeState of Object.values(buildingBucket)) {
+        if (!upgradeState || !Array.isArray(upgradeState.costHistory))
+          continue;
+        for (const entry of upgradeState.costHistory)
+          total += Number(entry && entry.cost) || 0;
+      }
     }
   }
   if (lane && lane.barracksSiteRosterCounts) {
@@ -570,7 +605,7 @@ function findNextActiveOpponentLaneIndex(game, fromLaneIndex, deps = {}) {
 
 function applyLaneCommandAction(game, lane, commandState, data = null, deps = {}) {
   const normalizeLaneCommandState = requireDepFunction(deps, "normalizeLaneCommandState");
-  const getLaneCommandAnchorProgress = requireDepFunction(deps, "getLaneCommandAnchorProgress");
+  const resolveLaneCommandAnchorProgressRequest = requireDepFunction(deps, "resolveLaneCommandAnchorProgressRequest");
   const getLaneCommandObjectiveLaneIndex = requireDepFunction(deps, "getLaneCommandObjectiveLaneIndex");
   const isLaneCombatEnabledCommandState = requireDepFunction(deps, "isLaneCombatEnabledCommandState");
   const getLaneCommandEngagementRadius = requireDepFunction(deps, "getLaneCommandEngagementRadius");
@@ -586,17 +621,72 @@ function applyLaneCommandAction(game, lane, commandState, data = null, deps = {}
   if (requestedTargetLaneIndex !== null && isOpponentLane(game, lane.laneIndex, requestedTargetLaneIndex, deps))
     lane.commandTargetLaneIndex = requestedTargetLaneIndex;
 
-  let anchorProgress = getLaneCommandAnchorProgress(lane);
-  if (normalizedCommandState === laneCommandStates.ATTACK)
-    anchorProgress = 1;
-  else
-    anchorProgress = 0;
+  const anchorProgress = resolveLaneCommandAnchorProgressRequest(
+    game,
+    lane,
+    normalizedCommandState,
+    data
+  );
 
   lane.commandState = normalizedCommandState;
   lane.commandAnchorProgress = anchorProgress;
   lane.commandTargetLaneIndex = getLaneCommandObjectiveLaneIndex(game, lane);
   lane.combatEnabled = isLaneCombatEnabledCommandState(normalizedCommandState);
   lane.engagementRadius = getLaneCommandEngagementRadius(lane);
+  syncBarracksSiteCommandStates(lane, normalizedCommandState, deps);
+  syncLaneCommandAssignments(game);
+  return { ok: true };
+}
+
+function syncBarracksSiteCommandStates(lane, commandState, deps = {}) {
+  const ensureBarracksSiteStates = requireDepFunction(deps, "ensureBarracksSiteStates");
+  const normalizeLaneCommandState = requireDepFunction(deps, "normalizeLaneCommandState");
+  const normalizedCommandState = normalizeLaneCommandState(commandState);
+  if (!lane || !normalizedCommandState)
+    return;
+
+  const states = ensureBarracksSiteStates(lane);
+  if (!states || typeof states !== "object")
+    return;
+
+  for (const siteState of Object.values(states)) {
+    if (!siteState || typeof siteState !== "object")
+      continue;
+    siteState.commandState = normalizedCommandState;
+  }
+}
+
+function applyBarracksSiteCommandAction(game, lane, barracksId, commandState, data = null, deps = {}) {
+  const normalizeLaneCommandState = requireDepFunction(deps, "normalizeLaneCommandState");
+  const normalizeBarracksSiteId = requireDepFunction(deps, "normalizeBarracksSiteId");
+  const ensureBarracksSiteStates = requireDepFunction(deps, "ensureBarracksSiteStates");
+  const resolveLaneCommandAnchorProgressRequest = requireDepFunction(deps, "resolveLaneCommandAnchorProgressRequest");
+  const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
+  const normalizedCommandState = normalizeLaneCommandState(commandState);
+  const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
+  if (!lane || !normalizedCommandState || !normalizedBarracksId)
+    return { ok: false, reason: "Invalid barracks command" };
+
+  const siteStates = ensureBarracksSiteStates(lane, game);
+  const siteState = siteStates && typeof siteStates === "object"
+    ? siteStates[normalizedBarracksId]
+    : null;
+  if (!siteState)
+    return { ok: false, reason: "Missing or invalid barracksId" };
+
+  const requestedTargetLaneIndex = Number.isInteger(data && data.targetLaneIndex)
+    ? data.targetLaneIndex
+    : null;
+  if (requestedTargetLaneIndex !== null && isOpponentLane(game, lane.laneIndex, requestedTargetLaneIndex, deps))
+    lane.commandTargetLaneIndex = requestedTargetLaneIndex;
+
+  if (normalizedCommandState === getLaneCommandStates(deps).DEFEND) {
+    const anchorProgress = resolveLaneCommandAnchorProgressRequest(game, lane, normalizedCommandState, data);
+    if (Number.isFinite(anchorProgress))
+      lane.commandAnchorProgress = anchorProgress;
+  }
+
+  siteState.commandState = normalizedCommandState;
   syncLaneCommandAssignments(game);
   return { ok: true };
 }
@@ -632,6 +722,7 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
   const applyFortressBuildOnPad = requireDepFunction(deps, "applyFortressBuildOnPad");
   const getFortressPadByBuildingType = requireDepFunction(deps, "getFortressPadByBuildingType");
   const applyFortressUpgrade = requireDepFunction(deps, "applyFortressUpgrade");
+  const applyFortressBuildingUpgradePurchase = requireDepFunction(deps, "applyFortressBuildingUpgradePurchase");
   const normalizeBarracksSiteId = requireDepFunction(deps, "normalizeBarracksSiteId");
   const applyBarracksSiteBuildAction = requireDepFunction(deps, "applyBarracksSiteBuildAction");
   const applyBarracksSiteUpgradeAction = requireDepFunction(deps, "applyBarracksSiteUpgradeAction");
@@ -657,6 +748,7 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
   action.actionSeq = game.actionSeq;
 
   const { type, data } = action;
+  const requestedBarracksId = String((data && data.barracksId) || "").trim();
 
   if (type === "build_on_pad") {
     const padId = String((data && data.padId) || "").trim();
@@ -672,6 +764,16 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
     if (!padId)
       return { ok: false, reason: "Missing padId" };
     return applyFortressUpgrade(game, lane, padId, deps);
+  }
+
+  if (type === "purchase_building_upgrade") {
+    const padId = String((data && data.padId) || "").trim();
+    const upgradeKey = String((data && data.upgradeKey) || "").trim();
+    if (!padId)
+      return { ok: false, reason: "Missing padId" };
+    if (!upgradeKey)
+      return { ok: false, reason: "Missing upgradeKey" };
+    return applyFortressBuildingUpgradePurchase(game, lane, padId, upgradeKey, deps);
   }
 
   if (type === "build_barracks_site") {
@@ -716,6 +818,24 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
     const requestedBarracksId = String((data && data.barracksId) || "").trim();
     return deployBarracksHero(game, laneIndex, lane, heroKey, requestedBarracksId);
   }
+
+  if (type === "set_barracks_attack")
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.ATTACK, data, deps);
+
+  if (type === "set_barracks_defend" || type === "set_barracks_hold" || type === "set_barracks_defend_point")
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.DEFEND, data, deps);
+
+  if (type === "set_barracks_retreat" || type === "set_barracks_callback")
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.RETREAT, data, deps);
+
+  if (type === "set_lane_attack" && requestedBarracksId)
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.ATTACK, data, deps);
+
+  if ((type === "set_lane_defend" || type === "set_lane_hold" || type === "set_lane_defend_point") && requestedBarracksId)
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.DEFEND, data, deps);
+
+  if ((type === "set_lane_retreat" || type === "set_lane_callback") && requestedBarracksId)
+    return applyBarracksSiteCommandAction(game, lane, requestedBarracksId, laneCommandStates.RETREAT, data, deps);
 
   if (type === "set_lane_attack")
     return applyLaneCommandAction(game, lane, laneCommandStates.ATTACK, data, deps);
