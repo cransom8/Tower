@@ -61,8 +61,9 @@ namespace CastleDefender.Editor
             File.WriteAllText(reportPath, BuildReport(scene.path, mapRoot.name, audits));
 
             Debug.Log($"[RemoteEnvironmentSceneAudit] Wrote environment audit report to {reportPath}");
-            Debug.Log("[RemoteEnvironmentSceneAudit] Audit complete. Continuing into environment extraction for Step 3.");
-            SetupRemoteEnvironmentAddressables.ExtractGameMlEnvironment();
+            Debug.Log(
+                "[RemoteEnvironmentSceneAudit] Audit complete. " +
+                "Run 'Castle Defender/Remote Content/Extract Game_ML Environment' explicitly if you intend to rebuild the critical environment prefab.");
         }
 
         [MenuItem("Castle Defender/Remote Content/Extract Game_ML Environment")]

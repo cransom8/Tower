@@ -9,11 +9,11 @@ public class OptionalEnvironmentLoader : MonoBehaviour
     [Header("Optional Dressing")]
     public string optionalEnvironmentAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
     public Transform instantiateParent;
-    public string instantiatedRootName = "OptionalEnvironmentDressing";
-    public float instantiatedRootScale = 0.2f;
+    public string instantiatedRootName = RemoteContentManager.GameMlEnvironmentDressingRootName;
+    public float instantiatedRootScale = RemoteContentManager.GameMlEnvironmentDressingScale;
 
     [Header("Startup Order")]
-    public string requiredRootName = "CoreMapCritical";
+    public string requiredRootName = RemoteContentManager.GameMlEnvironmentRootName;
     public float waitForCriticalTimeoutSeconds = 15f;
     public float loadStartDelaySeconds = 0.25f;
 

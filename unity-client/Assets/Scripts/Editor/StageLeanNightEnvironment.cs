@@ -1,7 +1,9 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using CastleDefender.Net;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -16,7 +18,7 @@ namespace CastleDefender.Editor
         const string MapRootName = "Map";
 
         const string LiveCriticalPrefabPath = "Assets/AddressableContent/Environment/GameEnvironment.prefab";
-        const string SourceCriticalPrefabPath = "Assets/AddressableContent/Environment/GameEnvironment 1.prefab";
+        const string SourceCriticalPrefabPath = LiveCriticalPrefabPath;
         const string LiveOptionalPrefabPath = "Assets/AddressableContent/Environment/GameEnvironmentOptional.prefab";
 
         const string TreePrefabPath = "Assets/Winter & Christmas Pack/Winter & Christmas Pack/Prefabs/Winter/pine_large.prefab";
@@ -24,6 +26,7 @@ namespace CastleDefender.Editor
         const string DarknessMaterialPath = "Assets/Materials/Environment/GameMLDarknessField.mat";
         const string OuterDarknessMaterialPath = "Assets/Materials/Environment/GameMLOuterDarknessField.mat";
         const string ForestVolumeMaterialPath = "Assets/Materials/Environment/GameMLForestVolume.mat";
+        const string ForestCanopyTexturePath = "Assets/Textures/Environment/GameMLForestCanopyAtlas.png";
         const string LanternRoadGlowMaterialPath = "Assets/Materials/Environment/GameMLLanternRoadGlow.mat";
         const string RoadShoulderMaterialPath = "Assets/Materials/Environment/GameMLRoadShoulder.mat";
         const string RoadMaterialSourcePath = "Assets/Materials/Environment/WinterCobbleEnvironment.mat";
@@ -34,8 +37,8 @@ namespace CastleDefender.Editor
         const string CriticalPreviewName = "GameEnvironment";
         const string OptionalPreviewName = "GameEnvironmentOptional";
 
-        const string CriticalAddress = "environment/game_ml";
-        const string OptionalAddress = "environment/game_ml_dressing";
+        const string CriticalAddress = RemoteContentManager.GameMlEnvironmentAddress;
+        const string OptionalAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
 
         const float TreeOffset = 3.75f;
         const float TreeTrim = 16f;
@@ -50,22 +53,28 @@ namespace CastleDefender.Editor
         const int ForestCurtainLayerCount = 3;
         const float ForestCurtainSpacing = 4.5f;
         const float ForestCurtainHeightStep = 2.8f;
-        const int ForestCanopyLayerCount = 4;
-        const float ForestCanopyInsetStep = 6f;
+        const int ForestCanopyLayerCount = 5;
+        const float ForestCanopyInsetStep = 5f;
         const float ForestCanopyHeightStep = 1.6f;
-        const int ForestInteriorSliceCount = 3;
+        const int ForestInteriorSliceCount = 4;
         const float ForestInteriorSliceMargin = 5f;
-        const float ForestInteriorSliceScale = 0.92f;
-        const float ForestInteriorSliceHeightBoost = 4.5f;
-        const float ForestDiagonalSliceScale = 0.9f;
-        const float ForestVolumeDarkness = 0.98f;
-        const float ForestVolumeNoiseStrength = 0.62f;
-        const float ForestVolumeFadeSoftness = 0.18f;
-        const float ForestVolumeTopSilhouetteStrength = 1.08f;
-        const float ForestVolumeNoiseScale = 0.045f;
-        const float ForestVolumeCenterDensity = 1.12f;
-        const float ForestVolumeViewOcclusionBoost = 0.4f;
-        const float ForestVolumeEdgeFadeDistance = 0.065f;
+        const float ForestInteriorSliceScale = 0.96f;
+        const float ForestInteriorSliceHeightBoost = 5.75f;
+        const float ForestDiagonalSliceScale = 0.94f;
+        const float ForestVolumeDarkness = 0.992f;
+        const float ForestVolumeNoiseStrength = 0.76f;
+        const float ForestVolumeFadeSoftness = 0.13f;
+        const float ForestVolumeTopSilhouetteStrength = 1.22f;
+        const float ForestVolumeNoiseScale = 0.034f;
+        const float ForestVolumeCenterDensity = 1.28f;
+        const float ForestVolumeViewOcclusionBoost = 0.58f;
+        const float ForestVolumeEdgeFadeDistance = 0.05f;
+        const float ForestCanopyTextureScale = 0.0215f;
+        const float ForestCanopyTextureBlend = 0.9f;
+        const float ForestCanopyTextureClip = 0.24f;
+        const float ForestCanopyTintStrength = 0.92f;
+        const int ForestCanopyTextureSize = 1024;
+        const int ForestCanopyStampCount = 32;
         const float ExteriorForestSpan = 240f;
         const float ExteriorForestRoadGap = 2f;
         const float ExteriorForestInset = 3f;
@@ -99,17 +108,12 @@ namespace CastleDefender.Editor
         const float FortressBackdropSideDistance = 12f;
         const float FortressBackdropRearDistance = 34f;
         const float FortressBackdropCornerReturnDepth = 18f;
-        const float RoadShoulderPatchBaseLength = 30f;
-        const float RoadShoulderPatchLengthVariance = 8f;
-        const float RoadShoulderPatchBaseWidth = 9f;
-        const float RoadShoulderPatchWidthVariance = 2.5f;
-        const float RoadShoulderPatchRoadGap = 4.5f;
-        const float RoadShoulderPatchAxisInset = 22f;
-        const float RoadShoulderPatchAxisJitter = 5f;
-        const float RoadShoulderInnerAlpha = 0.22f;
-        const float RoadShoulderOuterAlpha = 0.38f;
-        const float RoadShoulderNoiseStrength = 0.12f;
-        const float RoadShoulderEndFade = 0.08f;
+        const float RoadSnowDustingLengthInset = 6f;
+        const float RoadSnowDustingEdgeBlendWidth = 5.5f;
+        const float RoadSnowDustingBrightness = 0.84f;
+        const float RoadSnowDustingInnerAlpha = 0.2f;
+        const float RoadSnowDustingOuterAlpha = 0.44f;
+        const float RoadSnowDustingNoiseStrength = 0.22f;
         const float OuterLanternSpotIntensity = 12f;
         const float InnerLanternSpotIntensity = 13.5f;
         const float OuterLanternSpotRange = 40f;
@@ -128,9 +132,10 @@ namespace CastleDefender.Editor
         const float FortressLanternPointRange = 44f;
         const float FortressLanternRoadInset = 8f;
         const float FortressLanternEdgeInset = 1.25f;
+        const float FortressLanternCourtyardBias = 0.72f;
         const float FortressLanternMinimumInteriorSpan = 16f;
-        const int FortressLanternMinimumStations = 2;
-        const int FortressLanternMaximumStations = 3;
+        const int FortressLanternMinimumStations = 4;
+        const int FortressLanternMaximumStations = 4;
 
         [MenuItem("Castle Defender/Remote Content/Stage Lean Night Environment Preview")]
         static void StagePreview()
@@ -153,6 +158,7 @@ namespace CastleDefender.Editor
             ConfigureNightScene(mapRoot, previewMode: true);
 
             EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
             Debug.Log(
                 "[StageLeanNightEnvironment] Staged GameEnvironment/GameEnvironmentOptional preview roots in Game_ML. " +
                 "Use 'Apply Lean Night Environment Preview' to write them back to the live remote-content prefabs.");
@@ -379,10 +385,12 @@ namespace CastleDefender.Editor
             var outerDarknessMaterial = EnsureOuterDarknessMaterial();
             var forestVolumeMaterial = EnsureForestVolumeMaterial();
             var lanternGlowMaterial = EnsureLanternRoadGlowMaterial();
+            var roadShoulderMaterial = EnsureRoadShoulderMaterial();
             var darknessRoot = CreateChild(optionalRoot, "DarknessFields");
             var treeRoot = CreateChild(optionalRoot, "TreeLines");
             var forestRoot = CreateChild(optionalRoot, "ForestVolumes");
             var fortressBackdropRoot = CreateChild(optionalRoot, "FortressBackdrops");
+            var roadDustingRoot = CreateChild(optionalRoot, "RoadDusting");
             var lanternRoot = CreateChild(optionalRoot, "RoadLanterns");
             var glowRoot = CreateChild(optionalRoot, "RoadLightPools");
             var fortressLanternRoot = CreateChild(optionalRoot, "FortressLanterns");
@@ -392,6 +400,7 @@ namespace CastleDefender.Editor
             float darknessY = layout.MineBounds.center.y - 0.35f;
             float darknessBehindTrees = TreeOffset + DarknessBehindTreesOffset;
             CreateInnerQuadrantDarkness(darknessRoot, layout, darknessY, darknessMaterial);
+            CreateFortressPerimeterDarkness(darknessRoot, layout, darknessY, darknessMaterial);
 
             CreateWrappedOuterDarkness(
                 darknessRoot,
@@ -403,6 +412,9 @@ namespace CastleDefender.Editor
                 fortressBackdropRoot,
                 layout,
                 forestVolumeMaterial);
+
+            foreach (var road in layout.SnowDustingRoads)
+                CreateRoadSnowDustingOverlay(roadDustingRoot, road, roadShoulderMaterial);
 
             foreach (var road in layout.AllRoads)
                 AddTreesForRoad(treeRoot, treePrefab, road, layout.Fortresses);
@@ -441,15 +453,8 @@ namespace CastleDefender.Editor
             var playerRight = BuildRoadMetrics(criticalRoot, "Yellow_Player_Lane");
             var playerBottom = BuildRoadMetrics(criticalRoot, "PB_Blue_Player_Lane");
             var playerTop = BuildRoadMetrics(criticalRoot, "PB_Green_Player_Lane");
+            var mineRoad = BuildRoadMetrics(criticalRoot, "PB_Mine_Center");
             var fortresses = CaptureFortressBounds(criticalRoot);
-
-            var mineCenter = FindChildRecursive(criticalRoot, "PB_Mine_Center");
-            if (mineCenter == null)
-                throw new InvalidOperationException("Could not locate PB_Mine_Center in the critical environment preview.");
-
-            var mineRenderer = mineCenter.GetComponent<Renderer>();
-            if (mineRenderer == null)
-                throw new InvalidOperationException("PB_Mine_Center is missing a Renderer.");
 
             float leftInnerX = Mathf.Max(redLeft.Bounds.max.x, redRight.Bounds.max.x);
             float rightInnerX = Mathf.Min(yellowLeft.Bounds.min.x, yellowRight.Bounds.min.x);
@@ -462,7 +467,7 @@ namespace CastleDefender.Editor
             float bottomOuterZ = Mathf.Min(blueLeft.Bounds.min.z, blueRight.Bounds.min.z);
             float groundY = new[]
             {
-                mineRenderer.bounds.min.y,
+                mineRoad.Bounds.min.y,
                 redLeft.Bounds.min.y,
                 redRight.Bounds.min.y,
                 yellowLeft.Bounds.min.y,
@@ -479,8 +484,8 @@ namespace CastleDefender.Editor
 
             return new RoadLayout
             {
-                CenterX = mineRenderer.bounds.center.x,
-                CenterZ = mineRenderer.bounds.center.z,
+                CenterX = mineRoad.Bounds.center.x,
+                CenterZ = mineRoad.Bounds.center.z,
                 LeftInnerX = leftInnerX,
                 RightInnerX = rightInnerX,
                 TopInnerZ = topInnerZ,
@@ -494,7 +499,8 @@ namespace CastleDefender.Editor
                 VerticalRoadXMin = Mathf.Min(playerBottom.Bounds.min.x, playerTop.Bounds.min.x),
                 VerticalRoadXMax = Mathf.Max(playerBottom.Bounds.max.x, playerTop.Bounds.max.x),
                 GroundY = groundY,
-                MineBounds = mineRenderer.bounds,
+                MineBounds = mineRoad.Bounds,
+                MineRoad = mineRoad,
                 Fortresses = fortresses,
                 CenterRoads = new[]
                 {
@@ -2300,7 +2306,7 @@ namespace CastleDefender.Editor
                     $"{road.Name}_Lantern_{i + 1:00}");
                 lantern.transform.position = position;
                 lantern.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
-                lantern.transform.localScale = Vector3.one * 3.2f;
+                lantern.transform.localScale = Vector3.one;
 
                 SetRendererShadows(lantern, true, true);
                 ConfigureLanternProjector(lantern.transform, roadTarget, outerRoad);
@@ -2358,6 +2364,7 @@ namespace CastleDefender.Editor
                     lanternPrefab,
                     glowMaterial,
                     fortress.Name.Replace(' ', '_'),
+                    fortress,
                     road,
                     stations);
             }
@@ -2643,9 +2650,13 @@ namespace CastleDefender.Editor
             GameObject lanternPrefab,
             Material glowMaterial,
             string namePrefix,
+            FortressBounds fortress,
             RoadMetrics road,
             List<float> stations)
         {
+            if (!TryGetFortressLanternRowPositions(fortress, road, out float firstRow, out float secondRow))
+                return;
+
             float overlayY = road.Bounds.max.y + 0.45f;
             for (int i = 0; i < stations.Count; i++)
             {
@@ -2659,7 +2670,7 @@ namespace CastleDefender.Editor
                         glowMaterial,
                         $"{namePrefix}_InteriorLantern_{i + 1:00}_South",
                         $"{namePrefix}_InteriorGlow_{i + 1:00}_South",
-                        new Vector3(station, 0f, road.Bounds.min.z + FortressLanternEdgeInset),
+                        new Vector3(station, 0f, firstRow),
                         new Vector3(station, overlayY, road.Bounds.center.z),
                         yaw: 0f,
                         roadIsHorizontal: true);
@@ -2670,7 +2681,7 @@ namespace CastleDefender.Editor
                         glowMaterial,
                         $"{namePrefix}_InteriorLantern_{i + 1:00}_North",
                         $"{namePrefix}_InteriorGlow_{i + 1:00}_North",
-                        new Vector3(station, 0f, road.Bounds.max.z - FortressLanternEdgeInset),
+                        new Vector3(station, 0f, secondRow),
                         new Vector3(station, overlayY, road.Bounds.center.z),
                         yaw: 180f,
                         roadIsHorizontal: true);
@@ -2684,7 +2695,7 @@ namespace CastleDefender.Editor
                     glowMaterial,
                     $"{namePrefix}_InteriorLantern_{i + 1:00}_West",
                     $"{namePrefix}_InteriorGlow_{i + 1:00}_West",
-                    new Vector3(road.Bounds.min.x + FortressLanternEdgeInset, 0f, station),
+                    new Vector3(firstRow, 0f, station),
                     new Vector3(road.Bounds.center.x, overlayY, station),
                     yaw: 90f,
                     roadIsHorizontal: false);
@@ -2695,11 +2706,43 @@ namespace CastleDefender.Editor
                     glowMaterial,
                     $"{namePrefix}_InteriorLantern_{i + 1:00}_East",
                     $"{namePrefix}_InteriorGlow_{i + 1:00}_East",
-                    new Vector3(road.Bounds.max.x - FortressLanternEdgeInset, 0f, station),
+                    new Vector3(secondRow, 0f, station),
                     new Vector3(road.Bounds.center.x, overlayY, station),
                     yaw: 270f,
                     roadIsHorizontal: false);
             }
+        }
+
+        static bool TryGetFortressLanternRowPositions(FortressBounds fortress, RoadMetrics road, out float firstRow, out float secondRow)
+        {
+            firstRow = 0f;
+            secondRow = 0f;
+
+            var shellBounds = GetFortressShellBounds(fortress);
+            if (road.IsHorizontal)
+            {
+                float southWall = shellBounds.min.z + FortressLanternEdgeInset;
+                float southRoad = road.Bounds.min.z - FortressLanternRoadInset;
+                float northRoad = road.Bounds.max.z + FortressLanternRoadInset;
+                float northWall = shellBounds.max.z - FortressLanternEdgeInset;
+                if (southRoad <= southWall || northWall <= northRoad)
+                    return false;
+
+                firstRow = Mathf.Lerp(southRoad, southWall, FortressLanternCourtyardBias);
+                secondRow = Mathf.Lerp(northRoad, northWall, FortressLanternCourtyardBias);
+                return true;
+            }
+
+            float westWall = shellBounds.min.x + FortressLanternEdgeInset;
+            float westRoad = road.Bounds.min.x - FortressLanternRoadInset;
+            float eastRoad = road.Bounds.max.x + FortressLanternRoadInset;
+            float eastWall = shellBounds.max.x - FortressLanternEdgeInset;
+            if (westRoad <= westWall || eastWall <= eastRoad)
+                return false;
+
+            firstRow = Mathf.Lerp(westRoad, westWall, FortressLanternCourtyardBias);
+            secondRow = Mathf.Lerp(eastRoad, eastWall, FortressLanternCourtyardBias);
+            return true;
         }
 
         static void AddFortressLantern(
@@ -2717,7 +2760,7 @@ namespace CastleDefender.Editor
             var lantern = InstantiateNestedPrefab(lanternPrefab, lanternParent, lanternName);
             lantern.transform.position = position;
             lantern.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
-            lantern.transform.localScale = Vector3.one * 3.2f;
+            lantern.transform.localScale = Vector3.one;
 
             SetRendererShadows(lantern, true, true);
             ConfigureLanternProjector(lantern.transform, roadTarget, outerRoad: false);
@@ -2800,12 +2843,14 @@ namespace CastleDefender.Editor
 
             var serializedEnvironment = new SerializedObject(environmentLoader);
             serializedEnvironment.FindProperty("environmentAddress").stringValue = CriticalAddress;
+            serializedEnvironment.FindProperty("instantiatedRootName").stringValue = RemoteContentManager.GameMlEnvironmentRootName;
             serializedEnvironment.ApplyModifiedPropertiesWithoutUndo();
 
             var serializedOptional = new SerializedObject(optionalLoader);
             serializedOptional.FindProperty("optionalEnvironmentAddress").stringValue = OptionalAddress;
-            serializedOptional.FindProperty("instantiatedRootName").stringValue = "OptionalEnvironmentDressing";
-            serializedOptional.FindProperty("instantiatedRootScale").floatValue = 1f;
+            serializedOptional.FindProperty("instantiatedRootName").stringValue = RemoteContentManager.GameMlEnvironmentDressingRootName;
+            serializedOptional.FindProperty("instantiatedRootScale").floatValue = RemoteContentManager.GameMlEnvironmentDressingScale;
+            serializedOptional.FindProperty("requiredRootName").stringValue = RemoteContentManager.GameMlEnvironmentRootName;
             serializedOptional.ApplyModifiedPropertiesWithoutUndo();
 
             environmentLoader.enabled = !previewMode;
@@ -3001,6 +3046,7 @@ namespace CastleDefender.Editor
         {
             var material = AssetDatabase.LoadAssetAtPath<Material>(ForestVolumeMaterialPath);
             Shader shader = RequireForestVolumeShader();
+            Texture2D canopyTexture = EnsureForestCanopyTexture();
 
             if (material == null)
             {
@@ -3015,12 +3061,13 @@ namespace CastleDefender.Editor
                 material.shader = shader;
             }
 
+            // Push the darkness masses toward a clearer top-down canopy read.
             if (material.HasProperty("_BaseColor"))
-                material.SetColor("_BaseColor", new Color(0.03f, 0.055f, 0.038f, 0.94f));
+                material.SetColor("_BaseColor", new Color(0.04f, 0.074f, 0.046f, 0.96f));
             if (material.HasProperty("_DepthColor"))
-                material.SetColor("_DepthColor", new Color(0.006f, 0.012f, 0.012f, 0.99f));
+                material.SetColor("_DepthColor", new Color(0.008f, 0.018f, 0.014f, 0.995f));
             if (material.HasProperty("_TopColor"))
-                material.SetColor("_TopColor", new Color(0.048f, 0.072f, 0.052f, 0.9f));
+                material.SetColor("_TopColor", new Color(0.068f, 0.104f, 0.066f, 0.93f));
             if (material.HasProperty("_Darkness"))
                 material.SetFloat("_Darkness", ForestVolumeDarkness);
             if (material.HasProperty("_NoiseStrength"))
@@ -3037,11 +3084,260 @@ namespace CastleDefender.Editor
                 material.SetFloat("_ViewOcclusionBoost", ForestVolumeViewOcclusionBoost);
             if (material.HasProperty("_EdgeFadeDistance"))
                 material.SetFloat("_EdgeFadeDistance", ForestVolumeEdgeFadeDistance);
+            if (material.HasProperty("_CanopyTex"))
+                material.SetTexture("_CanopyTex", canopyTexture);
+            if (material.HasProperty("_CanopyTexScale"))
+                material.SetFloat("_CanopyTexScale", ForestCanopyTextureScale);
+            if (material.HasProperty("_CanopyTexBlend"))
+                material.SetFloat("_CanopyTexBlend", ForestCanopyTextureBlend);
+            if (material.HasProperty("_CanopyTexClip"))
+                material.SetFloat("_CanopyTexClip", ForestCanopyTextureClip);
+            if (material.HasProperty("_CanopyTintStrength"))
+                material.SetFloat("_CanopyTintStrength", ForestCanopyTintStrength);
 
             material.renderQueue = (int)RenderQueue.Transparent - 12;
             EditorUtility.SetDirty(material);
             AssetDatabase.SaveAssets();
             return material;
+        }
+
+        static Texture2D EnsureForestCanopyTexture()
+        {
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(ForestCanopyTexturePath);
+            if (texture == null)
+            {
+                string projectRoot = Directory.GetParent(Application.dataPath)?.FullName
+                    ?? throw new InvalidOperationException("Could not resolve the Unity project root.");
+                string textureAbsolutePath = Path.Combine(
+                    projectRoot,
+                    ForestCanopyTexturePath.Replace('/', Path.DirectorySeparatorChar));
+                string textureDirectory = Path.GetDirectoryName(textureAbsolutePath)
+                    ?? throw new InvalidOperationException(
+                        $"Could not resolve the directory for '{ForestCanopyTexturePath}'.");
+
+                Directory.CreateDirectory(textureDirectory);
+
+                Texture2D generated = BuildForestCanopyTexture();
+                try
+                {
+                    File.WriteAllBytes(textureAbsolutePath, generated.EncodeToPNG());
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(generated);
+                }
+
+                AssetDatabase.ImportAsset(
+                    ForestCanopyTexturePath,
+                    ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            }
+
+            ConfigureForestCanopyImporter();
+            texture = AssetDatabase.LoadAssetAtPath<Texture2D>(ForestCanopyTexturePath);
+            if (texture == null)
+                throw new InvalidOperationException(
+                    $"Could not load generated forest canopy texture at '{ForestCanopyTexturePath}'.");
+
+            return texture;
+        }
+
+        static void ConfigureForestCanopyImporter()
+        {
+            if (AssetImporter.GetAtPath(ForestCanopyTexturePath) is not TextureImporter importer)
+                return;
+
+            bool changed = false;
+
+            if (importer.textureType != TextureImporterType.Default)
+            {
+                importer.textureType = TextureImporterType.Default;
+                changed = true;
+            }
+
+            if (importer.alphaSource != TextureImporterAlphaSource.FromInput)
+            {
+                importer.alphaSource = TextureImporterAlphaSource.FromInput;
+                changed = true;
+            }
+
+            if (!importer.alphaIsTransparency)
+            {
+                importer.alphaIsTransparency = true;
+                changed = true;
+            }
+
+            if (!importer.mipmapEnabled)
+            {
+                importer.mipmapEnabled = true;
+                changed = true;
+            }
+
+            if (importer.wrapMode != TextureWrapMode.Repeat)
+            {
+                importer.wrapMode = TextureWrapMode.Repeat;
+                changed = true;
+            }
+
+            if (importer.filterMode != FilterMode.Bilinear)
+            {
+                importer.filterMode = FilterMode.Bilinear;
+                changed = true;
+            }
+
+            if (importer.maxTextureSize != ForestCanopyTextureSize)
+            {
+                importer.maxTextureSize = ForestCanopyTextureSize;
+                changed = true;
+            }
+
+            if (importer.textureCompression != TextureImporterCompression.CompressedHQ)
+            {
+                importer.textureCompression = TextureImporterCompression.CompressedHQ;
+                changed = true;
+            }
+
+            if (changed)
+                importer.SaveAndReimport();
+        }
+
+        static Texture2D BuildForestCanopyTexture()
+        {
+            var texture = new Texture2D(ForestCanopyTextureSize, ForestCanopyTextureSize, TextureFormat.RGBA32, true)
+            {
+                name = "GameMLForestCanopyAtlas",
+                wrapMode = TextureWrapMode.Repeat,
+                filterMode = FilterMode.Bilinear,
+            };
+
+            var stamps = BuildForestCanopyStamps();
+            var pixels = new Color32[ForestCanopyTextureSize * ForestCanopyTextureSize];
+
+            for (int y = 0; y < ForestCanopyTextureSize; y++)
+            {
+                float v = (y + 0.5f) / ForestCanopyTextureSize;
+                for (int x = 0; x < ForestCanopyTextureSize; x++)
+                {
+                    float u = (x + 0.5f) / ForestCanopyTextureSize;
+                    Color pixel = EvaluateForestCanopyPixel(u, v, stamps);
+                    pixels[(y * ForestCanopyTextureSize) + x] = pixel;
+                }
+            }
+
+            texture.SetPixels32(pixels);
+            texture.Apply(updateMipmaps: true, makeNoLongerReadable: false);
+            return texture;
+        }
+
+        static ForestCanopyStamp[] BuildForestCanopyStamps()
+        {
+            var random = new System.Random(742031);
+            var stamps = new ForestCanopyStamp[ForestCanopyStampCount];
+
+            for (int i = 0; i < stamps.Length; i++)
+            {
+                float sizeT = (float)random.NextDouble();
+                float radius = Mathf.Lerp(0.065f, 0.18f, Mathf.Pow(sizeT, 0.78f));
+                float hueJitter = Mathf.Lerp(-0.018f, 0.024f, (float)random.NextDouble());
+                float brightnessJitter = Mathf.Lerp(0.82f, 1.08f, (float)random.NextDouble());
+
+                Color shadow = new Color(0.03f, 0.085f, 0.045f, 1f) * brightnessJitter;
+                Color mid = new Color(0.085f + hueJitter, 0.19f + hueJitter, 0.095f, 1f) * brightnessJitter;
+                Color tip = new Color(0.16f + (hueJitter * 0.65f), 0.31f + hueJitter, 0.15f, 1f) * brightnessJitter;
+
+                stamps[i] = new ForestCanopyStamp
+                {
+                    Center = new Vector2((float)random.NextDouble(), (float)random.NextDouble()),
+                    Radius = radius,
+                    Spokes = random.Next(10, 18),
+                    Rotation = Mathf.Lerp(0f, Mathf.PI * 2f, (float)random.NextDouble()),
+                    Opacity = Mathf.Lerp(0.48f, 0.9f, (float)random.NextDouble()),
+                    NoiseScale = Mathf.Lerp(6f, 14f, (float)random.NextDouble()),
+                    ShadowColor = shadow,
+                    MidColor = mid,
+                    TipColor = tip,
+                };
+            }
+
+            return stamps;
+        }
+
+        static Color EvaluateForestCanopyPixel(float u, float v, ForestCanopyStamp[] stamps)
+        {
+            float baseNoise = TileableNoise(u, v, 4f);
+            float detailNoise = TileableNoise(u + 0.31f, v + 0.17f, 11f);
+            float alpha = 0.1f + (baseNoise * 0.06f);
+            Color color = Color.Lerp(
+                new Color(0.028f, 0.056f, 0.034f, 1f),
+                new Color(0.05f, 0.085f, 0.05f, 1f),
+                baseNoise * 0.65f);
+
+            for (int i = 0; i < stamps.Length; i++)
+            {
+                ForestCanopyStamp stamp = stamps[i];
+                float dx = WrapDistance(u - stamp.Center.x);
+                float dy = WrapDistance(v - stamp.Center.y);
+                float distance = Mathf.Sqrt((dx * dx) + (dy * dy));
+                if (distance > stamp.Radius * 1.35f)
+                    continue;
+
+                float normalizedDistance = distance / stamp.Radius;
+                float angle = Mathf.Atan2(dy, dx);
+                float spokeWave = 0.82f + (0.18f * Mathf.Sin((angle * stamp.Spokes) + stamp.Rotation));
+                float crownNoise = TileableNoise(
+                    Mathf.Repeat(u + (stamp.Center.x * 0.37f), 1f),
+                    Mathf.Repeat(v + (stamp.Center.y * 0.41f), 1f),
+                    stamp.NoiseScale);
+                float silhouette = 1f - Mathf.Clamp01(normalizedDistance / Mathf.Max(0.2f, spokeWave * (0.86f + (crownNoise * 0.28f))));
+                silhouette = Mathf.SmoothStep(0f, 1f, silhouette);
+                if (silhouette <= 0f)
+                    continue;
+
+                float innerMask = Mathf.Pow(Mathf.Clamp01(1f - (normalizedDistance * normalizedDistance)), 1.2f);
+                float tipNoise = TileableNoise(
+                    Mathf.Repeat(u + (stamp.Rotation * 0.07f), 1f),
+                    Mathf.Repeat(v + (stamp.Rotation * 0.11f), 1f),
+                    18f);
+                float shadeNoise = TileableNoise(
+                    Mathf.Repeat(u + (stamp.Center.y * 0.19f), 1f),
+                    Mathf.Repeat(v + (stamp.Center.x * 0.23f), 1f),
+                    7f);
+
+                Color stampColor = Color.Lerp(stamp.ShadowColor, stamp.MidColor, Mathf.Clamp01((innerMask * 0.75f) + (shadeNoise * 0.25f)));
+                stampColor = Color.Lerp(stampColor, stamp.TipColor, Mathf.Pow(innerMask, 2.1f) * (0.55f + (tipNoise * 0.45f)));
+
+                float stampAlpha = silhouette * stamp.Opacity;
+                color = Color.Lerp(color, stampColor, stampAlpha * (0.7f + ((1f - alpha) * 0.3f)));
+                alpha = Mathf.Clamp01(Mathf.Max(alpha, stampAlpha + (innerMask * 0.05f)));
+            }
+
+            alpha = Mathf.Clamp01(alpha + (Mathf.Max(0f, detailNoise - 0.72f) * 0.14f));
+            float highlight = TileableNoise(u + 0.62f, v + 0.44f, 23f);
+            color = Color.Lerp(color * 0.82f, color, 0.8f + (highlight * 0.2f));
+            color.a = alpha;
+            return color;
+        }
+
+        static float TileableNoise(float u, float v, float scale)
+        {
+            float x = u * scale;
+            float y = v * scale;
+            float a = Mathf.PerlinNoise(x, y);
+            float b = Mathf.PerlinNoise(x - scale, y);
+            float c = Mathf.PerlinNoise(x, y - scale);
+            float d = Mathf.PerlinNoise(x - scale, y - scale);
+            return Mathf.Lerp(
+                Mathf.Lerp(a, b, u),
+                Mathf.Lerp(c, d, u),
+                v);
+        }
+
+        static float WrapDistance(float value)
+        {
+            if (value > 0.5f)
+                return value - 1f;
+            if (value < -0.5f)
+                return value + 1f;
+            return value;
         }
 
         static Material EnsureLanternRoadGlowMaterial()
@@ -3102,15 +3398,15 @@ namespace CastleDefender.Editor
             if (material.HasProperty("_Color"))
                 material.SetColor("_Color", new Color(0.58f, 0.62f, 0.68f, 1f));
             if (material.HasProperty("_Brightness"))
-                material.SetFloat("_Brightness", 0.78f);
+                material.SetFloat("_Brightness", RoadSnowDustingBrightness);
             if (material.HasProperty("_TextureScale"))
                 material.SetFloat("_TextureScale", 0.085f);
             if (material.HasProperty("_InnerAlpha"))
-                material.SetFloat("_InnerAlpha", 0.13f);
+                material.SetFloat("_InnerAlpha", RoadSnowDustingInnerAlpha);
             if (material.HasProperty("_OuterAlpha"))
-                material.SetFloat("_OuterAlpha", 0.34f);
+                material.SetFloat("_OuterAlpha", RoadSnowDustingOuterAlpha);
             if (material.HasProperty("_NoiseStrength"))
-                material.SetFloat("_NoiseStrength", 0.3f);
+                material.SetFloat("_NoiseStrength", RoadSnowDustingNoiseStrength);
             if (material.HasProperty("_EndFade"))
                 material.SetFloat("_EndFade", 0.22f);
 
@@ -3378,62 +3674,25 @@ namespace CastleDefender.Editor
                 UnityEngine.Object.DestroyImmediate(collider);
         }
 
-        static void CreateRoadShoulderPatches(Transform parent, RoadMetrics road, Material material)
+        static void CreateRoadSnowDustingOverlay(Transform parent, RoadMetrics road, Material material)
         {
             if (parent == null || material == null)
                 return;
 
             float overlayY = road.Bounds.max.y + 0.16f;
             float roadLength = road.IsHorizontal ? road.Bounds.size.x : road.Bounds.size.z;
-            int patchCount = Mathf.Clamp(Mathf.RoundToInt(roadLength / 115f), 2, 3);
-            float axisMin = road.IsHorizontal ? road.Bounds.min.x : road.Bounds.min.z;
-            float axisMax = road.IsHorizontal ? road.Bounds.max.x : road.Bounds.max.z;
-            float maxInset = Mathf.Max(0f, (roadLength - 24f) * 0.5f);
-            float axisInset = Mathf.Min(RoadShoulderPatchAxisInset, maxInset);
+            float roadWidth = road.IsHorizontal ? road.Bounds.size.z : road.Bounds.size.x;
+            float overlayLength = Mathf.Max(12f, roadLength - (RoadSnowDustingLengthInset * 2f));
+            float overlayWidth = roadWidth + (RoadSnowDustingEdgeBlendWidth * 2f);
 
-            for (int sideIndex = 0; sideIndex < 2; sideIndex++)
-            {
-                for (int i = 0; i < patchCount; i++)
-                {
-                    float t = patchCount == 1 ? 0.5f : (i + 1f) / (patchCount + 1f);
-                    float along = Mathf.Lerp(axisMin + axisInset, axisMax - axisInset, t);
-                    float length = RoadShoulderPatchBaseLength + (((i + sideIndex) % 3) * RoadShoulderPatchLengthVariance);
-                    float width = RoadShoulderPatchBaseWidth + (((i + (sideIndex * 2)) % 3) * RoadShoulderPatchWidthVariance);
-                    float alongJitter = (((i + sideIndex) % 3) - 1f) * RoadShoulderPatchAxisJitter;
-                    float sideOffset = RoadShoulderPatchRoadGap + (width * 0.5f) + (((i + sideIndex) % 2) * 1.5f);
-                    float yawJitter = (((i * 2) + sideIndex) - 2f) * 3.25f;
-
-                    if (road.IsHorizontal)
-                    {
-                        bool northSide = sideIndex == 0;
-                        CreateRoadShoulderQuad(
-                            parent,
-                            $"{road.Name}_ShoulderPatch_{(northSide ? "North" : "South")}_{i + 1:00}",
-                            new Vector3(
-                                along + alongJitter,
-                                overlayY,
-                                northSide ? road.Bounds.min.z - sideOffset : road.Bounds.max.z + sideOffset),
-                            Quaternion.Euler(90f, (northSide ? 0f : 180f) + yawJitter, 0f),
-                            length,
-                            width,
-                            material);
-                        continue;
-                    }
-
-                    bool westSide = sideIndex == 0;
-                    CreateRoadShoulderQuad(
-                        parent,
-                        $"{road.Name}_ShoulderPatch_{(westSide ? "West" : "East")}_{i + 1:00}",
-                        new Vector3(
-                            westSide ? road.Bounds.min.x - sideOffset : road.Bounds.max.x + sideOffset,
-                            overlayY,
-                            along + alongJitter),
-                        Quaternion.Euler(90f, (westSide ? -90f : 90f) + yawJitter, 0f),
-                        length,
-                        width,
-                        material);
-                }
-            }
+            CreateRoadShoulderQuad(
+                parent,
+                $"{road.Name}_SnowDustingBlend",
+                new Vector3(road.Bounds.center.x, overlayY, road.Bounds.center.z),
+                Quaternion.Euler(90f, road.IsHorizontal ? 0f : 90f, 0f),
+                overlayLength,
+                overlayWidth,
+                material);
         }
 
         static void CreateRoadShoulderQuad(
@@ -3500,6 +3759,19 @@ namespace CastleDefender.Editor
                 .FirstOrDefault(t => string.Equals(t.name, name, StringComparison.Ordinal));
         }
 
+        struct ForestCanopyStamp
+        {
+            public Vector2 Center;
+            public float Radius;
+            public int Spokes;
+            public float Rotation;
+            public float Opacity;
+            public float NoiseScale;
+            public Color ShadowColor;
+            public Color MidColor;
+            public Color TipColor;
+        }
+
         sealed class RoadLayout
         {
             public float CenterX;
@@ -3518,11 +3790,13 @@ namespace CastleDefender.Editor
             public float VerticalRoadXMax;
             public float GroundY;
             public Bounds MineBounds;
+            public RoadMetrics MineRoad;
             public FortressBounds[] Fortresses;
             public RoadMetrics[] OuterRoads;
             public RoadMetrics[] CenterRoads;
 
             public IEnumerable<RoadMetrics> AllRoads => OuterRoads.Concat(CenterRoads);
+            public IEnumerable<RoadMetrics> SnowDustingRoads => OuterRoads.Concat(CenterRoads).Append(MineRoad);
         }
 
         enum DarknessDirection

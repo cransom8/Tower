@@ -90,6 +90,8 @@ namespace CastleDefender.Editor
                     return;
                 }
 
+                AssertNoLiveEnvironmentInstances(mapRoot.transform);
+
                 var candidates = new List<Transform>();
                 var keptLocal = new List<BranchDecision>();
                 foreach (Transform child in mapRoot.transform)
@@ -352,9 +354,50 @@ namespace CastleDefender.Editor
 
             loader.environmentAddress = RemoteContentManager.GameMlEnvironmentAddress;
             loader.instantiateParent = mapRoot.transform;
-            loader.instantiatedRootName = "RemoteEnvironment";
+            loader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentRootName;
+            loader.failureTitle = "Required map environment failed to load.";
             loader.readinessTimeoutSeconds = 12f;
             SafeSetDirty(loader);
+
+            var optionalLoader = mapRoot.GetComponent<OptionalEnvironmentLoader>();
+            if (optionalLoader == null)
+                optionalLoader = Undo.AddComponent<OptionalEnvironmentLoader>(mapRoot);
+
+            optionalLoader.optionalEnvironmentAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
+            optionalLoader.instantiateParent = mapRoot.transform;
+            optionalLoader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentDressingRootName;
+            optionalLoader.instantiatedRootScale = RemoteContentManager.GameMlEnvironmentDressingScale;
+            optionalLoader.requiredRootName = RemoteContentManager.GameMlEnvironmentRootName;
+            optionalLoader.waitForCriticalTimeoutSeconds = 15f;
+            optionalLoader.loadStartDelaySeconds = 0.25f;
+            optionalLoader.logWarnings = true;
+            SafeSetDirty(optionalLoader);
+        }
+
+        static void AssertNoLiveEnvironmentInstances(Transform mapRoot)
+        {
+            if (mapRoot == null)
+                throw new InvalidOperationException("[SetupRemoteEnvironmentAddressables] Map root is required before extraction.");
+
+            string[] liveRootNames =
+            {
+                "GameEnvironment",
+                "GameEnvironmentOptional",
+                RemoteContentManager.GameMlEnvironmentRootName,
+                RemoteContentManager.GameMlEnvironmentDressingRootName,
+            };
+
+            for (int i = 0; i < liveRootNames.Length; i++)
+            {
+                string rootName = liveRootNames[i];
+                if (mapRoot.Find(rootName) == null)
+                    continue;
+
+                throw new InvalidOperationException(
+                    $"[SetupRemoteEnvironmentAddressables] Refusing to extract because '{MapRootName}/{rootName}' already exists in '{ScenePath}'. " +
+                    "This scene is already using the authored remote environment. " +
+                    "Use 'Castle Defender/Remote Content/Commit Scene Environment Instances' to persist live map edits instead of re-extracting legacy scene branches.");
+            }
         }
 
         static bool EnsureAddressablesEntry(string assetPath, string address)

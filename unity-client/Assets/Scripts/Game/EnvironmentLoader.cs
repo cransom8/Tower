@@ -12,7 +12,7 @@ public class EnvironmentLoader : MonoBehaviour
     [Header("Remote Environment")]
     public string environmentAddress = RemoteContentManager.GameMlEnvironmentAddress;
     public Transform instantiateParent;
-    public string instantiatedRootName = "RemoteEnvironment";
+    public string instantiatedRootName = RemoteContentManager.GameMlEnvironmentRootName;
 
     [Header("Failure UI")]
     public string failureTitle = "Remote environment failed to load.";

@@ -141,7 +141,7 @@ namespace CastleDefender.Editor
 
             criticalLoader.environmentAddress = RemoteContentManager.GameMlEnvironmentAddress;
             criticalLoader.instantiateParent = mapRoot.transform;
-            criticalLoader.instantiatedRootName = "CoreMapCritical";
+            criticalLoader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentRootName;
             criticalLoader.failureTitle = "Required map environment failed to load.";
             criticalLoader.readinessTimeoutSeconds = 12f;
             EditorUtility.SetDirty(criticalLoader);
@@ -152,8 +152,9 @@ namespace CastleDefender.Editor
 
             optionalLoader.optionalEnvironmentAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
             optionalLoader.instantiateParent = mapRoot.transform;
-            optionalLoader.instantiatedRootName = "OptionalEnvironmentDressing";
-            optionalLoader.requiredRootName = "CoreMapCritical";
+            optionalLoader.instantiatedRootName = RemoteContentManager.GameMlEnvironmentDressingRootName;
+            optionalLoader.instantiatedRootScale = RemoteContentManager.GameMlEnvironmentDressingScale;
+            optionalLoader.requiredRootName = RemoteContentManager.GameMlEnvironmentRootName;
             optionalLoader.waitForCriticalTimeoutSeconds = 15f;
             optionalLoader.loadStartDelaySeconds = 0.25f;
             optionalLoader.logWarnings = true;
@@ -585,8 +586,8 @@ namespace CastleDefender.Editor
             builder.AppendLine();
             builder.AppendLine("## Load Order");
             builder.AppendLine();
-            builder.AppendLine("- `EnvironmentLoader` loads the required environment and instantiates it as `CoreMapCritical`.");
-            builder.AppendLine("- `OptionalEnvironmentLoader` waits for `CoreMapCritical`, then downloads and instantiates `OptionalEnvironmentDressing`.");
+            builder.AppendLine($"- `EnvironmentLoader` loads the required environment and instantiates it as `{RemoteContentManager.GameMlEnvironmentRootName}`.");
+            builder.AppendLine($"- `OptionalEnvironmentLoader` waits for `{RemoteContentManager.GameMlEnvironmentRootName}`, then downloads and instantiates `{RemoteContentManager.GameMlEnvironmentDressingRootName}`.");
             builder.AppendLine("- If optional dressing fails, gameplay still starts and continues with the critical map only.");
 
             File.WriteAllText(reportPath, builder.ToString());

@@ -36,6 +36,9 @@ namespace CastleDefender.Net
         public static RemoteContentManager Instance { get; private set; }
         public const string GameMlEnvironmentAddress = "environment/game_ml";
         public const string GameMlEnvironmentDressingAddress = "environment/game_ml_dressing";
+        public const string GameMlEnvironmentRootName = "CoreMapCritical";
+        public const string GameMlEnvironmentDressingRootName = "OptionalEnvironmentDressing";
+        public const float GameMlEnvironmentDressingScale = 1f;
 
         public ContentManifestResponse Manifest { get; private set; }
         public bool HasManifest => Manifest != null;

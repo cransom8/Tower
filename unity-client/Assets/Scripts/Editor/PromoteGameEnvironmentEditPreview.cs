@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using CastleDefender.Net;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -18,10 +19,10 @@ namespace CastleDefender.Editor
         const string OptionalPrefabPath = "Assets/AddressableContent/Environment/GameEnvironmentOptional.prefab";
         const string CriticalGroupName = "Remote Environment";
         const string OptionalGroupName = "Remote Environment Dressing";
-        const string CriticalAddress = "environment/game_ml";
-        const string OptionalAddress = "environment/game_ml_dressing";
-        const string RuntimeCriticalRootName = "CoreMapCritical";
-        const string RuntimeOptionalRootName = "OptionalEnvironmentDressing";
+        const string CriticalAddress = RemoteContentManager.GameMlEnvironmentAddress;
+        const string OptionalAddress = RemoteContentManager.GameMlEnvironmentDressingAddress;
+        const string RuntimeCriticalRootName = RemoteContentManager.GameMlEnvironmentRootName;
+        const string RuntimeOptionalRootName = RemoteContentManager.GameMlEnvironmentDressingRootName;
 
         [MenuItem("Castle Defender/Remote Content/Promote GameEnvironment_EditPreview")]
         static void Promote()
@@ -195,7 +196,7 @@ namespace CastleDefender.Editor
             optionalLoader.optionalEnvironmentAddress = OptionalAddress;
             optionalLoader.instantiateParent = mapRoot.transform;
             optionalLoader.instantiatedRootName = RuntimeOptionalRootName;
-            optionalLoader.instantiatedRootScale = 0.2f;
+            optionalLoader.instantiatedRootScale = RemoteContentManager.GameMlEnvironmentDressingScale;
             optionalLoader.requiredRootName = RuntimeCriticalRootName;
             optionalLoader.waitForCriticalTimeoutSeconds = 15f;
             optionalLoader.loadStartDelaySeconds = 0.25f;
