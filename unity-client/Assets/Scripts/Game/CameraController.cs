@@ -664,7 +664,9 @@ public class CameraController : MonoBehaviour
             if (renderer == null || !renderer.enabled)
                 continue;
 
-            if (!string.Equals(renderer.gameObject.name, "Floor", StringComparison.OrdinalIgnoreCase))
+            string objectName = renderer.gameObject.name;
+            if (!string.Equals(objectName, "Map_Floor", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(objectName, "Floor", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (!hasBounds)

@@ -419,7 +419,9 @@ namespace CastleDefender.UI
                 if (renderer == null || !renderer.enabled)
                     continue;
 
-                if (!string.Equals(renderer.gameObject.name, "Floor", System.StringComparison.OrdinalIgnoreCase))
+                string objectName = renderer.gameObject.name;
+                if (!string.Equals(objectName, "Map_Floor", System.StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(objectName, "Floor", System.StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 if (!hasBounds)
