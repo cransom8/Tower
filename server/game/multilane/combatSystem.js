@@ -1017,6 +1017,20 @@ function getStructureTargetAcquisitionRange(unit, target, deps = {}) {
   return getUnitStopDistance(unit, target, deps) + getStructureTargetVicinityPadding(deps);
 }
 
+function isRouteUnitInsideFortressInterior(lane, target, deps = {}) {
+  const getLaneTownCoreCombatTarget = requireDepFunction(deps, "getLaneTownCoreCombatTarget");
+  if (!lane || !target)
+    return false;
+
+  const townCoreTarget = getLaneTownCoreCombatTarget(lane);
+  if (!townCoreTarget)
+    return false;
+
+  const distanceToCore = getWaveUnitTargetDistance(target, townCoreTarget);
+  return Number.isFinite(distanceToCore)
+    && distanceToCore <= getFortressInteriorAssaultRadius(deps);
+}
+
 function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const getLaneCommandStateForUnit = requireDepFunction(deps, "getLaneCommandStateForUnit");
@@ -1027,6 +1041,7 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
     return null;
 
   const directEngagementOnly = !!(options && options.directEngagementOnly);
+  const fortressInteriorOnly = !!(options && options.fortressInteriorOnly);
   const laneCommandStates = getLaneCommandStates(deps);
   const defendSeek = isLaneControlledUnit(unit)
     && getLaneCommandStateForUnit(game, unit) === laneCommandStates.DEFEND;
@@ -1051,11 +1066,16 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
       const dist = Math.sqrt((dx * dx) + (dy * dy));
       const emergencyInteriorTarget = defendSeek
         && isTargetInsideHomeFortressEmergencyZone(game, unit, candidate);
+      const fortressInteriorTarget = isRouteUnitInsideFortressInterior(candidateLane, candidate, deps);
+      if (fortressInteriorOnly && !fortressInteriorTarget)
+        continue;
       const baseEngagementRange = getUnitEngagementRange(unit, deps);
       const rangeLimit = requireAttackRange
         ? getUnitStopDistance(unit, candidate, deps) + getContactSlotTolerance(deps)
         : (directEngagementOnly
           ? baseEngagementRange
+          : (fortressInteriorOnly
+            ? Math.max(baseEngagementRange, getFortressInteriorAssaultRadius(deps))
           : (emergencyInteriorTarget
             ? Math.max(baseEngagementRange, getFortressInteriorAssaultRadius(deps))
             : (defendSeek
@@ -1063,7 +1083,7 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
                 baseEngagementRange,
                 (Number(defendAnchorState && defendAnchorState.engagementRadius) || getLaneCommandDefenseRadius(deps)) + getRouteSlotRowSpacing(deps)
               )
-              : baseEngagementRange))) + getContactSlotTolerance(deps);
+              : baseEngagementRange)))) + getContactSlotTolerance(deps);
       if (dist > rangeLimit)
         continue;
 
@@ -1114,6 +1134,24 @@ function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
       laneIndex: routeUnitInEngageRange.laneIndex,
       reason: "route_unit_engage_range",
       preferenceScore: routeUnitInEngageRange.preferenceScore,
+    };
+  }
+
+  const fortressInteriorTarget = findHostileRouteUnitTarget(
+    game,
+    lane,
+    unit,
+    false,
+    { fortressInteriorOnly: true },
+    deps
+  );
+  if (fortressInteriorTarget) {
+    return {
+      kind: "unit",
+      entity: fortressInteriorTarget.entity,
+      laneIndex: fortressInteriorTarget.laneIndex,
+      reason: "fortress_interior_clearance",
+      preferenceScore: fortressInteriorTarget.preferenceScore,
     };
   }
 

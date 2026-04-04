@@ -805,4 +805,48 @@ test("wave units retarget from a prelocked Town Core to a nearer center barracks
   assert.equal(attacker.combatTarget?.padId, centerBarracksTarget.padId, "the wave should switch off the Town Core and onto the nearer center barracks");
 });
 
+test("wave units near the Town Core must retarget to fortress-interior defenders before attacking structures", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  const coreTarget = simMl.getLaneTownCoreCombatTarget(lane);
+  assert.ok(coreTarget, "expected the Town Core to expose a combat target");
+
+  const defender = createDefender("guardian", {
+    id: "fortress_interior_blocker",
+    hp: 80,
+    maxHp: 80,
+    baseDmg: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    posX: Number(coreTarget.posX),
+    posY: Number(coreTarget.posY) - 5.1,
+    pathIdx: Number(coreTarget.posY) - 5.1,
+    guardAnchorX: Number(coreTarget.posX),
+    guardAnchorY: Number(coreTarget.posY) - 5.1,
+  });
+  const attacker = createWaveUnit("raider", {
+    id: "fortress_interior_wave",
+    atkCd: 0,
+    posX: Number(coreTarget.posX),
+    posY: Number(coreTarget.posY) - 0.45,
+    pathIdx: Number(coreTarget.posY) - 0.45,
+    routeWorldX: Number(coreTarget.posX),
+    routeWorldY: Number(coreTarget.posY) - 0.45,
+    combatTarget: {
+      unitId: coreTarget.unitId,
+      kind: "fortress_pad",
+      padId: coreTarget.padId,
+      laneIndex: lane.laneIndex,
+    },
+  });
+
+  lane.units.push(defender, attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.kind, "unit", "the wave should drop the Town Core lock when a live defender still guards the fortress interior");
+  assert.equal(attacker.combatTarget?.unitId, defender.id, "the wave should pick the fortress-interior defender before any structure");
+  assert.equal(coreTarget.hp, 20, "the Town Core should stay untouched while the interior defender is still alive");
+});
+
 
