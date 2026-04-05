@@ -8,6 +8,7 @@ const crypto   = require('crypto');
 const fs       = require('fs');
 const fsp      = fs.promises;
 const path     = require('path');
+const { BARRACKS_MAX_LEVEL, reloadBarracksLevels } = require('../barracksLevels');
 const log      = require('../logger');
 const branding = require('../branding');
 const unitTypes = require('../unitTypes');
@@ -2772,7 +2773,13 @@ router.get('/barracks-levels', requireAdmin, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.json({ levels: [] });
   const db = require('../db');
   try {
-    const r = await db.query(`SELECT * FROM barracks_levels ORDER BY level`);
+    const r = await db.query(
+      `SELECT *
+         FROM barracks_levels
+        WHERE level >= 1 AND level <= $1
+        ORDER BY level`,
+      [BARRACKS_MAX_LEVEL]
+    );
     res.json({ levels: r.rows });
   } catch (err) {
     log.error('[admin] GET /barracks-levels error', { err: err.message });
@@ -2785,8 +2792,10 @@ router.put('/barracks-levels/:level', requireAdmin, requirePermission('config.wr
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
   const db = require('../db');
   const level = parseInt(req.params.level, 10);
-  if (!Number.isFinite(level) || level < 1 || level > 99)
-    return res.status(400).json({ error: 'level must be 1–99' });
+  if (Number.isFinite(level) && (level < 1 || level > BARRACKS_MAX_LEVEL))
+    return res.status(400).json({ error: `level must be 1-${BARRACKS_MAX_LEVEL}` });
+  if (!Number.isFinite(level))
+    return res.status(400).json({ error: 'Invalid level' });
   const { multiplier, upgrade_cost = 0, notes = '' } = req.body;
   if (multiplier === undefined) return res.status(400).json({ error: 'multiplier required' });
   const mult = Number(multiplier);
@@ -2805,7 +2814,7 @@ router.put('/barracks-levels/:level', requireAdmin, requirePermission('config.wr
       [level, mult, Number(upgrade_cost), String(notes)]
     );
     await audit(db, 'upsert_barracks_level', 'barracks_level', level, { multiplier: mult }, req.adminEmail, req.ip);
-    require('../barracksLevels').reloadBarracksLevels().catch(() => {});
+    reloadBarracksLevels().catch(() => {});
     res.json({ level: r.rows[0] });
   } catch (err) {
     log.error('[admin] PUT /barracks-levels/:level error', { err: err.message });
@@ -2822,7 +2831,7 @@ router.delete('/barracks-levels/:level', requireAdmin, requirePermission('config
   try {
     const r = await db.query(`DELETE FROM barracks_levels WHERE level=$1 RETURNING level`, [level]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Level not found' });
-    require('../barracksLevels').reloadBarracksLevels().catch(() => {});
+    reloadBarracksLevels().catch(() => {});
     res.json({ deleted: true });
   } catch (err) {
     log.error('[admin] DELETE /barracks-levels/:level error', { err: err.message });

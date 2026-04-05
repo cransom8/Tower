@@ -3,6 +3,7 @@
 // In-memory cache of barracks_levels loaded from the database.
 // Phase F: getCurrentBarracksMult() is the only sim-facing function.
 const log = require('./logger');
+const BARRACKS_MAX_LEVEL = 3;
 
 let _db = null;
 let _levels = {}; // level (integer) → { multiplier: number, upgradeCost: number }
@@ -10,7 +11,8 @@ let _levels = {}; // level (integer) → { multiplier: number, upgradeCost: numb
 async function _reload() {
   if (!_db) return;
   const res = await _db.query(
-    'SELECT level, multiplier, upgrade_cost FROM barracks_levels ORDER BY level'
+    'SELECT level, multiplier, upgrade_cost FROM barracks_levels WHERE level >= 1 AND level <= $1 ORDER BY level',
+    [BARRACKS_MAX_LEVEL]
   );
   _levels = {};
   for (const row of res.rows) {
@@ -54,10 +56,11 @@ function getBarracksUpgradeDef(level) {
  */
 function getMaxBarracksLevel() {
   const keys = Object.keys(_levels).map(Number);
-  return keys.length > 0 ? Math.max(...keys) : 5;
+  return keys.length > 0 ? Math.min(BARRACKS_MAX_LEVEL, Math.max(...keys)) : BARRACKS_MAX_LEVEL;
 }
 
 module.exports = {
+  BARRACKS_MAX_LEVEL,
   loadBarracksLevels,
   reloadBarracksLevels,
   getCurrentBarracksMult,

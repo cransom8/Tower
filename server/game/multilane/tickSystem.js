@@ -551,6 +551,32 @@ function processLane(game, lane, deps = {}) {
   const targetingContext = createCombatTargetingContext
     ? createCombatTargetingContext(game)
     : null;
+  if (targetingContext && !(targetingContext.contactSlotOccupancyByLane instanceof WeakMap))
+    targetingContext.contactSlotOccupancyByLane = new WeakMap();
+  function invalidateContactSlotOccupancyCache() {
+    if (targetingContext)
+      targetingContext.contactSlotOccupancyByLane = new WeakMap();
+  }
+  function clearCombatTargetWithCache(unit, options = {}) {
+    clearUnitCombatTarget(unit, game.tick, options);
+    invalidateContactSlotOccupancyCache();
+  }
+  function clearSupportTargetWithCache(unit, options = {}) {
+    clearUnitSupportTarget(unit, game.tick, options);
+    invalidateContactSlotOccupancyCache();
+  }
+  function assignCombatTargetWithCache(unit, targetDescriptor) {
+    const assigned = assignUnitCombatTarget(unit, targetDescriptor, game.tick);
+    if (assigned)
+      invalidateContactSlotOccupancyCache();
+    return assigned;
+  }
+  function assignSupportTargetWithCache(unit, targetDescriptor) {
+    const assigned = assignUnitSupportTarget(unit, targetDescriptor, game.tick);
+    if (assigned)
+      invalidateContactSlotOccupancyCache();
+    return assigned;
+  }
   const lanePerf = {
     prepMs: 0,
     unitLogicMs: 0,
@@ -588,6 +614,7 @@ function processLane(game, lane, deps = {}) {
     const priorMarketRouteProgress = unit.isMarketWorker ? computeUnitRoutePathIndex(unit) : null;
     const supportProfile = resolveUnitSupportProfile(unit);
     const healerMode = supportProfile.isHealer;
+    const unitTargetingContext = targetingContext;
     unit.combatState = waveUnitStates.IDLE;
     unit.routeState = waveUnitStates.IDLE;
     unit.blockedByStructure = false;
@@ -616,8 +643,8 @@ function processLane(game, lane, deps = {}) {
       if (unit.combatTarget && unit.combatTarget.unitId) {
         const targetStillValid = !!resolvedCombatTarget && isUnitCombatTargetStillValid(game, lane, unit, resolvedCombatTarget);
         if (!targetStillValid) {
-          clearUnitCombatTarget(unit, game.tick, {
-            suppressRegroup: !resolvedCombatTarget && hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
+          clearCombatTargetWithCache(unit, {
+            suppressRegroup: !resolvedCombatTarget && hasImmediateFollowThroughCombatTarget(game, lane, unit, unitTargetingContext),
           });
           resolvedCombatTarget = null;
         }
@@ -627,12 +654,7 @@ function processLane(game, lane, deps = {}) {
         resolvedCombatTarget
         && resolvedCombatTarget.kind === "unit"
         && resolvedCombatTarget.entity
-        && isUnitInCombatContact(lane, unit, resolvedCombatTarget.entity)
-      );
-      const currentDefenseStructureLock = !!(
-        resolvedCombatTarget
-        && resolvedCombatTarget.kind === "fortress_pad"
-        && ["wall", "gate", "turret"].includes(String(resolvedCombatTarget.buildingType || resolvedCombatTarget.type || "").trim().toLowerCase())
+        && isUnitInCombatContact(lane, unit, resolvedCombatTarget.entity, unitTargetingContext)
       );
       const canReacquireUnitTarget = !currentTargetInDirectContact
         && !isLaneControlledUnitInRegroupWindow(unit, game.tick);
@@ -653,15 +675,12 @@ function processLane(game, lane, deps = {}) {
       if (currentUnitTargetDescriptor
           && !currentTargetInDirectContact
           && isRouteUnitTargetBlockedByStructure(game, lane, unit, currentUnitTargetDescriptor, blockingTarget)) {
-        clearUnitCombatTarget(unit, game.tick, { suppressRegroup: true });
+        clearCombatTargetWithCache(unit, { suppressRegroup: true });
         resolvedCombatTarget = null;
       }
       let directPreferredTarget = null;
       if (canReacquireUnitTarget && canSeekCombat) {
-        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit, targetingContext);
-        if (directPreferredTarget && currentDefenseStructureLock) {
-          directPreferredTarget = null;
-        }
+        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit, unitTargetingContext);
         if (directPreferredTarget
             && isRouteUnitTargetBlockedByStructure(game, lane, unit, directPreferredTarget, blockingTarget)) {
           directPreferredTarget = null;
@@ -673,13 +692,13 @@ function processLane(game, lane, deps = {}) {
 
       if (preferredTarget && preferredTarget.kind === "unit") {
         const shouldAssignPreferredTarget = !resolvedCombatTarget
-          || shouldSwitchCombatTarget(game, lane, unit, resolvedCombatTarget, preferredTarget, targetingContext);
+          || shouldSwitchCombatTarget(game, lane, unit, resolvedCombatTarget, preferredTarget, unitTargetingContext);
         if (shouldAssignPreferredTarget) {
-          assignUnitCombatTarget(unit, {
+          assignCombatTargetWithCache(unit, {
             unitId: preferredTarget.entity.id,
             kind: "unit",
             laneIndex: preferredTarget.laneIndex,
-          }, game.tick);
+          });
           resolvedCombatTarget = resolveWaveCombatTarget(game, lane, unit.combatTarget);
         }
       }
@@ -699,12 +718,12 @@ function processLane(game, lane, deps = {}) {
           unit.blockedByStructure = true;
           unit.blockedByStructureId = activeBlockingTarget.unitId;
           unit.blockedByStructureType = activeBlockingTarget.buildingType || activeBlockingTarget.type || null;
-          assignUnitCombatTarget(unit, {
+          assignCombatTargetWithCache(unit, {
             unitId: activeBlockingTarget.unitId,
             kind: "fortress_pad",
             padId: activeBlockingTarget.padId,
             laneIndex: Number.isInteger(activeBlockingTarget.laneIndex) ? activeBlockingTarget.laneIndex : lane.laneIndex,
-          }, game.tick);
+          });
           resolvedCombatTarget = resolveWaveCombatTarget(game, lane, unit.combatTarget);
         } else if (!activeBlockingTarget && !unit.combatTarget) {
           unit.blockedByStructure = false;
@@ -723,7 +742,7 @@ function processLane(game, lane, deps = {}) {
         const healRange = getUnitAttackRange(unit.type);
         const stopDist = healRange + 0.15;
         const dist = dist2D(unit, healTarget);
-        assignUnitSupportTarget(unit, {
+        assignSupportTargetWithCache(unit, {
           unitId: healTarget.id,
           kind: "unit",
           laneIndex: lane.laneIndex,
@@ -766,7 +785,7 @@ function processLane(game, lane, deps = {}) {
           if (shouldUseSimpleContactApproach(unit, { kind: "unit" })) {
             moveTowardContact2D(unit, healTarget, unit.baseSpeed || 0.18, stopDist, -64, 64, -64, 64);
           } else {
-            const slotPoint = getLaneControlledCombatPocketPoint(lane, unit, healTarget, stopDist);
+            const slotPoint = getLaneControlledCombatPocketPoint(lane, unit, healTarget, stopDist, null, unitTargetingContext);
             moveTowardPoint2D(unit, slotPoint.x, slotPoint.y, unit.baseSpeed || 0.18, -64, 64, -64, 64);
           }
           if (!shouldLaneControlledUnitFreeRoamInCombat(unit))
@@ -775,13 +794,13 @@ function processLane(game, lane, deps = {}) {
           movementAdvanced = true;
         }
       } else {
-        clearUnitSupportTarget(unit);
+        clearSupportTargetWithCache(unit);
       }
     } else if (unit.combatTarget && unit.combatTarget.unitId) {
       const target = resolveWaveCombatTarget(game, lane, unit.combatTarget);
       if (!target) {
-        clearUnitCombatTarget(unit, game.tick, {
-          suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
+        clearCombatTargetWithCache(unit, {
+          suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, unitTargetingContext),
         });
       } else if (target.kind === "unit") {
         unit.combatState = waveUnitStates.COMBAT;
@@ -801,7 +820,7 @@ function processLane(game, lane, deps = {}) {
           && directContactDistance <= stopDist + contactSlotTolerance
           && shouldUseLaneControlledSurroundSlots(unit, targetUnit)
         );
-        const inCombatContact = allowImmediateLaneContact || isUnitInCombatContact(lane, unit, targetUnit);
+        const inCombatContact = allowImmediateLaneContact || isUnitInCombatContact(lane, unit, targetUnit, unitTargetingContext);
         if (inCombatContact) {
             if (unit.atkCd <= 0) {
               const attackStats = resolveUnitAttackStats(unit, deps);
@@ -840,8 +859,8 @@ function processLane(game, lane, deps = {}) {
                 killedByType: unit.type,
                 killedByLane: lane.laneIndex,
               });
-              clearUnitCombatTarget(unit, game.tick, {
-                suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
+              clearCombatTargetWithCache(unit, {
+                suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, unitTargetingContext),
               });
             }
             unit.atkCd = attackStats.cooldownTicks;
@@ -853,7 +872,7 @@ function processLane(game, lane, deps = {}) {
           if (shouldUseSimpleContactApproach(unit, target)) {
             moveTowardSimpleContact2D(unit, targetUnit, unit.baseSpeed || 0.18, stopDist, -64, 64, -64, 64);
           } else {
-            const slotPoint = getLaneControlledCombatPocketPoint(lane, unit, targetUnit, stopDist);
+            const slotPoint = getLaneControlledCombatPocketPoint(lane, unit, targetUnit, stopDist, null, unitTargetingContext);
             moveTowardPoint2D(unit, slotPoint.x, slotPoint.y, unit.baseSpeed || 0.18, -64, 64, -64, 64);
           }
           if (!shouldLaneControlledUnitFreeRoamInCombat(unit))
@@ -874,7 +893,7 @@ function processLane(game, lane, deps = {}) {
           if (unit.atkCd <= 0) {
             const result = attackFortressPad(game, lane, unit, target);
             if (result.destroyed)
-              clearUnitCombatTarget(unit, game.tick, { regroupUntilTick: game.tick });
+              clearCombatTargetWithCache(unit, { regroupUntilTick: game.tick });
             coreDamageApplied = result.damageApplied > 0;
             attackedTarget = true;
           } else {

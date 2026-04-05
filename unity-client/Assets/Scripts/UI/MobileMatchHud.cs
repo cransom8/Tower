@@ -225,6 +225,7 @@ namespace CastleDefender.UI
         TMP_Text _txtSettingsSfxValue;
         TMP_Text _txtSettingsMusicValue;
         TMP_Text _txtSettingsEngagementValue;
+        TMP_Text _txtSettingsAttackRangeValue;
         TMP_Text _txtSettingsHealthBarsValue;
         TMP_Text _txtSettingsTooltipsValue;
         TMP_Text _txtBarracksLevel;
@@ -2842,6 +2843,7 @@ namespace CastleDefender.UI
             var sfxButton = CreateFlatSettingsSelectorRow(rows.transform, "SfxRow", "Sound Effects", "Cycle combat, build, and UI volume.", new Color(0.20f, 0.22f, 0.34f, 0.98f), out _txtSettingsSfxValue);
             var musicButton = CreateFlatSettingsSelectorRow(rows.transform, "MusicRow", "Music Loop", "Cycle the background soundtrack level.", new Color(0.16f, 0.26f, 0.30f, 0.98f), out _txtSettingsMusicValue);
             var engagementButton = CreateFlatSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
+            var attackRangeButton = CreateFlatSettingsSelectorRow(rows.transform, "AttackRangeRow", "Attack Range Rings", "Show or hide attack range circles.", new Color(0.18f, 0.24f, 0.34f, 0.98f), out _txtSettingsAttackRangeValue);
             var healthBarsButton = CreateFlatSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
             var tooltipsButton = CreateFlatSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
 
@@ -2860,7 +2862,7 @@ namespace CastleDefender.UI
             Button logoutButton = null;
             if (AuthManager.IsAuthenticated)
                 logoutButton = CreateFlatSettingsButton(footer.transform, "LogoutButton", "Log Out", new Color(0.34f, 0.24f, 0.12f, 0.98f), 46f);
-            var quitButton = CreateFlatSettingsButton(footer.transform, "QuitButton", "Quit Game", new Color(0.42f, 0.17f, 0.17f, 0.98f), 46f);
+            var quitButton = CreateFlatSettingsButton(footer.transform, "QuitButton", "Forfeit Match", new Color(0.42f, 0.17f, 0.17f, 0.98f), 46f);
 
             var gear = new GameObject("GearButton", typeof(RectTransform), typeof(Image), typeof(Button));
             gear.transform.SetParent(root.transform, false);
@@ -2890,6 +2892,7 @@ namespace CastleDefender.UI
             sfxButton.onClick.AddListener(CycleSfxVolumeSetting);
             musicButton.onClick.AddListener(CycleMusicVolumeSetting);
             engagementButton.onClick.AddListener(ToggleEngagementCirclesSetting);
+            attackRangeButton.onClick.AddListener(ToggleAttackRangeCirclesSetting);
             healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
             tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
             closeButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
@@ -3373,6 +3376,8 @@ namespace CastleDefender.UI
                     int enabledCount = 0;
                     if (preferences.visuals.showEngagementCircles)
                         enabledCount++;
+                    if (preferences.visuals.showAttackRangeCircles)
+                        return "Custom";
                     if (preferences.visuals.showHealthBars)
                         enabledCount++;
                     if (preferences.visuals.showTooltips)
@@ -3784,6 +3789,11 @@ namespace CastleDefender.UI
             UserPreferencesManager.SetEngagementCirclesVisible(!UserPreferencesManager.ShowEngagementCircles);
         }
 
+        void ToggleAttackRangeCirclesSetting()
+        {
+            UserPreferencesManager.SetAttackRangeCirclesVisible(!UserPreferencesManager.ShowAttackRangeCircles);
+        }
+
         void ToggleHealthBarsSetting()
         {
             UserPreferencesManager.SetHealthBarsVisible(!UserPreferencesManager.ShowHealthBars);
@@ -3918,6 +3928,7 @@ namespace CastleDefender.UI
                 && _txtSettingsSfxValue == null
                 && _txtSettingsMusicValue == null
                 && _txtSettingsEngagementValue == null
+                && _txtSettingsAttackRangeValue == null
                 && _txtSettingsHealthBarsValue == null
                 && _txtSettingsTooltipsValue == null)
             {
@@ -3944,6 +3955,7 @@ namespace CastleDefender.UI
                 _txtSettingsMusicValue,
                 FormatVolumeValue(preferences.audio.gameplayMusicVolume ?? preferences.audio.menuMusicVolume ?? preferences.audio.ambientVolume));
             SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
+            SetSettingsValue(_txtSettingsAttackRangeValue, FormatToggleValue(preferences.visuals.showAttackRangeCircles));
             SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
             SetSettingsValue(_txtSettingsTooltipsValue, FormatToggleValue(preferences.visuals.showTooltips));
             UpdateSettingsMenuButtonState();
@@ -4027,7 +4039,7 @@ namespace CastleDefender.UI
                 _quitConfirmationTitleLabel.text = action switch
                 {
                     SettingsConfirmationAction.Logout => "Log Out",
-                    SettingsConfirmationAction.QuitGame => "Quit Game",
+                    SettingsConfirmationAction.QuitGame => "Forfeit Match",
                     _ => "Confirm Action",
                 };
             }
@@ -4037,7 +4049,7 @@ namespace CastleDefender.UI
                 _quitConfirmationBodyLabel.text = action switch
                 {
                     SettingsConfirmationAction.Logout => "Leave the current match, clear your commander session, and return to sign-in?",
-                    SettingsConfirmationAction.QuitGame => "Leave the battlefield and close the game?",
+                    SettingsConfirmationAction.QuitGame => "Forfeit this match and open the post-game report?",
                     _ => "Confirm this action.",
                 };
             }
@@ -4046,7 +4058,7 @@ namespace CastleDefender.UI
                 _quitConfirmationConfirmLabel.text = action switch
                 {
                     SettingsConfirmationAction.Logout => "Log Out",
-                    SettingsConfirmationAction.QuitGame => "Quit Game",
+                    SettingsConfirmationAction.QuitGame => "Forfeit Match",
                     _ => "Confirm",
                 };
             if (_quitConfirmationConfirmButton != null)
@@ -4087,7 +4099,7 @@ namespace CastleDefender.UI
                 _quitConfirmationConfirmLabel.text = _pendingSettingsConfirmationAction switch
                 {
                     SettingsConfirmationAction.Logout => "Logging Out...",
-                    SettingsConfirmationAction.QuitGame => "Quitting...",
+                    SettingsConfirmationAction.QuitGame => "Forfeiting...",
                     _ => "Working...",
                 };
             if (_quitConfirmationConfirmButton != null)
@@ -4109,8 +4121,23 @@ namespace CastleDefender.UI
 
             if (_pendingSettingsConfirmationAction == SettingsConfirmationAction.QuitGame)
             {
+                var network = NetworkManager.Instance;
+                if (network == null || !network.IsConnected)
+                {
+                    Debug.LogWarning("[MobileMatchHud] Cannot forfeit because the match connection is not available.");
+                    _isLeavingMatch = false;
+                    if (_quitConfirmationConfirmLabel != null)
+                        _quitConfirmationConfirmLabel.text = "Forfeit Match";
+                    if (_quitConfirmationConfirmButton != null)
+                        _quitConfirmationConfirmButton.interactable = true;
+                    if (_quitConfirmationCancelButton != null)
+                        _quitConfirmationCancelButton.interactable = true;
+                    return;
+                }
+
                 SetSettingsOverlayVisible(false, immediate: true);
-                TryQuitGameFromMatch();
+                ClearReconnectPrefs();
+                ActionSender.ForfeitMatch();
                 return;
             }
 
@@ -4133,17 +4160,6 @@ namespace CastleDefender.UI
             PlayerPrefs.DeleteKey("reconnect_lane");
             PlayerPrefs.DeleteKey("reconnect_gametype");
             PlayerPrefs.Save();
-        }
-
-        static void TryQuitGameFromMatch()
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            Debug.LogWarning("[MobileMatchHud] Quit Game is not supported on WebGL. Close the browser tab to leave the game.");
-#elif UNITY_EDITOR
-            UnityEditor.EditorApplication.isPlaying = false;
-#else
-            Application.Quit();
-#endif
         }
 
         void CreateWaveStatusChip(Transform parent, string name, string tag, string value, Color accentColor)
@@ -4503,7 +4519,6 @@ namespace CastleDefender.UI
             if (text == null)
                 return;
 
-            text.enableWordWrapping = false;
             text.textWrappingMode = TextWrappingModes.NoWrap;
             text.overflowMode = TextOverflowModes.Ellipsis;
         }

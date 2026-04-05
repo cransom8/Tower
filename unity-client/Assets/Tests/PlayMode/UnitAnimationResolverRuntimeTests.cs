@@ -38,17 +38,56 @@ public class UnitAnimationResolverRuntimeTests
         AssertPrimaryAttackState(profile, 7, "SpecialAttack2");
     }
 
-    static void AssertPrimaryAttackState(object profile, int attackPulse, string expectedState)
+    [Test]
+    public void ResolveAttackPulseStates_Prefers_Infantry_Engage_Opener_When_Requested()
+    {
+        object profile = CreateResolvedProfile(
+            "Melee",
+            "Attack1",
+            "Run2-Attack1",
+            "Jump-Attack1",
+            "SpecialAttack1");
+        object unit = CreateUnit("infantry_t1", "tt_peasant", "tt_peasant");
+
+        AssertPrimaryAttackState(
+            profile,
+            1,
+            "Jump-Attack1",
+            unit,
+            preferEngageOpener: true);
+    }
+
+    static void AssertPrimaryAttackState(
+        object profile,
+        int attackPulse,
+        string expectedState,
+        object unit = null,
+        bool preferEngageOpener = false)
     {
         Type resolverType = FindType("CastleDefender.Game.UnitAnimationResolver");
+        Type resolvedProfileType = FindType("CastleDefender.Game.UnitAnimationResolver+ResolvedProfile");
+        Type unitType = FindType("CastleDefender.Net.MLUnit");
         Assert.That(resolverType, Is.Not.Null, "UnitAnimationResolver should be discoverable in the loaded runtime assemblies.");
+        Assert.That(resolvedProfileType, Is.Not.Null, "ResolvedProfile should be discoverable in the loaded runtime assemblies.");
+        Assert.That(unitType, Is.Not.Null, "MLUnit should be discoverable in the loaded runtime assemblies.");
 
         MethodInfo resolveMethod = resolverType.GetMethod(
             "ResolveAttackPulseStates",
-            BindingFlags.Public | BindingFlags.Static);
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: new[]
+            {
+                resolvedProfileType,
+                unitType,
+                typeof(int),
+                typeof(bool),
+            },
+            modifiers: null);
         Assert.That(resolveMethod, Is.Not.Null, "ResolveAttackPulseStates should remain available for runtime attack sequencing.");
 
-        string[] stateNames = (string[])resolveMethod.Invoke(null, new[] { profile, null, (object)attackPulse });
+        string[] stateNames = (string[])resolveMethod.Invoke(
+            null,
+            new[] { profile, unit, (object)attackPulse, preferEngageOpener });
 
         Assert.That(stateNames, Is.Not.Null.And.Not.Empty);
         Assert.That(stateNames[0], Is.EqualTo(expectedState));
@@ -74,6 +113,19 @@ public class UnitAnimationResolverRuntimeTests
         attackFamilyProperty.SetValue(profile, Enum.Parse(attackFamilyType, attackFamilyName));
         attackStatesProperty.SetValue(profile, attackStates);
         return profile;
+    }
+
+    static object CreateUnit(string archetypeKey, string catalogUnitKey, string skinKey)
+    {
+        Type unitType = FindType("CastleDefender.Net.MLUnit");
+        Assert.That(unitType, Is.Not.Null, "MLUnit should be discoverable in the loaded runtime assemblies.");
+
+        object unit = Activator.CreateInstance(unitType);
+        unitType.GetField("archetypeKey", BindingFlags.Instance | BindingFlags.Public)?.SetValue(unit, archetypeKey);
+        unitType.GetField("catalogUnitKey", BindingFlags.Instance | BindingFlags.Public)?.SetValue(unit, catalogUnitKey);
+        unitType.GetField("skinKey", BindingFlags.Instance | BindingFlags.Public)?.SetValue(unit, skinKey);
+        unitType.GetField("type", BindingFlags.Instance | BindingFlags.Public)?.SetValue(unit, catalogUnitKey);
+        return unit;
     }
 
     static Type FindType(string fullName)

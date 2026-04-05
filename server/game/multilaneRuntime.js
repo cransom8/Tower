@@ -12,6 +12,7 @@ const {
   getDefaultRaceId,
   isValidRaceId,
 } = require("./raceProgressionCatalog");
+const { buildPlayerBattleReport } = require("./playerBattleReport");
 const { getLockedWavePlan } = require("../waveDefenseSpec");
 
 async function loadDefaultWaveConfig(db) {
@@ -45,6 +46,7 @@ function createMultilaneRuntime({
   io,
   issueReconnectToken,
   log,
+  logMatchAbandon,
   logMatchEnd,
   logMatchStart,
   mlRoomsByCode,
@@ -384,6 +386,13 @@ function createMultilaneRuntime({
     const balanceData = simMl && typeof simMl.getFinalizedMatchBalance === "function"
       ? simMl.getFinalizedMatchBalance(game)
       : { summary: null, flags: [], diagnosis: null };
+    const finalStats = buildFinalStats(room, game);
+    const playerBattleReport = buildPlayerBattleReport({
+      game,
+      balanceData,
+      finalStats,
+      roundSnapshots: game.roundSnapshots,
+    });
     const winnerLane = Number.isInteger(game.officialWinnerLane)
       ? game.officialWinnerLane
       : (Number.isInteger(game.winner) ? game.winner : null);
@@ -396,6 +405,9 @@ function createMultilaneRuntime({
     const survivalExtraRounds = Number.isInteger(game.survivalStartRound)
       ? Math.max(0, game.roundNumber - game.survivalStartRound)
       : Math.max(0, game.roundNumber - 1);
+    const causeLoss = game.finalGameOverReason === "player_forfeit"
+      ? "Match ended by forfeit."
+      : `Survival ended on Wave ${game.roundNumber}`;
 
     return {
       winnerLaneIndex: winnerLane ?? -1,
@@ -406,8 +418,8 @@ function createMultilaneRuntime({
       losingSide: null,
       finalRound: game.roundNumber,
       gameDuration: totalDurationSec,
-      causeLoss: `Survival ended on Wave ${game.roundNumber}`,
-      finalStats: buildFinalStats(room, game),
+      causeLoss,
+      finalStats,
       waveSnapshots: game.roundSnapshots,
       balanceReadableLog: Array.isArray(balanceData.summary?.readable?.perWaveLog)
         ? balanceData.summary.readable.perWaveLog
@@ -415,6 +427,7 @@ function createMultilaneRuntime({
       balanceDiagnosisLines: Array.isArray(balanceData.summary?.readable?.diagnosis)
         ? balanceData.summary.readable.diagnosis
         : [],
+      playerBattleReport,
       balanceSummary: balanceData.summary,
       balanceFlags: balanceData.flags,
       balanceDiagnosis: balanceData.diagnosis,
@@ -433,6 +446,114 @@ function createMultilaneRuntime({
     return room.players
       .map((sid) => room.laneBySocketId.get(sid))
       .filter((laneIndex) => laneIndex === game.officialWinnerLane);
+  }
+
+  function captureTerminalRoundSnapshot(game) {
+    if (!game || game.finalSnapshotCaptured)
+      return;
+    if (!simMl || typeof simMl.createRoundSnapshotLane !== "function")
+      return;
+
+    const roundSnapshots = Array.isArray(game.roundSnapshots)
+      ? game.roundSnapshots
+      : (game.roundSnapshots = []);
+    roundSnapshots.push({
+      round: game.roundNumber,
+      terminal: true,
+      elapsedSeconds: Math.floor(Math.max(0, Number(game.tick) || 0) / Math.max(1, Number(simMl.TICK_HZ) || 20)),
+      lanes: (Array.isArray(game.lanes) ? game.lanes : []).map((lane) => simMl.createRoundSnapshotLane(game, lane)),
+    });
+    game.finalSnapshotCaptured = true;
+  }
+
+  function buildFinalizationSnapshots(entry, winnerLane) {
+    const game = entry && entry.game;
+    const playerSnapshots = Array.isArray(entry && entry.playerSnapshot) ? entry.playerSnapshot : [];
+    if (game && game.finalGameOverReason === "player_forfeit" && Number.isInteger(game.forfeitLaneIndex)) {
+      return playerSnapshots.map((player) => ({
+        ...player,
+        result: player.laneIndex === game.forfeitLaneIndex ? "loss" : "draw",
+      }));
+    }
+
+    const hasWinnerLane = Number.isInteger(winnerLane) && winnerLane >= 0;
+    return playerSnapshots.map((player) => ({
+      ...player,
+      result: hasWinnerLane && player.laneIndex === winnerLane ? "win" : "loss",
+    }));
+  }
+
+  function forfeitMultilaneMatch(roomId, code, sid) {
+    const room = mlRoomsByCode.get(code);
+    const entry = gamesByRoomId.get(roomId);
+    if (!room || !entry || !entry.game)
+      return { ok: false, reason: "Game not active" };
+
+    const game = entry.game;
+    if (game.phase === "ended")
+      return { ok: false, reason: "Match already ended" };
+
+    const laneIndex = room.laneBySocketId.get(sid);
+    const lane = Number.isInteger(laneIndex) ? game.lanes[laneIndex] : null;
+    if (!lane)
+      return { ok: false, reason: "Lane not found" };
+    if (lane.eliminated)
+      return { ok: false, reason: "You have already been eliminated." };
+
+    if (!(entry.eliminatedNotified instanceof Set))
+      entry.eliminatedNotified = new Set();
+
+    const playerName = room.playerNames.get(sid) || "Player";
+    lane.eliminated = true;
+    if (typeof lane.lives === "number")
+      lane.lives = 0;
+    if (!entry.eliminatedNotified.has(laneIndex)) {
+      entry.eliminatedNotified.add(laneIndex);
+      io.to(roomId).emit("ml_player_eliminated", {
+        laneIndex,
+        displayName: playerName,
+        reason: "forfeit",
+      });
+      io.to(sid).emit("ml_spectator_join", { laneIndex });
+    }
+
+    const survivingLanes = (Array.isArray(game.lanes) ? game.lanes : []).filter((candidate) => !candidate.eliminated);
+    if (survivingLanes.length === 1) {
+      game.officialWinnerLane = survivingLanes[0].laneIndex;
+      game.officialWinningTeam = survivingLanes[0].team || null;
+      game.officialWinningSide = survivingLanes[0].side || null;
+      game.losingTeam = lane.team || null;
+      game.losingSide = lane.side || null;
+      game.winner = survivingLanes[0].laneIndex;
+    } else {
+      game.officialWinnerLane = null;
+      game.officialWinningTeam = null;
+      game.officialWinningSide = null;
+      game.losingTeam = null;
+      game.losingSide = null;
+      game.winner = null;
+    }
+
+    captureTerminalRoundSnapshot(game);
+    game.awaitingPostWinDecision = false;
+    game.finalGameOverReason = "player_forfeit";
+    game.finalGameOverDebug = {
+      tick: game.tick,
+      forfeitingLaneIndex: laneIndex,
+      forfeitingDisplayName: playerName,
+    };
+    game.forfeitLaneIndex = laneIndex;
+    game.phase = "ended";
+    game.matchState = "final_game_over";
+    log.info("[ml-game] player forfeited match", {
+      roomId,
+      code,
+      laneIndex,
+      playerName,
+      winnerLaneIndex: game.officialWinnerLane,
+      survivingLaneCount: survivingLanes.length,
+    });
+    return { ok: true };
   }
 
   function handlePostWinDecision(roomId, code, decision, sid) {
@@ -883,15 +1004,69 @@ function createMultilaneRuntime({
   // Cancels a match in progress, cleaning up the game entry and notifying clients.
   function cancelMatch(roomId, code, reason) {
     log.warn("[ml-game] match cancelled", { roomId, code, reason });
-    const entry = gamesByRoomId.get(roomId);
-    if (entry) {
-      if (entry.tickHandle) clearInterval(entry.tickHandle);
-      gamesByRoomId.delete(roomId);
-    }
+    void stopMLGame(roomId, code, { reason });
     io.to(roomId).emit("ml_match_cancelled", {
       code,
       reason,
       message: "A player did not finish downloading in time.",
+    });
+  }
+
+  function buildAbandonedPlayerSnapshots(entry) {
+    return Array.isArray(entry && entry.playerSnapshot)
+      ? entry.playerSnapshot.map((snapshot) => ({
+          ...snapshot,
+          result: snapshot && typeof snapshot.result === "string" ? snapshot.result : "draw",
+        }))
+      : [];
+  }
+
+  function buildAbandonedPersistenceOptions(entry, room, reason) {
+    const balanceData = simMl && typeof simMl.finalizeMatchBalance === "function"
+      ? simMl.finalizeMatchBalance(entry.game, {
+          finalResult: "abandoned",
+          defeat: false,
+        })
+      : { waveReports: [], summary: null, flags: [] };
+    const balanceFlags = Array.isArray(balanceData.flags) ? balanceData.flags.slice() : [];
+    if (reason) {
+      balanceFlags.push({
+        key: "match_abandoned",
+        severity: "medium",
+        reason,
+      });
+    }
+    return {
+      mode: entry.dbMode,
+      partyASize: entry.partyASize,
+      combatLog: entry.combatEvents,
+      waveStats: balanceData.waveReports,
+      balanceSummary: balanceData.summary,
+      balanceFlags,
+      actionTimeline: buildActionTimelinePayload(entry, room, normalizeMatchSettings),
+    };
+  }
+
+  function persistAbandonedMatch(entry, room, reason) {
+    if (!entry || typeof logMatchAbandon !== "function" || !entry.matchIdPromise)
+      return Promise.resolve(null);
+    if (!entry.game || entry.game.phase === "ended")
+      return Promise.resolve(null);
+
+    return Promise.resolve(
+      logMatchAbandon(
+        entry.matchIdPromise,
+        buildAbandonedPlayerSnapshots(entry),
+        buildAbandonedPersistenceOptions(entry, room, reason)
+      )
+    ).catch((err) => {
+      log.error("[match] abandon finalization error:", {
+        roomId: entry.roomId || null,
+        code: entry.roomCode || null,
+        reason: reason || null,
+        err: err && err.message ? err.message : String(err),
+      });
+      return null;
     });
   }
 
@@ -1379,10 +1554,12 @@ function createMultilaneRuntime({
       });
 
       if (entry.game.phase === "ended") {
+        const finalReason = String(entry.game.finalGameOverReason || "").trim().toLowerCase();
+        const isForfeit = finalReason === "player_forfeit";
         const balanceData = simMl && typeof simMl.finalizeMatchBalance === "function"
           ? simMl.finalizeMatchBalance(entry.game, {
-            finalResult: "completed",
-            defeat: entry.game.finalGameOverReason === "all_town_cores_destroyed",
+            finalResult: isForfeit ? "abandoned" : "completed",
+            defeat: isForfeit || finalReason === "all_town_cores_destroyed",
           })
           : { waveReports: [], summary: null, flags: [] };
         const finalPayload = buildOutcomePayload(room, entry);
@@ -1399,13 +1576,8 @@ function createMultilaneRuntime({
         });
         io.to(roomId).emit("ml_game_over", finalPayload);
         const winnerLane = finalPayload.winnerLaneIndex;
-        const hasWinnerLane = Number.isInteger(winnerLane) && winnerLane >= 0;
-        const snapshots = entry.playerSnapshot.map((player) => ({
-          ...player,
-          result: hasWinnerLane && player.laneIndex === winnerLane ? "win" : "loss",
-        }));
-
-        logMatchEnd(entry.matchIdPromise, winnerLane, snapshots, {
+        const snapshots = buildFinalizationSnapshots(entry, winnerLane);
+        const finalizationOptions = {
           mode: entry.dbMode,
           partyASize: entry.partyASize,
           combatLog: entry.combatEvents,
@@ -1413,8 +1585,18 @@ function createMultilaneRuntime({
           balanceSummary: balanceData.summary,
           balanceFlags: balanceData.flags,
           actionTimeline: buildActionTimelinePayload(entry, room, normalizeMatchSettings),
-        })
-          .then(({ ratingUpdates }) => {
+        };
+        const persistPromise = isForfeit && typeof logMatchAbandon === "function"
+          ? logMatchAbandon(entry.matchIdPromise, snapshots, finalizationOptions)
+          : typeof logMatchEnd === "function"
+            ? logMatchEnd(entry.matchIdPromise, winnerLane, snapshots, finalizationOptions)
+            : Promise.resolve({ ratingUpdates: [] });
+
+        Promise.resolve(persistPromise)
+          .then((result) => {
+            const ratingUpdates = Array.isArray(result && result.ratingUpdates)
+              ? result.ratingUpdates
+              : [];
             for (const update of ratingUpdates || []) {
               const sid = socketByPlayerId.get(update.playerId);
               if (!sid) continue;
@@ -1440,9 +1622,13 @@ function createMultilaneRuntime({
     log.info(`[ml-game] started ${roomId}`);
   }
 
-  function stopMLGame(roomId, code) {
+  function stopMLGame(roomId, code, options = null) {
     const entry = gamesByRoomId.get(roomId);
-    if (!entry) return;
+    if (!entry) return Promise.resolve(null);
+    const roomCode = code || entry.roomCode || null;
+    const room = roomCode ? mlRoomsByCode.get(roomCode) || null : null;
+    const reason = options && typeof options === "object" ? options.reason || null : null;
+    const persistPromise = persistAbandonedMatch(entry, room, reason);
     clearInterval(entry.tickHandle);
     if (entry.botController && typeof entry.botController.stop === "function") {
       try {
@@ -1453,12 +1639,20 @@ function createMultilaneRuntime({
     }
     gamesByRoomId.delete(roomId);
     log.info(`[ml-game] stopped ${roomId}`);
+    if (room && room._cleanupHandle) {
+      clearTimeout(room._cleanupHandle);
+      room._cleanupHandle = null;
+    }
     const handle = setTimeout(() => {
-      mlRoomsByCode.delete(code);
-      log.info(`[ml-room] cleaned up ${code}`);
+      if (roomCode) {
+        mlRoomsByCode.delete(roomCode);
+        log.info(`[ml-room] cleaned up ${roomCode}`);
+      }
     }, 60_000);
-    const room = mlRoomsByCode.get(code);
+    if (typeof handle.unref === "function")
+      handle.unref();
     if (room) room._cleanupHandle = handle;
+    return persistPromise;
   }
   return {
     applyMultilaneAction,
@@ -1475,6 +1669,7 @@ function createMultilaneRuntime({
     pickBalancedMlTeam,
     submitWaveReadyVote,
     startMLGame,
+    forfeitMultilaneMatch,
     stopMLGame,
     validateMlTeamSetup,
   };

@@ -12,7 +12,7 @@ namespace CastleDefender.Game
         const string CenterBarracksId = "center";
         const string MilitiaRosterKey = "militia";
         const string TownCorePadId = "town_core_pad";
-        const int MilitiaTargetCount = 5;
+        const int MilitiaTargetCount = 10;
         const string PromptRootName = "CenterBarracksOnboardingPrompt";
         const string ArrowRootName = "CenterBarracksOnboardingArrow";
         const string UiArrowRootName = "CenterBarracksOnboardingUiArrow";

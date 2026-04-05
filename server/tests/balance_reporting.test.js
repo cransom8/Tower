@@ -135,6 +135,9 @@ test("balance telemetry captures a rich wave report without changing legacy wave
   assert.equal(typeof wave.combatResults.enemiesSpawned, "number");
   assert.equal(typeof wave.derived.struggleScore, "number");
   assert.equal(typeof wave.powerCurve.playerToEnemyPowerRatio === "number" || wave.powerCurve.playerToEnemyPowerRatio === null, true);
+  assert.equal(Array.isArray(wave.laneSnapshots && wave.laneSnapshots.peak), true);
+  assert.equal(wave.laneSnapshots.peak.length >= 1, true);
+  assert.equal(typeof wave.laneSnapshots.peak[0].playerArmyValue, "number");
 
   assert.equal(finalized.summary.economy.startingEconomyReport.startingGold > 0, true);
   assert.equal(Array.isArray(finalized.summary.readable.perWaveLog), true);

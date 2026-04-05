@@ -2,10 +2,7 @@
 
 const { DEFAULT_FORT_PRESENTATION_KEY } = require("../fortUnitCatalog");
 const { logSpawnAuditLine } = require("./spawnAuditLogging");
-const {
-  getMaxBarracksLevel,
-  getBarracksUpgradeDef,
-} = require("../../barracksLevels");
+const { BARRACKS_MAX_LEVEL, getBarracksUpgradeDef } = require("../../barracksLevels");
 const {
   FORTRESS_BUILD_STATES,
   BUILDING_LIFECYCLE_STATES,
@@ -71,8 +68,6 @@ const BARRACKS_SITE_DEFS = Object.freeze([
       1: 1,
       2: 2,
       3: 3,
-      4: 4,
-      5: 4,
     }),
   },
   {
@@ -86,8 +81,6 @@ const BARRACKS_SITE_DEFS = Object.freeze([
       1: 2,
       2: 3,
       3: 4,
-      4: 4,
-      5: 4,
     }),
   },
   {
@@ -101,8 +94,6 @@ const BARRACKS_SITE_DEFS = Object.freeze([
       1: 3,
       2: 3,
       3: 4,
-      4: 4,
-      5: 4,
     }),
   },
 ]);
@@ -653,7 +644,7 @@ function getBarracksSiteBuildCost(siteDef) {
 }
 
 function getBarracksSiteMaxLevel() {
-  return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
+  return BARRACKS_MAX_LEVEL;
 }
 
 function normalizeBarracksSiteLevel(level) {
@@ -1968,25 +1959,25 @@ function applyLiveRosterDefinition(game, liveLane, unit, rosterDef, deps = {}) {
   const productionBuildingType = String(rosterDef.productionBuildingType || "").trim().toLowerCase();
   const branchKey = String(rosterDef.branchKey || "").trim().toLowerCase();
   const shieldArmorBonusPct = branchKey === "shield"
-    ? getResolvedUpgradePurchaseCount(deps, sourceLane, "blacksmith", "shield_armor") * 0.5
+    ? getResolvedUpgradePurchaseCount(deps, sourceLane, "blacksmith", "shield_armor") * 5
     : 0;
   const frontlineDamageMultiplier = branchKey === "infantry" || branchKey === "polearm"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "blacksmith", "frontline_damage", 0.5)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "blacksmith", "frontline_damage", 5)
     : 1;
   const archerRangeMultiplier = productionBuildingType === "archery_tower"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "archery_tower", "archer_range", 0.5)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "archery_tower", "archer_range", 5)
     : 1;
   const archerDamageMultiplier = productionBuildingType === "archery_tower"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "archery_tower", "archer_damage", 0.1)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "archery_tower", "archer_damage", 1)
     : 1;
   const mageDamageMultiplier = productionBuildingType === "wizard_tower"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "wizard_tower", "mage_damage", 0.1)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "wizard_tower", "mage_damage", 1)
     : 1;
   const healStrengthMultiplier = productionBuildingType === "temple"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "temple", "heal_strength", 0.5)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "temple", "heal_strength", 5)
     : 1;
   const runSpeedMultiplier = productionBuildingType === "stable"
-    ? getResolvedUpgradeMultiplier(deps, sourceLane, "stable", "run_speed", 0.5)
+    ? getResolvedUpgradeMultiplier(deps, sourceLane, "stable", "run_speed", 5)
     : 1;
   const baseSpeed = typeof deps.getBaseCombatPathSpeed === "function"
     ? deps.getBaseCombatPathSpeed(rosterDef.archetypeKey)
@@ -2074,6 +2065,68 @@ function reapplyOwnedCombatUnitsForLane(game, lane, deps = {}) {
       reapplied += 1;
   });
   return reapplied;
+}
+
+function hasStaleOwnedBarracksBranchUnits(lane, branchKey, currentRosterKey) {
+  if (!lane || !branchKey || !currentRosterKey)
+    return false;
+
+  for (const siteDef of BARRACKS_SITE_DEFS) {
+    const siteCounts = getBarracksSiteCounts(lane, siteDef.barracksId);
+    if (!siteCounts)
+      continue;
+
+    for (const rosterDef of BARRACKS_ROSTER_DEFS) {
+      if (!rosterDef || rosterDef.branchKey !== branchKey || rosterDef.rosterKey === currentRosterKey)
+        continue;
+      if (Math.max(0, Math.floor(Number(siteCounts[rosterDef.rosterKey]) || 0)) > 0)
+        return true;
+    }
+  }
+
+  return false;
+}
+
+function reconcileOwnedBarracksBranchTierCounts(lane) {
+  if (!lane)
+    return 0;
+
+  let moved = 0;
+  const visitedBranchKeys = new Set();
+  for (const rosterDef of BARRACKS_ROSTER_DEFS) {
+    const branchKey = rosterDef && rosterDef.branchKey;
+    if (!branchKey || visitedBranchKeys.has(branchKey))
+      continue;
+    visitedBranchKeys.add(branchKey);
+
+    const currentTierDef = getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
+    if (!currentTierDef || !hasStaleOwnedBarracksBranchUnits(lane, branchKey, currentTierDef.rosterKey))
+      continue;
+
+    moved += collapseBarracksBranchCountsToTier(lane, branchKey, currentTierDef);
+  }
+
+  if (moved > 0)
+    syncLegacyBarracksAggregate(lane);
+  return moved;
+}
+
+function buildBarracksActiveBranchCounts(activeRosterCounts) {
+  const branchCounts = Object.create(null);
+  for (const rosterDef of BARRACKS_ROSTER_DEFS) {
+    if (!rosterDef || !rosterDef.branchKey)
+      continue;
+
+    const activeCount = Math.max(
+      0,
+      Math.floor(Number(activeRosterCounts && activeRosterCounts[rosterDef.rosterKey]) || 0)
+    );
+    if (activeCount <= 0)
+      continue;
+
+    branchCounts[rosterDef.branchKey] = Math.max(0, Math.floor(Number(branchCounts[rosterDef.branchKey]) || 0)) + activeCount;
+  }
+  return branchCounts;
 }
 
 function collapseBarracksBranchCountsToTier(lane, branchKey, targetRosterDef) {
@@ -2213,6 +2266,7 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
   if (!game || !lane)
     return [];
 
+  reconcileOwnedBarracksBranchTierCounts(lane);
   const spawnEntries = [];
   const siteDefs = barracksId
     ? [getBarracksSiteDef(barracksId)].filter(Boolean)
@@ -2227,6 +2281,7 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
       lane.laneIndex,
       siteDef.barracksId
     );
+    const activeBranchCounts = buildBarracksActiveBranchCounts(activeRosterCounts);
     const rosterEntries = createBarracksSiteRosterSnapshot(game, lane, siteDef.barracksId, deps)
       .filter((entry) => entry.unlocked && entry.ownedCount > 0)
       .sort((a, b) => {
@@ -2249,7 +2304,11 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
         0,
         Math.floor(Number(activeRosterCounts[entry.rosterKey]) || 0)
       );
-      const missingCount = Math.max(0, Math.floor(Number(entry.ownedCount) || 0) - activeCount);
+      const branchActiveCount = Math.max(
+        activeCount,
+        Math.floor(Number(activeBranchCounts[entry.branchKey]) || 0)
+      );
+      const missingCount = Math.max(0, Math.floor(Number(entry.ownedCount) || 0) - branchActiveCount);
       for (let ownedIndex = 0; ownedIndex < missingCount; ownedIndex += 1) {
         spawnEntries.push({
           unitType: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : entry.unitTypeKey,
@@ -2267,6 +2326,8 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
           skinKey: presentation.skinKey || null,
         });
       }
+      if (missingCount > 0 && entry.branchKey)
+        activeBranchCounts[entry.branchKey] = branchActiveCount + missingCount;
     }
   }
 

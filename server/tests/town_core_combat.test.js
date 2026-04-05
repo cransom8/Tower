@@ -232,10 +232,58 @@ function tick(game, count = 1) {
     simMl.mlTick(game);
 }
 
+function laneSnapshot(game, laneIndex = 0) {
+  return simMl.createMLSnapshot(game).lanes[laneIndex];
+}
+
 function issueLaneCommand(game, laneIndex, type, data = {}) {
   const result = simMl.applyMLAction(game, laneIndex, { type, data });
   assert.equal(result.ok, true, `expected ${type} on lane ${laneIndex} to succeed`);
   return result;
+}
+
+function findPad(lane, padId) {
+  return (lane && lane.fortressPads || []).find((pad) => pad && pad.padId === padId) || null;
+}
+
+function advanceUntil(game, predicate, maxTicks = 4000) {
+  for (let tickIndex = 0; tickIndex < maxTicks; tickIndex += 1) {
+    if (predicate())
+      return;
+    simMl.mlTick(game);
+  }
+
+  assert.fail("Timed out waiting for multilane state to settle");
+}
+
+function finishPadConstruction(game, laneIndex, padId) {
+  advanceUntil(game, () => {
+    const pad = findPad(laneSnapshot(game, laneIndex), padId);
+    return !!(pad && !pad.isConstructing);
+  });
+}
+
+function act(game, laneIndex, type, data) {
+  const result = simMl.applyMLAction(game, laneIndex, { type, data });
+  assert.equal(result.ok, true, result.reason || `expected '${type}' to succeed`);
+  return result;
+}
+
+function upgradeTownCoreToTier(game, laneIndex, targetTier) {
+  let lane = laneSnapshot(game, laneIndex);
+  let townCore = findPad(lane, "town_core_pad");
+  assert.ok(townCore, "expected the Town Core pad to exist");
+  if (townCore && townCore.isConstructing) {
+    finishPadConstruction(game, laneIndex, "town_core_pad");
+    lane = laneSnapshot(game, laneIndex);
+    townCore = findPad(lane, "town_core_pad");
+  }
+  while ((townCore && townCore.tier) < targetTier) {
+    act(game, laneIndex, "upgrade_building", { padId: "town_core_pad" });
+    finishPadConstruction(game, laneIndex, "town_core_pad");
+    lane = laneSnapshot(game, laneIndex);
+    townCore = findPad(lane, "town_core_pad");
+  }
 }
 
 function activateCenterBarracks(lane) {
@@ -898,6 +946,59 @@ test("wave units near the Town Core must retarget to fortress-interior defenders
   assert.equal(attacker.combatTarget?.kind, "unit", "the wave should drop the Town Core lock when a live defender still guards the fortress interior");
   assert.equal(attacker.combatTarget?.unitId, defender.id, "the wave should pick the fortress-interior defender before any structure");
   assert.equal(coreTarget.hp, 20, "the Town Core should stay untouched while the interior defender is still alive");
+});
+
+test("wave units drop a prelocked gate target when a public-area defender is already outside", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  lane.gold = 1000;
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  upgradeTownCoreToTier(game, lane.laneIndex, 2);
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+
+  const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
+  assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the prelocked gate retarget test");
+  const initialGateHp = gatePad.hp;
+  const defenderPoint = getDefendAnchorPosition(lane, 0.15, 0);
+
+  const defender = createDefender("guardian", {
+    id: "public_gate_blocker",
+    hp: 80,
+    maxHp: 80,
+    baseDmg: 0,
+    atkCd: 999,
+    atkCdTicks: 999,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY,
+    guardAnchorX: defenderPoint.posX,
+    guardAnchorY: defenderPoint.posY,
+  });
+  const attacker = createWaveUnit("raider", {
+    id: "prelocked_gate_wave",
+    atkCd: 0,
+    baseDmg: 4,
+    posX: defenderPoint.posX,
+    posY: defenderPoint.posY + 0.35,
+    pathIdx: defenderPoint.posY + 0.35,
+    routeWorldX: defenderPoint.posX,
+    routeWorldY: defenderPoint.posY + 0.35,
+    combatTarget: {
+      unitId: "gate_front_pad",
+      kind: "fortress_pad",
+      padId: "gate_front_pad",
+      laneIndex: lane.laneIndex,
+    },
+  });
+
+  lane.units.push(defender, attacker);
+
+  tick(game, 1);
+
+  assert.equal(attacker.combatTarget?.kind, "unit", "the wave should drop the gate lock when a live defender is already standing outside in the public area");
+  assert.equal(attacker.combatTarget?.unitId, defender.id, "the outside defender should take aggro before the wave continues attacking the wall");
+  assert.equal(gatePad.hp, initialGateHp, "the front gate should stay untouched while the public-area defender is alive and intercepting");
 });
 
 test("retreating units only re-engage after each unit reaches the Town Core defense zone", () => {

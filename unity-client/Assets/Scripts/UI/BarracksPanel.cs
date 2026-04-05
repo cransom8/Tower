@@ -1458,13 +1458,23 @@ namespace CastleDefender.UI
             float viewportWidth = GetContentViewportWidth();
             float viewportHeight = GetContentViewportHeight();
             string signature = BuildContentSignature(lane);
-            if (!headerLayoutChanged
-                && signature == _lastContentSignature
-                && Mathf.Abs(viewportWidth - _lastViewportWidth) < 0.5f
-                && Mathf.Abs(viewportHeight - _lastViewportHeight) < 0.5f)
+            bool needsRefresh = headerLayoutChanged
+                || signature != _lastContentSignature
+                || Mathf.Abs(viewportWidth - _lastViewportWidth) >= 0.5f
+                || Mathf.Abs(viewportHeight - _lastViewportHeight) >= 0.5f;
+            if (!needsRefresh)
+                return;
+
+            // Keep the current button tree stable until the active press finishes.
+            if (IsPrimaryPointerHeld())
                 return;
 
             RefreshContent(force: true);
+        }
+
+        static bool IsPrimaryPointerHeld()
+        {
+            return Input.touchCount > 0 || Input.GetMouseButton(0);
         }
 
         void RefreshContent(bool force)
@@ -2539,6 +2549,13 @@ namespace CastleDefender.UI
                 return CreatePanelRowAction("Destroyed", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
             if (site.level >= Mathf.Max(1, site.maxLevel))
                 return CreatePanelRowAction("Max Level", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
+            var townCoreRedirectAction = BuildTownCoreLockedUpgradeRedirectAction(
+                lane,
+                site.requiredTownCoreTier,
+                site.requiredTownCoreTierName,
+                BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
+            if (townCoreRedirectAction != null)
+                return townCoreRedirectAction;
             if (!string.IsNullOrWhiteSpace(site.lockedReason))
                 return CreatePanelRowAction("Upgrade Locked", null, false, objectName: BuildTownCoreBarracksActionObjectName("Secondary", site.barracksId));
 
@@ -2656,10 +2673,91 @@ namespace CastleDefender.UI
                 return CreatePanelRowAction("Destroyed", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
             if (pad.tier >= Mathf.Max(1, pad.maxTier))
                 return CreatePanelRowAction("Max Tier", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
+            var townCoreRedirectAction = BuildTownCoreLockedUpgradeRedirectAction(
+                lane,
+                pad.requiredTownCoreTier,
+                pad.requiredTownCoreTierName,
+                BuildTownCorePadActionObjectName("Secondary", pad.padId));
+            if (townCoreRedirectAction != null)
+                return townCoreRedirectAction;
             if (!string.IsNullOrWhiteSpace(pad.lockedReason))
                 return CreatePanelRowAction("Upgrade Locked", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
 
             return CreatePanelRowAction("Upgrade", null, false, objectName: BuildTownCorePadActionObjectName("Secondary", pad.padId));
+        }
+
+        PanelRowActionData BuildTownCoreLockedUpgradeRedirectAction(MLLaneSnap lane, int requiredTownCoreTier, string requiredTownCoreTierName, string objectName)
+        {
+            if (lane == null)
+                return null;
+
+            int currentTownCoreTier = GetCurrentTownCoreTier(lane);
+            if (requiredTownCoreTier <= currentTownCoreTier)
+                return null;
+
+            var townCorePad = FindFortressPadByBuildingType(lane, "town_core");
+            if (townCorePad == null)
+                return null;
+
+            bool canAfford = townCorePad.canUpgrade && CanSpendGold(lane, townCorePad.upgradeCost);
+            return CreatePanelRowAction(
+                "\U0001F512: upgrade town core",
+                () => ExecuteTownCoreUpgradeRedirect(lane, townCorePad, requiredTownCoreTier, requiredTownCoreTierName),
+                true,
+                highlighted: canAfford,
+                objectName: objectName);
+        }
+
+        void ExecuteTownCoreUpgradeRedirect(MLLaneSnap lane, MLFortressPad townCorePad, int requiredTownCoreTier, string requiredTownCoreTierName)
+        {
+            if (lane == null || townCorePad == null)
+                return;
+
+            if (string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
+            {
+                int targetTier = townCorePad.constructionTargetTier > 0
+                    ? townCorePad.constructionTargetTier
+                    : townCorePad.nextTier > 0
+                        ? townCorePad.nextTier
+                        : Mathf.Clamp(townCorePad.tier + 1, 1, Mathf.Max(1, townCorePad.maxTier));
+                string targetTierName = ResolveBuildingTierName(
+                    "town_core",
+                    targetTier,
+                    !string.IsNullOrWhiteSpace(townCorePad.constructionTargetTierName)
+                        ? townCorePad.constructionTargetTierName
+                        : townCorePad.nextTierName);
+                _statusMessage = string.IsNullOrWhiteSpace(targetTierName)
+                    ? "Town Core is already upgrading."
+                    : $"Town Core is already upgrading to {targetTierName}.";
+                RefreshHeader(force: true);
+                return;
+            }
+
+            if (!townCorePad.canUpgrade)
+            {
+                string blockedReason = NormalizeTownCoreRequirementText(townCorePad.lockedReason);
+                string requirementLabel = ResolveTownCoreRequirementLabel(requiredTownCoreTierName, requiredTownCoreTier, includeVerb: false);
+                _statusMessage = string.IsNullOrWhiteSpace(blockedReason)
+                    ? $"Town Core cannot upgrade yet. {requirementLabel} is still required."
+                    : $"Town Core cannot upgrade yet. {blockedReason}";
+                RefreshHeader(force: true);
+                return;
+            }
+
+            int missingGold = Mathf.Max(0, townCorePad.upgradeCost - Mathf.FloorToInt(lane.gold));
+            if (missingGold > 0)
+            {
+                _statusMessage = $"Need {missingGold}g to upgrade Town Core.";
+                RefreshHeader(force: true);
+                return;
+            }
+
+            string townCoreName = string.IsNullOrWhiteSpace(townCorePad.buildingName)
+                ? "Town Core"
+                : townCorePad.buildingName;
+            _statusMessage = $"Upgrading {townCoreName}...";
+            ActionSender.UpgradeBuilding(townCorePad.padId, townCorePad.buildingType);
+            RefreshHeader(force: true);
         }
 
         void CreateFocusedPadUpgradeSections(MLLaneSnap lane, MLFortressPad pad)
@@ -3715,6 +3813,7 @@ namespace CastleDefender.UI
                 case "barracks":
                 case "gate":
                 case "turret":
+                case "wall_tower":
                 case "tower_archer":
                     return false;
                 default:

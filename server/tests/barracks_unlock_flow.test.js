@@ -51,6 +51,12 @@ setUnitTypesForTests([
   makeUnit("tt_spearman", { build_cost: 12, path_speed: 0.34 }),
   makeUnit("tt_heavy_infantry", { build_cost: 14, path_speed: 0.27 }),
   makeUnit("tt_light_infantry", { build_cost: 18, path_speed: 0.49 }),
+  makeUnit("tt_mage", { build_cost: 24, path_speed: 0.28, attack_damage: 12, range: 0.22, damage_type: "MAGIC" }),
+  makeUnit("tt_mounted_mage", { build_cost: 32, path_speed: 0.31, attack_damage: 18, range: 0.24, damage_type: "MAGIC" }),
+  makeUnit("tt_archer", { build_cost: 20, path_speed: 0.33, attack_damage: 10, range: 0.25, damage_type: "PIERCE" }),
+  makeUnit("tt_crossbowman", { build_cost: 28, path_speed: 0.29, attack_damage: 16, range: 0.24, damage_type: "PIERCE" }),
+  makeUnit("tt_mounted_priest", { build_cost: 22, path_speed: 0.35, attack_damage: 4, range: 0.18, damage_type: "MAGIC", special_props: { healAmount: 8 } }),
+  makeUnit("tt_priest", { build_cost: 30, path_speed: 0.3, attack_damage: 6, range: 0.2, damage_type: "MAGIC", special_props: { healAmount: 12 } }),
 ]);
 
 test.beforeEach(() => {
@@ -193,6 +199,32 @@ function collectGameUnits(game, predicate) {
     matches.push(...collectLaneUnits(game, laneIndex, predicate));
   }
   return matches;
+}
+
+function seedActiveBarracksUnit(game, laneIndex, barracksId, rosterKey, overrides = {}) {
+  const lane = game && Array.isArray(game.lanes) ? game.lanes[laneIndex] : null;
+  assert.ok(lane, `expected lane ${laneIndex} to exist`);
+  const collectionName = overrides.collectionName === "units" ? "units" : "spawnQueue";
+  const collection = lane[collectionName];
+  assert.ok(Array.isArray(collection), `expected lane ${laneIndex} ${collectionName} collection`);
+
+  collection.push({
+    id: overrides.id || `${rosterKey}_${barracksId}_${collection.length}`,
+    unitId: overrides.unitId || `${rosterKey}_${barracksId}_${collection.length}`,
+    type: overrides.type || rosterKey,
+    unitTypeKey: overrides.unitTypeKey || rosterKey,
+    hp: overrides.hp ?? 40,
+    maxHp: overrides.maxHp ?? 40,
+    spawnSourceType: "barracks_roster",
+    sourceBarracksId: barracksId,
+    sourceBarracksKey: barracksId,
+    barracksId,
+    sourceLaneIndex: laneIndex,
+    ownerLaneIndex: laneIndex,
+    ownerLane: laneIndex,
+    rosterKey,
+    ...overrides,
+  });
 }
 
 function act(game, laneIndex, type, data) {
@@ -564,6 +596,153 @@ test("blacksmith tier upgrades convert owned and live infantry units into the cu
   assert.ok(liveSwordsmen.every((unit) => unit.archetypeKey === "infantry_t2" && unit.isMarketWorker !== true));
 });
 
+test("branch building tier upgrades convert owned and live non-melee barracks units into the current tier", () => {
+  const cases = [
+    {
+      label: "mage tower",
+      padId: "wizard_tower_pad",
+      initialRosterKey: "mage",
+      upgradedRosterKey: "wizard",
+      upgradedArchetypeKey: "arcane_t2",
+    },
+    {
+      label: "archery tower",
+      padId: "archery_tower_pad",
+      initialRosterKey: "archer",
+      upgradedRosterKey: "crossbowman",
+      upgradedArchetypeKey: "ranged_t2",
+    },
+    {
+      label: "temple",
+      padId: "temple_pad",
+      initialRosterKey: "cleric",
+      upgradedRosterKey: "priest",
+      upgradedArchetypeKey: "support_t2",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const game = createGame(1200);
+
+    upgradeTownCoreToTier(game, 0, 2);
+    act(game, 0, "build_barracks_site", { barracksId: "left" });
+    finishBarracksConstruction(game, 0, "left");
+    act(game, 0, "build_on_pad", { padId: testCase.padId });
+    finishPadConstruction(game, 0, testCase.padId);
+    act(game, 0, "buy_barracks_unit", { barracksId: "left", rosterKey: testCase.initialRosterKey, count: 2 });
+    seedActiveBarracksUnit(game, 0, "left", testCase.initialRosterKey, {
+      id: `${testCase.initialRosterKey}_active_0`,
+      collectionName: "spawnQueue",
+      hp: 500,
+      maxHp: 500,
+      spawnIndex: 900,
+    });
+    seedActiveBarracksUnit(game, 0, "left", testCase.initialRosterKey, {
+      id: `${testCase.initialRosterKey}_active_1`,
+      collectionName: "spawnQueue",
+      hp: 500,
+      maxHp: 500,
+      spawnIndex: 901,
+    });
+
+    upgradeTownCoreToTier(game, 0, 3);
+    act(game, 0, "upgrade_building", { padId: testCase.padId });
+    finishPadConstruction(game, 0, testCase.padId);
+
+    const lane = laneSnapshot(game, 0);
+    const leftBarracks = findBarracksSite(lane, "left");
+    const initialEntry = findRosterEntry(leftBarracks && leftBarracks.roster, testCase.initialRosterKey);
+    const upgradedEntry = findRosterEntry(leftBarracks && leftBarracks.roster, testCase.upgradedRosterKey);
+    const aggregatedInitial = findRosterEntry(lane.barracksRoster, testCase.initialRosterKey);
+    const aggregatedUpgraded = findRosterEntry(lane.barracksRoster, testCase.upgradedRosterKey);
+    const liveUpgraded = collectGameUnits(game, (unit) => unit && unit.rosterKey === testCase.upgradedRosterKey);
+
+    assert.equal(initialEntry && initialEntry.ownedCount, 0, `${testCase.label} should clear the old owned count`);
+    assert.equal(initialEntry && initialEntry.availableForPurchase, false, `${testCase.label} should retire the old tier from purchases`);
+    assert.equal(upgradedEntry && upgradedEntry.ownedCount, 2, `${testCase.label} should move owned units into the upgraded tier`);
+    assert.equal(upgradedEntry && upgradedEntry.availableForPurchase, true, `${testCase.label} should make the upgraded tier purchasable`);
+    assert.equal(aggregatedInitial && aggregatedInitial.ownedCount, 0, `${testCase.label} should clear the aggregated old owned count`);
+    assert.equal(aggregatedUpgraded && aggregatedUpgraded.ownedCount, 2, `${testCase.label} should report the upgraded tier in the lane roster`);
+    assert.equal(liveUpgraded.length, 2, `${testCase.label} should convert live field units into the upgraded tier`);
+    assert.ok(
+      liveUpgraded.every((unit) => unit.archetypeKey === testCase.upgradedArchetypeKey),
+      `${testCase.label} should update live unit archetypes to ${testCase.upgradedArchetypeKey}`
+    );
+  }
+});
+
+test("scheduled barracks sends treat stale and upgraded branch units as the same roster family", () => {
+  const game = createGame(1200);
+
+  upgradeTownCoreToTier(game, 0, 2);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  upgradePadToTier(game, 0, "wizard_tower_pad", 1);
+  upgradeTownCoreToTier(game, 0, 3);
+  upgradePadToTier(game, 0, "wizard_tower_pad", 2);
+
+  game.lanes[0].barracksSiteRosterCounts.center.mage = 2;
+  const targetLaneIndex = simMl.resolveTargetLaneForBarracksSend(game, 0, "center");
+  assert.ok(Number.isInteger(targetLaneIndex) && targetLaneIndex >= 0, "expected a valid barracks target lane");
+  seedActiveBarracksUnit(game, targetLaneIndex, "center", "mage", {
+    id: "stale_mage_0",
+    collectionName: "units",
+    sourceLaneIndex: 0,
+    ownerLaneIndex: 0,
+    ownerLane: 0,
+    hp: 500,
+    maxHp: 500,
+  });
+  seedActiveBarracksUnit(game, targetLaneIndex, "center", "mage", {
+    id: "stale_mage_1",
+    collectionName: "units",
+    sourceLaneIndex: 0,
+    ownerLaneIndex: 0,
+    ownerLane: 0,
+    hp: 500,
+    maxHp: 500,
+  });
+
+  game.lanes[0].barracksSiteStates.center.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  let lane = laneSnapshot(game, 0);
+  const centerBarracks = findBarracksSite(lane, "center");
+  let mage = findRosterEntry(centerBarracks && centerBarracks.roster, "mage");
+  let wizard = findRosterEntry(centerBarracks && centerBarracks.roster, "wizard");
+  let activeUnits = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "center"
+  );
+
+  assert.equal(mage && mage.ownedCount, 0, "stale mage ownership should collapse into the upgraded tier");
+  assert.equal(wizard && wizard.ownedCount, 2, "wizard should inherit the stale owned count");
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "mage").length, 2, "existing mage units should still count toward the branch roster");
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "wizard").length, 0, "the barracks should not over-spawn while stale branch units are still alive");
+
+  game.lanes[targetLaneIndex].units = (game.lanes[targetLaneIndex].units || []).filter((unit) =>
+    unit && unit.id !== "stale_mage_0" && unit.id !== "stale_mage_1"
+  );
+  game.lanes[0].barracksSiteStates.center.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  lane = laneSnapshot(game, 0);
+  mage = findRosterEntry(findBarracksSite(lane, "center")?.roster, "mage");
+  wizard = findRosterEntry(findBarracksSite(lane, "center")?.roster, "wizard");
+  activeUnits = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "center"
+  );
+
+  assert.equal(mage && mage.ownedCount, 0, "the old mage roster should stay collapsed after the stale units are gone");
+  assert.equal(wizard && wizard.ownedCount, 2, "wizard ownership should remain authoritative for the branch");
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "wizard").length, 2, "once the stale mages die, replacements should spawn as wizards");
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "mage").length, 0, "no stale mage spawns should return after the branch upgrades");
+});
+
 test("market upgrades convert existing workers and future purchases to the current trade tier", () => {
   const game = createGame(900);
 
@@ -713,6 +892,32 @@ test("barracks food limits follow barracks tier capacity and troop tier food cos
     assert.equal(overflow.ok, false);
     assert.match(String(overflow.reason || ""), /food/i);
   }
+});
+
+test("barracks site progression hard-stops at tier 3", () => {
+  const game = createGame(5000);
+  upgradeTownCoreToTier(game, 0, 4);
+  upgradeBarracksSiteToLevel(game, 0, "center", 3);
+
+  const beforeExtraUpgrade = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(beforeExtraUpgrade, "expected the center barracks snapshot to exist");
+  assert.equal(beforeExtraUpgrade.level, 3);
+  assert.equal(beforeExtraUpgrade.maxLevel, 3);
+  assert.equal(beforeExtraUpgrade.canUpgrade, false);
+  assert.equal(beforeExtraUpgrade.buildState, "max_tier");
+
+  const result = simMl.applyMLAction(game, 0, {
+    type: "upgrade_barracks_site",
+    data: { barracksId: "center" },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(String(result.reason || ""), /upgrade unavailable|max/i);
+
+  const afterExtraUpgrade = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(afterExtraUpgrade, "expected the center barracks snapshot to remain after a rejected upgrade");
+  assert.equal(afterExtraUpgrade.level, 3);
+  assert.equal(afterExtraUpgrade.maxLevel, 3);
 });
 
 test("barracks snapshots report owned roster food separately from active field food", () => {

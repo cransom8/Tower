@@ -166,6 +166,9 @@ namespace CastleDefender.Game
         public static void EndGameNow()
             => NetworkManager.Instance.Emit("ml_end_game_now", null);
 
+        public static void ForfeitMatch()
+            => NetworkManager.Instance.Emit("ml_forfeit_match", null);
+
         public static void QueueEnter(string gameType, string matchFormat, bool ranked, int[] unitTypeIds = null)
             => NetworkManager.Instance.Emit("queue:enter_v2",
                new { gameType, matchFormat, ranked, unitTypeIds });

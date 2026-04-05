@@ -184,28 +184,28 @@ MonoBehaviour:
     - TechTree/Buildings/gate_tier_1
     - TechTree/Buildings/gate_tier_2
     - TechTree/Buildings/gate_tier_3
-  - key: turret
-    buildingType: turret
-    displayName: Turrets
+  - key: wall_tower
+    buildingType: wall_tower
+    displayName: Wall Towers
     maxTier: 3
     prefab: {fileID: 6833222374974641205, guid: fb67685449a43c148b516b771c3cdfa6, type: 3}
     cardIds:
-    - turret_tier_1
-    - turret_tier_2
-    - turret_tier_3
+    - wall_tower_tier_1
+    - wall_tower_tier_2
+    - wall_tower_tier_3
     portraitResourcePaths:
     - TechTree/Buildings/turret_tier_1
     - TechTree/Buildings/turret_tier_2
     - TechTree/Buildings/turret_tier_3
-  - key: tower_archer
-    buildingType: tower_archer
+  - key: turret
+    buildingType: turret
     displayName: Turrets
     maxTier: 3
     prefab: {fileID: 4604682994765928067, guid: 6c617edb5daf3fd42ab96d7c257cb9bf, type: 3}
     cardIds:
-    - archer_tower_tier_1
-    - archer_tower_tier_2
-    - archer_tower_tier_3
+    - turret_tier_1
+    - turret_tier_2
+    - turret_tier_3
     portraitResourcePaths:
     - TechTree/Buildings/archer_tower_tier_1
     - TechTree/Buildings/archer_tower_tier_2

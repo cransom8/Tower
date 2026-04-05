@@ -124,18 +124,50 @@ namespace CastleDefender.UI
             string baseSummary = $"{summaryCause}  -  Survival {survivalSeconds / 60}m {survivalSeconds % 60}s";
             _causeText.text = baseSummary;
 
+            var report = ResolveCommanderReport(payload, myLaneIndex);
+            if (report != null)
+            {
+                _winnerText.text = $"{report.matchHeader?.resultLabel ?? _resultText.text}  |  Final Wave {report.matchHeader?.finalWave ?? payload.finalRound}";
+                _summaryText.text =
+                    $"Enemies Defeated {report.snapshot?.enemiesDefeated ?? 0}    " +
+                    $"Units Recruited {report.snapshot?.unitsRecruited ?? 0}    " +
+                    $"Breaches {report.snapshot?.breachesSuffered ?? 0}    " +
+                    $"Core {report.snapshot?.coreHealthRemaining ?? 0} left";
+                return;
+            }
+
             var myStat = GetMyStat(payload, myLaneIndex);
             if (myStat != null)
             {
                 string continuation = $"    Final Wave {payload.finalRound}";
                 _summaryText.text =
                     $"Income {myStat.income:F0}    Build {myStat.buildValue:F0}    Sends {myStat.totalSendSpend:F0}/{myStat.totalSendCount}    " +
-                    $"Leaks {myStat.totalLeaksTaken}    Hold {myStat.longestHoldStreak}{continuation}";
+                    $"Breaches {myStat.totalLeaksTaken}    Hold {myStat.longestHoldStreak}{continuation}";
             }
             else
             {
                 _summaryText.text = $"Final Wave {payload.finalRound}";
             }
+        }
+
+        CommanderBattleReport ResolveCommanderReport(MLGameOverPayload payload, int myLaneIndex)
+        {
+            if (payload?.playerBattleReport?.lanes == null || payload.playerBattleReport.lanes.Length == 0)
+                return null;
+
+            foreach (var laneReport in payload.playerBattleReport.lanes)
+            {
+                if (laneReport != null && laneReport.laneIndex == myLaneIndex)
+                    return laneReport;
+            }
+
+            foreach (var laneReport in payload.playerBattleReport.lanes)
+            {
+                if (laneReport != null && laneReport.laneIndex == payload.winnerLaneIndex)
+                    return laneReport;
+            }
+
+            return payload.playerBattleReport.lanes[0];
         }
 
         void HandleRematchStatus(RematchStatusPayload payload)
@@ -305,7 +337,7 @@ namespace CastleDefender.UI
 
             _rematchButton = MakeButton(card.transform, "BtnRematch", "Rematch", new Vector2(0.08f, 0.18f), new Vector2(0.32f, 0.28f), new Color(0.72f, 0.23f, 0.18f, 1f));
             _lobbyButton = MakeButton(card.transform, "BtnLobby", "Exit to Lobby", new Vector2(0.36f, 0.18f), new Vector2(0.62f, 0.28f), new Color(0.23f, 0.25f, 0.30f, 1f));
-            _statsButton = MakeButton(card.transform, "BtnStats", "View Report", new Vector2(0.66f, 0.18f), new Vector2(0.92f, 0.28f), new Color(0.18f, 0.38f, 0.56f, 1f));
+            _statsButton = MakeButton(card.transform, "BtnStats", "Battle Report", new Vector2(0.66f, 0.18f), new Vector2(0.92f, 0.28f), new Color(0.18f, 0.38f, 0.56f, 1f));
 
             _rematchButton.onClick.AddListener(OnRematch);
             _lobbyButton.onClick.AddListener(OnLobby);
@@ -351,10 +383,16 @@ namespace CastleDefender.UI
             ValidateEditorReportTab("Economy", _statsPanel.Btn_Tab_Economy, _statsPanel.PanelEconomy);
             yield return null;
 
-            ValidateEditorReportTab("Build", _statsPanel.Btn_Tab_Build, _statsPanel.PanelBuild);
+            ValidateEditorReportTab("Army", _statsPanel.Btn_Tab_Build, _statsPanel.PanelBuild);
             yield return null;
 
-            ValidateEditorReportTab("Waves", _statsPanel.Btn_Tab_Waves, _statsPanel.PanelWaves);
+            ValidateEditorReportTab("Threat", _statsPanel.Btn_Tab_Threat, _statsPanel.PanelThreat);
+            yield return null;
+
+            ValidateEditorReportTab("Story", _statsPanel.Btn_Tab_Story, _statsPanel.PanelStory);
+            yield return null;
+
+            ValidateEditorReportTab("Advanced", _statsPanel.Btn_Tab_Waves, _statsPanel.PanelWaves);
             yield return null;
 
             ValidateEditorReportTab("Summary", _statsPanel.Btn_Tab_Summary, _statsPanel.PanelSummary);
@@ -437,15 +475,17 @@ namespace CastleDefender.UI
 
             var header = MakePanel(root.transform, "PanelHeader", new Color(0.10f, 0.10f, 0.18f, 1f), new Vector2(0f, 0.92f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
             var layout = header.AddComponent<HorizontalLayoutGroup>();
-            layout.padding = new RectOffset(12, 12, 8, 8);
-            layout.spacing = 8;
+            layout.padding = new RectOffset(8, 8, 8, 8);
+            layout.spacing = 6;
             layout.childControlWidth = true;
             layout.childForceExpandWidth = true;
 
             panel.Btn_Tab_Summary = MakeLayoutButton(header.transform, "BtnTabSummary", "Summary");
             panel.Btn_Tab_Economy = MakeLayoutButton(header.transform, "BtnTabEconomy", "Economy");
-            panel.Btn_Tab_Build = MakeLayoutButton(header.transform, "BtnTabBuild", "Build");
-            panel.Btn_Tab_Waves = MakeLayoutButton(header.transform, "BtnTabWaves", "Waves");
+            panel.Btn_Tab_Build = MakeLayoutButton(header.transform, "BtnTabBuild", "Army");
+            panel.Btn_Tab_Threat = MakeLayoutButton(header.transform, "BtnTabThreat", "Threat");
+            panel.Btn_Tab_Story = MakeLayoutButton(header.transform, "BtnTabStory", "Story");
+            panel.Btn_Tab_Waves = MakeLayoutButton(header.transform, "BtnTabWaves", "Advanced");
             panel.Btn_Close = MakeLayoutButton(header.transform, "BtnClose", "Close");
 
             var content = new GameObject("Content");
@@ -456,7 +496,9 @@ namespace CastleDefender.UI
             contentRt.offsetMin = Vector2.zero;
             contentRt.offsetMax = Vector2.zero;
 
-            panel.PanelSummary = MakePanel(content.transform, "PanelSummary", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            Color reportPanelColor = new Color(0.05f, 0.05f, 0.09f, 0.96f);
+
+            panel.PanelSummary = MakePanel(content.transform, "PanelSummary", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             panel.SummaryRows = Array.Empty<TMP_Text>();
             panel.SummaryBodyText = MakeText(
                 panel.PanelSummary.transform,
@@ -467,18 +509,22 @@ namespace CastleDefender.UI
                 new Vector2(0.97f, 0.96f),
                 FontStyles.Normal,
                 TextAlignmentOptions.TopLeft);
-            panel.SummaryBodyText.enableWordWrapping = true;
+            panel.SummaryBodyText.textWrappingMode = TextWrappingModes.Normal;
             panel.SummaryBodyText.overflowMode = TextOverflowModes.Overflow;
 
-            panel.PanelEconomy = MakePanel(content.transform, "PanelEconomy", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelEconomy = MakePanel(content.transform, "PanelEconomy", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             panel.PanelEconomy.SetActive(false);
-            panel.EconomyGraph = BuildGraph(panel.PanelEconomy.transform, "EconomyGraph");
 
-            panel.PanelBuild = MakePanel(content.transform, "PanelBuild", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelBuild = MakePanel(content.transform, "PanelBuild", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             panel.PanelBuild.SetActive(false);
-            panel.BuildGraph = BuildGraph(panel.PanelBuild.transform, "BuildGraph");
 
-            panel.PanelWaves = MakePanel(content.transform, "PanelWaves", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelThreat = MakePanel(content.transform, "PanelThreat", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelThreat.SetActive(false);
+
+            panel.PanelStory = MakePanel(content.transform, "PanelStory", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            panel.PanelStory.SetActive(false);
+
+            panel.PanelWaves = MakePanel(content.transform, "PanelWaves", reportPanelColor, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
             var scrollGo = new GameObject("ScrollRect");
             scrollGo.transform.SetParent(panel.PanelWaves.transform, false);
@@ -526,7 +572,7 @@ namespace CastleDefender.UI
             wavesBodyText.color = Color.white;
             wavesBodyText.alignment = TextAlignmentOptions.TopLeft;
             wavesBodyText.margin = new Vector4(12f, 12f, 12f, 12f);
-            wavesBodyText.enableWordWrapping = true;
+            wavesBodyText.textWrappingMode = TextWrappingModes.Normal;
             wavesBodyText.overflowMode = TextOverflowModes.Overflow;
             contentGo.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             wavesBody.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
@@ -602,7 +648,7 @@ namespace CastleDefender.UI
             }
         }
 
-        static MLGameOverPayload BuildEditorValidationPayload()
+        public static MLGameOverPayload BuildEditorValidationPayload()
         {
             return new MLGameOverPayload
             {
@@ -682,6 +728,7 @@ namespace CastleDefender.UI
                     "Economy overflow: no.",
                     "Likely tuning targets: inspect wave 10 boss reach and defender retargeting.",
                 },
+                playerBattleReport = BuildEditorValidationBattleReport(),
             };
         }
 
@@ -750,6 +797,223 @@ namespace CastleDefender.UI
                     },
                 },
             };
+        }
+
+        static PlayerBattleReportPayload BuildEditorValidationBattleReport()
+        {
+            return new PlayerBattleReportPayload
+            {
+                schemaVersion = 1,
+                tabs = new[] { "Summary", "Economy", "Army", "Threat", "Story", "Advanced" },
+                lanes = new[]
+                {
+                    new CommanderBattleReport
+                    {
+                        laneIndex = 0,
+                        displayName = "Blue Commander",
+                        result = "victory",
+                        resultLabel = "Victory",
+                        opponentLaneIndex = 1,
+                        opponentName = "Red Commander",
+                        commanderNotes = new[]
+                        {
+                            "You stabilized at Wave 6.",
+                            "You moved ahead of the incoming horde at Wave 8.",
+                            "Red Commander carried the larger war chest late, but you kept the stronger army curve."
+                        },
+                        matchHeader = new MatchResultHeaderReport
+                        {
+                            resultLabel = "Victory",
+                            finalWave = 10,
+                            durationSeconds = 625,
+                            modeLabel = "Survival",
+                            difficultyLabel = "Dungeon Pressure",
+                        },
+                        snapshot = new CorePerformanceSnapshotReport
+                        {
+                            enemiesDefeated = 84,
+                            unitsRecruited = 16,
+                            unitsLost = 6,
+                            buildingsConstructed = 7,
+                            upgradesPurchased = 9,
+                            goldEarned = 2155,
+                            goldSpent = 2040,
+                            breachesSuffered = 1,
+                            coreHealthRemaining = 17,
+                            coreDamageTaken = 3,
+                        },
+                        economyCurve = BuildCurve(
+                            "War Chest",
+                            "Banked gold, income, and match spending by wave.",
+                            new[] { "W9", "W10" },
+                            ("Your War Chest", new[] { 88f, 115f }, "player"),
+                            ("Red Commander War Chest", new[] { 102f, 132f }, "opponent"),
+                            ("Your Gold Flow", new[] { 41f, 42f }, "support"),
+                            ("Red Commander Gold Flow", new[] { 36f, 38f }, "opponent_support"),
+                            ("Your Spending", new[] { 220f, 215f }, "spend"),
+                            ("Red Commander Spending", new[] { 170f, 160f }, "opponent_spend")),
+                        armyCurve = BuildCurve(
+                            "Warband Value",
+                            "Army strength growth through the match.",
+                            new[] { "W9", "W10" },
+                            ("Your Army Strength", new[] { 720f, 790f }, "player"),
+                            ("Red Commander Army Strength", new[] { 640f, 610f }, "opponent")),
+                        threatCurve = BuildCurve(
+                            "War Strength vs Incoming Horde",
+                            "Your fielded strength against dungeon pressure.",
+                            new[] { "W9", "W10" },
+                            ("Your Battle Strength", new[] { 720f, 790f }, "player"),
+                            ("Red Commander Battle Strength", new[] { 640f, 610f }, "opponent"),
+                            ("Dungeon Threat", new[] { 690f, 840f }, "threat")),
+                        strategyComparison = new StrategyComparisonReport
+                        {
+                            playerStyleLabel = "Balanced",
+                            opponentStyleLabel = "Economy-Heavy",
+                            summary = "You played a balanced plan while Red Commander leaned economy-heavy.",
+                            player = BuildSpend("Blue Commander", "Balanced", 620f, 410f, 285f, 510f, 55f, new[] { ("Barracks", 42f), ("Archery", 28f), ("Market", 18f) }, new[] { ("Infantry", 34f), ("Archers", 29f), ("Shield", 18f) }),
+                            opponent = BuildSpend("Red Commander", "Economy-Heavy", 540f, 260f, 420f, 350f, 40f, new[] { ("Market", 44f), ("Barracks", 25f), ("Walls", 17f) }, null),
+                        },
+                        fortressPressure = new FortressPressureReport
+                        {
+                            breachCount = 1,
+                            wallDamageTaken = 12,
+                            towerDamageTaken = 4,
+                            coreDamageTaken = 3,
+                            timeUnderBreachPressure = 18.5f,
+                            fortressEntries = 2,
+                            timeWithoutFrontline = 6.2f,
+                            pressureVerdict = "Under Pressure",
+                            summary = "The fortress bent once, then recovered before the line fully collapsed."
+                        },
+                        armySummary = new ArmySummaryReport
+                        {
+                            mostRecruitedUnitType = "Militia",
+                            bestPerformingUnitType = "Archer",
+                            armyValueFielded = 1825f,
+                            unitComposition = new[]
+                            {
+                                new StrategyShareReport { label = "Infantry", value = 34f, sharePercent = 34f },
+                                new StrategyShareReport { label = "Archers", value = 29f, sharePercent = 29f },
+                                new StrategyShareReport { label = "Shield", value = 18f, sharePercent = 18f },
+                            },
+                            bestSupportType = "Priest",
+                            heroContribution = "Paladin joined the field and helped lock down the final breach.",
+                            summary = "Archer upgrades and a sturdy infantry shell carried the run."
+                        },
+                        battleStory = new BattleStoryReport
+                        {
+                            highlights = new[]
+                            {
+                                new BattleStoryHighlightReport { title = "Hardest Wave", detail = "Wave 10 brought the heaviest pressure.", wave = 10 },
+                                new BattleStoryHighlightReport { title = "First Breach", detail = "Your fortress first cracked at Wave 10.", wave = 10 },
+                                new BattleStoryHighlightReport { title = "Stabilized", detail = "You steadied the line at Wave 6.", wave = 6 },
+                                new BattleStoryHighlightReport { title = "Surpassed the Horde", detail = "Your warband first cleared the dungeon curve at Wave 8.", wave = 8 },
+                                new BattleStoryHighlightReport { title = "Strongest Spike Source", detail = "Archery upgrades drove your biggest surge.", wave = 8 },
+                            },
+                            storyLines = new[]
+                            {
+                                "Wave 10 was the hardest point of the match.",
+                                "You stabilized at Wave 6.",
+                                "You first outpaced dungeon pressure at Wave 8.",
+                                "Your strongest spike came from Archery upgrades.",
+                            },
+                            recommendations = new[]
+                            {
+                                "Spend a little earlier once your war chest rises above 100 gold.",
+                                "A faster repair after the first breach would keep the finish cleaner.",
+                            }
+                        },
+                        awards = new[]
+                        {
+                            new BattleHonorReport { title = "War Machine", detail = "You kept your economy, army, and fortress growing together." },
+                            new BattleHonorReport { title = "Arrow Storm", detail = "Ranged fire defined the winning curve." },
+                            new BattleHonorReport { title = "Frugal Commander", detail = "You kept your gold moving instead of floating it for too long." },
+                        },
+                        advanced = new AdvancedBattleStatsReport
+                        {
+                            breakdownLines = new[]
+                            {
+                                "You played a balanced plan while Red Commander leaned economy-heavy.",
+                                "Spending buckets: Units 620 | Upgrades 410 | Economy 285 | Defense 510 | Repairs 55",
+                                "Archer upgrades and a sturdy infantry shell carried the run.",
+                                "The fortress bent once, then recovered before the line fully collapsed.",
+                            },
+                            waveRows = new[]
+                            {
+                                new AdvancedWaveRowReport { wave = 9, state = "Stable", bankedGold = 88f, armyStrength = 720f, dungeonThreat = 690f, breachCount = 0, coreDamage = 0, opponentArmyStrength = 640f },
+                                new AdvancedWaveRowReport { wave = 10, state = "Holding the Line", bankedGold = 115f, armyStrength = 790f, dungeonThreat = 840f, breachCount = 1, coreDamage = 3, opponentArmyStrength = 610f },
+                            }
+                        }
+                    }
+                }
+            };
+        }
+
+        static CurveReport BuildCurve(string title, string subtitle, string[] labels, params (string label, float[] values, string tone)[] lines)
+        {
+            var result = new CurveLineReport[lines.Length];
+            for (int index = 0; index < lines.Length; index++)
+            {
+                result[index] = new CurveLineReport
+                {
+                    label = lines[index].label,
+                    values = lines[index].values,
+                    tone = lines[index].tone,
+                    isPrimary = index == 0,
+                };
+            }
+
+            return new CurveReport
+            {
+                title = title,
+                subtitle = subtitle,
+                valueFormat = "F0",
+                xLabels = labels,
+                lines = result,
+            };
+        }
+
+        static StrategySpendBreakdownReport BuildSpend(string commanderName, string styleLabel, float units, float upgrades, float economy, float defense, float repairs, (string label, float share)[] paths, (string label, float share)[] composition)
+        {
+            var report = new StrategySpendBreakdownReport
+            {
+                commanderName = commanderName,
+                styleLabel = styleLabel,
+                unitSpending = units,
+                upgradeSpending = upgrades,
+                economySpending = economy,
+                defenseSpending = defense,
+                repairs = repairs,
+                otherSpending = 0f,
+                highlights = new[] { $"{paths[0].label} was the defining path." },
+            };
+
+            report.buildingPaths = new StrategyShareReport[paths.Length];
+            for (int index = 0; index < paths.Length; index++)
+            {
+                report.buildingPaths[index] = new StrategyShareReport
+                {
+                    label = paths[index].label,
+                    value = paths[index].share,
+                    sharePercent = paths[index].share,
+                };
+            }
+
+            if (composition != null)
+            {
+                report.unitComposition = new StrategyShareReport[composition.Length];
+                for (int index = 0; index < composition.Length; index++)
+                {
+                    report.unitComposition[index] = new StrategyShareReport
+                    {
+                        label = composition[index].label,
+                        value = composition[index].share,
+                        sharePercent = composition[index].share,
+                    };
+                }
+            }
+
+            return report;
         }
 #endif
 

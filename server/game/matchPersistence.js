@@ -52,7 +52,7 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
     }
   }
 
-  async function logMatchEnd(matchIdPromise, winnerLane, playerSnapshots, options = {}) {
+  async function persistMatchFinalization(matchIdPromise, winnerLane, playerSnapshots, options = {}) {
     if (!db) {
       return { matchId: null, ratingUpdates: [], finalizationState: "disabled" };
     }
@@ -61,6 +61,8 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
       return { matchId: null, ratingUpdates: [], finalizationState: "missing_match_id" };
     }
 
+    const status = options.status === "abandoned" ? "abandoned" : "completed";
+    const targetFinalizationState = status === "abandoned" ? "abandoned" : "completed";
     const winnerLaneValue = Number.isInteger(winnerLane) && winnerLane >= 0 ? winnerLane : null;
     const waveStatsWithMatchId = Array.isArray(options.waveStats)
       ? attachMatchId(options.waveStats, matchId)
@@ -122,7 +124,7 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
           return timedClientQuery(
             client,
             `UPDATE matches
-                SET status = 'completed',
+                SET status = '${status}',
                     ended_at = NOW(),
                     winner_lane = $1,
                     combat_log = COALESCE($2::jsonb, combat_log),
@@ -138,7 +140,7 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
         return timedClientQuery(
           client,
           `UPDATE matches
-              SET status = 'completed',
+              SET status = '${status}',
                   ended_at = NOW(),
                   winner_lane = $1,
                   combat_log = COALESCE($2::jsonb, combat_log),
@@ -172,9 +174,9 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
         for (const { playerId, laneIndex, result } of validSnapshots) {
           params.push(playerId, laneIndex, result);
         }
-        await timedClientQuery(
-          client,
-          `INSERT INTO match_players (match_id, player_id, lane_index, result)
+          await timedClientQuery(
+            client,
+            `INSERT INTO match_players (match_id, player_id, lane_index, result)
            VALUES ${placeholders}
            ON CONFLICT (match_id, player_id) DO UPDATE SET
              lane_index = EXCLUDED.lane_index,
@@ -185,7 +187,7 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
       }
 
       let ratingUpdates = [];
-      if (ratingService && options.mode && options.mode.endsWith("_ranked")) {
+      if (status === "completed" && ratingService && options.mode && options.mode.endsWith("_ranked")) {
         ratingUpdates = await ratingService.updateRatings(
           db,
           matchId,
@@ -214,12 +216,12 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
 
       await timedClientQuery(
         client,
-        "UPDATE matches SET finalization_state = 'completed', finalized_at = NOW() WHERE id = $1",
+        `UPDATE matches SET finalization_state = '${targetFinalizationState}', finalized_at = NOW() WHERE id = $1`,
         [matchId],
-        "matches:close_mark_completed"
+        `matches:close_mark_${targetFinalizationState}`
       );
       await timedClientQuery(client, "COMMIT", undefined, "matches:close_commit");
-      return { matchId, ratingUpdates, finalizationState: "completed" };
+      return { matchId, ratingUpdates, finalizationState: targetFinalizationState };
     } catch (err) {
       await timedClientQuery(client, "ROLLBACK", undefined, "matches:close_rollback_error").catch(() => {});
       log.error("[match] close failed:", { matchId, err: err.message });
@@ -229,7 +231,21 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
     }
   }
 
-  return { logMatchEnd, logMatchStart };
+  async function logMatchEnd(matchIdPromise, winnerLane, playerSnapshots, options = {}) {
+    return persistMatchFinalization(matchIdPromise, winnerLane, playerSnapshots, {
+      ...options,
+      status: "completed",
+    });
+  }
+
+  async function logMatchAbandon(matchIdPromise, playerSnapshots, options = {}) {
+    return persistMatchFinalization(matchIdPromise, null, playerSnapshots, {
+      ...options,
+      status: "abandoned",
+    });
+  }
+
+  return { logMatchAbandon, logMatchEnd, logMatchStart };
 }
 
 module.exports = { createMatchPersistence };

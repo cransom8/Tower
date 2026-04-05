@@ -17,6 +17,7 @@ test('createDefaultPlayerPreferences returns the expected defaults', () => {
     },
     visuals: {
       showEngagementCircles: true,
+      showAttackRangeCircles: false,
       showHealthBars: true,
       showTooltips: true,
     },
@@ -55,6 +56,7 @@ test('normalizePlayerPreferences clamps numeric fields and fills defaults', () =
     },
     visuals: {
       showEngagementCircles: false,
+      showAttackRangeCircles: false,
       showHealthBars: true,
       showTooltips: true,
     },
@@ -81,6 +83,7 @@ test('normalizePlayerPreferences migrates legacy ambient music volume to menu mu
     },
     visuals: {
       showEngagementCircles: true,
+      showAttackRangeCircles: false,
       showHealthBars: true,
       showTooltips: true,
     },
@@ -100,4 +103,31 @@ test('normalizePlayerPreferences ignores invalid shapes', () => {
     visuals: [],
     audio: null,
   }), createDefaultPlayerPreferences());
+});
+
+test('normalizePlayerPreferences preserves attack range ring visibility when provided', () => {
+  assert.deepEqual(normalizePlayerPreferences({
+    visuals: {
+      showAttackRangeCircles: true,
+    },
+  }), {
+    camera: {
+      tilt: null,
+      zoom: null,
+      rotation: null,
+    },
+    visuals: {
+      showEngagementCircles: true,
+      showAttackRangeCircles: true,
+      showHealthBars: true,
+      showTooltips: true,
+    },
+    audio: {
+      masterVolume: 1,
+      sfxVolume: 1,
+      ambientVolume: 0.5,
+      menuMusicVolume: 0.5,
+      gameplayMusicVolume: null,
+    },
+  });
 });

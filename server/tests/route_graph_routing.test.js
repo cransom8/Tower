@@ -1299,6 +1299,214 @@ test("attack-mode lane units wait for local engagement range instead of auto-loc
   assert.equal(attacker.movementMode, "CombatEngage");
 });
 
+test("attack-mode home units still treat a hostile inside the home fortress interior as an emergency target", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const homeLane = game.lanes[0];
+  const enemyLane = game.lanes[1];
+  issueLaneCommand(game, homeLane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, homeLane);
+  issueLaneCommand(game, homeLane.laneIndex, "set_barracks_attack", {
+    barracksId: "center",
+    targetLaneIndex: enemyLane.laneIndex,
+  });
+
+  const attackers = [
+    createAttacker({
+      id: "attack_home_emergency_front",
+      sourceLaneIndex: homeLane.laneIndex,
+      sourceTeam: homeLane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: enemyLane.laneIndex,
+      laneId: homeLane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(homeLane, -0.9, -0.3),
+    }),
+    createAttacker({
+      id: "attack_home_emergency_rear",
+      sourceLaneIndex: homeLane.laneIndex,
+      sourceTeam: homeLane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: enemyLane.laneIndex,
+      laneId: homeLane.laneIndex,
+      atkCd: 0,
+      baseDmg: 3,
+      baseSpeed: 1.1,
+      ...getDefendAnchorPosition(homeLane, -1.5, 0.35),
+    }),
+  ];
+  const townCore = getTownCoreTargetPosition(homeLane);
+  const hostileWave = createAttacker({
+    id: "attack_home_emergency_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    sourceBarracksKey: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: homeLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: townCore.posX + 0.8,
+    posY: townCore.posY - 5.0,
+  });
+
+  homeLane.units.push(...attackers, hostileWave);
+
+  for (const attacker of attackers) {
+    const preferredTarget = simMl.getWaveUnitPreferredTarget(game, homeLane, attacker);
+    assert.equal(preferredTarget?.kind, "unit", "attack-mode home units should publish an emergency unit target inside the home fortress.");
+    assert.equal(
+      preferredTarget?.entity?.id,
+      hostileWave.id,
+      "attack-mode home units should pick the intruder instead of ignoring a hostile already inside the fortress."
+    );
+  }
+});
+
+test("combat target selection still picks the nearby fortress intruder when many distant wave units exist", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const homeLane = game.lanes[0];
+  const enemyLane = game.lanes[1];
+  issueLaneCommand(game, homeLane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, homeLane);
+  issueLaneCommand(game, homeLane.laneIndex, "set_barracks_attack", {
+    barracksId: "center",
+    targetLaneIndex: enemyLane.laneIndex,
+  });
+
+  const attacker = createAttacker({
+    id: "attack_home_spatial_context_attacker",
+    sourceLaneIndex: homeLane.laneIndex,
+    sourceTeam: homeLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: enemyLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    atkCd: 0,
+    baseDmg: 3,
+    baseSpeed: 1.1,
+    ...getDefendAnchorPosition(homeLane, -0.9, -0.3),
+  });
+  const townCore = getTownCoreTargetPosition(homeLane);
+  const nearbyHostileWave = createAttacker({
+    id: "attack_home_spatial_context_nearby_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    sourceBarracksKey: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: homeLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: townCore.posX + 0.8,
+    posY: townCore.posY - 5.0,
+  });
+
+  homeLane.units.push(attacker, nearbyHostileWave);
+  for (let index = 0; index < 48; index += 1) {
+    enemyLane.units.push(createAttacker({
+      id: `attack_home_spatial_context_far_wave_${index}`,
+      sourceLaneIndex: -1,
+      sourceTeam: null,
+      sourceBarracksId: null,
+      sourceBarracksKey: null,
+      spawnSourceType: "dungeon_wave",
+      targetLaneIndex: enemyLane.laneIndex,
+      laneId: enemyLane.laneIndex,
+      hp: 120,
+      maxHp: 120,
+      atkCd: 999,
+      baseSpeed: 0,
+      posX: townCore.posX + 24 + (index % 8),
+      posY: townCore.posY - 24 - Math.floor(index / 8),
+    }));
+  }
+
+  const preferredTarget = simMl.getWaveUnitPreferredTarget(game, homeLane, attacker);
+  assert.equal(preferredTarget?.kind, "unit");
+  assert.equal(
+    preferredTarget?.entity?.id,
+    nearbyHostileWave.id,
+    "combat target selection should still resolve the closest emergency hostile instead of being distracted by distant wave units."
+  );
+});
+
+test("attack-mode home units stay committed to a fortress intruder after combat has already started", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const homeLane = game.lanes[0];
+  const enemyLane = game.lanes[1];
+  issueLaneCommand(game, homeLane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, homeLane);
+  issueLaneCommand(game, homeLane.laneIndex, "set_barracks_attack", {
+    barracksId: "center",
+    targetLaneIndex: enemyLane.laneIndex,
+  });
+
+  const attacker = createAttacker({
+    id: "attack_home_commit_attacker",
+    sourceLaneIndex: homeLane.laneIndex,
+    sourceTeam: homeLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: enemyLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    atkCd: 0,
+    baseDmg: 3,
+    baseSpeed: 1.1,
+    ...getDefendAnchorPosition(homeLane, -0.9, -0.3),
+  });
+  const townCore = getTownCoreTargetPosition(homeLane);
+  const hostileWave = createAttacker({
+    id: "attack_home_commit_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    sourceBarracksKey: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: homeLane.laneIndex,
+    laneId: homeLane.laneIndex,
+    hp: 120,
+    maxHp: 120,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: townCore.posX + 0.8,
+    posY: townCore.posY - 5.0,
+  });
+
+  homeLane.units.push(attacker, hostileWave);
+
+  advanceUntil(game, () => attacker.combatTarget?.unitId === hostileWave.id, 8);
+  assert.equal(
+    attacker.combatTarget?.unitId,
+    hostileWave.id,
+    "the attacker should first acquire the fortress intruder as an emergency target."
+  );
+
+  hostileWave.posX = townCore.posX + 0.8;
+  hostileWave.posY = townCore.posY - 15.2;
+  hostileWave.routeWorldX = hostileWave.posX;
+  hostileWave.routeWorldY = hostileWave.posY;
+  hostileWave.pathIdx = hostileWave.posY;
+
+  tick(game, 1);
+
+  assert.equal(
+    attacker.combatTarget?.unitId,
+    hostileWave.id,
+    "once combat has started, the attacker should stay committed instead of abandoning the intruder and running back to route."
+  );
+  assert.equal(attacker.movementMode, "CombatEngage");
+});
+
 test("cross-lane hostile kills pay the attacker's owning lane instead of the victim lane container", () => {
   const game = createTwoPlayerGame(["red", "yellow"]);
   const sourceLane = game.lanes[0];
@@ -2645,6 +2853,99 @@ test("defend-mode units from different barracks share the same gate interception
   assert.ok(
     liveDefenders.every((unit) => unit.combatTarget?.unitId === hostileWave.id),
     "nearby defenders from separate barracks should all commit to the same intercepted wave."
+  );
+});
+
+test("intact home walls let ranged defenders shoot over the gate line", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  upgradeTownCoreToTier(game, lane.laneIndex, 2);
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+
+  const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
+  assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the wall-fire test");
+  const facing = lane.commandFacing || { x: 0, y: -1 };
+  const lateral = { x: -(Number(facing.y) || 0), y: Number(facing.x) || 0 };
+  const insideBaseX = Number(gatePad.posX) - ((Number(facing.x) || 0) * 1.1);
+  const insideBaseY = Number(gatePad.posY) - ((Number(facing.y) || 0) * 1.1);
+  const outsideBaseX = Number(gatePad.posX) + ((Number(facing.x) || 0) * 0.7);
+  const outsideBaseY = Number(gatePad.posY) + ((Number(facing.y) || 0) * 0.7);
+
+  const rangedDefender = {
+    ...createAttacker({
+      id: "wall_ranged_defender",
+      sourceLaneIndex: lane.laneIndex,
+      sourceTeam: lane.team,
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      targetLaneIndex: lane.laneIndex,
+      laneId: lane.laneIndex,
+      posX: insideBaseX + (lateral.x * 0.35),
+      posY: insideBaseY + (lateral.y * 0.35),
+    }),
+    attackRangeOverride: 4.0,
+  };
+  const hostileWave = createAttacker({
+    id: "wall_fire_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    posX: outsideBaseX,
+    posY: outsideBaseY,
+  });
+  const targetDescriptor = { kind: "unit", entity: hostileWave, laneIndex: lane.laneIndex };
+  assert.equal(
+    simMl.isRouteUnitTargetBlockedByStructure(game, lane, rangedDefender, targetDescriptor, null),
+    false,
+    "ranged home defenders should be allowed to target a hostile over their own intact wall."
+  );
+});
+
+test("intact home walls do not block defenders from targeting a hostile already behind the gate line", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  primeDefendAnchor(game, lane);
+  upgradeTownCoreToTier(game, lane.laneIndex, 2);
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+
+  const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
+  assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the same-side target test");
+  const facing = lane.commandFacing || { x: 0, y: -1 };
+  const defender = createAttacker({
+    id: "wall_same_side_defender",
+    sourceLaneIndex: lane.laneIndex,
+    sourceTeam: lane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    posX: Number(gatePad.posX) - ((Number(facing.x) || 0) * 1.4),
+    posY: Number(gatePad.posY) - ((Number(facing.y) || 0) * 1.4),
+  });
+  const hostileWave = createAttacker({
+    id: "wall_same_side_wave",
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: lane.laneIndex,
+    laneId: lane.laneIndex,
+    posX: Number(gatePad.posX) - ((Number(facing.x) || 0) * 0.6),
+    posY: Number(gatePad.posY) - ((Number(facing.y) || 0) * 0.6),
+  });
+  const targetDescriptor = { kind: "unit", entity: hostileWave, laneIndex: lane.laneIndex };
+  assert.equal(
+    simMl.isRouteUnitTargetBlockedByStructure(game, lane, defender, targetDescriptor, null),
+    false,
+    "once both units are already on the same side of the gate line, the intact wall should not suppress combat."
   );
 });
 

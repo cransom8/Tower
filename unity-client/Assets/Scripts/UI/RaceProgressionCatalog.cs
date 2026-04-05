@@ -417,14 +417,17 @@ namespace CastleDefender.UI
             const int placeholderWallTier1Cost = 20;
             const int placeholderWallTier2Cost = 40;
             const int placeholderWallTier3Cost = 80;
-            const int placeholderTurret1Cost = 40;
-            const int placeholderTurret2Cost = 80;
-            const int placeholderTurret3Cost = 140;
+            const int placeholderTurret1Cost = 500;
+            const int placeholderTurret2Cost = 500;
+            const int placeholderTurret3Cost = 500;
             const string feetAuraVisualNote = "Visual indicator: a slight colored circle around the unit's feet only. No full-body glow.";
 
             const string baseTowerDescription =
-                "Walls own the early shared defense path. As that path advances, defensive hardpoints become Turrets. " +
-                "Turrets are defensive structures, separate from the Archery building that unlocks Archer units.";
+                "Turrets unlock after Wall Archers is purchased from Archery. " +
+                "Each turret tier costs 500g, increases wall-archer damage with current Archery progression, and adds 20% wall HP.";
+            const string turretTier1Art = "TechTree/Buildings/archer_tower_tier_1";
+            const string turretTier2Art = "TechTree/Buildings/archer_tower_tier_2";
+            const string turretTier3Art = "TechTree/Buildings/archer_tower_tier_3";
 
             static string GeneratedBuildingArt(string cardId)
             {
@@ -1187,7 +1190,7 @@ namespace CastleDefender.UI
                     RaceProgressionLaneSection.Buildings,
                     RaceProgressionTab.Buildings,
                     true,
-                    "Walls -> Turret Tier 1 -> Turret Tier 2 -> Turret Tier 3",
+                    "Wall Archers -> Turret Tier 1 -> Turret Tier 2 -> Turret Tier 3",
                     RaceProgressionLaneCategory.Turret,
                     true,
                     false,
@@ -1200,9 +1203,10 @@ namespace CastleDefender.UI
                         "20s",
                         placeholderTurret1Cost,
                         startsUnlocked: false,
-                        unlockRequirement: lumberMillT1Requirement,
+                        unlockRequirement: archeryT1,
                         description: baseTowerDescription,
-                        nextUnitId: "turret_tier_2"),
+                        nextUnitId: "turret_tier_2",
+                        imageResourcePath: turretTier1Art),
                     BuildingCard(
                         "turret_tier_2",
                         buildingTurretLane,
@@ -1214,7 +1218,8 @@ namespace CastleDefender.UI
                         startsUnlocked: false,
                         unlockRequirement: turretT1Requirement,
                         description: baseTowerDescription,
-                        nextUnitId: "turret_tier_3"),
+                        nextUnitId: "turret_tier_3",
+                        imageResourcePath: turretTier2Art),
                     BuildingCard(
                         "turret_tier_3",
                         buildingTurretLane,
@@ -1225,7 +1230,8 @@ namespace CastleDefender.UI
                         placeholderTurret3Cost,
                         startsUnlocked: false,
                         unlockRequirement: turretT2Requirement,
-                        description: baseTowerDescription)
+                        description: baseTowerDescription,
+                        imageResourcePath: turretTier3Art)
                 ),
                 new RaceProgressionLaneDefinition(
                     siegeTier1Lane,

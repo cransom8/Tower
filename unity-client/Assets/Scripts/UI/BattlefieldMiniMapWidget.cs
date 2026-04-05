@@ -817,7 +817,7 @@ namespace CastleDefender.UI
                 starText.text = "\u2605";
                 starText.alignment = TextAlignmentOptions.Center;
                 starText.fontSize = townCoreStarFontSize;
-                starText.enableWordWrapping = false;
+                starText.textWrappingMode = TextWrappingModes.NoWrap;
                 starText.overflowMode = TextOverflowModes.Overflow;
                 if (TMP_Settings.defaultFontAsset != null)
                     starText.font = TMP_Settings.defaultFontAsset;

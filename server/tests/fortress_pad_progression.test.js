@@ -146,14 +146,14 @@ test("public multilane config exposes the new branch pads and authored defense p
   assert.equal(padCountsByType.tower_archer || 0, 0);
 });
 
-test("live fortress pad actions honor Town Core gating and shared wall progression", () => {
+test("live fortress pad actions keep walls shared while turrets unlock from wall archers", () => {
   const game = createGame();
 
   fail(game, 0, "build_on_pad", { padId: "stable_pad" }, /Town Hall/i);
   fail(game, 0, "build_on_pad", { padId: "workshop_pad" }, /Town Hall/i);
   fail(game, 0, "build_on_pad", { padId: "library_pad" }, /Town Hall/i);
   fail(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Town Hall/i);
+  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Wall Archers/i);
 
   upgradeTownCoreToTier(game, 0, 2);
   act(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" });
@@ -164,19 +164,31 @@ test("live fortress pad actions honor Town Core gating and shared wall progressi
   let turretPad = findPad(lane, "turret_front_left_pad");
   assert.equal(wallPad && wallPad.isConstructing, true);
   assert.equal(gatePad && gatePad.isConstructing, true);
-  assert.equal(turretPad && turretPad.isConstructing, true);
+  assert.equal(turretPad && turretPad.isConstructing, false);
+  assert.equal(turretPad && turretPad.isBuilt, false);
+  assert.match(String(turretPad && turretPad.lockedReason || ""), /Wall Archers/i);
 
   finishPadConstruction(game, 0, "wall_front_left_01_pad");
-  finishPadConstruction(game, 0, "turret_front_left_pad");
   lane = laneSnapshot(game, 0);
   wallPad = findPad(lane, "wall_front_left_01_pad");
   gatePad = findPad(lane, "gate_front_pad");
   turretPad = findPad(lane, "turret_front_left_pad");
   assert.equal(wallPad && wallPad.isBuilt, true);
   assert.equal(gatePad && gatePad.isBuilt, true);
-  assert.equal(turretPad && turretPad.isBuilt, true);
+  assert.equal(turretPad && turretPad.isBuilt, false);
 
   fail(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" }, /Keep/i);
+  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Wall Archers/i);
+
+  act(game, 0, "build_on_pad", { padId: "archery_tower_pad" });
+  finishPadConstruction(game, 0, "archery_tower_pad");
+  act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
+  lane = laneSnapshot(game, 0);
+  turretPad = findPad(lane, "turret_front_left_pad");
+  assert.equal(turretPad && turretPad.canBuild, true);
+  assert.equal(turretPad && turretPad.buildCost, 500);
+  act(game, 0, "build_on_pad", { padId: "turret_front_left_pad" });
+  finishPadConstruction(game, 0, "turret_front_left_pad");
 
   act(game, 0, "build_on_pad", { padId: "stable_pad" });
   act(game, 0, "build_on_pad", { padId: "workshop_pad" });
@@ -185,7 +197,6 @@ test("live fortress pad actions honor Town Core gating and shared wall progressi
   upgradeTownCoreToTier(game, 0, 3);
   act(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" });
   finishPadConstruction(game, 0, "wall_front_left_01_pad");
-  finishPadConstruction(game, 0, "turret_front_left_pad");
 
   lane = laneSnapshot(game, 0);
   wallPad = findPad(lane, "wall_front_left_01_pad");
@@ -193,6 +204,11 @@ test("live fortress pad actions honor Town Core gating and shared wall progressi
   turretPad = findPad(lane, "turret_front_left_pad");
   assert.equal(wallPad && wallPad.tier, 2);
   assert.equal(gatePad && gatePad.tier, 2);
+  assert.equal(turretPad && turretPad.tier, 1);
+
+  act(game, 0, "upgrade_building", { padId: "turret_front_left_pad" });
+  finishPadConstruction(game, 0, "turret_front_left_pad");
+  turretPad = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
   assert.equal(turretPad && turretPad.tier, 2);
 });
 

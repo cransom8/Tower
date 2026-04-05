@@ -19,6 +19,7 @@ function registerSocketHandlers({
   db,
   disconnectGrace,
   ffaTeamForLane,
+  forfeitMultilaneMatch,
   gamesByRoomId,
   generateCode,
   handlePostWinDecision,
@@ -1852,6 +1853,13 @@ function registerSocketHandlers({
       if (!session || session.mode !== "multilane" || !handlePostWinDecision) return;
       const result = handlePostWinDecision(session.roomId, session.code, "end_now", socket.id);
       if (!result.ok) socket.emit("error_message", { message: result.reason || "Unable to end match" });
+    });
+
+    socket.on("ml_forfeit_match", () => {
+      const session = sessionBySocketId.get(socket.id);
+      if (!session || session.mode !== "multilane" || !forfeitMultilaneMatch) return;
+      const result = forfeitMultilaneMatch(session.roomId, session.code, socket.id);
+      if (!result.ok) socket.emit("error_message", { message: result.reason || "Unable to forfeit match" });
     });
 
     socket.on("cancel_rematch", () => {

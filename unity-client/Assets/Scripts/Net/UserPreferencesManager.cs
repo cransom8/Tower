@@ -41,6 +41,10 @@ namespace CastleDefender.Net
             ? Instance._current.visuals.showEngagementCircles
             : DefaultPreferences.visuals.showEngagementCircles;
 
+        public static bool ShowAttackRangeCircles => Instance != null
+            ? Instance._current.visuals.showAttackRangeCircles
+            : DefaultPreferences.visuals.showAttackRangeCircles;
+
         public static bool ShowTooltips => Instance != null
             ? Instance._current.visuals.showTooltips
             : DefaultPreferences.visuals.showTooltips;
@@ -85,6 +89,11 @@ namespace CastleDefender.Net
         public static void SetEngagementCirclesVisible(bool enabled)
         {
             EnsureInstance().SetEngagementCirclesVisibleInternal(enabled);
+        }
+
+        public static void SetAttackRangeCirclesVisible(bool enabled)
+        {
+            EnsureInstance().SetAttackRangeCirclesVisibleInternal(enabled);
         }
 
         public static void SetHealthBarsVisible(bool enabled)
@@ -247,6 +256,7 @@ namespace CastleDefender.Net
         void ApplyCurrentToRuntime()
         {
             ApplyEngagementCirclePreference();
+            ApplyAttackRangeCirclePreference();
             ApplyAudioPreferencesToRuntime();
         }
 
@@ -263,6 +273,21 @@ namespace CastleDefender.Net
                 new[] { typeof(bool) },
                 null);
             method?.Invoke(null, new object[] { _current.visuals.showEngagementCircles });
+        }
+
+        void ApplyAttackRangeCirclePreference()
+        {
+            Type combatantType = FindType("CastleDefender.Game.LaneSnapshotCombatant");
+            if (combatantType == null)
+                return;
+
+            MethodInfo method = combatantType.GetMethod(
+                "SetAttackRingDebugEnabled",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(bool) },
+                null);
+            method?.Invoke(null, new object[] { _current.visuals.showAttackRangeCircles });
         }
 
         void ApplyAudioPreferencesToRuntime()
@@ -328,6 +353,15 @@ namespace CastleDefender.Net
                 return;
 
             _current.visuals.showEngagementCircles = enabled;
+            SetCurrent(_current, markDirty: true, applyToRuntime: true, broadcast: true);
+        }
+
+        void SetAttackRangeCirclesVisibleInternal(bool enabled)
+        {
+            if (_current.visuals.showAttackRangeCircles == enabled)
+                return;
+
+            _current.visuals.showAttackRangeCircles = enabled;
             SetCurrent(_current, markDirty: true, applyToRuntime: true, broadcast: true);
         }
 
@@ -568,6 +602,7 @@ namespace CastleDefender.Net
             if (preferences.visuals != null)
             {
                 normalized.visuals.showEngagementCircles = preferences.visuals.showEngagementCircles;
+                normalized.visuals.showAttackRangeCircles = preferences.visuals.showAttackRangeCircles;
                 normalized.visuals.showHealthBars = preferences.visuals.showHealthBars;
                 normalized.visuals.showTooltips = preferences.visuals.showTooltips;
             }
@@ -714,6 +749,7 @@ namespace CastleDefender.Net
     public sealed class UserVisualPreferences
     {
         public bool showEngagementCircles = true;
+        public bool showAttackRangeCircles = false;
         public bool showHealthBars = true;
         public bool showTooltips = true;
 
@@ -727,6 +763,7 @@ namespace CastleDefender.Net
             return new UserVisualPreferences
             {
                 showEngagementCircles = showEngagementCircles,
+                showAttackRangeCircles = showAttackRangeCircles,
                 showHealthBars = showHealthBars,
                 showTooltips = showTooltips,
             };

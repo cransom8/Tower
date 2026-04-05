@@ -18,6 +18,7 @@ namespace CastleDefender.Game
         static readonly RaycastHit[] s_hitBuffer = new RaycastHit[32];
         static readonly List<FortressPadAnchor> s_anchorScratch = new();
         static readonly List<BarracksSiteView> s_barracksScratch = new();
+        static readonly List<RaycastResult> s_uiRaycastScratch = new();
 
         readonly HashSet<string> _missingPadLogs = new();
         readonly HashSet<string> _missingBarracksLogs = new();
@@ -82,6 +83,17 @@ namespace CastleDefender.Game
 
         void HandlePointer()
         {
+            if (Input.touchCount > 0)
+            {
+                HandleTouchPointer();
+                return;
+            }
+
+            HandleMousePointer();
+        }
+
+        void HandleMousePointer()
+        {
             if (Input.GetMouseButtonDown(0))
             {
                 _mouseDownPos = Input.mousePosition;
@@ -94,10 +106,36 @@ namespace CastleDefender.Game
             if (!Input.GetMouseButtonUp(0))
                 return;
 
-            if (_wasDrag || CameraController.IsLmbPanning || IsPointerOverUi())
+            if (_wasDrag || CameraController.IsLmbPanning || IsPointerOverUi(Input.mousePosition))
                 return;
 
             TryHandleSelection(Input.mousePosition);
+        }
+
+        void HandleTouchPointer()
+        {
+            Touch touch = Input.GetTouch(0);
+            switch (touch.phase)
+            {
+                case TouchPhase.Began:
+                    _mouseDownPos = touch.position;
+                    _wasDrag = false;
+                    return;
+                case TouchPhase.Moved:
+                case TouchPhase.Stationary:
+                    if (Vector2.Distance(touch.position, new Vector2(_mouseDownPos.x, _mouseDownPos.y)) > clickDragThreshold)
+                        _wasDrag = true;
+                    return;
+                case TouchPhase.Canceled:
+                    _wasDrag = false;
+                    return;
+                case TouchPhase.Ended:
+                    if (_wasDrag || CameraController.IsLmbPanning || IsPointerOverUi(touch.position, touch.fingerId))
+                        return;
+
+                    TryHandleSelection(touch.position);
+                    return;
+            }
         }
 
         bool TryHandleSelection(Vector3 screenPos)
@@ -450,9 +488,26 @@ namespace CastleDefender.Game
                 cameraController.PanTo(worldPosition);
         }
 
-        static bool IsPointerOverUi()
+        static bool IsPointerOverUi(Vector2 screenPosition, int pointerId = -1)
         {
-            return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+            var eventSystem = EventSystem.current;
+            if (eventSystem == null)
+                return false;
+
+            bool pointerOverTrackedUi = pointerId >= 0
+                ? eventSystem.IsPointerOverGameObject(pointerId)
+                : eventSystem.IsPointerOverGameObject();
+            if (pointerOverTrackedUi)
+                return true;
+
+            s_uiRaycastScratch.Clear();
+            var eventData = new PointerEventData(eventSystem)
+            {
+                pointerId = pointerId,
+                position = screenPosition,
+            };
+            eventSystem.RaycastAll(eventData, s_uiRaycastScratch);
+            return s_uiRaycastScratch.Count > 0;
         }
 
         static MLFortressPad FindPad(MLLaneSnap lane, string padId)

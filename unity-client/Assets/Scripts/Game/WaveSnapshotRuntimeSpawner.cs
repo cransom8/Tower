@@ -129,6 +129,7 @@ namespace CastleDefender.Game
             public float lastVisualAttackUntil;
             public float lastHitReactUntil;
             public int lastServerAttackPulse;
+            public bool preferEngageOpenerOnNextAttack;
             public bool hadSnapshot;
             public bool lockCombatFacing;
             public bool hasDesiredFacing;
@@ -525,11 +526,23 @@ namespace CastleDefender.Game
                         }
                     }
 
+                    if (ShouldQueueInfantryEngageOpener(previousSnapshotUnit, unit))
+                    {
+                        view.preferEngageOpenerOnNextAttack = true;
+                    }
+                    else if (!HasUnitCombatTarget(unit))
+                    {
+                        view.preferEngageOpenerOnNextAttack = false;
+                    }
+
                     if (unit.attackPulse > 0 && unit.attackPulse != view.lastServerAttackPulse)
                     {
                         view.lastAttackAt = now;
                         view.combatant?.NotifyAttack(now);
-                        PlayAttackAnimation(view, unit);
+                        bool preferEngageOpener = view.preferEngageOpenerOnNextAttack;
+                        PlayAttackAnimation(view, unit, preferEngageOpener);
+                        if (preferEngageOpener)
+                            view.preferEngageOpenerOnNextAttack = false;
                         PlayAttackFeedback(snap, lane, view, unit, previousSnapshotUnit, now);
                     }
 
@@ -3389,7 +3402,7 @@ namespace CastleDefender.Game
             view.lastHitReactUntil = Mathf.Max(view.lastHitReactUntil, now + holdSeconds);
         }
 
-        static void PlayAttackAnimation(WaveView view, MLUnit unit)
+        static void PlayAttackAnimation(WaveView view, MLUnit unit, bool preferEngageOpener)
         {
             if (view == null)
                 return;
@@ -3401,7 +3414,8 @@ namespace CastleDefender.Game
             string[] stateNames = UnitAnimationResolver.ResolveAttackPulseStates(
                 view.animationProfile,
                 unit ?? view.latestSnapshotUnit,
-                unit != null ? unit.attackPulse : view.lastServerAttackPulse + 1);
+                unit != null ? unit.attackPulse : view.lastServerAttackPulse + 1,
+                preferEngageOpener);
             if (stateNames.Length > 0
                 && UnitAnimationResolver.TryFindPlayableState(view.animators, stateNames, out Animator foundAnimator, out string foundState))
             {
@@ -3441,6 +3455,38 @@ namespace CastleDefender.Game
             }
 
             view.lastVisualAttackUntil = Time.time + holdSeconds;
+        }
+
+        static bool ShouldQueueInfantryEngageOpener(MLUnit previousSnapshotUnit, MLUnit unit)
+        {
+            if (!UnitAnimationResolver.IsInfantryArchetype(unit) || !HasUnitCombatTarget(unit))
+                return false;
+
+            string currentTargetId = ResolveCombatUnitTargetId(unit);
+            string previousTargetId = ResolveCombatUnitTargetId(previousSnapshotUnit);
+            return string.IsNullOrWhiteSpace(previousTargetId)
+                || !string.Equals(previousTargetId, currentTargetId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool HasUnitCombatTarget(MLUnit unit)
+        {
+            return !string.IsNullOrWhiteSpace(ResolveCombatUnitTargetId(unit));
+        }
+
+        static string ResolveCombatUnitTargetId(MLUnit unit)
+        {
+            if (unit == null)
+                return null;
+
+            if (string.Equals(unit.combatTargetKind, "fortress_pad", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(unit.combatTargetId))
+                return unit.combatTargetId;
+
+            return !string.IsNullOrWhiteSpace(unit.currentTargetId)
+                ? unit.currentTargetId
+                : null;
         }
 
         static float ComputeAttackPlaybackMultiplier(WaveView view, float clipLength)

@@ -233,6 +233,15 @@ namespace CastleDefender.Game
             "Attack",
             "attack",
         };
+        static readonly string[] InfantryEngageOpenerPriority =
+        {
+            "Jump-Attack1",
+            "Run2-Attack1",
+            "SpecialAttack1",
+            "Attack3",
+            "Attack1",
+            "MoveAttack1",
+        };
         static readonly string[] CommonStatePathPrefixes =
         {
             "Base Layer.",
@@ -499,6 +508,15 @@ namespace CastleDefender.Game
 
         public static string[] ResolveAttackPulseStates(ResolvedProfile profile, MLUnit unit, int attackPulse)
         {
+            return ResolveAttackPulseStates(profile, unit, attackPulse, preferEngageOpener: false);
+        }
+
+        public static string[] ResolveAttackPulseStates(
+            ResolvedProfile profile,
+            MLUnit unit,
+            int attackPulse,
+            bool preferEngageOpener)
+        {
             string[] attackStates = profile != null ? profile.AttackStates : DefaultAttackStates;
             string[] availableTerminalStates = ResolveDistinctTerminalStateNames(attackStates);
             if (availableTerminalStates.Length == 0)
@@ -507,7 +525,11 @@ namespace CastleDefender.Game
             UnitAnimationAttackFamily family = profile != null && profile.AttackFamily != UnitAnimationAttackFamily.Unspecified
                 ? profile.AttackFamily
                 : ResolveRuntimeAttackFamily(unit);
-            string[] orderedTerminalStates = BuildAttackPulseTerminalPriority(family, availableTerminalStates, attackPulse);
+            string[] orderedTerminalStates = BuildAttackPulseTerminalPriority(
+                family,
+                availableTerminalStates,
+                attackPulse,
+                preferEngageOpener);
             return ExpandStateAliases(orderedTerminalStates.Length > 0 ? orderedTerminalStates : availableTerminalStates);
         }
 
@@ -632,7 +654,8 @@ namespace CastleDefender.Game
         static string[] BuildAttackPulseTerminalPriority(
             UnitAnimationAttackFamily family,
             string[] availableTerminalStates,
-            int attackPulse)
+            int attackPulse,
+            bool preferEngageOpener)
         {
             if (availableTerminalStates == null || availableTerminalStates.Length == 0)
                 return Array.Empty<string>();
@@ -640,6 +663,9 @@ namespace CastleDefender.Game
             var ordered = new List<string>(availableTerminalStates.Length + 8);
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var available = new HashSet<string>(availableTerminalStates, StringComparer.OrdinalIgnoreCase);
+            if (preferEngageOpener)
+                AppendAvailableTerminalMatches(ordered, seen, available, InfantryEngageOpenerPriority);
+
             string[][] rotation = ResolveAttackRotation(family);
             if (rotation.Length > 0)
             {
@@ -653,6 +679,27 @@ namespace CastleDefender.Game
             AppendAvailableTerminalMatches(ordered, seen, available, ResolveAttackFallbackOrder(family));
             AppendAvailableTerminalMatches(ordered, seen, available, availableTerminalStates);
             return ordered.ToArray();
+        }
+
+        public static bool IsInfantryArchetype(MLUnit unit)
+        {
+            if (unit == null)
+                return false;
+
+            if (StartsWithIgnoreCase(unit.archetypeKey, "infantry_"))
+                return true;
+
+            if (FortUnitIdentityCatalog.TryResolveBarracksDefinition(
+                null,
+                unit.archetypeKey,
+                !string.IsNullOrWhiteSpace(unit.catalogUnitKey) ? unit.catalogUnitKey : unit.type,
+                unit.skinKey,
+                out FortBarracksRosterDefinition definition))
+            {
+                return StartsWithIgnoreCase(definition.archetypeKey, "infantry_");
+            }
+
+            return false;
         }
 
         static void AppendAvailableTerminalMatches(
@@ -893,6 +940,13 @@ namespace CastleDefender.Game
         static bool EqualsIgnoreCase(string value, string expected)
         {
             return string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool StartsWithIgnoreCase(string value, string prefix)
+        {
+            return !string.IsNullOrWhiteSpace(value)
+                && !string.IsNullOrWhiteSpace(prefix)
+                && value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

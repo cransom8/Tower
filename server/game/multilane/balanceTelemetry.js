@@ -261,6 +261,38 @@ function armySnapshot(game) {
   };
 }
 
+function clonePeakLaneSnapshots(laneSnapshots) {
+  return (Array.isArray(laneSnapshots) ? laneSnapshots : [])
+    .filter((lane) => lane && i(lane.laneIndex, -1) >= 0)
+    .map((lane) => ({
+      laneIndex: i(lane.laneIndex, -1),
+      playerUnitsAlive: Math.max(0, i(lane.playerUnitsAlive, 0)),
+      enemyUnitsAlive: Math.max(0, i(lane.enemyUnitsAlive, 0)),
+      playerArmyValue: round(n(lane.playerArmyValue, 0), 2),
+      enemyArmyValue: round(n(lane.enemyArmyValue, 0), 2),
+    }));
+}
+
+function mergePeakLaneSnapshots(previousSnapshots, currentSnapshots) {
+  const merged = new Map();
+  for (const lane of clonePeakLaneSnapshots(previousSnapshots))
+    merged.set(lane.laneIndex, lane);
+
+  for (const lane of clonePeakLaneSnapshots(currentSnapshots)) {
+    const existing = merged.get(lane.laneIndex);
+    if (!existing) {
+      merged.set(lane.laneIndex, lane);
+      continue;
+    }
+    existing.playerUnitsAlive = Math.max(existing.playerUnitsAlive, lane.playerUnitsAlive);
+    existing.enemyUnitsAlive = Math.max(existing.enemyUnitsAlive, lane.enemyUnitsAlive);
+    existing.playerArmyValue = round(Math.max(existing.playerArmyValue, lane.playerArmyValue), 2);
+    existing.enemyArmyValue = round(Math.max(existing.enemyArmyValue, lane.enemyArmyValue), 2);
+  }
+
+  return Array.from(merged.values()).sort((left, right) => i(left.laneIndex, -1) - i(right.laneIndex, -1));
+}
+
 function waveStrength(game, waveDef = null) {
   const session = game && game.activeWaveSession;
   const activeLaneCount = (game && Array.isArray(game.lanes) ? game.lanes : []).filter((lane) => lane && !lane.eliminated).length;
@@ -423,7 +455,7 @@ function startWaveReport(game, context = {}) {
       enemyWaveEffectivePower: strength.effectivePower,
       playerToEnemyPowerRatio: strength.effectivePower > 0 ? round((army.playerPowerTotal + upgrades.totalUpgradeValue) / strength.effectivePower, 3) : null,
     },
-    laneSnapshots: { start: clone(army.laneSnapshots), end: clone(army.laneSnapshots) },
+    laneSnapshots: { start: clone(army.laneSnapshots), peak: clonePeakLaneSnapshots(army.laneSnapshots), end: clone(army.laneSnapshots) },
     waveStrength: strength,
     derived: { struggleScore: 0, economicEfficiencyScore: 0, unitLossRatio: 0, goldFloatScore: 0, pressureScore: 0, stabilizationScore: 0, powerRatio: strength.effectivePower > 0 ? round((army.playerPowerTotal + upgrades.totalUpgradeValue) / strength.effectivePower, 3) : 0, powerDeltaVersusEnemyWave: 0, armyEfficiencyScore: 0, upgradeEfficiencyScore: 0, recoveryScore: 0 },
     internal: { startTick: i(game && game.tick, 0), firstContactTick: null, firstBreachTick: null, clearTick: null, firstPlayerDeathTick: null, frontlineCollapseTick: null, frontlineReplacementTick: null, firstReactivePurchaseTick: null },
@@ -771,6 +803,7 @@ function recordTick(game) {
   report.economy.highestGoldHeldDuringWave = Math.max(report.economy.highestGoldHeldDuringWave, gold);
   report.economy.lowestGoldHeldDuringWave = Math.min(report.economy.lowestGoldHeldDuringWave, gold);
   report.combatResults.maxEnemiesAliveAtOnce = Math.max(report.combatResults.maxEnemiesAliveAtOnce, army.enemyAlive);
+  report.laneSnapshots.peak = mergePeakLaneSnapshots(report.laneSnapshots && report.laneSnapshots.peak, army.laneSnapshots);
   let enemiesInside = 0;
   for (const lane of game.lanes || []) {
     if (n(lane && lane.lives, 0) <= 3)
@@ -814,6 +847,7 @@ function finalizeWaveReport(game, context = {}) {
   report.armyState.unitsAliveAtWaveEnd = army.playerAlive;
   report.armyState.totalAliveArmyValueAtWaveEnd = army.playerPowerTotal;
   report.armyComposition.end = clone(army.composition);
+  report.laneSnapshots.peak = mergePeakLaneSnapshots(report.laneSnapshots && report.laneSnapshots.peak, army.laneSnapshots);
   report.laneSnapshots.end = clone(army.laneSnapshots);
   report.purchasingAndResponse.unspentGoldAfterWave = report.economy.goldAtWaveEnd;
   report.pressure.secondsUnderBreachPressure = sec(game, report.pressure.breachPressureTicks);

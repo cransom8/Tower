@@ -13,6 +13,7 @@ const DEFAULT_PLAYER_PREFERENCES = Object.freeze({
   }),
   visuals: Object.freeze({
     showEngagementCircles: true,
+    showAttackRangeCircles: false,
     showHealthBars: true,
     showTooltips: true,
   }),
@@ -70,6 +71,9 @@ function normalizeVisualPreferences(raw) {
     showEngagementCircles: typeof source.showEngagementCircles === 'boolean'
       ? source.showEngagementCircles
       : DEFAULT_PLAYER_PREFERENCES.visuals.showEngagementCircles,
+    showAttackRangeCircles: typeof source.showAttackRangeCircles === 'boolean'
+      ? source.showAttackRangeCircles
+      : DEFAULT_PLAYER_PREFERENCES.visuals.showAttackRangeCircles,
     showHealthBars: typeof source.showHealthBars === 'boolean'
       ? source.showHealthBars
       : DEFAULT_PLAYER_PREFERENCES.visuals.showHealthBars,

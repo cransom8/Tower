@@ -4305,8 +4305,9 @@ function openBarracksLevelModal(level, multiplier, upgradeCost, notes) {
   const isNew = level == null;
   openModal(isNew ? 'Add Barracks Level' : `Edit Barracks Level ${level}`, `
     <div class="form-group">
-      <label>Level (1–99)</label>
-      <input id="bl-level" type="number" min="1" max="99" value="${isNew ? '' : level}" style="width:100%" ${isNew ? '' : 'readonly'}>
+      <label>Level (1-3)</label>
+      <input id="bl-level" type="number" min="1" max="3" value="${isNew ? '' : level}" style="width:100%" ${isNew ? '' : 'readonly'}>
+      <div class="text-muted" style="font-size:12px;margin-top:4px">Barracks progression ends at level 3.</div>
     </div>
     <div class="form-group">
       <label>Multiplier</label>
@@ -4329,7 +4330,7 @@ async function saveBarracksLevel() {
   const multiplier = parseFloat(document.getElementById('bl-multiplier')?.value);
   const upgrade_cost = parseInt(document.getElementById('bl-upgrade_cost')?.value, 10) || 0;
   const notes = document.getElementById('bl-notes')?.value.trim() || '';
-  if (!Number.isFinite(level) || level < 1) { toast('Invalid level', 'err'); return; }
+  if (!Number.isFinite(level) || level < 1 || level > 3) { toast('Level must be between 1 and 3', 'err'); return; }
   if (!Number.isFinite(multiplier)) { toast('Invalid multiplier', 'err'); return; }
   try {
     await api('PUT', `/admin/barracks-levels/${level}`, { multiplier, upgrade_cost, notes });

@@ -5,12 +5,12 @@ namespace CastleDefender.Game
 {
     static class HpBarVisuals
     {
-        public const float UnitBillboardScaleFactor = 0.24f;
+        public const float UnitBillboardScaleFactor = 0.26f;
         public const float BuildingHudScaleFactor = 3.10f;
         const float BuildingHudReferencePerspectiveFov = 41f;
         const float BuildingHudReferencePerspectiveDepth = 42f;
         const float BuildingHudMaxZoomMultiplier = 3f;
-        static readonly Vector3 UnitBarLocalScale = new(1.15f, 1.85f, 1f);
+        static readonly Vector3 UnitBarLocalScale = new(1.30f, 2.20f, 1f);
         static readonly Color DefaultFillColor = new(0.18f, 0.94f, 0.34f, 0.96f);
         static readonly Color DefaultFrameColor = new(0.88f, 0.96f, 1f, 0.72f);
         const string FillVisualRootName = "FillVisual";
@@ -44,7 +44,11 @@ namespace CastleDefender.Game
 
             var billboard = barRoot.GetComponent<CastleDefender.FX.BillboardY>();
             if (billboard != null)
+            {
                 billboard.ScaleFactor = UnitBillboardScaleFactor;
+                billboard.CompensatePerspectiveZoom = true;
+                billboard.CompensateZoomIn = true;
+            }
         }
 
         public static void ConfigureBuildingHud(Transform hudRoot)

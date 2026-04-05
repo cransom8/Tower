@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const gameConfig = require("../gameConfig");
 const { setUnitTypesForTests } = require("../unitTypes");
 const simMl = require("../sim-multilane");
+const fortressSystem = require("../game/multilane/fortressSystem");
 
 const VALID_MULTILANE_CONFIG = {
   globalParams: {
@@ -252,7 +253,7 @@ test("built branch snapshots expose building upgrade cards", () => {
   assert.ok(frontlineDamage, "expected frontline damage upgrade");
   assert.equal(shieldArmor.cost, 100);
   assert.equal(shieldArmor.purchaseCount, 0);
-  assert.equal(shieldArmor.currentBonusText, "+0.0%");
+  assert.equal(shieldArmor.currentBonusText, "+0%");
   assert.equal(shieldArmor.canPurchase, true);
 });
 
@@ -276,9 +277,9 @@ test("repeatable building upgrades spend gold and update live shield units", () 
   const shieldArmor = findUpgrade(blacksmithPad, "shield_armor");
   assert.equal(goldBefore - Math.floor(lane.gold), 100);
   assert.equal(shieldArmor.purchaseCount, 1);
-  assert.equal(shieldArmor.currentBonusText, "+0.5%");
-  assert.equal(shieldUnit.directDamageReductionPctBonus, 0.5);
-  assert.equal(shieldUnit.damageReductionPct, 8.5);
+  assert.equal(shieldArmor.currentBonusText, "+5%");
+  assert.equal(shieldUnit.directDamageReductionPctBonus, 5);
+  assert.equal(shieldUnit.damageReductionPct, 13);
 });
 
 test("one-time building upgrades can only be purchased once", () => {
@@ -307,7 +308,76 @@ test("wall hp upgrades immediately increase built wall durability", () => {
   const wallAfter = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
 
   assert.ok(wallAfter.maxHp > wallBefore.maxHp, "expected wall max hp to increase after the wall hp upgrade");
-  assert.equal(findUpgrade(findPad(laneSnapshot(game, 0), "lumber_mill_pad"), "wall_hp").currentBonusText, "+1.0%");
+  assert.equal(findUpgrade(findPad(laneSnapshot(game, 0), "lumber_mill_pad"), "wall_hp").currentBonusText, "+10%");
+});
+
+test("wall archers unlock turret construction and turret tiers fortify walls", () => {
+  const game = createGame();
+  upgradeTownCoreToTier(game, 0, 2);
+  buildPad(game, 0, "archery_tower_pad");
+  buildPad(game, 0, "wall_front_left_01_pad");
+
+  const turretBeforeUnlock = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
+  const wallBeforeTurret = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  assert.equal(turretBeforeUnlock.canBuild, false);
+  assert.match(String(turretBeforeUnlock.lockedReason || ""), /Wall Archers/i);
+
+  act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
+  const unlockedTurret = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
+  assert.equal(unlockedTurret.canBuild, true);
+  assert.equal(unlockedTurret.buildCost, 500);
+
+  buildPad(game, 0, "turret_front_left_pad");
+  const wallAfterTurretTier1 = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  assert.equal(wallAfterTurretTier1.maxHp, Math.floor(wallBeforeTurret.maxHp * 1.2));
+
+  upgradeTownCoreToTier(game, 0, 3);
+  act(game, 0, "upgrade_building", { padId: "turret_front_left_pad" });
+  finishPadConstruction(game, 0, "turret_front_left_pad");
+
+  const wallAfterTurretTier2 = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  assert.equal(wallAfterTurretTier2.maxHp, Math.floor(wallBeforeTurret.maxHp * 1.4));
+});
+
+test("wall archer turret defense damage follows archery tower progression", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+  upgradeTownCoreToTier(game, 0, 2);
+  buildPad(game, 0, "archery_tower_pad");
+  buildPad(game, 0, "wall_front_left_01_pad");
+  act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
+  buildPad(game, 0, "turret_front_left_pad");
+
+  const tierOneDefense = fortressSystem.getLaneWallArcherTurretDefenseProfile(lane);
+  assert.ok(tierOneDefense, "expected wall archer defense profile at archery tier 1");
+
+  upgradeTownCoreToTier(game, 0, 3);
+  act(game, 0, "upgrade_building", { padId: "archery_tower_pad" });
+  finishPadConstruction(game, 0, "archery_tower_pad");
+
+  const tierTwoDefense = fortressSystem.getLaneWallArcherTurretDefenseProfile(lane);
+  assert.ok(tierTwoDefense.damage > tierOneDefense.damage, "expected archery tower tier 2 to increase wall archer damage");
+
+  for (let i = 0; i < 10; i += 1)
+    act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "archer_damage" });
+
+  const upgradedDefense = fortressSystem.getLaneWallArcherTurretDefenseProfile(lane);
+  assert.ok(upgradedDefense.damage > tierTwoDefense.damage, "expected archer damage upgrades to keep improving wall archer damage");
+  assert.equal(findUpgrade(findPad(laneSnapshot(game, 0), "archery_tower_pad"), "archer_damage").currentBonusText, "+10%");
+});
+
+test("stable run speed upgrade cards show whole-number percentages", () => {
+  const game = createGame();
+  upgradeTownCoreToTier(game, 0, 2);
+  buildPad(game, 0, "stable_pad");
+
+  act(game, 0, "purchase_building_upgrade", { padId: "stable_pad", upgradeKey: "run_speed" });
+
+  const stablePad = findPad(laneSnapshot(game, 0), "stable_pad");
+  const runSpeed = findUpgrade(stablePad, "run_speed");
+
+  assert.ok(runSpeed, "expected run speed upgrade");
+  assert.equal(runSpeed.currentBonusText, "+5%");
 });
 
 test("chain heal upgrade heals the primary target and two extra nearby allies", () => {

@@ -42,6 +42,7 @@ namespace CastleDefender.Editor
             public string sourceModelPath;
             public AccentStyle accentStyle;
             public string cardId;
+            public float scaleMultiplier = 1f;
         }
 
         sealed class ConstructionStageSpec
@@ -186,7 +187,7 @@ namespace CastleDefender.Editor
                     {
                         new TierSpec { label = "Wall 1", sourceModelPath = EditorPaths.TT_BUILDING_WALL_A, accentStyle = AccentStyle.None, cardId = "wall_tier_1" },
                         new TierSpec { label = "Wall 2", sourceModelPath = EditorPaths.TT_BUILDING_WALL_B, accentStyle = AccentStyle.None, cardId = "wall_tier_2" },
-                        new TierSpec { label = "Wall 3", sourceModelPath = EditorPaths.TT_BUILDING_WALL_B, accentStyle = AccentStyle.WallTier3, cardId = "wall_tier_3" },
+                        new TierSpec { label = "Wall 3", sourceModelPath = EditorPaths.TT_BUILDING_WALL_B, accentStyle = AccentStyle.None, cardId = "wall_tier_3", scaleMultiplier = 1.25f },
                     },
                 },
                 new ChainSpec
@@ -211,6 +212,26 @@ namespace CastleDefender.Editor
                 },
                 new ChainSpec
                 {
+                    key = "wall_tower",
+                    buildingType = "wall_tower",
+                    displayName = "Wall Towers",
+                    mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
+                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("wall_tower")),
+                    portraitYaw = 150f,
+                    portraitFrameFill = 0.90f,
+                    portraitCanvasFill = 0.92f,
+                    portraitVerticalFocus = 0.54f,
+                    portraitCameraHeightBias = -0.14f,
+                    portraitLookAtHeightBias = -0.02f,
+                    tiers = new[]
+                    {
+                        new TierSpec { label = "Wall Tower 1", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_A, accentStyle = AccentStyle.None, cardId = "wall_tower_tier_1" },
+                        new TierSpec { label = "Wall Tower 2", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_B, accentStyle = AccentStyle.None, cardId = "wall_tower_tier_2" },
+                        new TierSpec { label = "Wall Tower 3", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_B, accentStyle = AccentStyle.TurretTier3, cardId = "wall_tower_tier_3" },
+                    },
+                },
+                new ChainSpec
+                {
                     key = "turret",
                     buildingType = "turret",
                     displayName = "Turrets",
@@ -221,32 +242,12 @@ namespace CastleDefender.Editor
                     portraitCanvasFill = 0.92f,
                     portraitVerticalFocus = 0.54f,
                     portraitCameraHeightBias = -0.14f,
-                    portraitLookAtHeightBias = -0.02f,
-                    tiers = new[]
-                    {
-                        new TierSpec { label = "Turret 1", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_A, accentStyle = AccentStyle.None, cardId = "turret_tier_1" },
-                        new TierSpec { label = "Turret 2", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_B, accentStyle = AccentStyle.None, cardId = "turret_tier_2" },
-                        new TierSpec { label = "Turret 3", sourceModelPath = EditorPaths.TT_BUILDING_CORNER_B, accentStyle = AccentStyle.TurretTier3, cardId = "turret_tier_3" },
-                    },
-                },
-                new ChainSpec
-                {
-                    key = "tower_archer",
-                    buildingType = "tower_archer",
-                    displayName = "Turrets",
-                    mode = TieredBuildingVisual.VisualMode.ExclusiveSwaps,
-                    constructionStages = RepeatConstructionStages(3, ResolveConstructionStageModelPaths("tower_archer")),
-                    portraitYaw = 150f,
-                    portraitFrameFill = 0.90f,
-                    portraitCanvasFill = 0.92f,
-                    portraitVerticalFocus = 0.54f,
-                    portraitCameraHeightBias = -0.14f,
                     portraitLookAtHeightBias = -0.01f,
                     tiers = new[]
                     {
-                        new TierSpec { label = "Turret 1", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_A, accentStyle = AccentStyle.None, cardId = "archer_tower_tier_1" },
-                        new TierSpec { label = "Turret 2", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_B, accentStyle = AccentStyle.ArcherTier2, cardId = "archer_tower_tier_2" },
-                        new TierSpec { label = "Turret 3", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_C, accentStyle = AccentStyle.ArcherTier3, cardId = "archer_tower_tier_3" },
+                        new TierSpec { label = "Turret 1", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_A, accentStyle = AccentStyle.None, cardId = "turret_tier_1" },
+                        new TierSpec { label = "Turret 2", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_B, accentStyle = AccentStyle.ArcherTier2, cardId = "turret_tier_2" },
+                        new TierSpec { label = "Turret 3", sourceModelPath = EditorPaths.TT_BUILDING_TOWER_C, accentStyle = AccentStyle.ArcherTier3, cardId = "turret_tier_3" },
                     },
                 },
             };
@@ -324,8 +325,9 @@ namespace CastleDefender.Editor
                     return new[] { EditorPaths.TT_CONSTRUCTION_WALL_A_0, EditorPaths.TT_CONSTRUCTION_WALL_A_1 };
                 case "gate":
                     return new[] { EditorPaths.TT_CONSTRUCTION_GATE_A_0, EditorPaths.TT_CONSTRUCTION_GATE_A_1 };
-                case "turret":
+                case "wall_tower":
                     return new[] { EditorPaths.TT_CONSTRUCTION_CORNER_A_0, EditorPaths.TT_CONSTRUCTION_CORNER_A_1 };
+                case "turret":
                 case "tower_archer":
                     return new[] { EditorPaths.TT_CONSTRUCTION_TOWER_A_0, EditorPaths.TT_CONSTRUCTION_TOWER_A_1 };
                 default:
@@ -522,6 +524,7 @@ namespace CastleDefender.Editor
                     baseRoot = new GameObject("BaseModel");
                     baseRoot.transform.SetParent(root.transform, false);
                     var baseModel = InstantiateAssetAsChild(chain.tiers[0].sourceModelPath, baseRoot.transform);
+                    ApplyTierRootScale(baseRoot.transform, chain.tiers[0].scaleMultiplier);
                     ApplyNeutralBuildingMaterial(baseModel, trimMaterials.baseNeutral);
                     AddRange(neutralTintRenderers, baseModel.GetComponentsInChildren<Renderer>(true));
                     AddRange(portraitFrameRenderers, baseModel.GetComponentsInChildren<Renderer>(true));
@@ -532,6 +535,7 @@ namespace CastleDefender.Editor
                         string layerName = GetTierRootName(tierIndex + 1);
                         var layerRoot = new GameObject(layerName);
                         layerRoot.transform.SetParent(root.transform, false);
+                        ApplyTierRootScale(layerRoot.transform, chain.tiers[tierIndex].scaleMultiplier);
                         AddAccentSet(layerRoot.transform, baseBounds, chain.tiers[tierIndex].accentStyle, teamColorTargets, trimMaterials);
 
                         if (tierIndex == 1)
@@ -549,6 +553,7 @@ namespace CastleDefender.Editor
                         string layerName = GetTierRootName(tierIndex + 1);
                         var layerRoot = new GameObject(layerName);
                         layerRoot.transform.SetParent(root.transform, false);
+                        ApplyTierRootScale(layerRoot.transform, chain.tiers[tierIndex].scaleMultiplier);
 
                         var modelInstance = InstantiateAssetAsChild(chain.tiers[tierIndex].sourceModelPath, layerRoot.transform);
                         ApplyNeutralBuildingMaterial(modelInstance, trimMaterials.baseNeutral);
@@ -952,6 +957,15 @@ namespace CastleDefender.Editor
 
                 renderer.sharedMaterials = sharedMaterials;
             }
+        }
+
+        static void ApplyTierRootScale(Transform root, float scaleMultiplier)
+        {
+            if (root == null)
+                return;
+
+            float safeScale = Mathf.Max(0.01f, scaleMultiplier);
+            root.localScale = Vector3.one * safeScale;
         }
 
         static string GetTierRootName(int tier)

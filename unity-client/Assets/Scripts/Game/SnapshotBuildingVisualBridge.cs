@@ -49,6 +49,7 @@ namespace CastleDefender.Game
         SnapshotApplier _boundSnapshotApplier;
         bool _subscribed;
         string _lastVisualFailureSignature;
+        string _resolvedVisualBuildingType;
 
         void Awake()
         {
@@ -117,7 +118,7 @@ namespace CastleDefender.Game
                 visualParent = transform;
 
             if (_fortressPad != null)
-                legacyRenderers = _fortressPad.GetPrimaryRenderers();
+                legacyRenderers = ResolveLegacyVisualRenderers();
             else if (_barracksSiteView != null)
                 legacyRenderers = _barracksSiteView.GetPrimaryRenderers();
             else if (legacyRenderers == null || legacyRenderers.Length == 0)
@@ -159,12 +160,17 @@ namespace CastleDefender.Game
             RefreshFromSnapshot();
         }
 
-        void EnsureVisualInstance()
+        void EnsureVisualInstance(string requestedBuildingType = null)
         {
-            if (_tieredVisual != null)
+            string buildingType = !string.IsNullOrWhiteSpace(requestedBuildingType)
+                ? requestedBuildingType.Trim()
+                : ResolveEffectiveBuildingType();
+            if (_tieredVisual != null
+                && !string.IsNullOrWhiteSpace(_resolvedVisualBuildingType)
+                && string.Equals(_resolvedVisualBuildingType, buildingType, StringComparison.OrdinalIgnoreCase))
                 return;
 
-            string buildingType = ResolveBuildingType();
+            ClearGeneratedVisuals();
             if (string.IsNullOrWhiteSpace(buildingType))
             {
                 ReportVisualFailure("missing_type", "Building visual bridge could not resolve a building type.");
@@ -194,9 +200,6 @@ namespace CastleDefender.Game
                 return;
             }
 
-            ResetGeneratedRendererStates();
-            _supplementalGeneratedVisuals.Clear();
-
             var primaryInstance = CreateGeneratedVisualInstance(
                 entry.prefab,
                 visualParent != null ? visualParent : transform,
@@ -207,14 +210,13 @@ namespace CastleDefender.Game
 
             if (_tieredVisual == null)
             {
-                if (_visualInstanceRoot != null)
-                    Destroy(_visualInstanceRoot);
+                ClearGeneratedVisuals();
                 ReportVisualFailure("missing_tier_component", $"Generated visual prefab '{entry.prefab.name}' is missing TieredBuildingVisual.");
                 HideBrokenVisuals();
                 return;
             }
 
-            var resolvedSupplementalRoots = ResolveSupplementalVisualRoots();
+            var resolvedSupplementalRoots = ResolveSupplementalVisualRoots(buildingType);
             for (int i = 0; i < resolvedSupplementalRoots.Length; i++)
             {
                 var supplementalRoot = resolvedSupplementalRoots[i];
@@ -229,6 +231,7 @@ namespace CastleDefender.Game
                     _supplementalGeneratedVisuals.Add(supplementalInstance);
             }
 
+            _resolvedVisualBuildingType = buildingType;
             ClearVisualFailure();
         }
 
@@ -243,6 +246,9 @@ namespace CastleDefender.Game
             bool underRepair = false;
             float hp01 = 1f;
             bool hasSnapshot = SnapshotApplier.Instance?.LatestML?.lanes != null;
+            string effectiveBuildingType = ResolveEffectiveBuildingType();
+            bool showUnbuiltTurretShell = false;
+            MLLaneSnap resolvedLane = null;
 
             if (!hasSnapshot && ShouldUseEditorPreviewWithoutAuthoritativeMatch())
             {
@@ -253,6 +259,7 @@ namespace CastleDefender.Game
             if (_barracksSiteView != null)
             {
                 var lane = ResolveLane(_barracksSiteView.laneColor, out bool laneConfigured);
+                resolvedLane = lane;
                 if (hasSnapshot && lane == null)
                 {
                     if (!laneConfigured)
@@ -302,6 +309,7 @@ namespace CastleDefender.Game
             else if (_fortressPad != null)
             {
                 var lane = ResolveLane(_fortressPad.AnchorLaneColor, out bool laneConfigured);
+                resolvedLane = lane;
                 if (hasSnapshot && lane == null)
                 {
                     if (!laneConfigured)
@@ -334,6 +342,8 @@ namespace CastleDefender.Game
                     return;
                 }
 
+                effectiveBuildingType = ResolveEffectiveBuildingType(lane, pad);
+                showUnbuiltTurretShell = ShouldShowUnbuiltTurretShell(lane, pad, effectiveBuildingType);
                 built = pad != null && pad.isBuilt;
                 tier = built ? Mathf.Max(1, pad.tier) : 1;
                 constructing = pad != null && pad.isConstructing;
@@ -349,10 +359,9 @@ namespace CastleDefender.Game
                 hp01 = pad != null && pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : 1f;
             }
 
-            if (_tieredVisual == null)
-                EnsureVisualInstance();
+            EnsureVisualInstance(effectiveBuildingType);
 
-            bool showWorldVisual = built || constructing;
+            bool showWorldVisual = built || constructing || showUnbuiltTurretShell;
             if (_tieredVisual == null)
             {
                 HideBrokenVisuals();
@@ -378,7 +387,9 @@ namespace CastleDefender.Game
 
             int presentationTier = constructing
                 ? Mathf.Max(1, constructionTargetTier)
-                : Mathf.Max(1, tier);
+                : showUnbuiltTurretShell
+                    ? ResolveSharedWallLineTier(resolvedLane)
+                    : Mathf.Max(1, tier);
             destroyed = destroyed && built;
             if (destroyed)
                 constructing = false;
@@ -386,7 +397,13 @@ namespace CastleDefender.Game
             bool useAuthoredBuiltVisuals = built
                 && !constructing
                 && !destroyed
-                && ShouldUseAuthoredBuiltVisuals();
+                && ShouldUseAuthoredBuiltVisuals(effectiveBuildingType);
+            bool showLegacyStructuralShell = ShouldShowLegacyStructuralShell(
+                effectiveBuildingType,
+                built,
+                constructing,
+                destroyed,
+                showUnbuiltTurretShell);
 
             bool showConstructionStages = constructing && HasConstructionStagesFor(constructionTargetTier);
             bool showConstructionFx = constructing;
@@ -402,7 +419,7 @@ namespace CastleDefender.Game
                 showDamagedFx,
                 destroyed);
 
-            SetLegacyRenderersVisible(useAuthoredBuiltVisuals);
+            SetLegacyRenderersVisible(showLegacyStructuralShell);
             SetInteractionEnabled(true);
             ClearVisualFailure();
         }
@@ -484,6 +501,39 @@ namespace CastleDefender.Game
             _generatedRenderers = Array.Empty<Renderer>();
         }
 
+        void ClearGeneratedVisuals()
+        {
+            HideGeneratedPresentation();
+
+            if (_visualInstanceRoot != null)
+                DestroyGeneratedRoot(_visualInstanceRoot);
+
+            for (int i = 0; i < _supplementalGeneratedVisuals.Count; i++)
+            {
+                if (_supplementalGeneratedVisuals[i].root != null)
+                    DestroyGeneratedRoot(_supplementalGeneratedVisuals[i].root);
+            }
+
+            _supplementalGeneratedVisuals.Clear();
+            _visualInstanceRoot = null;
+            _tieredVisual = null;
+            _lifecycleVisual = null;
+            _resolvedVisualBuildingType = null;
+            ResetGeneratedRendererStates();
+        }
+
+        static void DestroyGeneratedRoot(GameObject root)
+        {
+            if (root == null)
+                return;
+
+            root.SetActive(false);
+            if (Application.isPlaying)
+                Destroy(root);
+            else
+                DestroyImmediate(root);
+        }
+
         bool RestoreGeneratedRendererStates()
         {
             if (_generatedRenderers == null || _generatedRenderers.Length == 0)
@@ -541,6 +591,50 @@ namespace CastleDefender.Game
             SetInteractionEnabled(enableInteraction);
         }
 
+        Renderer[] ResolveLegacyVisualRenderers()
+        {
+            if (_fortressPad == null)
+                return Array.Empty<Renderer>();
+
+            if (TryResolveSharedStructuralVisualRoot(out Transform sharedRoot))
+            {
+                var sharedRenderers = ResolveSharedStructuralRenderers(sharedRoot);
+                if (sharedRenderers.Length > 0)
+                    return sharedRenderers;
+            }
+
+            return _fortressPad.GetPrimaryRenderers();
+        }
+
+        Renderer[] ResolveSharedStructuralRenderers(Transform sharedRoot)
+        {
+            if (sharedRoot == null)
+                return Array.Empty<Renderer>();
+
+            var renderers = sharedRoot.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length <= 0)
+                return Array.Empty<Renderer>();
+
+            var filtered = new List<Renderer>(renderers.Length);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null)
+                    continue;
+
+                var owningAnchor = renderer.GetComponentInParent<FortressPadAnchor>();
+                if (owningAnchor != null
+                    && !IsSharedWallLineStructuralVisualBuildingType(owningAnchor.BuildingType))
+                {
+                    continue;
+                }
+
+                filtered.Add(renderer);
+            }
+
+            return filtered.ToArray();
+        }
+
         void ApplyTeamTint(GameObject root)
         {
             if (root == null)
@@ -573,23 +667,154 @@ namespace CastleDefender.Game
             return string.Empty;
         }
 
-        bool ShouldUseAuthoredBuiltVisuals()
+        string ResolveEffectiveBuildingType(MLLaneSnap lane = null, MLFortressPad snapshotPad = null)
+        {
+            string buildingType = ResolveBuildingType();
+            if (_fortressPad == null
+                || !string.Equals(buildingType, "turret", StringComparison.OrdinalIgnoreCase))
+                return buildingType;
+
+            if (snapshotPad == null && lane != null)
+                snapshotPad = ResolveFortressPad(lane);
+
+            if (snapshotPad == null)
+                return "wall_tower";
+
+            return (snapshotPad.isBuilt || snapshotPad.isConstructing)
+                ? "turret"
+                : "wall_tower";
+        }
+
+        static bool LaneHasBuiltFortressPadType(MLLaneSnap lane, string buildingType)
+        {
+            if (lane?.fortressPads == null || string.IsNullOrWhiteSpace(buildingType))
+                return false;
+
+            for (int padIndex = 0; padIndex < lane.fortressPads.Length; padIndex++)
+            {
+                var pad = lane.fortressPads[padIndex];
+                if (pad == null
+                    || !string.Equals(pad.buildingType, buildingType, StringComparison.OrdinalIgnoreCase)
+                    || !pad.isBuilt
+                    || pad.isDestroyed)
+                    continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
+        static int ResolveSharedWallLineTier(MLLaneSnap lane)
+        {
+            if (lane?.fortressPads == null)
+                return 1;
+
+            int highestTier = 1;
+            for (int padIndex = 0; padIndex < lane.fortressPads.Length; padIndex++)
+            {
+                var pad = lane.fortressPads[padIndex];
+                if (pad == null
+                    || !pad.isBuilt
+                    || pad.isDestroyed
+                    || !IsSharedWallLineStructuralVisualBuildingType(pad.buildingType))
+                {
+                    continue;
+                }
+
+                highestTier = Mathf.Max(highestTier, Mathf.Max(1, pad.tier));
+            }
+
+            return highestTier;
+        }
+
+        bool ShouldShowUnbuiltTurretShell(MLLaneSnap lane, MLFortressPad snapshotPad, string effectiveBuildingType)
+        {
+            if (_fortressPad == null
+                || lane == null
+                || snapshotPad == null
+                || !string.Equals(ResolveBuildingType(), "turret", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(effectiveBuildingType, "wall_tower", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (snapshotPad.isBuilt || snapshotPad.isConstructing || snapshotPad.isDestroyed)
+                return false;
+
+            // Turret hardpoints are part of the fortress silhouette. Keep the authored shell
+            // visible once the shared wall line exists so locked turrets do not create visual gaps.
+            return LaneHasBuiltFortressPadType(lane, "wall") || LaneHasBuiltFortressPadType(lane, "gate");
+        }
+
+        static bool ShouldShowLegacyStructuralShell(
+            string buildingType,
+            bool built,
+            bool constructing,
+            bool destroyed,
+            bool showUnbuiltTurretShell)
+        {
+            if (constructing || destroyed)
+                return false;
+
+            switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wall":
+                case "gate":
+                    return built;
+                default:
+                    return false;
+            }
+        }
+
+        bool ShouldUseAuthoredBuiltVisuals(string buildingType = null)
         {
             if (_fortressPad == null)
                 return false;
 
-            switch ((ResolveBuildingType() ?? string.Empty).Trim().ToLowerInvariant())
+            string resolvedBuildingType = !string.IsNullOrWhiteSpace(buildingType)
+                ? buildingType.Trim()
+                : !string.IsNullOrWhiteSpace(_resolvedVisualBuildingType)
+                    ? _resolvedVisualBuildingType
+                    : ResolveEffectiveBuildingType();
+            switch ((resolvedBuildingType ?? string.Empty).Trim().ToLowerInvariant())
             {
-                case "wall":
                 case "gate":
-                case "turret":
                     return true;
                 default:
                     return false;
             }
         }
 
-        Transform[] ResolveSupplementalVisualRoots()
+        bool TryResolveSharedStructuralVisualRoot(out Transform sharedRoot)
+        {
+            sharedRoot = null;
+            if (_fortressPad == null || !IsSharedWallLineStructuralVisualBuildingType(ResolveBuildingType()))
+                return false;
+
+            Transform candidate = _fortressPad.transform.parent;
+            if (candidate == null)
+                return false;
+
+            var groupedAnchors = candidate.GetComponentsInChildren<FortressPadAnchor>(true);
+            if (groupedAnchors == null || groupedAnchors.Length <= 1)
+                return false;
+
+            sharedRoot = candidate;
+            return true;
+        }
+
+        static bool IsSharedWallLineStructuralVisualBuildingType(string buildingType)
+        {
+            switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wall":
+                case "gate":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        Transform[] ResolveSupplementalVisualRoots(string buildingType = null)
         {
             var results = new List<Transform>();
             var seen = new HashSet<Transform>();
@@ -608,7 +833,10 @@ namespace CastleDefender.Game
                     AppendRoot(supplementalVisualRoots[i]);
             }
 
-            if (!ShouldUseAuthoredBuiltVisuals() || legacyRenderers == null || legacyRenderers.Length <= 0)
+            if (!ShouldUseAuthoredBuiltVisuals(buildingType) || legacyRenderers == null || legacyRenderers.Length <= 0)
+                return results.ToArray();
+
+            if (TryResolveSharedStructuralVisualRoot(out _))
                 return results.ToArray();
 
             Transform primaryRoot = visualParent != null ? visualParent : transform;
@@ -1062,8 +1290,9 @@ namespace CastleDefender.Game
                     return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_wall_0.FBX", $"{TtConstructionRoot}/Wall_A_wall_1.FBX");
                 case "gate":
                     return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_gate_0.FBX", $"{TtConstructionRoot}/Wall_A_gate_1.FBX");
-                case "turret":
+                case "wall_tower":
                     return RepeatConstructionStages(3, $"{TtConstructionRoot}/Wall_A_corner_0.FBX", $"{TtConstructionRoot}/Wall_A_corner_1.FBX");
+                case "turret":
                 case "tower_archer":
                     return RepeatConstructionStages(3, $"{TtConstructionRoot}/Tower_A_0.FBX", $"{TtConstructionRoot}/Tower_A_1.FBX");
                 default:

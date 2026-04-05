@@ -1897,6 +1897,8 @@ function canLaneControlledUnitSeekCombat(game, attacker, target = null) {
     return false;
   if (!target)
     return true;
+  if (isTargetInsideHomeFortressEmergencyZone(game, attacker, target))
+    return true;
   const commandState = getLaneCommandStateForUnit(game, attacker);
   const retreatHomeDefenseReady = commandState === LANE_COMMAND_STATES.RETREAT
     && isLaneControlledUnitReadyToDefendHome(game, attacker);
@@ -2151,18 +2153,19 @@ function shouldUseLaneControlledSurroundSlots(attacker, target) {
   return combatSystem.shouldUseLaneControlledSurroundSlots(attacker, target, COMBAT_SYSTEM_DEPS);
 }
 
-function getContactSlotPoint(lane, attacker, target, stopDistance, options = null) {
-  return combatSystem.getContactSlotPoint(lane, attacker, target, stopDistance, options, COMBAT_SYSTEM_DEPS);
+function getContactSlotPoint(lane, attacker, target, stopDistance, options = null, targetingContext = null) {
+  return combatSystem.getContactSlotPoint(lane, attacker, target, stopDistance, options, COMBAT_SYSTEM_DEPS, targetingContext);
 }
 
-function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance, options = null) {
+function getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance, options = null, targetingContext = null) {
   return combatSystem.getLaneControlledCombatPocketPoint(
     lane,
     attacker,
     target,
     stopDistance,
     options,
-    COMBAT_SYSTEM_DEPS
+    COMBAT_SYSTEM_DEPS,
+    targetingContext
   );
 }
 
@@ -2170,8 +2173,8 @@ function getCombatSlotArrivalTolerance(attacker, target) {
   return combatSystem.getCombatSlotArrivalTolerance(attacker, target, COMBAT_SYSTEM_DEPS);
 }
 
-function isUnitInCombatContact(lane, attacker, target) {
-  return combatSystem.isUnitInCombatContact(lane, attacker, target, COMBAT_SYSTEM_DEPS);
+function isUnitInCombatContact(lane, attacker, target, targetingContext = null) {
+  return combatSystem.isUnitInCombatContact(lane, attacker, target, COMBAT_SYSTEM_DEPS, targetingContext);
 }
 
 function shouldUseSimpleContactApproach(unit, target) {
@@ -2623,8 +2626,11 @@ module.exports = {
   createBarracksRosterSnapshot,
   createMarketRosterSnapshot,
   createHeroRosterSnapshot,
+  createRoundSnapshotLane,
   spawnScheduledBarracksRoster,
   attackFortressPad,
+  getWaveUnitPreferredTarget,
+  isRouteUnitTargetBlockedByStructure,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,
   BARRACKS_SITE_DEFS,

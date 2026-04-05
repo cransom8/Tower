@@ -15,6 +15,9 @@ namespace CastleDefender.Game
         const float EngagementRingWidth = 0.22f;
         const float EngagementRingVerticalOffset = 0.08f;
         const float EngagementRingMinimumWorldLift = 0.14f;
+        const float AttackRingWidth = 0.16f;
+        const float AttackRingVerticalOffset = 0.12f;
+        const float AttackRingMinimumWorldLift = 0.18f;
         static readonly Color DungeonHpBarFill = new(0.74f, 0.28f, 0.98f, 1f);
         static readonly Color DungeonHpBarFrame = new(0.88f, 0.62f, 1.00f, 0.88f);
         static readonly Color HostileHpBarFill = new(0.98f, 0.48f, 0.20f, 0.98f);
@@ -25,6 +28,7 @@ namespace CastleDefender.Game
         static readonly List<LaneSnapshotCombatant> s_refreshBuffer = new();
         static Material s_engagementRingMaterial;
         static bool s_engagementRingDebugEnabled = true;
+        static bool s_attackRingDebugEnabled;
         BarracksSpawnCombatProfile _combatProfile;
         string _combatantId;
         string _registeredCombatantId;
@@ -41,9 +45,12 @@ namespace CastleDefender.Game
         Image _hpBarImage;
         Transform _engagementRingRoot;
         LineRenderer _engagementRing;
+        Transform _attackRingRoot;
+        LineRenderer _attackRing;
         Vector3 _hpBarFillBaseScale = Vector3.one;
         Vector3 _hpBarFillBaseLocalPosition = Vector3.zero;
         Vector3[] _engagementRingPoints;
+        Vector3[] _attackRingPoints;
         Renderer[] _renderers;
         bool _initialized;
         bool _locallyDefeated;
@@ -70,6 +77,7 @@ namespace CastleDefender.Game
         float _debugAnchorTargetY;
         float _debugEngagementRadiusWorld;
         float _resolvedEngagementRingRadius;
+        float _resolvedAttackRingRadius;
         float _debugCombatLeashRadius;
         bool _debugCanEngage = true;
 
@@ -112,6 +120,7 @@ namespace CastleDefender.Game
         public bool DebugCanEngage => _debugCanEngage;
         public float DebugVisibleEngagementRadius => _resolvedEngagementRingRadius;
         public static bool EngagementRingDebugEnabled => s_engagementRingDebugEnabled;
+        public static bool AttackRingDebugEnabled => s_attackRingDebugEnabled;
 
         public static void SetEngagementRingDebugEnabled(bool enabled)
         {
@@ -119,6 +128,20 @@ namespace CastleDefender.Game
                 return;
 
             s_engagementRingDebugEnabled = enabled;
+            RefreshAllRangeRingVisuals();
+        }
+
+        public static void SetAttackRingDebugEnabled(bool enabled)
+        {
+            if (s_attackRingDebugEnabled == enabled)
+                return;
+
+            s_attackRingDebugEnabled = enabled;
+            RefreshAllRangeRingVisuals();
+        }
+
+        static void RefreshAllRangeRingVisuals()
+        {
             s_refreshBuffer.Clear();
             foreach (LaneSnapshotCombatant combatant in s_activeCombatants.Values)
             {
@@ -127,7 +150,7 @@ namespace CastleDefender.Game
             }
 
             for (int i = 0; i < s_refreshBuffer.Count; i++)
-                s_refreshBuffer[i].RefreshEngagementRingVisual();
+                s_refreshBuffer[i].RefreshRangeRingVisuals();
 
             s_refreshBuffer.Clear();
         }
@@ -156,7 +179,7 @@ namespace CastleDefender.Game
             EnsureHpBar();
             RefreshHpBarVisual();
             EnsureEngagementRing();
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
 
         void OnDisable()
@@ -303,13 +326,13 @@ namespace CastleDefender.Game
             _debugAnchorTargetY = unit != null ? unit.anchorTargetY : 0f;
             _debugCombatLeashRadius = unit != null ? unit.combatLeashRadius : 0f;
             _debugCanEngage = unit == null || unit.canEngage;
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
 
         public void SetSnapshotEngagementRadius(float worldRadius)
         {
             _debugEngagementRadiusWorld = Mathf.Max(0f, worldRadius);
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
 
         // Kept as a snapshot-reconciliation hook for runtime tests and any future
@@ -363,7 +386,7 @@ namespace CastleDefender.Game
             EnsureHpBar();
             RefreshHpBarVisual();
             EnsureEngagementRing();
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
 
         void ApplySnapshotInternal(
@@ -404,7 +427,7 @@ namespace CastleDefender.Game
             }
 
             RefreshHpBarVisual();
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
 
         void RestoreFromSnapshot(float authoritativeHp)
@@ -488,6 +511,45 @@ namespace CastleDefender.Game
             Material ringMaterial = ResolveEngagementRingMaterial();
             if (ringMaterial != null)
                 _engagementRing.sharedMaterial = ringMaterial;
+        }
+
+        void EnsureAttackRing()
+        {
+            if (_attackRing != null)
+                return;
+
+            var ringRoot = new GameObject("AttackRangeRing");
+            ringRoot.transform.SetParent(transform, false);
+            ringRoot.transform.localPosition = Vector3.up * AttackRingVerticalOffset;
+            ringRoot.transform.localRotation = Quaternion.identity;
+
+            _attackRingRoot = ringRoot.transform;
+            _attackRing = ringRoot.AddComponent<LineRenderer>();
+            _attackRing.loop = true;
+            _attackRing.useWorldSpace = false;
+            _attackRing.alignment = LineAlignment.View;
+            _attackRing.widthMultiplier = AttackRingWidth;
+            _attackRing.positionCount = EngagementRingSegments;
+            _attackRing.numCapVertices = 4;
+            _attackRing.numCornerVertices = 4;
+            _attackRing.textureMode = LineTextureMode.Stretch;
+            _attackRing.shadowCastingMode = ShadowCastingMode.Off;
+            _attackRing.receiveShadows = false;
+            _attackRing.lightProbeUsage = LightProbeUsage.Off;
+            _attackRing.reflectionProbeUsage = ReflectionProbeUsage.Off;
+            _attackRing.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+            _attackRing.sortingOrder = 22;
+            _attackRing.enabled = false;
+
+            Material ringMaterial = ResolveEngagementRingMaterial();
+            if (ringMaterial != null)
+                _attackRing.sharedMaterial = ringMaterial;
+        }
+
+        void RefreshRangeRingVisuals()
+        {
+            RefreshEngagementRingVisual();
+            RefreshAttackRingVisual();
         }
 
         void RefreshEngagementRingVisual()
@@ -584,6 +646,95 @@ namespace CastleDefender.Game
             if (_debugCombatContact || _debugIsAttacking)
                 return WithAlpha(Color.Lerp(baseColor, Color.white, 0.36f), 0.98f);
             return WithAlpha(Color.Lerp(baseColor, Color.white, 0.18f), 0.82f);
+        }
+
+        void RefreshAttackRingVisual()
+        {
+            if (_attackRing == null && !s_attackRingDebugEnabled)
+                return;
+
+            EnsureAttackRing();
+            if (_attackRing == null)
+                return;
+
+            bool visible = s_attackRingDebugEnabled && _initialized && !_locallyDefeated && CurrentHp > 0f;
+            _attackRing.enabled = visible;
+            if (!visible)
+                return;
+
+            SyncAttackRingScale();
+            PositionAttackRing();
+
+            float radius = Mathf.Max(0.5f, AttackRange);
+            if (!Mathf.Approximately(radius, _resolvedAttackRingRadius))
+            {
+                _resolvedAttackRingRadius = radius;
+                UpdateAttackRingGeometry(radius);
+            }
+
+            Color color = ResolveAttackRingColor();
+            _attackRing.startColor = color;
+            _attackRing.endColor = color;
+        }
+
+        void SyncAttackRingScale()
+        {
+            if (_attackRingRoot == null)
+                return;
+
+            Vector3 lossyScale = transform.lossyScale;
+            _attackRingRoot.localScale = new Vector3(
+                InverseScaleAxis(lossyScale.x),
+                InverseScaleAxis(lossyScale.y),
+                InverseScaleAxis(lossyScale.z));
+        }
+
+        void PositionAttackRing()
+        {
+            if (_attackRingRoot == null)
+                return;
+
+            if (!TryGetVisibleRendererBounds(out Bounds combined))
+            {
+                _attackRingRoot.localPosition = Vector3.up * AttackRingVerticalOffset;
+                return;
+            }
+
+            float footWorldY = Mathf.Max(
+                transform.position.y + AttackRingMinimumWorldLift,
+                combined.min.y + AttackRingVerticalOffset);
+            Vector3 footWorld = new(transform.position.x, footWorldY, transform.position.z);
+            _attackRingRoot.localPosition = transform.InverseTransformPoint(footWorld);
+        }
+
+        void UpdateAttackRingGeometry(float radius)
+        {
+            if (_attackRing == null)
+                return;
+
+            _attackRingPoints ??= new Vector3[EngagementRingSegments];
+            float step = Mathf.PI * 2f / EngagementRingSegments;
+            for (int i = 0; i < EngagementRingSegments; i++)
+            {
+                float angle = i * step;
+                _attackRingPoints[i] = new Vector3(
+                    Mathf.Cos(angle) * radius,
+                    0f,
+                    Mathf.Sin(angle) * radius);
+            }
+
+            _attackRing.positionCount = _attackRingPoints.Length;
+            _attackRing.SetPositions(_attackRingPoints);
+        }
+
+        Color ResolveAttackRingColor()
+        {
+            Color baseColor = Color.Lerp(ResolveEngagementRingBaseColor(), Color.white, 0.42f);
+            if (!_debugCanEngage)
+                return WithAlpha(baseColor, 0.24f);
+            if (_debugCombatContact || _debugIsAttacking)
+                return WithAlpha(baseColor, 0.78f);
+            return WithAlpha(baseColor, 0.58f);
         }
 
         static Material ResolveEngagementRingMaterial()
@@ -727,7 +878,7 @@ namespace CastleDefender.Game
 
         bool ShouldUseRendererForBounds(Renderer renderer)
         {
-            if (renderer == null || renderer == _engagementRing)
+            if (renderer == null || renderer == _engagementRing || renderer == _attackRing)
                 return false;
             if (!renderer.enabled || !renderer.gameObject.activeInHierarchy)
                 return false;
@@ -827,7 +978,7 @@ namespace CastleDefender.Game
         void HandlePreferencesChanged(UserPreferencesData _)
         {
             RefreshHpBarVisual();
-            RefreshEngagementRingVisual();
+            RefreshRangeRingVisuals();
         }
     }
 }

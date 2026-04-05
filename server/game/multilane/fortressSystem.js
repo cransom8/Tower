@@ -1,6 +1,5 @@
 "use strict";
-
-const { getMaxBarracksLevel } = require("../../barracksLevels");
+const { BARRACKS_MAX_LEVEL } = require("../../barracksLevels");
 const { logSpawnAuditInfo: logVerboseAuditInfo } = require("./spawnAuditLogging");
 const {
   BUILDING_LIFECYCLE_STATES,
@@ -51,6 +50,7 @@ const FORTRESS_CONSTRUCTION_DURATION_TICKS = Object.freeze({
 });
 
 const SHARED_DEFENSE_BUILDING_TYPES = new Set(["wall", "gate", "turret"]);
+const SHARED_WALL_GROUP_BUILDING_TYPES = new Set(["wall", "gate"]);
 
 const BUILDING_UPGRADE_SECTION_TYPES = Object.freeze({
   repeatable: "repeatable",
@@ -62,21 +62,29 @@ const DEFAULT_ONE_TIME_UPGRADE_COST = 500;
 const REPEATABLE_UPGRADE_STEP_TO_MULTIPLIER = 0.01;
 const WALL_HP_UPGRADE_KEY = "wall_hp";
 const WALL_ARCHERS_UPGRADE_KEY = "wall_archers";
-const TURRET_DAMAGE_UPGRADE_KEY = "turret_damage";
 const WALL_ARCHER_BASE_DAMAGE = 10;
 const WALL_ARCHER_RANGE = 4.1;
 const WALL_ARCHER_ATTACK_COOLDOWN_TICKS = 18;
 const WALL_ARCHER_PROJECTILE_TICKS = 6;
 const WALL_ARCHER_DAMAGE_TYPE = "PIERCE";
 const WALL_ARCHER_SPLASH_RADIUS = 1.5;
+const TURRET_WALL_HP_STEP_TO_MULTIPLIER = 0.20;
+const ARCHER_TIER_DAMAGE_STEP_TO_MULTIPLIER = 0.25;
 
 const BUILDING_PANEL_DESCRIPTIONS = Object.freeze({
   blacksmith: "Frontline melee durability and damage.",
-  archery_tower: "Archer performance and wall archer support.",
-  lumber_mill: "Fortress defenses and turret improvements.",
+  archery_tower: "Archer performance, wall archers, and turret unlocks.",
+  lumber_mill: "Wall durability and fortress repairs.",
   wizard_tower: "Mage damage and spell utility.",
   temple: "Healing power and support utility.",
   stable: "Movement speed improvements for mounted branches.",
+});
+
+const BARRACKS_BRANCH_KEYS_BY_BUILDING_TYPE = Object.freeze({
+  blacksmith: Object.freeze(["infantry", "polearm", "shield"]),
+  archery_tower: Object.freeze(["ranged"]),
+  wizard_tower: Object.freeze(["arcane"]),
+  temple: Object.freeze(["healing"]),
 });
 
 const BUILDING_UPGRADE_DEFS = Object.freeze({
@@ -85,20 +93,20 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
       key: "shield_armor",
       displayName: "Shield Armor",
       affectedLabel: "Shield units",
-      description: "Increase shield unit armor by 0.5%.",
+      description: "Increase shield unit armor by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
+      stepPct: 5,
       sortIndex: 10,
     }),
     Object.freeze({
       key: "frontline_damage",
       displayName: "Frontline Damage",
       affectedLabel: "Infantry and spear units",
-      description: "Increase infantry and spear attack damage by 0.5%.",
+      description: "Increase infantry and spear attack damage by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
+      stepPct: 5,
       sortIndex: 20,
     }),
   ]),
@@ -107,27 +115,27 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
       key: "archer_range",
       displayName: "Archer Range",
       affectedLabel: "Archers",
-      description: "Increase archer range by 0.5%.",
+      description: "Increase archer range by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
+      stepPct: 5,
       sortIndex: 10,
     }),
     Object.freeze({
       key: "archer_damage",
       displayName: "Archer Damage",
       affectedLabel: "Archers",
-      description: "Increase archer damage by 0.1%.",
+      description: "Increase archer damage by 1%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.1,
+      stepPct: 1,
       sortIndex: 20,
     }),
     Object.freeze({
       key: WALL_ARCHERS_UPGRADE_KEY,
       displayName: "Wall Archers",
-      affectedLabel: "Built turrets",
-      description: "Place one archer on each built tower.",
+      affectedLabel: "Turrets",
+      description: "Unlock turret construction and place one archer on each built turret.",
       section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
       cost: DEFAULT_ONE_TIME_UPGRADE_COST,
       sortIndex: 30,
@@ -135,34 +143,14 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
   ]),
   lumber_mill: Object.freeze([
     Object.freeze({
-      key: "buy_turrets",
-      displayName: "Buy Turrets",
-      affectedLabel: "Fortress towers",
-      description: "Turret purchase cost is not set yet.",
-      section: BUILDING_UPGRADE_SECTION_TYPES.oneTime,
-      cost: null,
-      unavailableReason: "Turret purchase cost is not set yet.",
-      sortIndex: 10,
-    }),
-    Object.freeze({
       key: WALL_HP_UPGRADE_KEY,
       displayName: "Wall Integrity",
       affectedLabel: "Walls",
-      description: "Increase wall HP by 0.5%.",
+      description: "Increase wall HP by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
-      sortIndex: 20,
-    }),
-    Object.freeze({
-      key: TURRET_DAMAGE_UPGRADE_KEY,
-      displayName: "Turret Damage",
-      affectedLabel: "Wall archers",
-      description: "Increase tower archer damage by 0.5%.",
-      section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
-      cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
-      sortIndex: 30,
+      stepPct: 5,
+      sortIndex: 10,
     }),
   ]),
   wizard_tower: Object.freeze([
@@ -179,10 +167,10 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
       key: "mage_damage",
       displayName: "Mage Damage",
       affectedLabel: "Mages",
-      description: "Increase mage damage by 0.1%.",
+      description: "Increase mage damage by 1%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.1,
+      stepPct: 1,
       sortIndex: 20,
     }),
   ]),
@@ -191,10 +179,10 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
       key: "heal_strength",
       displayName: "Healing Strength",
       affectedLabel: "Temple healers",
-      description: "Increase heal strength by 0.5%.",
+      description: "Increase heal strength by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
+      stepPct: 5,
       sortIndex: 10,
     }),
     Object.freeze({
@@ -212,10 +200,10 @@ const BUILDING_UPGRADE_DEFS = Object.freeze({
       key: "run_speed",
       displayName: "Run Speed Boost",
       affectedLabel: "Stable units",
-      description: "Increase run speed by 0.5%.",
+      description: "Increase run speed by 5%.",
       section: BUILDING_UPGRADE_SECTION_TYPES.repeatable,
       cost: DEFAULT_REPEATABLE_UPGRADE_COST,
-      stepPct: 0.5,
+      stepPct: 5,
       sortIndex: 10,
     }),
   ]),
@@ -512,10 +500,10 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     requiresLumberMill: false,
     requiresTurretTier3: false,
     baseMaxHp: 210,
-    buildCost: 20,
+    buildCost: 500,
     upgradeCosts: {
-      2: 40,
-      3: 80,
+      2: 500,
+      3: 500,
     },
   },
 });
@@ -569,7 +557,7 @@ const FORTRESS_PAD_DEFS = Object.freeze([
 
 function getFortressMaxTier(buildingType) {
   if (buildingType === "barracks")
-    return Math.max(1, Math.floor(Number(getMaxBarracksLevel()) || 1));
+    return BARRACKS_MAX_LEVEL;
 
   const buildingDef = FORTRESS_BUILDING_DEFS[buildingType];
   return buildingDef ? Math.max(1, Math.floor(Number(buildingDef.maxTier) || 1)) : 1;
@@ -579,8 +567,17 @@ function isSharedDefenseBuildingType(buildingType) {
   return SHARED_DEFENSE_BUILDING_TYPES.has(String(buildingType || "").trim().toLowerCase());
 }
 
+function getSharedDefenseGroupKey(buildingType) {
+  const normalizedBuildingType = String(buildingType || "").trim().toLowerCase();
+  if (SHARED_WALL_GROUP_BUILDING_TYPES.has(normalizedBuildingType))
+    return "wall";
+  if (normalizedBuildingType === "turret")
+    return "turret";
+  return null;
+}
+
 function getFortressActionBuildingType(buildingType) {
-  return isSharedDefenseBuildingType(buildingType) ? "wall" : buildingType;
+  return getSharedDefenseGroupKey(buildingType) || buildingType;
 }
 
 function getTownCoreRequirementLabel(requiredTownCoreTier) {
@@ -926,20 +923,15 @@ function advanceFortressConstruction(game, deps = {}) {
     if (!lane || !Array.isArray(lane.fortressPads))
       continue;
 
+    let laneNeedsWallDurabilityRefresh = false;
     for (const padState of lane.fortressPads) {
       const construction = getFortressConstructionState(padState, game);
       if (!construction || construction.endTick > currentTick)
         continue;
 
-      const priorBlacksmithBranchDefs = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
-        && String(padState.buildingType || "").trim().toLowerCase() === "blacksmith"
-        && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
-          ? new Map([
-            ["infantry", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "infantry")],
-            ["polearm", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "polearm")],
-            ["shield", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "shield")],
-          ])
-          : null;
+      const priorBarracksBranchDefs = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
+        ? capturePriorBarracksBranchDefs(lane, padState.buildingType, deps)
+        : null;
       const priorMarketTierDef = construction.kind === FORTRESS_CONSTRUCTION_KINDS.upgrade
         && String(padState.buildingType || "").trim().toLowerCase() === "market"
         && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
@@ -952,17 +944,13 @@ function advanceFortressConstruction(game, deps = {}) {
       padState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
       clearFortressConstructionState(padState);
 
-      if (priorBlacksmithBranchDefs
-          && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
-          && typeof deps.upgradeOwnedBarracksBranchUnits === "function") {
-        for (const branchKey of ["infantry", "polearm", "shield"]) {
-          const previousDef = priorBlacksmithBranchDefs.get(branchKey) || null;
-          const nextDef = deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
-          if (!nextDef || !previousDef || nextDef.rosterKey === previousDef.rosterKey)
-            continue;
-          deps.upgradeOwnedBarracksBranchUnits(game, lane, branchKey, nextDef, deps);
-        }
-      }
+      upgradeOwnedBarracksBranchesForBuildingTierChange(
+        game,
+        lane,
+        padState.buildingType,
+        priorBarracksBranchDefs,
+        deps
+      );
 
       if (priorMarketTierDef
           && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
@@ -972,8 +960,14 @@ function advanceFortressConstruction(game, deps = {}) {
           deps.upgradeOwnedMarketUnits(game, lane, nextMarketTierDef, deps);
       }
 
+      if (String(padState.buildingType || "").trim().toLowerCase() === "turret")
+        laneNeedsWallDurabilityRefresh = true;
+
       changed = true;
     }
+
+    if (laneNeedsWallDurabilityRefresh && applyWallDurabilityBonuses(game, lane))
+      changed = true;
   }
 
   if (changed)
@@ -997,6 +991,39 @@ function getFortressRequiredTownCoreTier(buildingType, targetTier) {
     return explicitTier;
 
   return safeTier;
+}
+
+function getBarracksBranchKeysForBuildingType(buildingType) {
+  const normalizedBuildingType = String(buildingType || "").trim().toLowerCase();
+  return BARRACKS_BRANCH_KEYS_BY_BUILDING_TYPE[normalizedBuildingType] || null;
+}
+
+function capturePriorBarracksBranchDefs(lane, buildingType, deps = {}) {
+  const branchKeys = getBarracksBranchKeysForBuildingType(buildingType);
+  if (!branchKeys || typeof deps.getCurrentBarracksRosterDefinitionForBranch !== "function")
+    return null;
+
+  return new Map(
+    branchKeys.map((branchKey) => [branchKey, deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey)])
+  );
+}
+
+function upgradeOwnedBarracksBranchesForBuildingTierChange(game, lane, buildingType, priorBranchDefs, deps = {}) {
+  const branchKeys = getBarracksBranchKeysForBuildingType(buildingType);
+  if (!branchKeys
+      || !priorBranchDefs
+      || typeof deps.getCurrentBarracksRosterDefinitionForBranch !== "function"
+      || typeof deps.upgradeOwnedBarracksBranchUnits !== "function") {
+    return;
+  }
+
+  for (const branchKey of branchKeys) {
+    const previousDef = priorBranchDefs.get(branchKey) || null;
+    const nextDef = deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
+    if (!nextDef || !previousDef || nextDef.rosterKey === previousDef.rosterKey)
+      continue;
+    deps.upgradeOwnedBarracksBranchUnits(game, lane, branchKey, nextDef, deps);
+  }
 }
 
 function getFortressDependencyRequirements(buildingType, targetTier) {
@@ -1064,7 +1091,19 @@ function getRepeatableUpgradeMultiplier(lane, upgradeKey, stepPct, buildingType 
 }
 
 function getWallHpUpgradeMultiplier(lane) {
-  return getRepeatableUpgradeMultiplier(lane, WALL_HP_UPGRADE_KEY, 0.5, "lumber_mill");
+  return getRepeatableUpgradeMultiplier(lane, WALL_HP_UPGRADE_KEY, 5, "lumber_mill");
+}
+
+function getTurretWallHpMultiplier(lane) {
+  const turretTier = getHighestBuiltFortressPadTier(lane, "turret");
+  return 1 + (Math.max(0, turretTier) * TURRET_WALL_HP_STEP_TO_MULTIPLIER);
+}
+
+function getWallArcherDamageMultiplier(lane) {
+  const archeryTier = getHighestBuiltFortressPadTier(lane, "archery_tower");
+  const tierMultiplier = 1 + (Math.max(0, archeryTier - 1) * ARCHER_TIER_DAMAGE_STEP_TO_MULTIPLIER);
+  const archerUpgradeMultiplier = getRepeatableUpgradeMultiplier(lane, "archer_damage", 1, "archery_tower");
+  return tierMultiplier * archerUpgradeMultiplier;
 }
 
 function resolveFortressPadMaxHp(game, lane, padState, tier) {
@@ -1079,7 +1118,7 @@ function resolveFortressPadMaxHp(game, lane, padState, tier) {
     return maxHp;
 
   if (String(padState.buildingType || "").trim().toLowerCase() === "wall")
-    return Math.max(1, Math.floor(maxHp * getWallHpUpgradeMultiplier(lane)));
+    return Math.max(1, Math.floor(maxHp * getWallHpUpgradeMultiplier(lane) * getTurretWallHpMultiplier(lane)));
 
   return maxHp;
 }
@@ -1215,6 +1254,11 @@ function getLaneTownCoreMaxHp(lane) {
 }
 
 function getFortressDependencyLockedReason(lane, buildingType, targetTier) {
+  if (String(buildingType || "").trim().toLowerCase() === "turret"
+      && !hasLaneBuildingUpgrade(lane, WALL_ARCHERS_UPGRADE_KEY, "archery_tower")) {
+    return "Archery: Wall Archers";
+  }
+
   const requirements = getFortressDependencyRequirements(buildingType, targetTier);
   for (const requirement of requirements) {
     if (!requirement || !requirement.buildingType)
@@ -1344,19 +1388,24 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
   };
 }
 
-function getSharedDefenseGroupPads(lane) {
+function getSharedDefenseGroupPads(lane, buildingType) {
   if (!lane || !Array.isArray(lane.fortressPads))
     return [];
 
-  return lane.fortressPads.filter((pad) => pad && isSharedDefenseBuildingType(pad.buildingType));
+  const groupKey = getSharedDefenseGroupKey(buildingType);
+  if (!groupKey)
+    return [];
+
+  return lane.fortressPads.filter((pad) => pad && getSharedDefenseGroupKey(pad.buildingType) === groupKey);
 }
 
 function applySharedDefenseGroupAction(game, lane, padState, deps = {}, kind = FORTRESS_CONSTRUCTION_KINDS.build) {
-  const groupPads = getSharedDefenseGroupPads(lane);
+  const actionBuildingType = getFortressActionBuildingType(padState && padState.buildingType);
+  const groupPads = getSharedDefenseGroupPads(lane, padState && padState.buildingType);
   if (groupPads.length <= 0)
     return { ok: false, reason: "Unknown defense group" };
 
-  const representativePad = groupPads.find((pad) => pad && pad.buildingType === "wall") || groupPads[0];
+  const representativePad = groupPads.find((pad) => pad && pad.buildingType === actionBuildingType) || groupPads[0];
   if (!representativePad)
     return { ok: false, reason: "Unknown defense group" };
 
@@ -1381,6 +1430,7 @@ function applySharedDefenseGroupAction(game, lane, padState, deps = {}, kind = F
   lane.gold -= cost;
   lane.totalBuildSpend += cost;
   lane.buildSpendThisRound += cost;
+  let applyImmediateWallDurabilityBonus = false;
 
   for (const groupPad of groupPads) {
     if (!groupPad)
@@ -1398,12 +1448,17 @@ function applySharedDefenseGroupAction(game, lane, padState, deps = {}, kind = F
       groupPad.maxHp = resolveFortressPadMaxHp(game, lane, groupPad, targetTier);
       groupPad.hp = groupPad.maxHp;
       groupPad.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
+      if (actionBuildingType === "turret")
+        applyImmediateWallDurabilityBonus = true;
     }
   }
 
   if (!Array.isArray(padState.costHistory))
     padState.costHistory = [];
   padState.costHistory.push({ cost });
+
+  if (applyImmediateWallDurabilityBonus)
+    applyWallDurabilityBonuses(game, lane);
 
   recomputeTeamHpState(game, deps);
   return { ok: true };
@@ -1665,9 +1720,6 @@ function buildBuildingUpgradeLockedReason(game, lane, padState, descriptor, upgr
   if (upgradeDef.unavailableReason)
     return upgradeDef.unavailableReason;
 
-  if (upgradeDef.key === WALL_ARCHERS_UPGRADE_KEY && countBuiltFortressPadsByBuildingType(lane, "turret") <= 0)
-    return "Build at least one turret first.";
-
   if (upgradeDef.section === BUILDING_UPGRADE_SECTION_TYPES.oneTime && purchaseCount > 0)
     return "Already purchased.";
 
@@ -1743,11 +1795,10 @@ function getLaneWallArcherTurretDefenseProfile(lane) {
   if (turretPadIds.length <= 0)
     return null;
 
-  const turretDamageMultiplier = getRepeatableUpgradeMultiplier(lane, TURRET_DAMAGE_UPGRADE_KEY, 0.5, "lumber_mill");
   return {
     turretPadIds,
     turretCount: turretPadIds.length,
-    damage: Math.max(1, Math.round(WALL_ARCHER_BASE_DAMAGE * turretDamageMultiplier)),
+    damage: Math.max(1, Math.round(WALL_ARCHER_BASE_DAMAGE * getWallArcherDamageMultiplier(lane))),
     range: WALL_ARCHER_RANGE,
     attackCooldownTicks: WALL_ARCHER_ATTACK_COOLDOWN_TICKS,
     projectileTicks: WALL_ARCHER_PROJECTILE_TICKS,
@@ -1949,14 +2000,7 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
     ? deps.recordBalanceSpend
     : null;
 
-  const priorBlacksmithBranchDefs = String(padState.buildingType || "").trim().toLowerCase() === "blacksmith"
-    && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
-      ? new Map([
-        ["infantry", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "infantry")],
-        ["polearm", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "polearm")],
-        ["shield", deps.getCurrentBarracksRosterDefinitionForBranch(lane, "shield")],
-      ])
-      : null;
+  const priorBarracksBranchDefs = capturePriorBarracksBranchDefs(lane, padState.buildingType, deps);
   const priorMarketTierDef = String(padState.buildingType || "").trim().toLowerCase() === "market"
     && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"
       ? deps.getCurrentMarketRosterDefinitionForLane(lane)
@@ -1976,17 +2020,13 @@ function applyFortressUpgrade(game, lane, padId, deps = {}) {
     padState.costHistory = [];
   padState.costHistory.push({ cost: descriptor.nextUpgradeCost });
 
-  if (priorBlacksmithBranchDefs
-      && typeof deps.getCurrentBarracksRosterDefinitionForBranch === "function"
-      && typeof deps.upgradeOwnedBarracksBranchUnits === "function") {
-    for (const branchKey of ["infantry", "polearm", "shield"]) {
-      const previousDef = priorBlacksmithBranchDefs.get(branchKey) || null;
-      const nextDef = deps.getCurrentBarracksRosterDefinitionForBranch(lane, branchKey);
-      if (!nextDef || !previousDef || nextDef.rosterKey === previousDef.rosterKey)
-        continue;
-      deps.upgradeOwnedBarracksBranchUnits(game, lane, branchKey, nextDef, deps);
-    }
-  }
+  upgradeOwnedBarracksBranchesForBuildingTierChange(
+    game,
+    lane,
+    padState.buildingType,
+    priorBarracksBranchDefs,
+    deps
+  );
 
   if (priorMarketTierDef
       && typeof deps.getCurrentMarketRosterDefinitionForLane === "function"

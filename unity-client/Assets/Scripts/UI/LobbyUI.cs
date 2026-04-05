@@ -146,6 +146,7 @@ namespace CastleDefender.UI
         TMP_Text _txtSettingsSfxValue;
         TMP_Text _txtSettingsMusicValue;
         TMP_Text _txtSettingsEngagementValue;
+        TMP_Text _txtSettingsAttackRangeValue;
         TMP_Text _txtSettingsHealthBarsValue;
         TMP_Text _txtSettingsTooltipsValue;
         GameObject _settingsOverlay;
@@ -1687,7 +1688,7 @@ namespace CastleDefender.UI
             if (label != null)
             {
                 label.richText = true;
-                label.enableWordWrapping = false;
+                label.textWrappingMode = TextWrappingModes.NoWrap;
                 label.fontSize = locked ? 20f : 24f;
                 label.color = locked
                     ? new Color(0.90f, 0.91f, 0.94f, 1f)
@@ -2216,6 +2217,7 @@ namespace CastleDefender.UI
             var sfxButton = CreateSettingsSelectorRow(rows.transform, "SfxRow", "Sound Effects", "Cycle combat, build, and UI volume.", new Color(0.20f, 0.22f, 0.34f, 0.98f), out _txtSettingsSfxValue);
             var musicButton = CreateSettingsSelectorRow(rows.transform, "MusicRow", "Music Loop", "Cycle the background soundtrack level.", new Color(0.16f, 0.26f, 0.30f, 0.98f), out _txtSettingsMusicValue);
             var engagementButton = CreateSettingsSelectorRow(rows.transform, "EngagementRow", "Engagement Rings", "Show or hide combat range circles.", new Color(0.24f, 0.18f, 0.32f, 0.98f), out _txtSettingsEngagementValue);
+            var attackRangeButton = CreateSettingsSelectorRow(rows.transform, "AttackRangeRow", "Attack Range Rings", "Show or hide attack range circles.", new Color(0.18f, 0.24f, 0.34f, 0.98f), out _txtSettingsAttackRangeValue);
             var healthBarsButton = CreateSettingsSelectorRow(rows.transform, "HealthBarsRow", "Health Bars", "Show or hide unit health bars.", new Color(0.23f, 0.26f, 0.16f, 0.98f), out _txtSettingsHealthBarsValue);
             var tooltipsButton = CreateSettingsSelectorRow(rows.transform, "TooltipsRow", "Display Tooltips", "Save barracks hints and onboarding tips.", new Color(0.28f, 0.24f, 0.12f, 0.98f), out _txtSettingsTooltipsValue);
 
@@ -2262,6 +2264,7 @@ namespace CastleDefender.UI
             sfxButton.onClick.AddListener(CycleSfxVolumeSetting);
             musicButton.onClick.AddListener(CycleMusicVolumeSetting);
             engagementButton.onClick.AddListener(ToggleEngagementCirclesSetting);
+            attackRangeButton.onClick.AddListener(ToggleAttackRangeCirclesSetting);
             healthBarsButton.onClick.AddListener(ToggleHealthBarsSetting);
             tooltipsButton.onClick.AddListener(ToggleTooltipsSetting);
             closeButton.onClick.AddListener(() => SetSettingsOverlayVisible(false));
@@ -2502,6 +2505,11 @@ namespace CastleDefender.UI
             UserPreferencesManager.SetEngagementCirclesVisible(!UserPreferencesManager.ShowEngagementCircles);
         }
 
+        void ToggleAttackRangeCirclesSetting()
+        {
+            UserPreferencesManager.SetAttackRangeCirclesVisible(!UserPreferencesManager.ShowAttackRangeCircles);
+        }
+
         void ToggleHealthBarsSetting()
         {
             UserPreferencesManager.SetHealthBarsVisible(!UserPreferencesManager.ShowHealthBars);
@@ -2635,6 +2643,7 @@ namespace CastleDefender.UI
                 && _txtSettingsSfxValue == null
                 && _txtSettingsMusicValue == null
                 && _txtSettingsEngagementValue == null
+                && _txtSettingsAttackRangeValue == null
                 && _txtSettingsHealthBarsValue == null
                 && _txtSettingsTooltipsValue == null)
             {
@@ -2659,6 +2668,7 @@ namespace CastleDefender.UI
             SetSettingsValue(_txtSettingsSfxValue, FormatVolumeValue(preferences.audio.sfxVolume));
             SetSettingsValue(_txtSettingsMusicValue, FormatVolumeValue(preferences.audio.menuMusicVolume ?? preferences.audio.ambientVolume));
             SetSettingsValue(_txtSettingsEngagementValue, FormatToggleValue(preferences.visuals.showEngagementCircles));
+            SetSettingsValue(_txtSettingsAttackRangeValue, FormatToggleValue(preferences.visuals.showAttackRangeCircles));
             SetSettingsValue(_txtSettingsHealthBarsValue, FormatToggleValue(preferences.visuals.showHealthBars));
             SetSettingsValue(_txtSettingsTooltipsValue, FormatToggleValue(preferences.visuals.showTooltips));
             UpdateSettingsMenuButtonState();

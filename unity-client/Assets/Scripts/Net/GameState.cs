@@ -1004,6 +1004,8 @@ namespace CastleDefender.Net
     {
         public int    laneIndex;
         public string displayName;
+        public bool   isAI;
+        public string difficulty;
         public string team;
         public string side;
         public float  income;
@@ -1020,6 +1022,14 @@ namespace CastleDefender.Net
         public int    lives; // legacy field; mirrors current Town Core HP
         public int    teamHp;
         public bool   eliminated;
+        public string commandState;
+        public int    commandTargetLaneIndex;
+        public Dictionary<string, int> fortressTiers;
+        public Dictionary<string, int> builtStructureCounts;
+        public MLBarracksSiteStat[] barracksSites;
+        public Dictionary<string, int> barracksRosterOwned;
+        public Dictionary<string, int> marketRosterOwned;
+        public MLHeroState[] heroStates;
     }
 
     [Serializable]
@@ -1050,6 +1060,210 @@ namespace CastleDefender.Net
     }
 
     [Serializable]
+    public class MLBarracksSiteStat
+    {
+        public string barracksId;
+        public int    level;
+        public int    foodUsed;
+        public int    foodLimit;
+        public int    foodRemaining;
+        public bool   isAtFoodLimit;
+        public int    sendTimerTicksRemaining;
+    }
+
+    [Serializable]
+    public class MLHeroState
+    {
+        public string heroKey;
+        public string state;
+        public bool   canSummon;
+    }
+
+    [Serializable]
+    public class PlayerBattleReportPayload
+    {
+        public int                     schemaVersion;
+        public string[]                tabs;
+        public CommanderBattleReport[] lanes;
+    }
+
+    [Serializable]
+    public class CommanderBattleReport
+    {
+        public int                           laneIndex;
+        public string                        displayName;
+        public bool                          isAI;
+        public string                        difficulty;
+        public string                        result;
+        public string                        resultLabel;
+        public int                           opponentLaneIndex;
+        public string                        opponentName;
+        public string[]                      commanderNotes;
+        public MatchResultHeaderReport       matchHeader;
+        public CorePerformanceSnapshotReport snapshot;
+        public CurveReport                   economyCurve;
+        public CurveReport                   armyCurve;
+        public CurveReport                   threatCurve;
+        public StrategyComparisonReport      strategyComparison;
+        public FortressPressureReport        fortressPressure;
+        public ArmySummaryReport             armySummary;
+        public BattleStoryReport             battleStory;
+        public BattleHonorReport[]           awards;
+        public AdvancedBattleStatsReport     advanced;
+    }
+
+    [Serializable]
+    public class MatchResultHeaderReport
+    {
+        public string resultLabel;
+        public int    finalWave;
+        public int    durationSeconds;
+        public string modeLabel;
+        public string difficultyLabel;
+        public string scoreLabel;
+        public string rankLabel;
+        public string ratingLabel;
+    }
+
+    [Serializable]
+    public class CorePerformanceSnapshotReport
+    {
+        public int   enemiesDefeated;
+        public int   unitsRecruited;
+        public int   unitsLost;
+        public int   buildingsConstructed;
+        public int   upgradesPurchased;
+        public float goldEarned;
+        public float goldSpent;
+        public int   breachesSuffered;
+        public int   coreHealthRemaining;
+        public int   coreDamageTaken;
+    }
+
+    [Serializable]
+    public class CurveReport
+    {
+        public string            title;
+        public string            subtitle;
+        public string            valueFormat;
+        public string            takeaway;
+        public string[]          xLabels;
+        public CurveLineReport[] lines;
+    }
+
+    [Serializable]
+    public class CurveLineReport
+    {
+        public string  label;
+        public float[] values;
+        public string  tone;
+        public bool    isPrimary;
+    }
+
+    [Serializable]
+    public class StrategyComparisonReport
+    {
+        public string                      playerStyleLabel;
+        public string                      opponentStyleLabel;
+        public string                      summary;
+        public StrategySpendBreakdownReport player;
+        public StrategySpendBreakdownReport opponent;
+    }
+
+    [Serializable]
+    public class StrategySpendBreakdownReport
+    {
+        public string               commanderName;
+        public float                unitSpending;
+        public float                upgradeSpending;
+        public float                economySpending;
+        public float                defenseSpending;
+        public float                repairs;
+        public float                otherSpending;
+        public StrategyShareReport[] unitComposition;
+        public StrategyShareReport[] buildingPaths;
+        public string[]             highlights;
+        public string               styleLabel;
+    }
+
+    [Serializable]
+    public class StrategyShareReport
+    {
+        public string label;
+        public float  value;
+        public float  sharePercent;
+    }
+
+    [Serializable]
+    public class FortressPressureReport
+    {
+        public int    breachCount;
+        public int    wallDamageTaken;
+        public int    towerDamageTaken;
+        public int    coreDamageTaken;
+        public float  timeUnderBreachPressure;
+        public int    fortressEntries;
+        public float  timeWithoutFrontline;
+        public string pressureVerdict;
+        public string summary;
+    }
+
+    [Serializable]
+    public class ArmySummaryReport
+    {
+        public string               mostRecruitedUnitType;
+        public string               bestPerformingUnitType;
+        public float                armyValueFielded;
+        public StrategyShareReport[] unitComposition;
+        public string               bestSupportType;
+        public string               heroContribution;
+        public string               summary;
+    }
+
+    [Serializable]
+    public class BattleStoryReport
+    {
+        public BattleStoryHighlightReport[] highlights;
+        public string[]                     storyLines;
+        public string[]                     recommendations;
+    }
+
+    [Serializable]
+    public class BattleStoryHighlightReport
+    {
+        public string title;
+        public string detail;
+        public int    wave;
+    }
+
+    [Serializable]
+    public class BattleHonorReport
+    {
+        public string title;
+        public string detail;
+    }
+
+    [Serializable]
+    public class AdvancedBattleStatsReport
+    {
+        public string[]              breakdownLines;
+        public AdvancedWaveRowReport[] waveRows;
+    }
+
+    [Serializable]
+    public class AdvancedWaveRowReport
+    {
+        public int    wave;
+        public string state;
+        public float  bankedGold;
+        public float  armyStrength;
+        public float  dungeonThreat;
+        public int    breachCount;
+        public int    coreDamage;
+        public float  opponentArmyStrength;
+    }
+
+    [Serializable]
     public class MLGameOverPayload
     {
         public int    winnerLaneIndex;       // -1 when survival ends without an explicit winner
@@ -1068,6 +1282,7 @@ namespace CastleDefender.Net
         public MLWaveSnapshot[]  waveSnapshots;
         public string[] balanceReadableLog;
         public string[] balanceDiagnosisLines;
+        public PlayerBattleReportPayload playerBattleReport;
         public bool   continuedIntoSurvival;
         public int    survivalDuration;
         public int    survivalExtraRounds;

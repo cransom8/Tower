@@ -3,18 +3,22 @@ using UnityEngine;
 namespace CastleDefender.FX
 {
     /// <summary>
-    /// Rotates a flat visual to fully face the camera and keeps it readable as the
-    /// orthographic gameplay camera zooms out.
+    /// Rotates a flat visual to fully face the camera and can compensate for
+    /// gameplay zoom so world-space UI stays visually stable.
     /// </summary>
     public class BillboardY : MonoBehaviour
     {
         const float ReferenceOrthographicSize = 5.3f;
+        const float ReferencePerspectiveFov = 41f;
         const float MinScaleMultiplier = 1f;
+        const float MinFullZoomCompensationMultiplier = 0.25f;
         const float MaxScaleMultiplier = 7.5f;
         const float ExternalScaleEpsilon = 0.0001f;
 
         [Min(0.01f)]
         public float ScaleFactor = 1f;
+        public bool CompensatePerspectiveZoom = false;
+        public bool CompensateZoomIn = false;
 
         Camera _cam;
         Vector3 _baseLocalScale;
@@ -56,10 +60,28 @@ namespace CastleDefender.FX
             float multiplier = 1f;
             if (_cam.orthographic)
             {
+                float minMultiplier = CompensateZoomIn
+                    ? MinFullZoomCompensationMultiplier
+                    : MinScaleMultiplier;
                 multiplier = Mathf.Clamp(
                     _cam.orthographicSize / ReferenceOrthographicSize,
-                    MinScaleMultiplier,
+                    minMultiplier,
                     MaxScaleMultiplier);
+            }
+            else if (CompensatePerspectiveZoom)
+            {
+                float referenceFovTangent = Mathf.Tan(ReferencePerspectiveFov * 0.5f * Mathf.Deg2Rad);
+                float currentFovTangent = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+                if (referenceFovTangent > 0.0001f && currentFovTangent > 0.0001f)
+                {
+                    float minMultiplier = CompensateZoomIn
+                        ? MinFullZoomCompensationMultiplier
+                        : MinScaleMultiplier;
+                    multiplier = Mathf.Clamp(
+                        currentFovTangent / referenceFovTangent,
+                        minMultiplier,
+                        MaxScaleMultiplier);
+                }
             }
 
             multiplier *= Mathf.Max(0.01f, ScaleFactor);

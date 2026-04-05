@@ -29,6 +29,7 @@ function createRuntimeHarness({ remainingWaveMobs = 0, startNextWaveNow = () => 
     },
     issueReconnectToken: () => "token",
     log: { info() {}, warn() {}, error() {} },
+    logMatchAbandon: async () => null,
     logMatchEnd: async () => null,
     logMatchStart: async () => null,
     mlRoomsByCode,

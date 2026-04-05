@@ -25,6 +25,7 @@ const { stringToSeed } = require("./sim-core");
 const { createLoadoutHelpers } = require("./game/loadoutHelpers");
 const { createMatchPersistence } = require("./game/matchPersistence");
 const { createMultilaneRuntime } = require("./game/multilaneRuntime");
+const { buildActionTimelinePayload } = require("./game/actionTimeline");
 const {
   authenticateSocketToken,
   createCodeGenerator,
@@ -357,7 +358,9 @@ app.get("/api/barracks-levels", async (_req, res) => {
     const rows = await db.query(
       `SELECT level, multiplier, upgrade_cost, notes
          FROM barracks_levels
-        ORDER BY level`
+        WHERE level >= 1 AND level <= $1
+        ORDER BY level`,
+      [barracksLevels.BARRACKS_MAX_LEVEL]
     );
     res.json(rows.rows);
   } catch (err) {
@@ -510,7 +513,7 @@ const generateCode = createCodeGenerator();
 const { checkLobbyRateLimit, checkActionRateLimit } = createRateLimiters(runtimeState);
 const { issueReconnectToken, verifyReconnectToken } = createReconnectTokenHelpers(process.env.JWT_SECRET);
 const { resolveLoadout, validateLoadoutSelection, hasValidInlineLoadoutIds } = createLoadoutHelpers({ db, unitTypes, log });
-const { logMatchStart, logMatchEnd } = createMatchPersistence({ db, log, ratingService, seasonService });
+const { logMatchAbandon, logMatchStart, logMatchEnd } = createMatchPersistence({ db, log, ratingService, seasonService });
 
 installSocketAuth(io, {
   authService,
@@ -529,6 +532,7 @@ const multilaneRuntime = createMultilaneRuntime({
   io,
   issueReconnectToken,
   log,
+  logMatchAbandon,
   logMatchEnd,
   logMatchStart,
   mlRoomsByCode: runtimeState.mlRoomsByCode,
@@ -542,6 +546,56 @@ const multilaneRuntime = createMultilaneRuntime({
   RECONNECT_GRACE_MS: runtimeState.RECONNECT_GRACE_MS,
 });
 
+function buildAbandonedPlayerSnapshots(entry) {
+  return Array.isArray(entry && entry.playerSnapshot)
+    ? entry.playerSnapshot.map((snapshot) => ({
+        ...snapshot,
+        result: snapshot && typeof snapshot.result === "string" ? snapshot.result : "draw",
+      }))
+    : [];
+}
+
+function buildMultilaneAbandonOptions(entry, reason) {
+  const room = entry && entry.roomCode
+    ? runtimeState.mlRoomsByCode.get(entry.roomCode) || null
+    : Array.from(runtimeState.mlRoomsByCode.values()).find((candidate) => candidate && candidate.roomId === entry.roomId) || null;
+  const balanceData = simMl && typeof simMl.finalizeMatchBalance === "function" && entry && entry.game
+    ? simMl.finalizeMatchBalance(entry.game, {
+        finalResult: "abandoned",
+        defeat: false,
+      })
+    : { waveReports: [], summary: null, flags: [] };
+  const balanceFlags = Array.isArray(balanceData.flags) ? balanceData.flags.slice() : [];
+  if (reason) {
+    balanceFlags.push({
+      key: "match_abandoned",
+      severity: "medium",
+      reason,
+    });
+  }
+  return {
+    mode: entry.dbMode,
+    partyASize: entry.partyASize,
+    combatLog: entry.combatEvents,
+    waveStats: balanceData.waveReports,
+    balanceSummary: balanceData.summary,
+    balanceFlags,
+    actionTimeline: buildActionTimelinePayload(entry, room, normalizeMatchSettings),
+  };
+}
+
+async function persistAbandonedMatchEntry(entry, reason) {
+  if (!db || !entry || typeof logMatchAbandon !== "function" || !entry.matchIdPromise)
+    return null;
+  if (entry.game && entry.game.phase === "ended")
+    return null;
+
+  const options = entry.mode === "multilane"
+    ? buildMultilaneAbandonOptions(entry, reason)
+    : {};
+  return logMatchAbandon(entry.matchIdPromise, buildAbandonedPlayerSnapshots(entry), options);
+}
+
 const { onMatchFound } = registerSocketHandlers({
   checkActionRateLimit,
   checkLobbyRateLimit,
@@ -549,6 +603,7 @@ const { onMatchFound } = registerSocketHandlers({
   db,
   disconnectGrace: runtimeState.disconnectGrace,
   ffaTeamForLane: multilaneRuntime.ffaTeamForLane,
+  forfeitMultilaneMatch: multilaneRuntime.forfeitMultilaneMatch,
   gamesByRoomId: runtimeState.gamesByRoomId,
   generateCode,
   io,
@@ -599,14 +654,14 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
     }
   }
   runtimeState.gamesByRoomId.delete(roomId);
+  await persistAbandonedMatchEntry(entry, "admin_terminated").catch((err) => {
+    log.error("[match] admin termination persistence failed", {
+      roomId,
+      err: err && err.message ? err.message : String(err),
+    });
+  });
   io.to(roomId).emit("game_over", { winner: null, reason: "admin_terminated" });
   io.to(roomId).emit("ml_game_over", { winnerLaneIndex: null, winnerName: null, reason: "admin_terminated" });
-  if (db && entry.matchIdPromise) {
-    const matchId = await Promise.resolve(entry.matchIdPromise).catch(() => null);
-    if (matchId) {
-      await db.query("UPDATE matches SET status='abandoned', ended_at=NOW() WHERE id=$1", [matchId]).catch(() => {});
-    }
-  }
   log.info("match terminated by admin", { roomId });
   return true;
 };
@@ -704,12 +759,23 @@ async function startServer() {
   });
 }
 
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   log.info("graceful shutdown", { signal });
   featureFlagCache.stop();
   matchmaker.stopMatchmakingLoop();
 
-  for (const [, entry] of runtimeState.gamesByRoomId.entries()) {
+  const activeEntries = Array.from(runtimeState.gamesByRoomId.values());
+  const persistencePromises = activeEntries.map((entry) =>
+    persistAbandonedMatchEntry(entry, `server_shutdown_${String(signal || "unknown").toLowerCase()}`).catch((err) => {
+      log.error("[match] shutdown persistence failed", {
+        roomId: entry && entry.roomId ? entry.roomId : null,
+        err: err && err.message ? err.message : String(err),
+      });
+      return null;
+    })
+  );
+
+  for (const entry of activeEntries) {
     clearInterval(entry.tickHandle);
     if (entry.botController && typeof entry.botController.stop === "function") {
       try {
@@ -720,6 +786,7 @@ function gracefulShutdown(signal) {
     }
   }
   runtimeState.gamesByRoomId.clear();
+  await Promise.allSettled(persistencePromises);
 
   for (const [, grace] of runtimeState.disconnectGrace.entries()) {
     clearTimeout(grace.graceHandle);

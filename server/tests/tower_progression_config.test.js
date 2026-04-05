@@ -71,7 +71,7 @@ test("public multilane config exposes shared walls and turret progression withou
       progressionCategory: "Defense",
       requiresLumberMill: false,
       requiresTurretTier3: false,
-      buildCost: 20,
+      buildCost: 500,
       tierDisplayNames: ["Tier 1", "Tier 2", "Tier 3"],
     }
   );
