@@ -1,0 +1,2 @@
+ALTER TABLE matches
+  ADD COLUMN IF NOT EXISTS action_timeline JSONB DEFAULT NULL;

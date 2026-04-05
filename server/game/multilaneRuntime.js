@@ -4,6 +4,10 @@ const { performance } = require("node:perf_hooks");
 
 const { canUseInLoadout } = require("../unitUsage");
 const {
+  buildActionTimelinePayload,
+  recordTimelineAction,
+} = require("./actionTimeline");
+const {
   getAvailableRaces,
   getDefaultRaceId,
   isValidRaceId,
@@ -479,6 +483,11 @@ function createMultilaneRuntime({
 
   function applyMultilaneAction(entry, laneIndex, action) {
     const result = simMl.applyMLAction(entry.game, laneIndex, action);
+    if (result.ok && entry && entry.roomCode) {
+      const room = mlRoomsByCode.get(entry.roomCode);
+      if (room)
+        recordTimelineAction(entry, room, laneIndex, action, { origin: "player_socket" });
+    }
     const tracker = entry.botController && entry.botController.runtimeTracker;
     if (tracker && !result.ok)
       tracker.recordInvalidAction(laneIndex);
@@ -1074,13 +1083,20 @@ function createMultilaneRuntime({
       game,
       tickHandle: null,
       mode: "multilane",
+      roomId,
+      roomCode: code,
       snapshotEveryNTicks,
       eliminatedNotified,
       botController: null,
       matchIdPromise: null,
+      matchSeedText: matchSeedStr,
+      layoutId: publicConfig?.battlefieldLayout?.layoutId || null,
+      layoutHash: publicConfig?.battlefieldLayout?.contentHash || null,
       playerSnapshot,
       dbMode,
       partyASize: room.partyASize || 1,
+      actionTimeline: [],
+      actionTimelineCounts: {},
       waveReadyVotes: new Set(),
       waveReadyWaveNumber: getUpcomingWaveNumber(game),
       perfLogAtByKind: Object.create(null),
@@ -1283,7 +1299,15 @@ function createMultilaneRuntime({
       let eliminationStateChanged = false;
 
       const prevLite = entry.botController ? aiRuntime.captureStateLite(entry.game) : null;
-      if (entry.botController) entry.botController.onBeforeSimTick(entry.game);
+      if (entry.botController) {
+        entry.botController.onBeforeSimTick(entry.game);
+        const botActions = entry.botController.drainActionLog();
+        for (const botEvent of botActions) {
+          const acceptedCommands = Array.isArray(botEvent && botEvent.acceptedCommands) ? botEvent.acceptedCommands : [];
+          for (const command of acceptedCommands)
+            recordTimelineAction(entry, room, botEvent.laneIndex, command, { origin: "ai_runtime" });
+        }
+      }
       const simTickStartedAt = performance.now();
       simMl.mlTick(entry.game);
       simTickMs = performance.now() - simTickStartedAt;
@@ -1388,6 +1412,7 @@ function createMultilaneRuntime({
           waveStats: balanceData.waveReports,
           balanceSummary: balanceData.summary,
           balanceFlags: balanceData.flags,
+          actionTimeline: buildActionTimelinePayload(entry, room, normalizeMatchSettings),
         })
           .then(({ ratingUpdates }) => {
             for (const update of ratingUpdates || []) {

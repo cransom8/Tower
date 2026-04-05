@@ -547,6 +547,60 @@ test("DEFEND lane commands let barracks units intercept dungeon waves without us
   assert.equal(corePad.hp, 20, "the Town Core should stay untouched while the DEFEND stance unit owns interception");
 });
 
+test("legacy defenders queued through spawnQueue normalize before they enter live combat", () => {
+  const game = createGame(20);
+  const lane = game.lanes[0];
+  issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
+  activateCenterBarracks(lane);
+  primeDefendAnchor(game, lane);
+
+  const queuedDefender = createDefender("guardian", {
+    id: "queued_legacy_defender",
+    isDefender: true,
+    sourceLaneIndex: lane.laneIndex,
+    ownerLane: lane.laneIndex,
+    targetLaneIndex: lane.laneIndex,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    spawnSourceType: "barracks_roster",
+  });
+  queuedDefender.spawnIndex = 0;
+  queuedDefender.spawnLogicalPos = { x: 0, y: 0 };
+  lane.spawnQueue.push(queuedDefender);
+
+  tick(game, 1);
+
+  const liveQueuedDefender = lane.units.find((unit) => unit.id === queuedDefender.id);
+  assert.ok(liveQueuedDefender, "the queued legacy defender should materialize into the lane");
+  assert.equal(liveQueuedDefender.isDefender, false, "queued legacy defenders should normalize into lane-controlled barracks units");
+  assert.equal(liveQueuedDefender.sourceLaneIndex, lane.laneIndex, "queued legacy defenders should retain their owning lane");
+  assert.equal(liveQueuedDefender.spawnSourceType, "barracks_roster", "queued legacy defenders should publish barracks ownership after normalization");
+
+  const attacker = createWaveUnit("raider", {
+    id: "queued_legacy_wave",
+    hp: 80,
+    maxHp: 80,
+    baseDmg: 4,
+    atkCd: 0,
+    atkCdTicks: 4,
+    posX: Number(liveQueuedDefender.posX) + 0.1,
+    posY: Number(liveQueuedDefender.posY) + 0.1,
+    pathIdx: Number(liveQueuedDefender.pathIdx ?? liveQueuedDefender.posY) + 0.1,
+    routeWorldX: Number(liveQueuedDefender.posX) + 0.1,
+    routeWorldY: Number(liveQueuedDefender.posY) + 0.1,
+  });
+  lane.units.push(attacker);
+
+  tick(game, 1);
+
+  const updatedDefender = lane.units.find((unit) => unit.id === queuedDefender.id);
+  const updatedAttacker = lane.units.find((unit) => unit.id === attacker.id);
+  assert.ok(updatedDefender, "the queued defender should still be alive for target acquisition");
+  assert.ok(updatedAttacker, "the dungeon wave should still be alive during opening contact");
+  assert.equal(updatedDefender.combatTarget?.unitId, attacker.id, "normalized queued defenders should acquire nearby dungeon mobs");
+  assert.equal(updatedAttacker.combatTarget?.unitId, queuedDefender.id, "dungeon mobs should retaliate against normalized queued defenders");
+});
+
 test("wave units already in defender contact range do not backpedal to a slot before attacking", () => {
   const game = createGame(20);
   const lane = game.lanes[0];

@@ -72,6 +72,9 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
     const waveStatsPayload = waveStatsWithMatchId ? JSON.stringify(waveStatsWithMatchId) : null;
     const balanceSummaryPayload = balanceSummaryWithMatchId ? JSON.stringify(balanceSummaryWithMatchId) : null;
     const balanceFlagsPayload = Array.isArray(options.balanceFlags) ? JSON.stringify(options.balanceFlags) : null;
+    const actionTimelinePayload = options.actionTimeline && typeof options.actionTimeline === "object"
+      ? JSON.stringify({ ...options.actionTimeline, matchId })
+      : null;
     const validSnapshots = Array.isArray(playerSnapshots)
       ? playerSnapshots.filter((snapshot) => UUID_RE.test(String(snapshot?.playerId || "")))
       : [];
@@ -114,20 +117,53 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
         [matchId],
         "matches:close_mark_processing"
       );
-      await timedClientQuery(
-        client,
-        `UPDATE matches
-            SET status = 'completed',
-                ended_at = NOW(),
-                winner_lane = $1,
-                combat_log = COALESCE($2::jsonb, combat_log),
-                wave_stats = COALESCE($3::jsonb, wave_stats),
-                balance_summary = COALESCE($4::jsonb, balance_summary),
-                balance_flags = COALESCE($5::jsonb, balance_flags)
-          WHERE id = $6`,
-        [winnerLaneValue, combatLogPayload, waveStatsPayload, balanceSummaryPayload, balanceFlagsPayload, matchId],
-        "matches:close_update_match"
-      );
+      const updateMatchRow = async (includeActionTimeline) => {
+        if (includeActionTimeline) {
+          return timedClientQuery(
+            client,
+            `UPDATE matches
+                SET status = 'completed',
+                    ended_at = NOW(),
+                    winner_lane = $1,
+                    combat_log = COALESCE($2::jsonb, combat_log),
+                    wave_stats = COALESCE($3::jsonb, wave_stats),
+                    balance_summary = COALESCE($4::jsonb, balance_summary),
+                    balance_flags = COALESCE($5::jsonb, balance_flags),
+                    action_timeline = COALESCE($6::jsonb, action_timeline)
+              WHERE id = $7`,
+            [winnerLaneValue, combatLogPayload, waveStatsPayload, balanceSummaryPayload, balanceFlagsPayload, actionTimelinePayload, matchId],
+            "matches:close_update_match"
+          );
+        }
+        return timedClientQuery(
+          client,
+          `UPDATE matches
+              SET status = 'completed',
+                  ended_at = NOW(),
+                  winner_lane = $1,
+                  combat_log = COALESCE($2::jsonb, combat_log),
+                  wave_stats = COALESCE($3::jsonb, wave_stats),
+                  balance_summary = COALESCE($4::jsonb, balance_summary),
+                  balance_flags = COALESCE($5::jsonb, balance_flags)
+            WHERE id = $6`,
+          [winnerLaneValue, combatLogPayload, waveStatsPayload, balanceSummaryPayload, balanceFlagsPayload, matchId],
+          "matches:close_update_match_legacy"
+        );
+      };
+
+      try {
+        await updateMatchRow(!!actionTimelinePayload);
+      } catch (err) {
+        if (actionTimelinePayload && /action_timeline/i.test(String(err && err.message || ""))) {
+          log.warn("[match] action timeline column missing during finalization; continuing without action timeline", {
+            matchId,
+            err: err.message,
+          });
+          await updateMatchRow(false);
+        } else {
+          throw err;
+        }
+      }
       if (validSnapshots.length > 0) {
         const placeholders = validSnapshots
           .map((_, i) => `($1, ${i * 3 + 2}, ${i * 3 + 3}, ${i * 3 + 4})`)

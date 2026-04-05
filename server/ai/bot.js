@@ -168,6 +168,72 @@ function getCurrentMarketEntry(laneSummary) {
     .find((entry) => entry && entry.currentTier) || null;
 }
 
+function getOwnedRosterTotal(laneSummary) {
+  return Math.max(
+    0,
+    Number(
+      laneSummary &&
+      laneSummary.barracksRosterSummary &&
+      laneSummary.barracksRosterSummary.ownedTotal
+    ) || 0
+  );
+}
+
+function countMissingSpecialistRoles(laneSummary) {
+  if (!laneSummary)
+    return 0;
+  let missing = 0;
+  if (getUnlockedRoleCount(laneSummary, "ranged") <= 0)
+    missing += 1;
+  if (getUnlockedRoleCount(laneSummary, "support") <= 0)
+    missing += 1;
+  return missing;
+}
+
+function getEarlyBranchUnlockBonus(laneSummary, context, profile, buildingType, branchRole) {
+  if (!laneSummary || !context || !profile)
+    return 0;
+  if (context.roundStage !== "early" || laneSummary.builtBarracksSites <= 0)
+    return 0;
+
+  const profileKey = String(profile.key || "");
+  const nonEcoProfile = profileKey !== "ECO";
+  const pressureBias = Math.max(0, (Number(profile.pressureWeight) || 0) - (Number(profile.ecoWeight) || 0));
+  let bonus = 0;
+
+  if (context.combatBranchCount <= 0 && buildingType === "blacksmith" && nonEcoProfile)
+    bonus += 2.25 + pressureBias * 1.4;
+
+  if (context.combatBranchCount <= 1 && branchRole && getUnlockedRoleCount(laneSummary, branchRole) <= 0) {
+    bonus += 1.15;
+    if (nonEcoProfile)
+      bonus += 0.55;
+  }
+
+  if (bonus > 0 && getOwnedRosterTotal(laneSummary) >= Math.max(1, Number(context.minimumRosterFloor) || 0))
+    bonus += 0.45;
+
+  return bonus;
+}
+
+function getEarlyMarketTimingPenalty(laneSummary, context, profile) {
+  if (!laneSummary || !context || !profile)
+    return 0;
+  if (context.danger || context.roundStage !== "early" || String(profile.key || "") === "ECO")
+    return 0;
+
+  const pressureBias = Math.max(0, (Number(profile.pressureWeight) || 0) - (Number(profile.ecoWeight) || 0));
+  let penalty = 0;
+  if (laneSummary.builtBarracksSites > 0 && context.combatBranchCount <= 0)
+    penalty += 2.2;
+  if (context.combatBranchCount <= 1)
+    penalty += countMissingSpecialistRoles(laneSummary) * 0.9;
+  if (getOwnedRosterTotal(laneSummary) >= Math.max(1, Number(context.minimumRosterFloor) || 0))
+    penalty += 0.8;
+  penalty += pressureBias * 1.4;
+  return penalty;
+}
+
 function chooseTechSaveTarget(laneSummary, context, profile) {
   if (!laneSummary || !context || !profile)
     return null;
@@ -208,7 +274,7 @@ function chooseTechSaveTarget(laneSummary, context, profile) {
   const desiredMarketTier = context.roundStage === "early" ? (context.ecoWindow ? 1 : 0) : context.roundStage === "mid" ? 2 : 3;
   const marketTier = Number(laneSummary.padTiers.market) || 0;
   const marketWorkers = Number(laneSummary.marketRosterSummary && laneSummary.marketRosterSummary.ownedTotal) || 0;
-  const lumberTier = Number(laneSummary.padTiers.lumber_mill) || 0;
+  const marketTimingPenalty = getEarlyMarketTimingPenalty(laneSummary, context, profile);
   if (desiredMarketTier > 0) {
     if (marketTier <= 0) {
       const marketPad = findBuildablePad(laneSummary, "market");
@@ -222,6 +288,7 @@ function chooseTechSaveTarget(laneSummary, context, profile) {
           + (context.townCoreTier >= 2 ? 1.15 : 0)
           + (lumberTier > 0 ? 0.75 : 0)
           + (marketWorkers <= 0 ? 0.45 : 0)
+          - marketTimingPenalty
         );
       }
     } else if (marketTier < desiredMarketTier && !context.danger) {
@@ -235,6 +302,7 @@ function chooseTechSaveTarget(laneSummary, context, profile) {
           + (context.ecoWindow ? 0.95 : 0.2)
           + (lumberTier > 0 ? 0.45 : 0)
           + (marketWorkers >= Math.max(2, marketTier * 2) ? 0.35 : 0)
+          - Math.max(0, marketTimingPenalty - 0.9)
         );
       }
     }
@@ -253,7 +321,8 @@ function chooseTechSaveTarget(laneSummary, context, profile) {
     const roleNeed = role ? Math.max(0, Number(context.roleNeeds[role]) || 0) : 0;
     const unlockedCount = role ? getUnlockedRoleCount(laneSummary, role) : 0;
     const scarcityBonus = !role ? 0 : unlockedCount <= 0 ? 1.9 : unlockedCount === 1 ? 1.0 : 0;
-    addTarget(goal, buildable.buildCost, 5.5 + priorityBonus + roleNeed * 1.25 + scarcityBonus);
+    const unlockBonus = getEarlyBranchUnlockBonus(laneSummary, context, profile, goal, role);
+    addTarget(goal, buildable.buildCost, 5.5 + priorityBonus + roleNeed * 1.25 + scarcityBonus + unlockBonus);
   }
 
   for (let i = 0; i < branchPriority.length; i += 1) {
@@ -268,7 +337,8 @@ function chooseTechSaveTarget(laneSummary, context, profile) {
     const unlockedCount = role ? getUnlockedRoleCount(laneSummary, role) : 0;
     const scarcityBonus = !role ? 0 : unlockedCount <= 0 ? 1.6 : unlockedCount === 1 ? 0.8 : 0;
     const priorityBonus = Math.max(0, 1.4 - i * 0.22);
-    addTarget(buildingType, buildable.buildCost, 4 + priorityBonus + roleNeed + scarcityBonus);
+    const unlockBonus = getEarlyBranchUnlockBonus(laneSummary, context, profile, buildingType, role);
+    addTarget(buildingType, buildable.buildCost, 4 + priorityBonus + roleNeed + scarcityBonus + unlockBonus);
   }
 
   const townCorePad = findUpgradablePad(laneSummary, "town_core");
@@ -411,12 +481,13 @@ class BotBrain {
     const barracksSaturated = barracksCapacity.cappedSites > 0
       || barracksCapacity.foodPressure01 >= 0.85
       || (barracksCapacity.builtSites > 0 && barracksCapacity.totalFoodRemaining <= barracksCapacity.builtSites);
+    const establishedPressureArmy = laneSummary.barracksRosterSummary.ownedTotal >= Math.max(4, laneSummary.builtBarracksSites * 3);
     const pressureWindow = !!laneSummary && !!targetSummary && !danger && (
       targetSummary.coreHpRatio <= 0.82 ||
       targetSummary.recentLeaks > 0 ||
       targetPressureGap >= 1.4 ||
-      laneSummary.defense >= laneSummary.threat * 1.12 + 1 ||
-      laneSummary.barracksRosterSummary.ownedTotal >= Math.max(4, laneSummary.builtBarracksSites * 3)
+      (establishedPressureArmy && laneSummary.defense >= laneSummary.threat * 1.12 + 1) ||
+      establishedPressureArmy
     );
     const ecoWindow = !!laneSummary && !danger && !pressureWindow && (
       laneSummary.padTiers.lumber_mill < (roundStage === "early" ? 1 : roundStage === "mid" ? 2 : 3) ||
@@ -461,6 +532,7 @@ class BotBrain {
       techStarved,
       branchStarved,
       barracksSaturated,
+      minimumRosterFloor,
     }, this.personalityProfile);
 
     return {
@@ -536,8 +608,20 @@ class BotBrain {
       defensive: !!(options && options.defensive),
       reserveBreak: !!(options && options.reserveBreak),
     };
-    if (!existing || candidate.score > existing.score)
+    if (!existing) {
       candidateMap.set(key, candidate);
+      return;
+    }
+
+    candidateMap.set(key, {
+      action: existing.action,
+      key,
+      score: Math.max(existing.score, candidate.score),
+      spend: existing.spend,
+      critical: existing.critical || candidate.critical,
+      defensive: existing.defensive || candidate.defensive,
+      reserveBreak: existing.reserveBreak || candidate.reserveBreak,
+    });
   }
 
   rankCandidates(candidates) {
@@ -629,10 +713,11 @@ class BotBrain {
         const roleBonus = branchRole ? Math.max(0, Number(context.roleNeeds[branchRole]) || 0) * 0.9 : 0;
         const branchStarveBonus = goal !== "lumber_mill" && context.branchStarved ? 1.4 : 0;
         const ecoUnlockBonus = goal === "lumber_mill" && context.townCoreTier >= 2 && laneSummary.padTiers.lumber_mill <= 0 ? 1.1 : 0;
+        const unlockBonus = getEarlyBranchUnlockBonus(laneSummary, context, this.personalityProfile, goal, branchRole);
         this.addCandidate(candidateMap, game, laneSummary, {
           type: AI_ACTION_TYPE.BUILD_PAD,
           padId: buildable.padId,
-        }, 4.4 + orderBonus + roleBonus + branchStarveBonus + ecoUnlockBonus + (goal === "lumber_mill" ? this.personalityProfile.ecoWeight * 0.7 : 0), {
+        }, 4.4 + orderBonus + roleBonus + branchStarveBonus + ecoUnlockBonus + unlockBonus + (goal === "lumber_mill" ? this.personalityProfile.ecoWeight * 0.7 : 0), {
           critical: goal === "lumber_mill" && laneSummary.padTiers.lumber_mill <= 0,
           defensive: goal === "temple" && context.danger,
         });
@@ -676,6 +761,7 @@ class BotBrain {
     const desiredTier = context.roundStage === "early" ? (context.ecoWindow ? 1 : 0) : context.roundStage === "mid" ? 2 : 3;
     const currentWorkers = Number(laneSummary.marketRosterSummary && laneSummary.marketRosterSummary.ownedTotal) || 0;
     const lumberTier = Number(laneSummary.padTiers.lumber_mill) || 0;
+    const marketTimingPenalty = getEarlyMarketTimingPenalty(laneSummary, context, this.personalityProfile);
 
     if (desiredTier <= 0)
       return;
@@ -691,7 +777,8 @@ class BotBrain {
           + (context.ecoWindow ? 1.8 : 0.35)
           + (context.townCoreTier >= 2 ? 1.1 : 0)
           + (lumberTier > 0 ? 0.8 : 0)
-          + (currentWorkers <= 0 ? 0.45 : 0), {
+          + (currentWorkers <= 0 ? 0.45 : 0)
+          - marketTimingPenalty, {
           critical: context.ecoWindow && context.townCoreTier >= 2 && currentWorkers <= 0,
           reserveBreak: context.ecoWindow && !context.danger,
         });
@@ -709,7 +796,8 @@ class BotBrain {
           + this.personalityProfile.ecoWeight * 1
           + (context.ecoWindow ? 1.05 : 0.2)
           + (lumberTier > 0 ? 0.35 : 0)
-          + (currentWorkers >= Math.max(2, currentTier * 2) ? 0.45 : 0), {
+          + (currentWorkers >= Math.max(2, currentTier * 2) ? 0.45 : 0)
+          - Math.max(0, marketTimingPenalty - 0.9), {
           reserveBreak: laneSummary.gold > this.personalityProfile.floatGoldSoftCap + 80,
         });
       }
@@ -766,6 +854,7 @@ class BotBrain {
       const scarcityBonus = !branchRole ? 0 : unlockedCount <= 0 ? 1.45 : unlockedCount === 1 ? 0.75 : 0;
       const desiredTier = context.roundStage === "early" ? 1 : context.roundStage === "mid" ? 2 : 3;
       const priorityBonus = Math.max(0, 1.6 - i * 0.28);
+      const unlockBonus = getEarlyBranchUnlockBonus(laneSummary, context, this.personalityProfile, buildingType, branchRole);
 
       if (currentTier <= 0) {
         const buildable = findBuildablePad(laneSummary, buildingType);
@@ -773,7 +862,7 @@ class BotBrain {
         this.addCandidate(candidateMap, game, laneSummary, {
           type: AI_ACTION_TYPE.BUILD_PAD,
           padId: buildable.padId,
-        }, 2.8 + priorityBonus + roleNeed + scarcityBonus + (context.branchStarved ? 1.5 : 0) + (context.pressureWindow && branchRole === "ranged" ? 0.6 : 0) + (context.danger && branchRole === "support" ? 0.6 : 0), {
+        }, 2.8 + priorityBonus + roleNeed + scarcityBonus + unlockBonus + (context.branchStarved ? 1.5 : 0) + (context.pressureWindow && branchRole === "ranged" ? 0.6 : 0) + (context.danger && branchRole === "support" ? 0.6 : 0), {
           reserveBreak: context.saveForTechLabel === buildingType,
         });
         continue;
@@ -917,7 +1006,8 @@ class BotBrain {
     if (laneSummary.gold > this.personalityProfile.floatGoldSoftCap + 160)
       preferredCount = 10;
 
-    const spendableGold = Math.max(0, laneSummary.gold - (context.danger ? 0 : context.reserveGold));
+    const bootstrapFirstWorker = !context.danger && context.ecoWindow && currentWorkers <= 0;
+    const spendableGold = Math.max(0, laneSummary.gold - (context.danger || bootstrapFirstWorker ? 0 : context.reserveGold));
     const buyCost = Math.max(1, Number(currentEntry.buyCost) || 1);
     const foodCost = Math.max(1, Number(currentEntry.foodCost) || 1);
     const maxAffordableGold = Math.floor(spendableGold / buyCost);
@@ -1049,6 +1139,11 @@ class BotBrain {
             laneSummary.padTiers.archery_tower <= 0 &&
             laneSummary.padTiers.wizard_tower <= 0) {
           score -= 1.8;
+        }
+        if (totalOwned < context.minimumRosterFloor) {
+          score += entry.rosterKey === "militia" ? 3.1 : 4.5;
+          if (!context.danger)
+            score += 0.35;
         }
 
         this.addCandidate(candidateMap, game, laneSummary, {

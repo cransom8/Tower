@@ -470,6 +470,11 @@ const requeueLaneControlledUnit = bindSystemMethodWithDeps(
   "requeueLaneControlledUnit",
   () => LANE_COMMAND_SYSTEM_DEPS
 );
+const markLaneCommandAssignmentsDirty = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "markLaneCommandAssignmentsDirty",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
 const syncLaneCommandAssignments = bindSystemMethodWithDeps(
   laneCommandSystem,
   "syncLaneCommandAssignments",
@@ -954,6 +959,7 @@ const FORTRESS_SYSTEM_DEPS = Object.freeze({
   getPadWorldPosition,
   isScheduledWaveUnit,
   shouldKeepUnitAfterLaneDefeat,
+  markLaneCommandAssignmentsDirty,
   recordBalanceSpend,
   recordBalanceStructureDamage,
   resolveLaneAllegianceKey,
@@ -1085,6 +1091,7 @@ const SPAWN_SYSTEM_DEPS = Object.freeze({
   log,
   getSourceLane,
   getBarracksSpeedMult,
+  markLaneCommandAssignmentsDirty,
   normalizeAllegianceKey,
   normalizeBarracksSiteId,
   resolveLaneAllegianceKey,
@@ -1225,9 +1232,11 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   runScheduledWaves,
   runScheduledBuildingConstruction,
   runScheduledBarracksSends,
+  markLaneCommandAssignmentsDirty,
   syncLaneCommandAssignments,
   createCombatTargetingContext,
   laneHasOccupyingForces,
+  normalizeLegacyDefenderUnit,
   initializeMovingUnitRouteState,
   resolveSpawnSourceTypeFromUnit,
   applyCanonicalUnitMirrors,
@@ -1340,6 +1349,7 @@ const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({
   getLaneCommandObjectiveLaneIndex,
   isLaneCombatEnabledCommandState,
   getLaneCommandEngagementRadius,
+  markLaneCommandAssignmentsDirty,
   syncLaneCommandAssignments,
   applyFortressBuildOnPad,
   getFortressPadByBuildingType,

@@ -277,6 +277,9 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   const buildAbilitiesForUnitType = requireDepFunction(deps, "buildAbilitiesForUnitType");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
   const isFortArchetypeKey = requireDepFunction(deps, "isFortArchetypeKey");
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   const log = deps.log;
   const spawnSourceTypes = getSpawnSourceTypes(deps);
   const allegianceKeys = getAllegianceKeys(deps);
@@ -406,6 +409,8 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   };
   applyCanonicalUnitMirrors(game, lane, queuedUnit);
   lane.spawnQueue.push(queuedUnit);
+  if (markLaneCommandAssignmentsDirty && spawnValidation.spawnType !== spawnSourceTypes.DUNGEON_WAVE)
+    markLaneCommandAssignmentsDirty(game);
 }
 
 module.exports = {

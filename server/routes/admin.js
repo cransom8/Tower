@@ -982,6 +982,26 @@ router.get('/matches/:id/combat-log', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /admin/matches/:id/action-timeline
+router.get('/matches/:id/action-timeline', requireAdmin, async (req, res) => {
+  if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });
+  const db = require('../db');
+  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid match ID' });
+  try {
+    const r = await db.query(`SELECT action_timeline FROM matches WHERE id = $1`, [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Match not found' });
+    const timeline = r.rows[0].action_timeline || null;
+    res.json({
+      matchId: req.params.id,
+      timeline,
+      actions: Array.isArray(timeline?.actions) ? timeline.actions : [],
+    });
+  } catch (err) {
+    log.error('[admin] action-timeline route error', { err: err.message });
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /admin/matches/:id/balance-report
 router.get('/matches/:id/balance-report', requireAdmin, async (req, res) => {
   if (!process.env.DATABASE_URL) return res.status(503).json({ error: 'No database' });

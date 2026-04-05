@@ -629,12 +629,17 @@ function normalizeLegacyDefenderUnits(game, deps = {}) {
     return;
 
   for (const lane of game.lanes) {
-    if (!lane || !Array.isArray(lane.units))
+    if (!lane)
       continue;
 
-    for (const unit of lane.units) {
-      if (normalizeLegacyDefenderUnit(game, lane, unit, deps))
-        applyCanonicalUnitMirrors(game, lane, unit, deps);
+    const collections = [lane.units, lane.spawnQueue];
+    for (const units of collections) {
+      if (!Array.isArray(units))
+        continue;
+      for (const unit of units) {
+        if (normalizeLegacyDefenderUnit(game, lane, unit, deps))
+          applyCanonicalUnitMirrors(game, lane, unit, deps);
+      }
     }
   }
 }
@@ -1855,9 +1860,87 @@ function requeueLaneControlledUnit(targetLane, unit, deps = {}) {
   return true;
 }
 
+function markLaneCommandAssignmentsDirty(game) {
+  if (!game || typeof game !== "object")
+    return false;
+  game.__laneCommandAssignmentsDirty = true;
+  return true;
+}
+
+function countLaneControlledEntries(units, deps = {}) {
+  if (!Array.isArray(units) || units.length <= 0)
+    return 0;
+  let count = 0;
+  for (const unit of units) {
+    if ((unit && unit.isDefender) || isLaneControlledUnit(unit, deps))
+      count += 1;
+  }
+  return count;
+}
+
+function buildLaneCommandAssignmentsSnapshotKey(game, deps = {}) {
+  if (!game || !Array.isArray(game.lanes))
+    return "";
+
+  return game.lanes.map((lane) => {
+    if (!lane)
+      return "missing";
+
+    const siteCommandKey = lane.barracksSiteStates && typeof lane.barracksSiteStates === "object"
+      ? Object.entries(lane.barracksSiteStates)
+        .sort(([leftId], [rightId]) => String(leftId).localeCompare(String(rightId)))
+        .map(([siteId, siteState]) => `${siteId}=${normalizeLaneCommandState(siteState && siteState.commandState, deps) || ""}`)
+        .join(",")
+      : "";
+
+    return [
+      Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
+      lane.eliminated ? 1 : 0,
+      getLaneCommandState(lane, deps) || "",
+      Number.isInteger(lane.commandTargetLaneIndex) ? lane.commandTargetLaneIndex : "",
+      Number.isFinite(Number(lane.commandAnchorProgress)) ? Number(lane.commandAnchorProgress).toFixed(3) : "",
+      countLaneControlledEntries(lane.units, deps),
+      countLaneControlledEntries(lane.spawnQueue, deps),
+      siteCommandKey,
+    ].join(":");
+  }).join("||");
+}
+
+function shouldForceLaneCommandAssignmentsSync(game, deps = {}) {
+  const laneCommandStates = getLaneCommandStates(deps);
+  if (!game || !Array.isArray(game.lanes))
+    return false;
+  if (deps.USE_PER_UNIT_ANCHOR_SLOTS !== true)
+    return true;
+
+  for (const lane of game.lanes) {
+    if (!lane)
+      continue;
+    if (getLaneCommandState(lane, deps) === laneCommandStates.RETREAT)
+      return true;
+    if (!lane.barracksSiteStates || typeof lane.barracksSiteStates !== "object")
+      continue;
+    for (const siteState of Object.values(lane.barracksSiteStates)) {
+      if (normalizeLaneCommandState(siteState && siteState.commandState, deps) === laneCommandStates.RETREAT)
+        return true;
+    }
+  }
+
+  return false;
+}
+
 function syncLaneCommandAssignments(game, deps = {}) {
   if (!game || !Array.isArray(game.lanes))
     return;
+  const currentSnapshotKey = buildLaneCommandAssignmentsSnapshotKey(game, deps);
+  const snapshotStale = game.__laneCommandAssignmentsSnapshotKey !== currentSnapshotKey;
+  if (game.__laneCommandAssignmentsDirty === false
+      && !snapshotStale
+      && !shouldForceLaneCommandAssignmentsSync(game, deps)) {
+    return;
+  }
+
+  game.__laneCommandAssignmentsDirty = false;
 
   normalizeLegacyDefenderUnits(game, deps);
   const laneCommandStates = getLaneCommandStates(deps);
@@ -2223,6 +2306,8 @@ function syncLaneCommandAssignments(game, deps = {}) {
 
     ownerLane.assignedUnitOrder = ownerLane.assignedUnits.slice();
   }
+
+  game.__laneCommandAssignmentsSnapshotKey = buildLaneCommandAssignmentsSnapshotKey(game, deps);
 }
 
 module.exports = {
@@ -2285,5 +2370,6 @@ module.exports = {
   resolveLegacySourceTeamFromAllegianceKey,
   applyCanonicalUnitMirrors,
   requeueLaneControlledUnit,
+  markLaneCommandAssignmentsDirty,
   syncLaneCommandAssignments,
 };

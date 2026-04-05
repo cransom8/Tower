@@ -58,10 +58,24 @@ namespace CastleDefender.UI
         {
             var nm = NetworkManager.Instance;
             _payload = nm != null ? nm.LastMLGameOver : null;
+            bool injectedEditorPayload = false;
+#if UNITY_EDITOR
+            if (_payload == null)
+            {
+                _payload = BuildEditorValidationPayload();
+                injectedEditorPayload = true;
+                Debug.LogWarning("[PostGameFlow] No game-over payload found in editor Play Mode. Injecting mock payload so the report UI can be validated.");
+            }
+#endif
             ShowPayload(_payload);
             Debug.Log(
                 $"[PostGameFlow] Post-game opened. scene={SceneName} " +
                 $"result={_resultText?.text ?? "UNKNOWN"} winnerLane={_payload?.winnerLaneIndex ?? -1} round={_payload?.finalRound ?? -1}.");
+
+#if UNITY_EDITOR
+            if (injectedEditorPayload && _statsPanel != null)
+                StartCoroutine(ValidateInjectedEditorReport());
+#endif
 
             StartCoroutine(EnsureEventSystemReady());
 
@@ -322,6 +336,58 @@ namespace CastleDefender.UI
             SceneEventSystemUtility.EnsureSceneLocal(this, "PostGameEventSystem", "PostGameFlow");
         }
 
+#if UNITY_EDITOR
+        System.Collections.IEnumerator ValidateInjectedEditorReport()
+        {
+            if (_statsPanel == null || _payload == null)
+                yield break;
+
+            if (!_statsPanel.gameObject.activeSelf)
+                _statsPanel.gameObject.SetActive(true);
+
+            _statsPanel.Show(_payload);
+            yield return null;
+
+            ValidateEditorReportTab("Economy", _statsPanel.Btn_Tab_Economy, _statsPanel.PanelEconomy);
+            yield return null;
+
+            ValidateEditorReportTab("Build", _statsPanel.Btn_Tab_Build, _statsPanel.PanelBuild);
+            yield return null;
+
+            ValidateEditorReportTab("Waves", _statsPanel.Btn_Tab_Waves, _statsPanel.PanelWaves);
+            yield return null;
+
+            ValidateEditorReportTab("Summary", _statsPanel.Btn_Tab_Summary, _statsPanel.PanelSummary);
+            yield return null;
+
+            if (_statsPanel.Btn_Close != null)
+            {
+                _statsPanel.Btn_Close.onClick.Invoke();
+                yield return new WaitForSecondsRealtime(0.25f);
+
+                bool panelClosed = _statsPanel.PanelRoot == null || !_statsPanel.PanelRoot.activeSelf;
+                Debug.Log($"[PostGameFlow] Close validation. panelClosed={panelClosed}.");
+            }
+
+            _statsPanel.Show(_payload);
+            yield return null;
+            ValidateEditorReportTab("Summary (reopened)", _statsPanel.Btn_Tab_Summary, _statsPanel.PanelSummary);
+        }
+
+        void ValidateEditorReportTab(string tabName, Button button, GameObject panel)
+        {
+            if (button == null)
+            {
+                Debug.LogWarning($"[PostGameFlow] {tabName} tab validation skipped because the button reference is missing.");
+                return;
+            }
+
+            button.onClick.Invoke();
+            bool panelActive = panel != null && panel.activeSelf;
+            Debug.Log($"[PostGameFlow] {tabName} tab validation. panelActive={panelActive} panel={panel?.name ?? "null"}.");
+        }
+#endif
+
         System.Collections.IEnumerator LogStableOpenState()
         {
             yield return new WaitForSecondsRealtime(StableOpenLogDelaySeconds);
@@ -413,7 +479,6 @@ namespace CastleDefender.UI
             panel.BuildGraph = BuildGraph(panel.PanelBuild.transform, "BuildGraph");
 
             panel.PanelWaves = MakePanel(content.transform, "PanelWaves", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            panel.PanelWaves.SetActive(false);
 
             var scrollGo = new GameObject("ScrollRect");
             scrollGo.transform.SetParent(panel.PanelWaves.transform, false);
@@ -445,10 +510,18 @@ namespace CastleDefender.UI
             var wavesBody = new GameObject("WavesBody");
             wavesBody.transform.SetParent(contentGo.transform, false);
             var wavesBodyRt = wavesBody.AddComponent<RectTransform>();
+            wavesBodyRt.anchorMin = new Vector2(0f, 1f);
+            wavesBodyRt.anchorMax = new Vector2(1f, 1f);
+            wavesBodyRt.pivot = new Vector2(0.5f, 1f);
             wavesBodyRt.sizeDelta = new Vector2(0f, 0f);
             wavesBody.AddComponent<LayoutElement>().preferredHeight = 32f;
             var wavesBodyText = wavesBody.AddComponent<TextMeshProUGUI>();
             wavesBodyText.text = string.Empty;
+            var wavesFont = panel.SummaryBodyText != null ? panel.SummaryBodyText.font : TMP_Settings.defaultFontAsset;
+            if (wavesFont != null)
+                wavesBodyText.font = wavesFont;
+            if (panel.SummaryBodyText != null && panel.SummaryBodyText.fontSharedMaterial != null)
+                wavesBodyText.fontSharedMaterial = panel.SummaryBodyText.fontSharedMaterial;
             wavesBodyText.fontSize = 13;
             wavesBodyText.color = Color.white;
             wavesBodyText.alignment = TextAlignmentOptions.TopLeft;
@@ -466,6 +539,7 @@ namespace CastleDefender.UI
             panel.WaveRowContainer = wavesRt;
             panel.WaveRowPrefab = BuildWaveRowPrefab();
             panel.WavesBodyText = wavesBodyText;
+            panel.PanelWaves.SetActive(false);
 
             return panel;
         }
@@ -486,6 +560,8 @@ namespace CastleDefender.UI
             textRt.offsetMin = new Vector2(10f, 0f);
             textRt.offsetMax = new Vector2(-10f, 0f);
             var tmp = text.AddComponent<TextMeshProUGUI>();
+            if (TMP_Settings.defaultFontAsset != null)
+                tmp.font = TMP_Settings.defaultFontAsset;
             tmp.fontSize = 13;
             tmp.color = Color.white;
             tmp.alignment = TextAlignmentOptions.MidlineLeft;
@@ -501,8 +577,181 @@ namespace CastleDefender.UI
             rt.anchorMax = new Vector2(0.95f, 0.90f);
             rt.offsetMin = Vector2.zero;
             rt.offsetMax = Vector2.zero;
+            if (go.GetComponent<CanvasRenderer>() == null)
+                go.AddComponent<CanvasRenderer>();
             return go.AddComponent<LineGraphUI>();
         }
+
+#if UNITY_EDITOR
+        public void DebugShowReport(MLGameOverPayload payload, bool openReportPanel = true)
+        {
+            _payload = payload;
+            ShowPayload(payload);
+            Debug.Log(
+                $"[PostGameReport] DebugShowReport applied. " +
+                $"finalStats={(payload?.finalStats?.Length ?? 0)} " +
+                $"waveSnapshots={(payload?.waveSnapshots?.Length ?? 0)} " +
+                $"readableLog={(payload?.balanceReadableLog?.Length ?? 0)} " +
+                $"diagnosis={(payload?.balanceDiagnosisLines?.Length ?? 0)}.");
+
+            if (openReportPanel && _statsPanel != null && payload != null)
+            {
+                if (!_statsPanel.gameObject.activeSelf)
+                    _statsPanel.gameObject.SetActive(true);
+                _statsPanel.Show(payload);
+            }
+        }
+
+        static MLGameOverPayload BuildEditorValidationPayload()
+        {
+            return new MLGameOverPayload
+            {
+                winnerLaneIndex = 0,
+                winnerName = "Blue Commander",
+                winningTeam = "blue",
+                winningSide = "left",
+                finalRound = 10,
+                matchState = "final_game_over",
+                gameDuration = 625,
+                causeLoss = "Survival ended on Wave 10",
+                continuedIntoSurvival = true,
+                survivalDuration = 625,
+                survivalExtraRounds = 9,
+                pvpWinnerLaneIndex = 0,
+                finalStats = new[]
+                {
+                    new MLFinalLaneStat
+                    {
+                        laneIndex = 0,
+                        displayName = "Blue Commander",
+                        team = "blue",
+                        side = "left",
+                        income = 42,
+                        buildValue = 1825,
+                        gold = 115,
+                        totalSendSpend = 620,
+                        totalSendCount = 16,
+                        totalBuildSpend = 1420,
+                        totalLeaksTaken = 1,
+                        biggestLeakTaken = 3,
+                        wavesHeld = 8,
+                        wavesLeaked = 2,
+                        longestHoldStreak = 5,
+                        lives = 17,
+                        teamHp = 17,
+                        eliminated = false,
+                    },
+                    new MLFinalLaneStat
+                    {
+                        laneIndex = 1,
+                        displayName = "Red Commander",
+                        team = "red",
+                        side = "right",
+                        income = 38,
+                        buildValue = 1490,
+                        gold = 72,
+                        totalSendSpend = 540,
+                        totalSendCount = 13,
+                        totalBuildSpend = 1260,
+                        totalLeaksTaken = 4,
+                        biggestLeakTaken = 7,
+                        wavesHeld = 6,
+                        wavesLeaked = 4,
+                        longestHoldStreak = 3,
+                        lives = 9,
+                        teamHp = 9,
+                        eliminated = true,
+                    },
+                },
+                waveSnapshots = new[]
+                {
+                    BuildEditorValidationWave(9, 540, 41, 1740, 0, 0, 80, 2, 140, "Held", 18, 1, 36, 1400, 1, 2, 60, 2, 110, "Leaked", 11),
+                    BuildEditorValidationWave(10, 625, 42, 1825, 1, 3, 95, 3, 120, "Leaked", 17, 1, 38, 1490, 3, 6, 70, 2, 90, "Crushed", 9, true),
+                },
+                balanceReadableLog = new[]
+                {
+                    "Wave 9 (late_game) gold 88->115, clear 62s, losses 2, pressure 48, struggle 32, ratio 1.12",
+                    "Wave 10 (late_game) gold 115->72, clear uncleared, losses 6, pressure 91, struggle 87, ratio 0.58",
+                },
+                balanceDiagnosisLines = new[]
+                {
+                    "Early game: stable.",
+                    "Mid game: manageable.",
+                    "Late game: overtuned.",
+                    "Snowball detected: no.",
+                    "Economy overflow: no.",
+                    "Likely tuning targets: inspect wave 10 boss reach and defender retargeting.",
+                },
+            };
+        }
+
+        static MLWaveSnapshot BuildEditorValidationWave(
+            int round,
+            int elapsedSeconds,
+            float leftIncome,
+            float leftBuild,
+            int leftLeaks,
+            int leftLeakDamage,
+            float leftSendSpend,
+            int leftSendCount,
+            float leftBuildSpend,
+            string leftResult,
+            int leftHp,
+            int rightLaneIndex,
+            float rightIncome,
+            float rightBuild,
+            int rightLeaks,
+            int rightLeakDamage,
+            float rightSendSpend,
+            int rightSendCount,
+            float rightBuildSpend,
+            string rightResult,
+            int rightHp,
+            bool terminal = false)
+        {
+            return new MLWaveSnapshot
+            {
+                round = round,
+                elapsedSeconds = elapsedSeconds,
+                terminal = terminal,
+                lanes = new[]
+                {
+                    new MLWaveLaneStat
+                    {
+                        laneIndex = 0,
+                        income = leftIncome,
+                        buildValue = leftBuild,
+                        gold = 0,
+                        leaksTaken = leftLeaks,
+                        leakDamage = leftLeakDamage,
+                        sendSpend = leftSendSpend,
+                        sendCount = leftSendCount,
+                        buildSpend = leftBuildSpend,
+                        lives = leftHp,
+                        teamHp = leftHp,
+                        eliminated = false,
+                        holdResult = leftResult,
+                    },
+                    new MLWaveLaneStat
+                    {
+                        laneIndex = rightLaneIndex,
+                        income = rightIncome,
+                        buildValue = rightBuild,
+                        gold = 0,
+                        leaksTaken = rightLeaks,
+                        leakDamage = rightLeakDamage,
+                        sendSpend = rightSendSpend,
+                        sendCount = rightSendCount,
+                        buildSpend = rightBuildSpend,
+                        lives = rightHp,
+                        teamHp = rightHp,
+                        eliminated = rightHp <= 0,
+                        holdResult = rightResult,
+                    },
+                },
+            };
+        }
+#endif
 
         GameObject MakePanel(Transform parent, string name, Color color, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
         {
@@ -528,6 +777,8 @@ namespace CastleDefender.UI
             rt.offsetMax = Vector2.zero;
             var tmp = go.AddComponent<TextMeshProUGUI>();
             tmp.text = text;
+            if (TMP_Settings.defaultFontAsset != null)
+                tmp.font = TMP_Settings.defaultFontAsset;
             tmp.fontSize = fontSize;
             tmp.fontStyle = style;
             tmp.color = Color.white;

@@ -171,6 +171,7 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
   }
 
   let appliedCommands = 0;
+  const acceptedCommands = [];
   let lastReason = null;
   const maxCommands = Number.isFinite(opt.maxCommandsPerAction) ? Math.max(1, Math.floor(opt.maxCommandsPerAction)) : Infinity;
   for (let i = 0; i < mapped.commands.length && i < maxCommands; i++) {
@@ -181,6 +182,13 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
       break;
     }
     appliedCommands += 1;
+    acceptedCommands.push({
+      type: command.type,
+      data: command.data && typeof command.data === "object" ? { ...command.data } : {},
+      tickApply: command.tickApply,
+      laneId: command.laneId,
+      actionSeq: command.actionSeq,
+    });
   }
 
   if (mapped.commands.length > 0 && appliedCommands === 0) {
@@ -194,6 +202,7 @@ function executeBotAction(game, laneIndex, action, runtime, options) {
     action: checked.normalized,
     reason: lastReason,
     appliedCommands,
+    acceptedCommands,
   };
 }
 

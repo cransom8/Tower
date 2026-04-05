@@ -539,6 +539,54 @@ function getBarracksGlobalActiveFoodState(game, sourceLaneIndex, barracksId, lev
   };
 }
 
+function countActiveBarracksRosterUnitsForCollection(
+  collection,
+  sourceLaneIndex,
+  normalizedBarracksId,
+  rosterCounts
+) {
+  if (!Array.isArray(collection) || !normalizedBarracksId || !rosterCounts)
+    return rosterCounts;
+
+  for (const unit of collection) {
+    if (!unit)
+      continue;
+    if (Math.max(0, Math.floor(Number(unit.hp) || 0)) <= 0)
+      continue;
+    if (String(unit.spawnSourceType || "").trim().toLowerCase() !== "barracks_roster")
+      continue;
+    if (normalizeBarracksSiteId(unit.sourceBarracksId) !== normalizedBarracksId)
+      continue;
+    if (Number.isInteger(sourceLaneIndex) && Number(unit.sourceLaneIndex) !== Number(sourceLaneIndex))
+      continue;
+
+    const rosterKey = String(unit.rosterKey || "").trim().toLowerCase();
+    if (!rosterKey || !Object.prototype.hasOwnProperty.call(rosterCounts, rosterKey))
+      continue;
+
+    rosterCounts[rosterKey] = Math.max(0, Math.floor(Number(rosterCounts[rosterKey]) || 0) + 1);
+  }
+
+  return rosterCounts;
+}
+
+function getBarracksGlobalActiveRosterCounts(game, sourceLaneIndex, barracksId) {
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  const rosterCounts = createBarracksRosterCounts();
+  if (!game || !Array.isArray(game.lanes) || !normalizedId)
+    return rosterCounts;
+
+  for (const lane of game.lanes) {
+    if (!lane)
+      continue;
+
+    for (const collection of [lane.units, lane.spawnQueue])
+      countActiveBarracksRosterUnitsForCollection(collection, sourceLaneIndex, normalizedId, rosterCounts);
+  }
+
+  return rosterCounts;
+}
+
 function hasOwnedBarracksUnits(lane, barracksId) {
   const normalizedId = normalizeBarracksSiteId(barracksId);
   if (!normalizedId)
@@ -2174,6 +2222,11 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
     if (!descriptor || !descriptor.isBuilt || descriptor.destroyed)
       continue;
 
+    const activeRosterCounts = getBarracksGlobalActiveRosterCounts(
+      game,
+      lane.laneIndex,
+      siteDef.barracksId
+    );
     const rosterEntries = createBarracksSiteRosterSnapshot(game, lane, siteDef.barracksId, deps)
       .filter((entry) => entry.unlocked && entry.ownedCount > 0)
       .sort((a, b) => {
@@ -2192,7 +2245,12 @@ function buildBarracksRosterSpawnEntries(game, lane, barracksId = null, deps = {
         entry.displayName,
         deps
       );
-      for (let ownedIndex = 0; ownedIndex < entry.ownedCount; ownedIndex += 1) {
+      const activeCount = Math.max(
+        0,
+        Math.floor(Number(activeRosterCounts[entry.rosterKey]) || 0)
+      );
+      const missingCount = Math.max(0, Math.floor(Number(entry.ownedCount) || 0) - activeCount);
+      for (let ownedIndex = 0; ownedIndex < missingCount; ownedIndex += 1) {
         spawnEntries.push({
           unitType: rosterDef && rosterDef.archetypeKey ? rosterDef.archetypeKey : entry.unitTypeKey,
           count: 1,
@@ -2616,10 +2674,6 @@ function buyBarracksUnit(game, laneIndex, lane, rosterKey, barracksId, count = 1
 
 function buyMarketUnit(game, laneIndex, lane, unitKey, count = 1, deps = {}) {
   const safeCount = Math.min(25, Math.max(1, Math.floor(Number(count) || 1)));
-  console.log(
-    `[MarketTrace][ServerBuy] action='buy_market_unit' lane=${laneIndex} ` +
-    `unitKey='${unitKey}' count=${safeCount}`
-  );
 
   const unitDef = getMarketRosterDefinition(unitKey);
   if (!unitDef)
@@ -2665,11 +2719,6 @@ function buyMarketUnit(game, laneIndex, lane, unitKey, count = 1, deps = {}) {
     return { ok: false, reason: "Market roster state is unavailable" };
   marketCounts[unitKey] = Math.max(0, Math.floor(Number(marketCounts[unitKey]) || 0) + safeCount);
   removeOwnedMarketWorkers(game, lane);
-
-  console.log(
-    `[MarketTrace][ServerBuy] lane=${laneIndex} unitKey='${unitKey}' ` +
-    `ownedCount=${marketCounts[unitKey]} totalCost=${totalCost}`
-  );
   if (typeof deps.recordBalanceSpend === "function")
     deps.recordBalanceSpend(game, lane, "unit", totalCost, {
       buildingType: "market",

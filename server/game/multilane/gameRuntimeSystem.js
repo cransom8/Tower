@@ -508,6 +508,8 @@ function createMLGame(playerCount, options, deps = {}) {
     matchSeed: opt.matchSeed !== undefined ? opt.matchSeed : null,
     configVersionId: null,
     actionSeq: 0,
+    __laneCommandAssignmentsDirty: true,
+    __laneCommandAssignmentsSnapshotKey: null,
   };
   if (opt.startingCombatMilitiaCount > 0) {
     for (const lane of lanes)
@@ -626,6 +628,9 @@ function applyLaneCommandAction(game, lane, commandState, data = null, deps = {}
   const isLaneCombatEnabledCommandState = requireDepFunction(deps, "isLaneCombatEnabledCommandState");
   const getLaneCommandEngagementRadius = requireDepFunction(deps, "getLaneCommandEngagementRadius");
   const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   const laneCommandStates = getLaneCommandStates(deps);
   const normalizedCommandState = normalizeLaneCommandState(commandState);
   if (!lane || !normalizedCommandState)
@@ -650,6 +655,8 @@ function applyLaneCommandAction(game, lane, commandState, data = null, deps = {}
   lane.combatEnabled = isLaneCombatEnabledCommandState(normalizedCommandState);
   lane.engagementRadius = getLaneCommandEngagementRadius(lane);
   syncBarracksSiteCommandStates(lane, normalizedCommandState, deps);
+  if (markLaneCommandAssignmentsDirty)
+    markLaneCommandAssignmentsDirty(game);
   syncLaneCommandAssignments(game);
   return { ok: true };
 }
@@ -678,6 +685,9 @@ function applyBarracksSiteCommandAction(game, lane, barracksId, commandState, da
   const ensureBarracksSiteStates = requireDepFunction(deps, "ensureBarracksSiteStates");
   const resolveLaneCommandAnchorProgressRequest = requireDepFunction(deps, "resolveLaneCommandAnchorProgressRequest");
   const syncLaneCommandAssignments = requireDepFunction(deps, "syncLaneCommandAssignments");
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   const normalizedCommandState = normalizeLaneCommandState(commandState);
   const normalizedBarracksId = normalizeBarracksSiteId(barracksId);
   if (!lane || !normalizedCommandState || !normalizedBarracksId)
@@ -703,6 +713,8 @@ function applyBarracksSiteCommandAction(game, lane, barracksId, commandState, da
   }
 
   siteState.commandState = normalizedCommandState;
+  if (markLaneCommandAssignmentsDirty)
+    markLaneCommandAssignmentsDirty(game);
   syncLaneCommandAssignments(game);
   return { ok: true };
 }

@@ -1494,7 +1494,12 @@ function markLaneDefeated(game, lane, defeatContext = null, deps = {}) {
   if (!lane || lane.eliminated)
     return;
 
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   lane.eliminated = true;
+  if (markLaneCommandAssignmentsDirty)
+    markLaneCommandAssignmentsDirty(game);
   const corePad = getLaneTownCorePad(lane);
   if (deps.log && typeof deps.log.warn === "function") {
     deps.log.warn("[TownCoreTrace] lane eliminated", {

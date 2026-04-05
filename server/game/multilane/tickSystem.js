@@ -81,13 +81,24 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
   const resolveSpawnSourceTypeFromUnit = requireDepFunction(deps, "resolveSpawnSourceTypeFromUnit");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
   const resolveAbilityHook = requireDepFunction(deps, "resolveAbilityHook");
+  const normalizeLegacyDefenderUnit = typeof deps.normalizeLegacyDefenderUnit === "function"
+    ? deps.normalizeLegacyDefenderUnit
+    : null;
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   const recordBalanceUnitSpawned = typeof deps.recordBalanceUnitSpawned === "function"
     ? deps.recordBalanceUnitSpawned
     : null;
   const gridWidth = getGridWidth(deps);
+  let materializedLaneControlledUnit = false;
 
   while (Array.isArray(lane.spawnQueue) && lane.spawnQueue.length > 0) {
     const unit = lane.spawnQueue.shift();
+    if (normalizeLegacyDefenderUnit && unit && unit.isDefender) {
+      if (normalizeLegacyDefenderUnit(game, lane, unit))
+        applyCanonicalUnitMirrors(game, lane, unit);
+    }
     const idx = unit.spawnIndex ?? 0;
     const spawnLogicalPos = unit.spawnLogicalPos || {
       x: idx % gridWidth,
@@ -114,6 +125,8 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
       ? unit.sourceLaneIndex
       : -1;
     unit.ownerLaneIndex = unit.ownerLane;
+    if (unit.ownerLane >= 0)
+      materializedLaneControlledUnit = true;
     applyCanonicalUnitMirrors(game, lane, unit);
     logSpawnAuditInfo(deps, "[SpawnAudit][ServerLive] materialized", {
       spawnType: resolveSpawnSourceTypeFromUnit(unit),
@@ -148,6 +161,8 @@ function materializeLaneSpawnQueue(game, lane, deps = {}) {
 
   for (const unit of lane.units || [])
     applyCanonicalUnitMirrors(game, lane, unit);
+  if (materializedLaneControlledUnit && markLaneCommandAssignmentsDirty)
+    markLaneCommandAssignmentsDirty(game);
 }
 
 function decrementLaneCooldowns(lane) {
@@ -462,10 +477,15 @@ function processLane(game, lane, deps = {}) {
   const contactSlotTolerance = getContactSlotTolerance(deps);
   const waveRouteCombatRecoveryTicks = getWaveRouteCombatRecoveryTicks(deps);
   const enableWaveUnitTrace = getEnableWaveUnitTrace(deps);
+  const markLaneCommandAssignmentsDirty = typeof deps.markLaneCommandAssignmentsDirty === "function"
+    ? deps.markLaneCommandAssignmentsDirty
+    : null;
   const laneHasOccupyingForces = requireDepFunction(deps, "laneHasOccupyingForces");
   const resolveUnitSupportProfile = requireDepFunction(deps, "resolveUnitSupportProfile");
   const resolveStatuses = requireDepFunction(deps, "resolveStatuses");
-  const traceWaveUnitTick = requireDepFunction(deps, "traceWaveUnitTick");
+  const traceWaveUnitTick = enableWaveUnitTrace
+    ? requireDepFunction(deps, "traceWaveUnitTick")
+    : null;
   const resolveWaveCombatTarget = requireDepFunction(deps, "resolveWaveCombatTarget");
   const isUnitCombatTargetStillValid = requireDepFunction(deps, "isUnitCombatTargetStillValid");
   const clearUnitCombatTarget = requireDepFunction(deps, "clearUnitCombatTarget");
@@ -525,24 +545,41 @@ function processLane(game, lane, deps = {}) {
     : null;
   const isScheduledWaveUnit = requireDepFunction(deps, "isScheduledWaveUnit");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
+  const normalizeLegacyDefenderUnit = typeof deps.normalizeLegacyDefenderUnit === "function"
+    ? deps.normalizeLegacyDefenderUnit
+    : null;
   const targetingContext = createCombatTargetingContext
     ? createCombatTargetingContext(game)
     : null;
+  const lanePerf = {
+    prepMs: 0,
+    unitLogicMs: 0,
+    separationMs: 0,
+    projectileMs: 0,
+    cleanupMs: 0,
+  };
 
   const laneHasActiveOccupiers = laneHasOccupyingForces(lane);
   if (lane.eliminated && !laneHasActiveOccupiers)
-    return;
+    return lanePerf;
 
   const laneActive = !lane.eliminated;
 
+  let phaseStartedAt = performance.now();
   materializeLaneSpawnQueue(game, lane, deps);
   decrementLaneCooldowns(lane);
+  lanePerf.prepMs = performance.now() - phaseStartedAt;
 
   const dotDeadIds = new Set();
 
+  phaseStartedAt = performance.now();
   for (const unit of lane.units || []) {
     if (unit.hp <= 0)
       continue;
+    if (unit.isDefender && normalizeLegacyDefenderUnit) {
+      if (normalizeLegacyDefenderUnit(game, lane, unit))
+        applyCanonicalUnitMirrors(game, lane, unit);
+    }
     if (unit.isDefender)
       continue;
 
@@ -561,10 +598,12 @@ function processLane(game, lane, deps = {}) {
       unit.combatState = waveUnitStates.DEAD;
       unit.routeState = waveUnitStates.DEAD;
       dotDeadIds.add(unit.id);
-      traceWaveUnitTick(game, lane, unit, null, {
-        movementAdvanced: false,
-        coreDamageApplied: false,
-      });
+      if (traceWaveUnitTick) {
+        traceWaveUnitTick(game, lane, unit, null, {
+          movementAdvanced: false,
+          coreDamageApplied: false,
+        });
+      }
       continue;
     }
 
@@ -911,16 +950,22 @@ function processLane(game, lane, deps = {}) {
       }
     }
 
-    const traceTarget = unit.combatTarget ? resolveWaveCombatTarget(game, lane, unit.combatTarget) : null;
+    const traceTarget = traceWaveUnitTick && unit.combatTarget
+      ? resolveWaveCombatTarget(game, lane, unit.combatTarget)
+      : null;
     unit.state = unit.combatState || unit.routeState || unit.state || waveUnitStates.IDLE;
     unit.currentTargetId = unit.combatTargetId || (unit.combatTarget && unit.combatTarget.unitId) || null;
-    traceWaveUnitTick(game, lane, unit, traceTarget, {
-      movementAdvanced,
-      coreDamageApplied,
-      preferredTargetReason: preferredTarget ? preferredTarget.reason : null,
-    });
+    if (traceWaveUnitTick) {
+      traceWaveUnitTick(game, lane, unit, traceTarget, {
+        movementAdvanced,
+        coreDamageApplied,
+        preferredTargetReason: preferredTarget ? preferredTarget.reason : null,
+      });
+    }
   }
+  lanePerf.unitLogicMs = performance.now() - phaseStartedAt;
 
+  phaseStartedAt = performance.now();
   const laneCollisionUnits = (lane.units || []).filter((unit) =>
     unit
     && unit.hp > 0
@@ -949,9 +994,11 @@ function processLane(game, lane, deps = {}) {
       );
     }
   }
+  lanePerf.separationMs = performance.now() - phaseStartedAt;
 
   const killedById = new Set();
   const stillFlying = [];
+  phaseStartedAt = performance.now();
   for (const projectile of lane.projectiles || []) {
     projectile.ticksRemaining -= 1;
     if (projectile.ticksRemaining > 0) {
@@ -1005,13 +1052,18 @@ function processLane(game, lane, deps = {}) {
     }
   }
   lane.projectiles = stillFlying;
+  lanePerf.projectileMs = performance.now() - phaseStartedAt;
 
   for (const id of dotDeadIds)
     killedById.add(id);
 
+  phaseStartedAt = performance.now();
+  let removedLaneControlledUnit = false;
   for (const unit of lane.units || []) {
     if (unit.hp > 0)
       continue;
+    if (Number.isInteger(unit.sourceLaneIndex) && unit.sourceLaneIndex >= 0)
+      removedLaneControlledUnit = true;
     if (recordBalanceUnitDeath)
       recordBalanceUnitDeath(game, lane, unit);
     if (unit.abilities && unit.abilities.length > 0)
@@ -1030,7 +1082,11 @@ function processLane(game, lane, deps = {}) {
     }
   }
   lane.units = (lane.units || []).filter((unit) => unit.hp > 0);
+  if (removedLaneControlledUnit && markLaneCommandAssignmentsDirty)
+    markLaneCommandAssignmentsDirty(game);
   fireLaneWallArcherTurrets(game, lane, deps);
+  lanePerf.cleanupMs = performance.now() - phaseStartedAt;
+  return lanePerf;
 }
 
 function finalizeTick(game, deps = {}) {
@@ -1140,13 +1196,14 @@ function mlTick(game, deps = {}) {
   phaseStartedAt = performance.now();
   for (const lane of game.lanes || []) {
     const laneStartedAt = performance.now();
-    processLane(game, lane, deps);
+    const lanePerf = processLane(game, lane, deps) || null;
     laneTimings.push({
       laneIndex: lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
       ms: performance.now() - laneStartedAt,
       unitCount: Array.isArray(lane && lane.units) ? lane.units.length : 0,
       projectileCount: Array.isArray(lane && lane.projectiles) ? lane.projectiles.length : 0,
       eliminated: !!(lane && lane.eliminated),
+      perf: lanePerf,
     });
   }
   tickBreakdown.lanesMs = performance.now() - phaseStartedAt;
@@ -1170,6 +1227,11 @@ function mlTick(game, deps = {}) {
       unitCount: lanePerf.unitCount,
       projectileCount: lanePerf.projectileCount,
       eliminated: lanePerf.eliminated,
+      prepMs: roundPerfDuration(lanePerf.perf && lanePerf.perf.prepMs),
+      unitLogicMs: roundPerfDuration(lanePerf.perf && lanePerf.perf.unitLogicMs),
+      separationMs: roundPerfDuration(lanePerf.perf && lanePerf.perf.separationMs),
+      projectileMs: roundPerfDuration(lanePerf.perf && lanePerf.perf.projectileMs),
+      cleanupMs: roundPerfDuration(lanePerf.perf && lanePerf.perf.cleanupMs),
     }));
 
   game._lastTickPerfBreakdown = {

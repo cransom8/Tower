@@ -909,6 +909,62 @@ test("barracks food limit also caps how much of one barracks can stay active on 
   assert.equal(activeUnits.length, 20);
 });
 
+test("scheduled barracks sends refill the missing roster type instead of repeating the first sorted unit", () => {
+  const game = createGame(5000);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  upgradeTownCoreToTier(game, 0, 2);
+  act(game, 0, "build_on_pad", { padId: "blacksmith_pad" });
+  finishPadConstruction(game, 0, "blacksmith_pad");
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 5 });
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "shieldman", count: 5 });
+
+  const targetLaneIndex = simMl.resolveTargetLaneForBarracksSend(game, 0, "center");
+  assert.ok(Number.isInteger(targetLaneIndex) && targetLaneIndex >= 0, "expected a valid barracks target lane");
+
+  game.lanes[0].barracksSiteStates.center.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  let activeUnits = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "center"
+  );
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "militia").length, 5);
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "shieldman").length, 5);
+
+  const targetLane = game.lanes[targetLaneIndex];
+  let removed = false;
+  for (const collectionKey of ["units", "spawnQueue"]) {
+    const collection = Array.isArray(targetLane && targetLane[collectionKey]) ? targetLane[collectionKey] : [];
+    const removeIndex = collection.findIndex((unit) =>
+      unit
+      && unit.spawnSourceType === "barracks_roster"
+      && unit.sourceLaneIndex === 0
+      && unit.sourceBarracksId === "center"
+      && unit.rosterKey === "shieldman"
+    );
+    if (removeIndex >= 0) {
+      collection.splice(removeIndex, 1);
+      removed = true;
+      break;
+    }
+  }
+  assert.equal(removed, true, "expected to remove one active shieldman from the barracks roster");
+
+  game.lanes[0].barracksSiteStates.center.nextSendTick = game.tick;
+  simMl.mlTick(game);
+
+  activeUnits = collectGameUnits(game, (unit) =>
+    unit
+    && unit.spawnSourceType === "barracks_roster"
+    && unit.sourceLaneIndex === 0
+    && unit.sourceBarracksId === "center"
+  );
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "militia").length, 5);
+  assert.equal(activeUnits.filter((unit) => unit.rosterKey === "shieldman").length, 5);
+});
+
 test("barracks snapshots keep independent command states per site", () => {
   const game = createGame(5000);
   upgradeBarracksSiteToLevel(game, 0, "center", 1);

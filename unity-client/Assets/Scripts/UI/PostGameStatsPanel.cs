@@ -79,6 +79,7 @@ namespace CastleDefender.UI
 
         public void Show(MLGameOverPayload payload)
         {
+            bool canAnimate = isActiveAndEnabled;
             _payload          = payload;
             _economyPopulated = false;
             _buildPopulated   = false;
@@ -94,7 +95,12 @@ namespace CastleDefender.UI
             if (Btn_Tab_Build   != null) Btn_Tab_Build  .gameObject.SetActive(hasWaveSnapshots);
             if (Btn_Tab_Waves   != null) Btn_Tab_Waves  .gameObject.SetActive(hasWaveDetails);
 
-            if (PanelRoot != null) PanelRoot.SetActive(true);
+            if (PanelRoot != null)
+            {
+                PanelRoot.SetActive(true);
+                if (!canAnimate)
+                    PanelRoot.transform.localScale = Vector3.one;
+            }
             Debug.Log(
                 $"[PostGameReport] Opening report panel. " +
                 $"summaryRows={(payload?.finalStats?.Length ?? 0)} " +
@@ -102,11 +108,28 @@ namespace CastleDefender.UI
                 $"readableLog={(payload?.balanceReadableLog?.Length ?? 0)} " +
                 $"diagnosis={(payload?.balanceDiagnosisLines?.Length ?? 0)}.");
             SwitchTab(hasSummaryRows || !hasWaveDetails ? 0 : 3);
+            if (PanelRoot == null)
+                return;
+
+            if (!canAnimate)
+            {
+                PanelRoot.transform.localScale = Vector3.one;
+                return;
+            }
+
+            StopAllCoroutines();
             StartCoroutine(ScaleIn(PanelRoot.transform, 0f, 1f, 0.3f));
         }
 
         public void Hide()
         {
+            if (!isActiveAndEnabled || PanelRoot == null)
+            {
+                HideImmediate();
+                return;
+            }
+
+            StopAllCoroutines();
             StartCoroutine(ScaleOut(PanelRoot.transform, 0.2f));
         }
 

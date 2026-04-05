@@ -14,6 +14,7 @@ using TMPro;
 
 namespace CastleDefender.UI
 {
+    [RequireComponent(typeof(CanvasRenderer))]
     public class LineGraphUI : MaskableGraphic
     {
         [Header("Appearance")]

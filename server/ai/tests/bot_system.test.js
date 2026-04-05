@@ -355,6 +355,37 @@ test("economy logic: bot buys market workers when the market is online", () => {
   assert.ok(Number(action.count) >= 1, "expected at least one market worker purchase");
 });
 
+test("economy planning: eco bot builds the market after lumber when safe", () => {
+  const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 900, startIncome: 18 });
+  game.lanes[0].commandState = "ATTACK";
+  game.lanes[0].commandAnchorProgress = 1;
+  game.lanes[0].commandTargetLaneIndex = 1;
+  act(game, 0, "build_barracks_site", { barracksId: "center" });
+  waitForBarracksBuilt(game, 0, "center");
+  upgradeTownCoreToTier(game, 0, 2);
+  act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
+  waitForPadTier(game, 0, "lumber_mill_pad", 1);
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 1 });
+  game.lanes[0].gold = 80;
+
+  const bot = new BotBrain({
+    laneIndex: 0,
+    difficulty: "hard",
+    personality: "ECO",
+    seed: "market-after-lumber",
+    unitDefMap: simMl.getMovingUnitDefMap(),
+  });
+
+  bot.memory.nextThinkTick = 0;
+  const action = bot.tick({
+    game,
+    runtime: { laneLeakHistory: { 0: [0], 1: [0] }, recentLifeLossByLane: { 0: 0, 1: 0 }, currentTargetByLane: {} },
+  });
+
+  assert.equal(action.type, AI_ACTION_TYPE.BUILD_PAD, "expected eco bot to keep investing in economy");
+  assert.equal(action.padId, "market_pad");
+});
+
 test("ffa targeting: bot picks a target and retargets when target is removed", () => {
   const game = makeFfaGame(4);
   const controller = createBotController({
