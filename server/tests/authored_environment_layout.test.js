@@ -95,6 +95,42 @@ test("live environment prefab keeps one shared-defense anchor per lane and pad i
   assert.deepEqual(duplicates, [], "expected the live environment prefab to avoid duplicate shared-defense anchors");
 });
 
+test("live environment prefab keeps every direct defense child under wall parents bridge-controlled", () => {
+  const prefabText = fs.readFileSync(LIVE_PREFAB_PATH, "utf8");
+  const prefab = parsePrefabHierarchy(prefabText);
+
+  for (const team of ["RED", "YELLOW", "BLUE", "GREEN"]) {
+    for (const side of ["FRONT", "LEFT", "RIGHT", "REAR"]) {
+      const wallParentPath = `GameEnvironment/${capitalize(team.toLowerCase())} Fort/Walls/${team}_${side}_WALL`;
+      const wallParentTransformId = prefab.transformIdByPath.get(wallParentPath);
+      assert.ok(wallParentTransformId, `expected wall parent '${wallParentPath}'`);
+
+      const directChildren = prefab.childTransformsByParent.get(wallParentTransformId) || [];
+      const defenseChildren = directChildren
+        .map((transformId) => ({
+          transformId,
+          gameObjectId: prefab.transformToGameObject.get(transformId),
+          name: prefab.gameObjectNames.get(prefab.transformToGameObject.get(transformId)) || "",
+        }))
+        .filter((entry) => /_(Wall|Tower|Gate)_/i.test(entry.name));
+
+      assert.ok(defenseChildren.length > 0, `expected direct defense children under '${wallParentPath}'`);
+
+      for (const child of defenseChildren) {
+        const componentSet = prefab.componentsByGameObject.get(child.gameObjectId) || new Set();
+        assert.ok(
+          componentSet.has("CastleDefender.Game.FortressPadAnchor"),
+          `expected '${child.name}' under '${wallParentPath}' to keep a FortressPadAnchor`
+        );
+        assert.ok(
+          componentSet.has("CastleDefender.Game.SnapshotBuildingVisualBridge"),
+          `expected '${child.name}' under '${wallParentPath}' to keep a SnapshotBuildingVisualBridge`
+        );
+      }
+    }
+  }
+});
+
 function extractScalar(block, key) {
   const match = block.match(new RegExp(`\\r?\\n  ${escapeRegex(key)}: ([^\\r\\n]+)\\r?\\n`));
   return match ? String(match[1]).trim() : "";
@@ -102,4 +138,101 @@ function extractScalar(block, key) {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parsePrefabHierarchy(prefabText) {
+  const blocks = prefabText.split(/^--- /m).slice(1).map((raw) => `--- ${raw}`);
+  const gameObjectNames = new Map();
+  const transformToGameObject = new Map();
+  const gameObjectToTransform = new Map();
+  const transformParents = new Map();
+  const componentsByGameObject = new Map();
+
+  for (const block of blocks) {
+    const gameObjectHeader = block.match(/^--- !u!1 &(\d+)/m);
+    if (gameObjectHeader) {
+      const gameObjectId = gameObjectHeader[1];
+      const name = extractScalar(block, "m_Name");
+      gameObjectNames.set(gameObjectId, name);
+      continue;
+    }
+
+    const transformHeader = block.match(/^--- !u!4 &(\d+)/m);
+    if (transformHeader) {
+      const transformId = transformHeader[1];
+      const gameObjectId = extractFileId(block, "m_GameObject");
+      const parentTransformId = extractFileId(block, "m_Father") || "0";
+      if (gameObjectId) {
+        transformToGameObject.set(transformId, gameObjectId);
+        gameObjectToTransform.set(gameObjectId, transformId);
+      }
+      transformParents.set(transformId, parentTransformId);
+      continue;
+    }
+
+    const monoBehaviourHeader = block.match(/^--- !u!114 &(\d+)/m);
+    if (monoBehaviourHeader) {
+      const gameObjectId = extractFileId(block, "m_GameObject");
+      const classIdentifier = extractScalar(block, "m_EditorClassIdentifier");
+      if (!gameObjectId || !classIdentifier)
+        continue;
+
+      if (!componentsByGameObject.has(gameObjectId))
+        componentsByGameObject.set(gameObjectId, new Set());
+      componentsByGameObject.get(gameObjectId).add(normalizeClassIdentifier(classIdentifier));
+    }
+  }
+
+  const childTransformsByParent = new Map();
+  for (const [transformId, parentTransformId] of transformParents.entries()) {
+    if (!childTransformsByParent.has(parentTransformId))
+      childTransformsByParent.set(parentTransformId, []);
+    childTransformsByParent.get(parentTransformId).push(transformId);
+  }
+
+  const transformIdByPath = new Map();
+  for (const [transformId] of transformParents.entries()) {
+    const path = buildTransformPath(transformId, transformParents, transformToGameObject, gameObjectNames);
+    if (path)
+      transformIdByPath.set(path, transformId);
+  }
+
+  return {
+    gameObjectNames,
+    transformToGameObject,
+    childTransformsByParent,
+    componentsByGameObject,
+    transformIdByPath,
+  };
+}
+
+function buildTransformPath(transformId, transformParents, transformToGameObject, gameObjectNames) {
+  const parts = [];
+  let currentTransformId = transformId;
+
+  while (currentTransformId && currentTransformId !== "0") {
+    const gameObjectId = transformToGameObject.get(currentTransformId);
+    if (!gameObjectId)
+      return "";
+
+    parts.push(gameObjectNames.get(gameObjectId) || "");
+    currentTransformId = transformParents.get(currentTransformId) || "0";
+  }
+
+  return parts.reverse().join("/");
+}
+
+function extractFileId(block, key) {
+  const match = block.match(new RegExp(`\\r?\\n  ${escapeRegex(key)}: \\{fileID: ([^\\r\\n}]+)\\}`));
+  return match ? String(match[1]).trim() : "";
+}
+
+function normalizeClassIdentifier(classIdentifier) {
+  const normalized = String(classIdentifier || "").trim();
+  const separatorIndex = normalized.indexOf("::");
+  return separatorIndex >= 0 ? normalized.slice(separatorIndex + 2) : normalized;
+}
+
+function capitalize(value) {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }

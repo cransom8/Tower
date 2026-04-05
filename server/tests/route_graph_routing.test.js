@@ -1000,8 +1000,8 @@ test("waves do not tunnel through intact front defenses to chase defenders deepe
   const lane = game.lanes[0];
   primeDefendAnchor(game, lane);
   upgradeTownCoreToTier(game, lane.laneIndex, 2);
-  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
-  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_1_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_1_pad");
   const defenderInteriorY = Number(lane.outsideGateAnchor.y) + 10.5;
   const breachLimitY = defenderInteriorY - 2;
 
@@ -2862,8 +2862,8 @@ test("intact home walls let ranged defenders shoot over the gate line", () => {
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   primeDefendAnchor(game, lane);
   upgradeTownCoreToTier(game, lane.laneIndex, 2);
-  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
-  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_1_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_1_pad");
 
   const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
   assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the wall-fire test");
@@ -2913,8 +2913,8 @@ test("intact home walls do not block defenders from targeting a hostile already 
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   primeDefendAnchor(game, lane);
   upgradeTownCoreToTier(game, lane.laneIndex, 2);
-  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
-  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_1_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_1_pad");
 
   const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
   assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the same-side target test");

@@ -955,8 +955,8 @@ test("wave units drop a prelocked gate target when a public-area defender is alr
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   primeDefendAnchor(game, lane);
   upgradeTownCoreToTier(game, lane.laneIndex, 2);
-  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_left_01_pad" });
-  finishPadConstruction(game, lane.laneIndex, "wall_front_left_01_pad");
+  act(game, lane.laneIndex, "build_on_pad", { padId: "wall_front_1_pad" });
+  finishPadConstruction(game, lane.laneIndex, "wall_front_1_pad");
 
   const gatePad = lane.fortressPads.find((pad) => pad && pad.padId === "gate_front_pad");
   assert.ok(gatePad && gatePad.hp > 0, "expected the front gate to remain intact for the prelocked gate retarget test");

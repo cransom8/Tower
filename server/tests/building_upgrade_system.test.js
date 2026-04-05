@@ -300,12 +300,12 @@ test("wall hp upgrades immediately increase built wall durability", () => {
   const game = createGame();
   upgradeTownCoreToTier(game, 0, 2);
   buildPad(game, 0, "lumber_mill_pad");
-  buildPad(game, 0, "wall_front_left_01_pad");
+  buildPad(game, 0, "wall_front_1_pad");
 
-  const wallBefore = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  const wallBefore = findPad(laneSnapshot(game, 0), "wall_front_1_pad");
   act(game, 0, "purchase_building_upgrade", { padId: "lumber_mill_pad", upgradeKey: "wall_hp" });
   act(game, 0, "purchase_building_upgrade", { padId: "lumber_mill_pad", upgradeKey: "wall_hp" });
-  const wallAfter = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  const wallAfter = findPad(laneSnapshot(game, 0), "wall_front_1_pad");
 
   assert.ok(wallAfter.maxHp > wallBefore.maxHp, "expected wall max hp to increase after the wall hp upgrade");
   assert.equal(findUpgrade(findPad(laneSnapshot(game, 0), "lumber_mill_pad"), "wall_hp").currentBonusText, "+10%");
@@ -315,27 +315,27 @@ test("wall archers unlock turret construction and turret tiers fortify walls", (
   const game = createGame();
   upgradeTownCoreToTier(game, 0, 2);
   buildPad(game, 0, "archery_tower_pad");
-  buildPad(game, 0, "wall_front_left_01_pad");
+  buildPad(game, 0, "wall_front_1_pad");
 
-  const turretBeforeUnlock = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
-  const wallBeforeTurret = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  const turretBeforeUnlock = findPad(laneSnapshot(game, 0), "tower_front_1_pad");
+  const wallBeforeTurret = findPad(laneSnapshot(game, 0), "wall_front_1_pad");
   assert.equal(turretBeforeUnlock.canBuild, false);
   assert.match(String(turretBeforeUnlock.lockedReason || ""), /Wall Archers/i);
 
   act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
-  const unlockedTurret = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
+  const unlockedTurret = findPad(laneSnapshot(game, 0), "tower_front_1_pad");
   assert.equal(unlockedTurret.canBuild, true);
   assert.equal(unlockedTurret.buildCost, 500);
 
-  buildPad(game, 0, "turret_front_left_pad");
-  const wallAfterTurretTier1 = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  buildPad(game, 0, "tower_front_1_pad");
+  const wallAfterTurretTier1 = findPad(laneSnapshot(game, 0), "wall_front_1_pad");
   assert.equal(wallAfterTurretTier1.maxHp, Math.floor(wallBeforeTurret.maxHp * 1.2));
 
   upgradeTownCoreToTier(game, 0, 3);
-  act(game, 0, "upgrade_building", { padId: "turret_front_left_pad" });
-  finishPadConstruction(game, 0, "turret_front_left_pad");
+  act(game, 0, "upgrade_building", { padId: "tower_front_1_pad" });
+  finishPadConstruction(game, 0, "tower_front_1_pad");
 
-  const wallAfterTurretTier2 = findPad(laneSnapshot(game, 0), "wall_front_left_01_pad");
+  const wallAfterTurretTier2 = findPad(laneSnapshot(game, 0), "wall_front_1_pad");
   assert.equal(wallAfterTurretTier2.maxHp, Math.floor(wallBeforeTurret.maxHp * 1.4));
 });
 
@@ -344,9 +344,9 @@ test("wall archer turret defense damage follows archery tower progression", () =
   const lane = game.lanes[0];
   upgradeTownCoreToTier(game, 0, 2);
   buildPad(game, 0, "archery_tower_pad");
-  buildPad(game, 0, "wall_front_left_01_pad");
+  buildPad(game, 0, "wall_front_1_pad");
   act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
-  buildPad(game, 0, "turret_front_left_pad");
+  buildPad(game, 0, "tower_front_1_pad");
 
   const tierOneDefense = fortressSystem.getLaneWallArcherTurretDefenseProfile(lane);
   assert.ok(tierOneDefense, "expected wall archer defense profile at archery tier 1");

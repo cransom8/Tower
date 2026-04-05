@@ -13,35 +13,33 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/Remote Content/Build Addressables Content")]
         static void BuildAddressablesContent()
         {
+            BuildForTarget(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static AddressablesBuildResult BuildForTarget(BuildTarget target, bool restorePreviousTarget = true)
+        {
             var settingsDefaultType = Type.GetType("UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject, Unity.Addressables.Editor");
             var settingsType = Type.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings, Unity.Addressables.Editor");
             var buildResultType = Type.GetType("UnityEditor.AddressableAssets.Build.AddressablesPlayerBuildResult, Unity.Addressables.Editor");
 
             if (settingsType == null || settingsDefaultType == null)
-            {
-                Debug.LogError("[RemoteContentBuildAddressables] Addressables editor API unavailable.");
-                return;
-            }
+                throw new InvalidOperationException("[RemoteContentBuildAddressables] Addressables editor API unavailable.");
 
             object settings = GetSettings(settingsDefaultType);
             if (settings == null)
-            {
-                Debug.LogError("[RemoteContentBuildAddressables] Failed to load Addressables settings.");
-                return;
-            }
+                throw new InvalidOperationException("[RemoteContentBuildAddressables] Failed to load Addressables settings.");
 
-            string previousBuilder = EditorUserBuildSettings.activeBuildTarget.ToString();
-            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.WebGL, BuildTarget.WebGL);
+            BuildTarget previousTarget = EditorUserBuildSettings.activeBuildTarget;
 
             try
             {
+                SwitchBuildTarget(target);
                 SetupRemoteEnvironmentAddressables.RemoveEmbeddedGameMlEnvironmentRoots(logResult: true);
                 SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
                 SyncRegistryToAddressables();
 
                 var cleanPlayerContent = settingsType.GetMethod("CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);
-                if (cleanPlayerContent != null)
-                    cleanPlayerContent.Invoke(null, new object[] { null });
+                cleanPlayerContent?.Invoke(null, new object[] { null });
 
                 var buildPlayerContent = settingsType.GetMethod("BuildPlayerContent", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
                 var buildPlayerContentWithResult = buildResultType == null
@@ -49,10 +47,7 @@ namespace CastleDefender.Editor
                     : settingsType.GetMethod("BuildPlayerContent", BindingFlags.Public | BindingFlags.Static, null, new[] { buildResultType.MakeByRefType() }, null);
 
                 if (buildPlayerContent == null && buildPlayerContentWithResult == null)
-                {
-                    Debug.LogError("[RemoteContentBuildAddressables] BuildPlayerContent API not found.");
-                    return;
-                }
+                    throw new MissingMethodException("[RemoteContentBuildAddressables] BuildPlayerContent API not found.");
 
                 object result = null;
                 if (buildPlayerContentWithResult != null)
@@ -66,17 +61,25 @@ namespace CastleDefender.Editor
                     buildPlayerContent.Invoke(null, null);
                 }
 
-                string publishedPath = PublishBuildOutput(result);
                 string summary = DescribeResult(result);
-                string[] catalogs = FindCatalogs();
-                Debug.Log($"[RemoteContentBuildAddressables] Build complete. {summary} PublishedPath={publishedPath ?? "unpublished"}");
+                string publishedPath = PublishBuildOutput(result, target);
+                string[] catalogs = FindCatalogs(target);
+                string error = ExtractError(result);
+                if (!string.IsNullOrWhiteSpace(error))
+                    throw new InvalidOperationException($"[RemoteContentBuildAddressables] Addressables build failed: {error}");
+
+                Debug.Log($"[RemoteContentBuildAddressables] Build complete for {target}. {summary} PublishedPath={publishedPath ?? "unpublished"}");
                 if (catalogs.Length > 0)
                     Debug.Log("[RemoteContentBuildAddressables] Catalogs:\n" + string.Join("\n", catalogs));
+
+                return new AddressablesBuildResult(target, publishedPath, summary, catalogs);
             }
             finally
             {
-                if (!string.Equals(previousBuilder, "WebGL", StringComparison.OrdinalIgnoreCase))
-                    AssetDatabase.Refresh();
+                if (restorePreviousTarget)
+                    SwitchBuildTarget(previousTarget);
+
+                AssetDatabase.Refresh();
             }
         }
 
@@ -95,13 +98,25 @@ namespace CastleDefender.Editor
                 Debug.LogWarning("[RemoteContentBuildAddressables] Failed to execute registry-to-addressables sync before build.");
         }
 
+        static void SwitchBuildTarget(BuildTarget target)
+        {
+            if (EditorUserBuildSettings.activeBuildTarget == target)
+                return;
+
+            BuildTargetGroup targetGroup = BuildPipeline.GetBuildTargetGroup(target);
+            if (targetGroup == BuildTargetGroup.Unknown)
+                throw new InvalidOperationException($"[RemoteContentBuildAddressables] Unsupported build target '{target}'.");
+
+            if (!EditorUserBuildSettings.SwitchActiveBuildTarget(targetGroup, target))
+                throw new InvalidOperationException($"[RemoteContentBuildAddressables] Failed to switch active build target to '{target}'.");
+        }
+
         static string DescribeResult(object result)
         {
             if (result == null) return "No result object returned.";
 
             var resultType = result.GetType();
-            var error = resultType.GetProperty("Error")?.GetValue(result) as string
-                ?? resultType.GetField("Error")?.GetValue(result) as string;
+            string error = ExtractError(result);
             if (!string.IsNullOrWhiteSpace(error))
                 return $"Result error: {error}";
 
@@ -113,10 +128,18 @@ namespace CastleDefender.Editor
             return $"Duration={duration ?? "unknown"} OutputPath={outputPath ?? "unknown"}";
         }
 
-        static string PublishBuildOutput(object result)
+        static string ExtractError(object result)
         {
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string remoteOutputDir = Path.Combine(projectRoot, "ServerData", EditorUserBuildSettings.activeBuildTarget.ToString());
+            if (result == null) return null;
+            var resultType = result.GetType();
+            return resultType.GetProperty("Error")?.GetValue(result) as string
+                ?? resultType.GetField("Error")?.GetValue(result) as string;
+        }
+
+        static string PublishBuildOutput(object result, BuildTarget target)
+        {
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string remoteOutputDir = Path.Combine(unityProjectRoot, "ServerData", target.ToString());
             if (Directory.Exists(remoteOutputDir))
                 return remoteOutputDir;
 
@@ -155,19 +178,35 @@ namespace CastleDefender.Editor
                 CopyDirectory(childDir, Path.Combine(destinationDir, Path.GetFileName(childDir)));
         }
 
-        static string[] FindCatalogs()
+        static string[] FindCatalogs(BuildTarget target)
         {
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string serverData = Path.Combine(projectRoot, "ServerData");
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string serverData = Path.Combine(unityProjectRoot, "ServerData", target.ToString());
             if (!Directory.Exists(serverData))
                 return Array.Empty<string>();
 
             return Directory.EnumerateFiles(serverData, "*.json", SearchOption.AllDirectories)
                 .Concat(Directory.EnumerateFiles(serverData, "*.hash", SearchOption.AllDirectories))
                 .OrderBy(path => path)
-                .Select(path => path.Replace(projectRoot + Path.DirectorySeparatorChar, string.Empty))
+                .Select(path => path.Replace(unityProjectRoot + Path.DirectorySeparatorChar, string.Empty))
                 .ToArray();
         }
+    }
+
+    public sealed class AddressablesBuildResult
+    {
+        public AddressablesBuildResult(BuildTarget target, string publishedPath, string summary, string[] catalogs)
+        {
+            Target = target;
+            PublishedPath = publishedPath;
+            Summary = summary ?? throw new ArgumentNullException(nameof(summary));
+            Catalogs = catalogs ?? Array.Empty<string>();
+        }
+
+        public BuildTarget Target { get; }
+        public string PublishedPath { get; }
+        public string Summary { get; }
+        public string[] Catalogs { get; }
     }
 }
 #endif

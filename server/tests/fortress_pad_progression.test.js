@@ -150,65 +150,71 @@ test("live fortress pad actions keep walls shared while turrets unlock from wall
   const game = createGame();
 
   fail(game, 0, "build_on_pad", { padId: "stable_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "workshop_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "library_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" }, /Town Hall/i);
-  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Wall Archers/i);
+  fail(game, 0, "build_on_pad", { padId: "workshop_pad" }, /Coming Soon/i);
+  fail(game, 0, "build_on_pad", { padId: "library_pad" }, /Coming Soon/i);
+  fail(game, 0, "build_on_pad", { padId: "wall_front_1_pad" }, /Town Hall/i);
+  fail(game, 0, "build_on_pad", { padId: "tower_front_1_pad" }, /Wall Archers/i);
 
   upgradeTownCoreToTier(game, 0, 2);
-  act(game, 0, "build_on_pad", { padId: "wall_front_left_01_pad" });
+  act(game, 0, "build_on_pad", { padId: "wall_front_1_pad" });
 
   let lane = laneSnapshot(game, 0);
-  let wallPad = findPad(lane, "wall_front_left_01_pad");
+  let wallPad = findPad(lane, "wall_front_1_pad");
   let gatePad = findPad(lane, "gate_front_pad");
-  let turretPad = findPad(lane, "turret_front_left_pad");
+  let turretPad = findPad(lane, "tower_front_1_pad");
+  let workshopPad = findPad(lane, "workshop_pad");
+  let libraryPad = findPad(lane, "library_pad");
   assert.equal(wallPad && wallPad.isConstructing, true);
   assert.equal(gatePad && gatePad.isConstructing, true);
   assert.equal(turretPad && turretPad.isConstructing, false);
   assert.equal(turretPad && turretPad.isBuilt, false);
   assert.match(String(turretPad && turretPad.lockedReason || ""), /Wall Archers/i);
+  assert.equal(workshopPad && workshopPad.canBuild, false);
+  assert.equal(libraryPad && libraryPad.canBuild, false);
+  assert.match(String(workshopPad && workshopPad.lockedReason || ""), /Coming Soon/i);
+  assert.match(String(libraryPad && libraryPad.lockedReason || ""), /Coming Soon/i);
 
-  finishPadConstruction(game, 0, "wall_front_left_01_pad");
+  finishPadConstruction(game, 0, "wall_front_1_pad");
   lane = laneSnapshot(game, 0);
-  wallPad = findPad(lane, "wall_front_left_01_pad");
+  wallPad = findPad(lane, "wall_front_1_pad");
   gatePad = findPad(lane, "gate_front_pad");
-  turretPad = findPad(lane, "turret_front_left_pad");
+  turretPad = findPad(lane, "tower_front_1_pad");
   assert.equal(wallPad && wallPad.isBuilt, true);
   assert.equal(gatePad && gatePad.isBuilt, true);
   assert.equal(turretPad && turretPad.isBuilt, false);
 
-  fail(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" }, /Keep/i);
-  fail(game, 0, "build_on_pad", { padId: "turret_front_left_pad" }, /Wall Archers/i);
+  fail(game, 0, "upgrade_building", { padId: "wall_front_1_pad" }, /Keep/i);
+  fail(game, 0, "build_on_pad", { padId: "tower_front_1_pad" }, /Wall Archers/i);
 
   act(game, 0, "build_on_pad", { padId: "archery_tower_pad" });
   finishPadConstruction(game, 0, "archery_tower_pad");
   act(game, 0, "purchase_building_upgrade", { padId: "archery_tower_pad", upgradeKey: "wall_archers" });
   lane = laneSnapshot(game, 0);
-  turretPad = findPad(lane, "turret_front_left_pad");
+  turretPad = findPad(lane, "tower_front_1_pad");
   assert.equal(turretPad && turretPad.canBuild, true);
   assert.equal(turretPad && turretPad.buildCost, 500);
-  act(game, 0, "build_on_pad", { padId: "turret_front_left_pad" });
-  finishPadConstruction(game, 0, "turret_front_left_pad");
+  act(game, 0, "build_on_pad", { padId: "tower_front_1_pad" });
+  finishPadConstruction(game, 0, "tower_front_1_pad");
 
   act(game, 0, "build_on_pad", { padId: "stable_pad" });
-  act(game, 0, "build_on_pad", { padId: "workshop_pad" });
-  act(game, 0, "build_on_pad", { padId: "library_pad" });
+  fail(game, 0, "build_on_pad", { padId: "workshop_pad" }, /Coming Soon/i);
+  fail(game, 0, "build_on_pad", { padId: "library_pad" }, /Coming Soon/i);
 
   upgradeTownCoreToTier(game, 0, 3);
-  act(game, 0, "upgrade_building", { padId: "wall_front_left_01_pad" });
-  finishPadConstruction(game, 0, "wall_front_left_01_pad");
+  act(game, 0, "upgrade_building", { padId: "wall_front_1_pad" });
+  finishPadConstruction(game, 0, "wall_front_1_pad");
 
   lane = laneSnapshot(game, 0);
-  wallPad = findPad(lane, "wall_front_left_01_pad");
+  wallPad = findPad(lane, "wall_front_1_pad");
   gatePad = findPad(lane, "gate_front_pad");
-  turretPad = findPad(lane, "turret_front_left_pad");
+  turretPad = findPad(lane, "tower_front_1_pad");
   assert.equal(wallPad && wallPad.tier, 2);
   assert.equal(gatePad && gatePad.tier, 2);
   assert.equal(turretPad && turretPad.tier, 1);
 
-  act(game, 0, "upgrade_building", { padId: "turret_front_left_pad" });
-  finishPadConstruction(game, 0, "turret_front_left_pad");
-  turretPad = findPad(laneSnapshot(game, 0), "turret_front_left_pad");
+  act(game, 0, "upgrade_building", { padId: "tower_front_1_pad" });
+  finishPadConstruction(game, 0, "tower_front_1_pad");
+  turretPad = findPad(laneSnapshot(game, 0), "tower_front_1_pad");
   assert.equal(turretPad && turretPad.tier, 2);
 });
 

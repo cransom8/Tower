@@ -39,6 +39,9 @@ namespace CastleDefender.Game
         static readonly List<FortressPadAnchor> s_activeAnchors = new();
         static readonly HashSet<string> s_invalidConfigLogs = new();
         static readonly HashSet<string> s_missingRendererLogs = new();
+#if UNITY_EDITOR
+        static int s_editorValidationSuppressionDepth;
+#endif
 
         Renderer[] _cachedRenderers;
         Renderer[] _cachedGhostRenderers;
@@ -69,10 +72,31 @@ namespace CastleDefender.Game
 
         void OnValidate()
         {
+#if UNITY_EDITOR
+            if (s_editorValidationSuppressionDepth > 0)
+                return;
+#endif
             ValidateIdentity();
             if (!Application.isPlaying)
                 EnsureInteractionCollider();
         }
+
+#if UNITY_EDITOR
+        public static IDisposable SuppressEditorValidation()
+        {
+            s_editorValidationSuppressionDepth++;
+            return new EditorValidationSuppressionScope();
+        }
+
+        sealed class EditorValidationSuppressionScope : IDisposable
+        {
+            public void Dispose()
+            {
+                if (s_editorValidationSuppressionDepth > 0)
+                    s_editorValidationSuppressionDepth--;
+            }
+        }
+#endif
 
         public bool MatchesPad(string padId)
         {

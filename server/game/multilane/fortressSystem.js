@@ -25,6 +25,8 @@ const FORTRESS_BUILD_STATES = Object.freeze({
   maxTier: "max_tier",
 });
 
+const COMING_SOON_LOCK_REASON = "Coming Soon";
+
 const FORTRESS_CONSTRUCTION_KINDS = Object.freeze({
   build: "build",
   upgrade: "upgrade",
@@ -233,50 +235,68 @@ function createFortressPadDef(
 }
 
 const FORTRESS_WALL_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front_left_01", displayName: "Front Left Wall 01", gridX: -2, gridY: 15, combatOffsetX: -4.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_02", displayName: "Front Left Wall 02", gridX: -1, gridY: 15, combatOffsetX: -3.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_03", displayName: "Front Left Wall 03", gridX: 0, gridY: 15, combatOffsetX: -2.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_04", displayName: "Front Left Wall 04", gridX: 1, gridY: 15, combatOffsetX: -1.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_06", displayName: "Front Left Wall 06", gridX: 2, gridY: 15, combatOffsetX: 0.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_left_07", displayName: "Front Left Wall 07", gridX: 3, gridY: 15, combatOffsetX: 1.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_right_01", displayName: "Front Right Wall 01", gridX: 4, gridY: 15, combatOffsetX: 2.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "front_right_02", displayName: "Front Right Wall 02", gridX: 5, gridY: 15, combatOffsetX: 3.0, combatOffsetY: 11.2 }),
-  Object.freeze({ key: "back_left_01", displayName: "Back Left Wall 01", gridX: -2, gridY: 29, combatOffsetX: -4.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_02", displayName: "Back Left Wall 02", gridX: -1, gridY: 29, combatOffsetX: -3.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_04", displayName: "Back Left Wall 04", gridX: 0, gridY: 29, combatOffsetX: -2.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_left_05", displayName: "Back Left Wall 05", gridX: 1, gridY: 29, combatOffsetX: -1.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_01", displayName: "Back Right Wall 01", gridX: 4, gridY: 29, combatOffsetX: 1.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_02", displayName: "Back Right Wall 02", gridX: 5, gridY: 29, combatOffsetX: 2.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "right_side_03", displayName: "Right Side Wall 03", gridX: 7, gridY: 17, combatOffsetX: 6.0, combatOffsetY: 9.0 }),
-  Object.freeze({ key: "right_side_04_a", displayName: "Right Side Wall 04A", gridX: 7, gridY: 19, combatOffsetX: 6.0, combatOffsetY: 7.0 }),
-  Object.freeze({ key: "right_side_04_b", displayName: "Right Side Wall 04B", gridX: 7, gridY: 21, combatOffsetX: 6.0, combatOffsetY: 5.0 }),
-  Object.freeze({ key: "right_side_05", displayName: "Right Side Wall 05", gridX: 7, gridY: 23, combatOffsetX: 6.0, combatOffsetY: 3.0 }),
-  Object.freeze({ key: "right_side_06", displayName: "Right Side Wall 06", gridX: 7, gridY: 25, combatOffsetX: 6.0, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "right_side_07", displayName: "Right Side Wall 07", gridX: 7, gridY: 27, combatOffsetX: 6.0, combatOffsetY: -1.0 }),
+  Object.freeze({ key: "front_1", displayName: "Front Wall 1", gridX: 12, gridY: 15, combatOffsetX: 8.617, combatOffsetY: 9.736 }),
+  Object.freeze({ key: "front_2", displayName: "Front Wall 2", gridX: 10, gridY: 15, combatOffsetX: 7.004, combatOffsetY: 9.832 }),
+  Object.freeze({ key: "front_3", displayName: "Front Wall 3", gridX: 7, gridY: 15, combatOffsetX: 4.295, combatOffsetY: 9.995 }),
+  Object.freeze({ key: "front_4", displayName: "Front Wall 4", gridX: 6, gridY: 15, combatOffsetX: 2.682, combatOffsetY: 10.091 }),
+  Object.freeze({ key: "front_5", displayName: "Front Wall 5", gridX: 0, gridY: 15, combatOffsetX: -2.548, combatOffsetY: 10.405 }),
+  Object.freeze({ key: "front_6", displayName: "Front Wall 6", gridX: -1, gridY: 14, combatOffsetX: -4.158, combatOffsetY: 10.501 }),
+  Object.freeze({ key: "front_7", displayName: "Front Wall 7", gridX: -4, gridY: 14, combatOffsetX: -6.739, combatOffsetY: 10.656 }),
+  Object.freeze({ key: "front_8", displayName: "Front Wall 8", gridX: -5, gridY: 14, combatOffsetX: -8.349, combatOffsetY: 10.752 }),
+  Object.freeze({ key: "left_1", displayName: "Left Wall 1", gridX: 13, gridY: 17, combatOffsetX: 9.824, combatOffsetY: 8.261 }),
+  Object.freeze({ key: "left_2", displayName: "Left Wall 2", gridX: 13, gridY: 18, combatOffsetX: 9.726, combatOffsetY: 6.624 }),
+  Object.freeze({ key: "left_3", displayName: "Left Wall 3", gridX: 13, gridY: 21, combatOffsetX: 9.573, combatOffsetY: 4.073 }),
+  Object.freeze({ key: "left_4", displayName: "Left Wall 4", gridX: 12, gridY: 23, combatOffsetX: 9.475, combatOffsetY: 2.435 }),
+  Object.freeze({ key: "left_5", displayName: "Left Wall 5", gridX: 12, gridY: 28, combatOffsetX: 9.159, combatOffsetY: -2.852 }),
+  Object.freeze({ key: "left_6", displayName: "Left Wall 6", gridX: 12, gridY: 29, combatOffsetX: 9.062, combatOffsetY: -4.459 }),
+  Object.freeze({ key: "left_7", displayName: "Left Wall 7", gridX: 12, gridY: 32, combatOffsetX: 8.907, combatOffsetY: -7.056 }),
+  Object.freeze({ key: "left_8", displayName: "Left Wall 8", gridX: 12, gridY: 34, combatOffsetX: 8.81, combatOffsetY: -8.663 }),
+  Object.freeze({ key: "rear_1", displayName: "Rear Wall 1", gridX: 10, gridY: 35, combatOffsetX: 7.411, combatOffsetY: -9.737 }),
+  Object.freeze({ key: "rear_2", displayName: "Rear Wall 2", gridX: 9, gridY: 35, combatOffsetX: 5.768, combatOffsetY: -9.638 }),
+  Object.freeze({ key: "rear_3", displayName: "Rear Wall 3", gridX: 6, gridY: 34, combatOffsetX: 3.138, combatOffsetY: -9.481 }),
+  Object.freeze({ key: "rear_4", displayName: "Rear Wall 4", gridX: 4, gridY: 34, combatOffsetX: 1.494, combatOffsetY: -9.382 }),
+  Object.freeze({ key: "rear_5", displayName: "Rear Wall 5", gridX: -1, gridY: 34, combatOffsetX: -3.739, combatOffsetY: -9.069 }),
+  Object.freeze({ key: "rear_6", displayName: "Rear Wall 6", gridX: -2, gridY: 34, combatOffsetX: -5.361, combatOffsetY: -8.972 }),
+  Object.freeze({ key: "rear_7", displayName: "Rear Wall 7", gridX: -5, gridY: 34, combatOffsetX: -7.896, combatOffsetY: -8.82 }),
+  Object.freeze({ key: "rear_8", displayName: "Rear Wall 8", gridX: -7, gridY: 34, combatOffsetX: -9.519, combatOffsetY: -8.723 }),
+  Object.freeze({ key: "right_1", displayName: "Right Wall 1", gridX: -7, gridY: 16, combatOffsetX: -9.623, combatOffsetY: 9.429 }),
+  Object.freeze({ key: "right_2", displayName: "Right Wall 2", gridX: -7, gridY: 17, combatOffsetX: -9.721, combatOffsetY: 7.786 }),
+  Object.freeze({ key: "right_3", displayName: "Right Wall 3", gridX: -7, gridY: 20, combatOffsetX: -9.88, combatOffsetY: 5.137 }),
+  Object.freeze({ key: "right_4", displayName: "Right Wall 4", gridX: -7, gridY: 21, combatOffsetX: -9.977, combatOffsetY: 3.515 }),
+  Object.freeze({ key: "right_5", displayName: "Right Wall 5", gridX: -7, gridY: 27, combatOffsetX: -10.286, combatOffsetY: -1.638 }),
+  Object.freeze({ key: "right_6", displayName: "Right Wall 6", gridX: -7, gridY: 28, combatOffsetX: -10.381, combatOffsetY: -3.233 }),
+  Object.freeze({ key: "right_7", displayName: "Right Wall 7", gridX: -8, gridY: 31, combatOffsetX: -10.534, combatOffsetY: -5.781 }),
+  Object.freeze({ key: "right_8", displayName: "Right Wall 8", gridX: -8, gridY: 32, combatOffsetX: -10.63, combatOffsetY: -7.376 }),
 ]);
 
 const FORTRESS_GATE_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 16, combatOffsetX: 0.0, combatOffsetY: FRONT_GATE_COMBAT_OFFSET }),
-  Object.freeze({ key: "left", displayName: "Left Gate", gridX: -3, gridY: 24, combatOffsetX: -6.0, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "right", displayName: "Right Gate", gridX: 8, gridY: 24, combatOffsetX: 6.5, combatOffsetY: 1.0 }),
-  Object.freeze({ key: "rear", displayName: "Rear Gate", gridX: 3, gridY: 30, combatOffsetX: 0.0, combatOffsetY: -6.0 }),
+  Object.freeze({ key: "front", displayName: "Front Gate", gridX: 3, gridY: 15, combatOffsetX: 0.0, combatOffsetY: FRONT_GATE_COMBAT_OFFSET }),
+  Object.freeze({ key: "left", displayName: "Left Gate", gridX: 12, gridY: 25, combatOffsetX: 9.342, combatOffsetY: -0.254 }),
+  Object.freeze({ key: "right", displayName: "Right Gate", gridX: -7, gridY: 24, combatOffsetX: -10.062, combatOffsetY: 0.972 }),
+  Object.freeze({ key: "rear", displayName: "Rear Gate", gridX: 2, gridY: 34, combatOffsetX: -1.133, combatOffsetY: -9.225 }),
 ]);
 
-const FORTRESS_TURRET_PAD_LAYOUT = Object.freeze([
-  Object.freeze({ key: "front_left", displayName: "Front Left Tower", gridX: -2, gridY: 13, combatOffsetX: -5.0, combatOffsetY: 13.5 }),
-  Object.freeze({ key: "front_left_05", displayName: "Front Left Tower 05", gridX: 0, gridY: 12, combatOffsetX: -2.5, combatOffsetY: 14.5 }),
-  Object.freeze({ key: "front_right", displayName: "Front Right Tower", gridX: 6, gridY: 13, combatOffsetX: 5.0, combatOffsetY: 13.5 }),
-  Object.freeze({ key: "front_gate_left", displayName: "Front Gate Tower Left", gridX: 1, gridY: 14, combatOffsetX: -2.5, combatOffsetY: 12.0 }),
-  Object.freeze({ key: "front_gate_right", displayName: "Front Gate Tower Right", gridX: 5, gridY: 14, combatOffsetX: 2.5, combatOffsetY: 12.0 }),
-  Object.freeze({ key: "back_left_03", displayName: "Back Left Tower 03", gridX: -2, gridY: 27, combatOffsetX: -5.0, combatOffsetY: -3.0 }),
-  Object.freeze({ key: "back_left_06", displayName: "Back Left Tower 06", gridX: 0, gridY: 28, combatOffsetX: -2.5, combatOffsetY: -4.0 }),
-  Object.freeze({ key: "back_left_07", displayName: "Back Left Tower 07", gridX: 2, gridY: 29, combatOffsetX: -0.5, combatOffsetY: -5.0 }),
-  Object.freeze({ key: "back_right_03", displayName: "Back Right Tower 03", gridX: 6, gridY: 27, combatOffsetX: 5.0, combatOffsetY: -3.0 }),
-  Object.freeze({ key: "rear_gate_left", displayName: "Rear Gate Tower Left", gridX: 1, gridY: 30, combatOffsetX: -2.5, combatOffsetY: -6.5 }),
-  Object.freeze({ key: "rear_gate_right", displayName: "Rear Gate Tower Right", gridX: 5, gridY: 30, combatOffsetX: 2.5, combatOffsetY: -6.5 }),
-  Object.freeze({ key: "right_side_05", displayName: "Right Side Tower 05", gridX: 8, gridY: 17, combatOffsetX: 7.4, combatOffsetY: 9.0 }),
-  Object.freeze({ key: "right_side_06", displayName: "Right Side Tower 06", gridX: 8, gridY: 22, combatOffsetX: 7.4, combatOffsetY: 4.0 }),
-  Object.freeze({ key: "right_side_07", displayName: "Right Side Tower 07", gridX: 8, gridY: 27, combatOffsetX: 7.4, combatOffsetY: -1.0 }),
+const FORTRESS_TOWER_PAD_LAYOUT = Object.freeze([
+  Object.freeze({ key: "front_1", displayName: "Front Tower 1", gridX: 13, gridY: 15, combatOffsetX: 9.926, combatOffsetY: 9.657 }),
+  Object.freeze({ key: "front_2", displayName: "Front Tower 2", gridX: 9, gridY: 15, combatOffsetX: 5.604, combatOffsetY: 9.916 }),
+  Object.freeze({ key: "front_3", displayName: "Front Tower 3", gridX: 4, gridY: 15, combatOffsetX: 1.403, combatOffsetY: 10.168 }),
+  Object.freeze({ key: "front_4", displayName: "Front Tower 4", gridX: 2, gridY: 15, combatOffsetX: -1.336, combatOffsetY: 10.332 }),
+  Object.freeze({ key: "front_5", displayName: "Front Tower 5", gridX: -2, gridY: 14, combatOffsetX: -5.445, combatOffsetY: 10.578 }),
+  Object.freeze({ key: "front_6", displayName: "Front Tower 6", gridX: -7, gridY: 14, combatOffsetX: -9.637, combatOffsetY: 10.829 }),
+  Object.freeze({ key: "left_1", displayName: "Left Tower 1", gridX: 13, gridY: 20, combatOffsetX: 9.648, combatOffsetY: 5.312 }),
+  Object.freeze({ key: "left_2", displayName: "Left Tower 2", gridX: 12, gridY: 24, combatOffsetX: 9.398, combatOffsetY: 1.148 }),
+  Object.freeze({ key: "left_3", displayName: "Left Tower 3", gridX: 12, gridY: 27, combatOffsetX: 9.234, combatOffsetY: -1.592 }),
+  Object.freeze({ key: "left_4", displayName: "Left Tower 4", gridX: 12, gridY: 31, combatOffsetX: 8.982, combatOffsetY: -5.795 }),
+  Object.freeze({ key: "rear_1", displayName: "Rear Tower 1", gridX: 12, gridY: 35, combatOffsetX: 8.711, combatOffsetY: -9.814 }),
+  Object.freeze({ key: "rear_2", displayName: "Rear Tower 2", gridX: 7, gridY: 35, combatOffsetX: 4.437, combatOffsetY: -9.559 }),
+  Object.freeze({ key: "rear_3", displayName: "Rear Tower 3", gridX: 3, gridY: 34, combatOffsetX: 0.176, combatOffsetY: -9.303 }),
+  Object.freeze({ key: "rear_4", displayName: "Rear Tower 4", gridX: 0, gridY: 34, combatOffsetX: -2.503, combatOffsetY: -9.143 }),
+  Object.freeze({ key: "rear_5", displayName: "Rear Tower 5", gridX: -4, gridY: 34, combatOffsetX: -6.611, combatOffsetY: -8.878 }),
+  Object.freeze({ key: "rear_6", displayName: "Rear Tower 6", gridX: -8, gridY: 34, combatOffsetX: -10.769, combatOffsetY: -8.629 }),
+  Object.freeze({ key: "right_1", displayName: "Right Tower 1", gridX: -7, gridY: 19, combatOffsetX: -9.8, combatOffsetY: 6.477 }),
+  Object.freeze({ key: "right_2", displayName: "Right Tower 2", gridX: -7, gridY: 23, combatOffsetX: -10.049, combatOffsetY: 2.31 }),
+  Object.freeze({ key: "right_3", displayName: "Right Tower 3", gridX: -7, gridY: 25, combatOffsetX: -10.206, combatOffsetY: -0.308 }),
+  Object.freeze({ key: "right_4", displayName: "Right Tower 4", gridX: -7, gridY: 29, combatOffsetX: -10.454, combatOffsetY: -4.451 }),
 ]);
 
 const FORTRESS_BUILDING_DEFS = Object.freeze({
@@ -414,6 +434,7 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 205,
     buildCost: 60,
+    comingSoonReason: COMING_SOON_LOCK_REASON,
     upgradeCosts: {
       2: 100,
       3: 150,
@@ -430,6 +451,7 @@ const FORTRESS_BUILDING_DEFS = Object.freeze({
     requiredTownCoreTierByTier: { 1: 2, 2: 3, 3: 4 },
     baseMaxHp: 200,
     buildCost: 60,
+    comingSoonReason: COMING_SOON_LOCK_REASON,
     upgradeCosts: {
       2: 100,
       3: 150,
@@ -542,8 +564,8 @@ const FORTRESS_PAD_DEFS = Object.freeze([
       combatOffsetY: slot.combatOffsetY,
     }
   )),
-  ...FORTRESS_TURRET_PAD_LAYOUT.map((slot) => createFortressPadDef(
-    `turret_${slot.key}_pad`,
+  ...FORTRESS_TOWER_PAD_LAYOUT.map((slot) => createFortressPadDef(
+    `tower_${slot.key}_pad`,
     "turret",
     slot.displayName,
     slot.gridX,
@@ -1312,16 +1334,22 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     ? construction.targetTier
     : built ? nextTier : 1;
   const actionBuildingType = getFortressActionBuildingType(padState.buildingType);
+  const comingSoonReason = typeof buildingDef.comingSoonReason === "string"
+    && buildingDef.comingSoonReason.trim()
+    ? buildingDef.comingSoonReason.trim()
+    : null;
   const townCoreTier = getTownCoreTier(lane);
   const requiredTownCoreTier = getFortressRequiredTownCoreTier(actionBuildingType, targetTier);
   const dependencyLockedReason = construction
     ? null
     : getFortressDependencyLockedReason(lane, actionBuildingType, targetTier);
-  const canBuild = !built
+  const canBuild = !comingSoonReason
+    && !built
     && !construction
     && townCoreTier >= requiredTownCoreTier
     && !dependencyLockedReason;
-  const canUpgrade = built
+  const canUpgrade = !comingSoonReason
+    && built
     && !construction
     && !destroyed
     && !underRepair
@@ -1357,6 +1385,8 @@ function describeFortressPad(_game, lane, padState, deps = {}) {
     lockedReason = "Destroyed";
   } else if (underRepair) {
     lockedReason = "Under repair";
+  } else if (comingSoonReason) {
+    lockedReason = comingSoonReason;
   } else if (!canBuild && !canUpgrade && buildState === FORTRESS_BUILD_STATES.locked) {
     lockedReason = dependencyLockedReason
       ? `Requires ${dependencyLockedReason}`

@@ -6,8 +6,7 @@ namespace CastleDefender.Editor
     {
         public static void BuildAddressablesContent()
         {
-            if (!EditorApplication.ExecuteMenuItem("Castle Defender/Remote Content/Build Addressables Content"))
-                throw new System.InvalidOperationException("Failed to execute Addressables build menu item.");
+            RemoteContentBuildAddressables.BuildForTarget(BuildTarget.Android);
         }
     }
 }

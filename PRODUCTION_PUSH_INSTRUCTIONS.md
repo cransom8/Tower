@@ -4,167 +4,95 @@ Use this runbook when the request is: "read push instructions and do a push".
 
 ## Scope
 
-This project has two connected repos/folders:
-
-- Unity project: `C:\Users\Crans\RansomForge\CastleDefenderClient`
-- Production server repo: `C:\Users\Crans\RansomForge\castle-defender`
-
-The live Unity WebGL client for `app.ransomforge.com` is served by the server repo from:
-
-- `C:\Users\Crans\RansomForge\castle-defender\server\client`
-
-## Required access
-
-This workflow assumes Codex has Unity MCP server access to the running Unity editor.
-
-Expected capability:
-
-- Read Unity editor state
-- Target the active Unity instance
-- Trigger the production WebGL build from the Unity editor menu
-- Validate that Unity is responsive after the build
-
-If Unity MCP access is missing, disconnected, stale, or unusable, stop and flag the user before attempting the production push.
-
-## How production gets the Unity build
-
-The Unity editor menu item below runs the production WebGL build pipeline:
-
-- `Castle Defender/Build/Build WebGL Release`
-
-That menu maps to:
-
-- [BuildWebGL.cs](C:/Users/Crans/RansomForge/CastleDefenderClient/Assets/Scripts/Editor/BuildWebGL.cs)
-
-What that script does:
-
-1. Switches Unity to `WebGL`.
-2. Uses Brotli compression.
-3. Builds the enabled scenes, or falls back to:
-   - `Assets/Scenes/Bootstrap.unity`
-   - `Assets/Scenes/Login.unity`
-   - `Assets/Scenes/Lobby.unity`
-   - `Assets/Scenes/Loadout.unity`
-   - `Assets/Scenes/Game_ML.unity`
-   - `Assets/Scenes/PostGame.unity`
-4. Builds into a temporary Unity folder named `WebGLBuild_Auto`.
-5. Copies the finished build directly into:
-   - `castle-defender/server/client`
-6. Removes any nested wrapper folder Unity may have produced.
-
-This means the production web client is not deployed from the Unity repo directly. It becomes production by being copied into the server repo and then pushed from the server repo.
-
-Important:
-
-- The production `Build/*` payload is now served from GCS when `BUILD_CDN_URL` is set.
-- Uploading `server/client/Build` with a plain `gcloud storage rsync` is not sufficient for Brotli builds, because the `.br` files must be served with `Content-Encoding: br`.
-- Use:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\upload-build.ps1
-```
-
-- That script uploads the build files and sets the correct `Content-Type`, `Content-Encoding`, and `Cache-Control` metadata on GCS.
-
-## How the server serves the Unity client
-
-The production server resolves its Unity client from:
-
-- [index.js](C:/Users/Crans/RansomForge/castle-defender/server/index.js)
-
-Relevant behavior:
-
-- It prefers `server/client` as the Unity client directory.
-- It serves `/`, `/Build/*`, `/TemplateData/*`, and `/client/*` from that Unity build output when `BUILD_CDN_URL` is not set.
-- When `BUILD_CDN_URL` is set, `/` rewrites Unity's `buildUrl` to the GCS-hosted `Build` path instead.
-- It sets the correct headers for Unity Brotli WebGL files like:
-  - `.framework.js.unityweb`
-  - `.wasm.unityweb`
-  - `.data.unityweb`
-
-## Standard push flow
-
-1. Confirm Unity code changes are done in `CastleDefenderClient`.
-2. Run the Unity production build from the Unity editor:
-   - `Castle Defender/Build/Build WebGL Release`
-3. Wait for the build to finish.
-4. Verify the server repo's Unity client output changed:
-   - `C:\Users\Crans\RansomForge\castle-defender\server\client`
-   - Especially `index.html`, `Build`, and `TemplateData`
-5. Upload the GCS-served WebGL build with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\upload-build.ps1
-```
-
-6. Upload refreshed addressables to GCS.
-7. In `C:\Users\Crans\RansomForge\castle-defender`, review git status.
-8. Commit the server repo changes that are still tracked locally, such as refreshed streaming-addressables metadata.
-9. Push `main` to `origin`.
-10. Railway redeploys the app from the pushed server repo.
-11. Verify on `https://app.ransomforge.com`.
-
-## Commands to use after build completes
-
-Run these from:
+The active production repo is:
 
 - `C:\Users\Crans\RansomForge\castle-defender`
 
-Check what changed:
+The Unity project now lives inside that repo:
+
+- `C:\Users\Crans\RansomForge\castle-defender\unity-client`
+
+WebGL release pushes are retired. The deployment path going forward is Android only.
+
+## Primary entry point
+
+Run the Unity editor menu item:
+
+- `Castle Defender/Deploy Android`
+
+That pipeline now handles the Android release flow in one place:
+
+1. Builds Addressables for `Android`.
+2. Writes refreshed remote content into:
+   - `unity-client/ServerData/Android`
+3. Builds the signed Android App Bundle:
+   - stable path: `builds/android/forge-wars.aab`
+   - archived release copy: `builds/android/releases/...`
+4. Uploads Android Addressables to Google Cloud Storage.
+5. Stages the Railway-facing Android catalog/hash/settings files in git so they can be committed and pushed.
+
+## Supporting scripts
+
+The menu pipeline calls this uploader:
+
+- `scripts/upload-addressables.ps1`
+
+You can also run it manually from the repo root if needed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\upload-addressables.ps1 -Platform Android -StageRailwayMetadata
+```
+
+That uploads:
+
+- `unity-client/ServerData/Android/catalog*.bin`
+- `unity-client/ServerData/Android/catalog*.hash`
+- `unity-client/ServerData/Android/settings.json`
+- all `unity-client/ServerData/Android/*.bundle`
+
+to:
+
+- `gs://castle-defender-assets/addressables/Android/`
+
+and stages the tracked metadata files for Railway.
+
+## Standard release flow
+
+1. Finish the Unity and server changes intended for the release.
+2. Run `Castle Defender/Deploy Android`.
+3. Wait for the menu pipeline to finish successfully.
+4. Verify the output `.aab` exists under:
+   - `builds/android/forge-wars.aab`
+   - `builds/android/releases`
+5. Review the staged Railway metadata and any other release changes:
 
 ```powershell
 git status --short
 ```
 
-Stage everything intended for the release:
+6. Commit the intended release changes:
 
 ```powershell
-git add -A
+git commit -m "Deploy Android release"
 ```
 
-Commit:
-
-```powershell
-git commit -m "Deploy WebGL production build"
-```
-
-Push:
+7. Push `main`:
 
 ```powershell
 git push origin main
 ```
+
+8. Railway redeploys from the pushed repo.
 
 ## Exact push behavior Codex should follow
 
 When asked to "read push instructions and do a push", do this:
 
 1. Open this file.
-2. Confirm Unity MCP server access is available and the correct Unity instance is reachable.
-3. If MCP access is unavailable or unhealthy, flag the user and stop before the build/push.
-4. Confirm whether the Unity build is still running or has finished.
-5. If it is still running, wait and verify output timestamps in `castle-defender/server/client`.
-6. Once finished, inspect `git status` in `castle-defender`.
-7. Do not revert unrelated changes.
-8. Commit only when the user wants the deployment pushed.
-9. Push from the `castle-defender` repo, not from `CastleDefenderClient`.
-
-## Notes from the 3D unit portrait fix push
-
-The production issue investigated here affected shared runtime portrait rendering used by:
-
-- Loadout phase
-- CMD bar
-- Build menu
-- Tile/unit builder
-
-The code fix was applied in the Unity project here:
-
-- [RuntimePortraitStudio.cs](C:/Users/Crans/RansomForge/CastleDefenderClient/Assets/Scripts/UI/RuntimePortraitStudio.cs)
-- [UnitPortraitCamera.cs](C:/Users/Crans/RansomForge/CastleDefenderClient/Assets/Scripts/UI/UnitPortraitCamera.cs)
-
-The expectation for this push is:
-
-- Build from Unity
-- Copy into `castle-defender/server/client`
-- Commit and push the server repo
-- Validate on production
+2. Confirm Unity MCP access is available and the correct Unity instance is reachable.
+3. If MCP access is unavailable or unhealthy, stop and flag the user before building.
+4. Run `Castle Defender/Deploy Android` unless the user explicitly says the pipeline already finished.
+5. Inspect `git status` in `castle-defender`.
+6. Do not revert unrelated changes.
+7. Commit only what the user wants in the release.
+8. Push from the `castle-defender` repo.

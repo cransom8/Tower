@@ -34,6 +34,7 @@ namespace CastleDefender.Editor
             try
             {
                 EnvironmentPrefabSafety.AssertValidCriticalEnvironmentRoot(root, EnvironmentPrefabPath);
+                ResetDefenseBindings(root.transform);
 
                 var runtimeSpecs = new List<FortressPadBindingCatalog.RuntimePadSpec>();
                 FortressPadBindingCatalog.GetRuntimePadSpecs(runtimeSpecs);
@@ -112,7 +113,7 @@ namespace CastleDefender.Editor
             }
 
             var conflictingAnchor = target.GetComponent<FortressPadAnchor>();
-            if (conflictingAnchor != null && !string.IsNullOrWhiteSpace(conflictingAnchor.padId))
+            if (conflictingAnchor != null && !CanReuseAnchor(conflictingAnchor, spec))
             {
                 Debug.LogError(
                     $"[AuthorFortressPadAnchors] Refusing to overwrite existing FortressPadAnchor '{conflictingAnchor.padId}' " +
@@ -120,11 +121,116 @@ namespace CastleDefender.Editor
                 return;
             }
 
-            var anchor = conflictingAnchor != null ? conflictingAnchor : Undo.AddComponent<FortressPadAnchor>(target.gameObject);
-            ConfigureAnchor(anchor, spec);
+            FortressPadAnchor anchor;
+            using (FortressPadAnchor.SuppressEditorValidation())
+            {
+                anchor = conflictingAnchor != null ? conflictingAnchor : Undo.AddComponent<FortressPadAnchor>(target.gameObject);
+                ConfigureAnchor(anchor, spec);
+            }
             existingByKey[key] = anchor;
             stats.createdAnchors++;
             EnsureBridge(target.gameObject, spec, ref stats.createdBridges, ref stats.updatedBridges);
+        }
+
+        static void ResetDefenseBindings(Transform root)
+        {
+            if (root == null)
+                return;
+
+            var wallHierarchyRoots = new List<Transform>();
+            CollectWallHierarchyRoots(root, wallHierarchyRoots);
+            var touchedObjects = new HashSet<GameObject>();
+
+            for (int i = 0; i < wallHierarchyRoots.Count; i++)
+            {
+                var wallRoot = wallHierarchyRoots[i];
+                if (wallRoot == null)
+                    continue;
+
+                var anchors = wallRoot.GetComponentsInChildren<FortressPadAnchor>(true);
+                for (int anchorIndex = 0; anchorIndex < anchors.Length; anchorIndex++)
+                {
+                    var anchor = anchors[anchorIndex];
+                    if (anchor == null)
+                        continue;
+
+                    touchedObjects.Add(anchor.gameObject);
+                    Undo.DestroyObjectImmediate(anchor);
+                }
+
+                var bridges = wallRoot.GetComponentsInChildren<SnapshotBuildingVisualBridge>(true);
+                for (int bridgeIndex = 0; bridgeIndex < bridges.Length; bridgeIndex++)
+                {
+                    var bridge = bridges[bridgeIndex];
+                    if (bridge == null)
+                        continue;
+
+                    touchedObjects.Add(bridge.gameObject);
+                    Undo.DestroyObjectImmediate(bridge);
+                }
+            }
+
+            foreach (var gameObject in touchedObjects)
+            {
+                if (gameObject == null)
+                    continue;
+
+                var collider = gameObject.GetComponent<BoxCollider>();
+                if (collider != null)
+                    Undo.DestroyObjectImmediate(collider);
+            }
+        }
+
+        static void CollectWallHierarchyRoots(Transform root, List<Transform> results)
+        {
+            if (root == null || results == null)
+                return;
+
+            var stack = new Stack<Transform>();
+            stack.Push(root);
+
+            while (stack.Count > 0)
+            {
+                var current = stack.Pop();
+                if (current == null)
+                    continue;
+
+                if (string.Equals(current.name, "Walls", StringComparison.Ordinal))
+                {
+                    results.Add(current);
+                    continue;
+                }
+
+                for (int childIndex = current.childCount - 1; childIndex >= 0; childIndex--)
+                    stack.Push(current.GetChild(childIndex));
+            }
+        }
+
+        static bool CanReuseAnchor(FortressPadAnchor anchor, FortressPadBindingCatalog.RuntimePadSpec spec)
+        {
+            if (anchor == null)
+                return true;
+
+            if (string.IsNullOrWhiteSpace(anchor.padId))
+                return true;
+
+            if (string.Equals(anchor.padId, spec.PadId, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return IsDefenseBuildingType(anchor.buildingType) && IsDefenseBuildingType(spec.BuildingType);
+        }
+
+        static bool IsDefenseBuildingType(string buildingType)
+        {
+            switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "wall":
+                case "gate":
+                case "turret":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         static void ConfigureAnchor(FortressPadAnchor anchor, FortressPadBindingCatalog.RuntimePadSpec spec)

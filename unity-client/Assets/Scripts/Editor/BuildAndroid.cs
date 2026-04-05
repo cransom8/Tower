@@ -14,12 +14,12 @@ public static class BuildAndroid
     [MenuItem("Castle Defender/Build/Build Android App Bundle")]
     public static void BuildReleaseMenu() => BuildRelease();
 
-    public static void BuildRelease()
+    public static AndroidBuildResult BuildRelease()
     {
-        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-        string outputPath = ResolveOutputPath(projectRoot);
+        string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        string outputPath = ResolveOutputPath(unityProjectRoot);
         string outputDirectory = Path.GetDirectoryName(outputPath);
-        var localSettings = LoadLocalSettings(projectRoot);
+        var localSettings = LoadLocalSettings(unityProjectRoot);
 
         if (string.IsNullOrWhiteSpace(outputDirectory))
             throw new InvalidOperationException("Failed to resolve Android build output directory.");
@@ -100,8 +100,11 @@ public static class BuildAndroid
             if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded)
                 throw new InvalidOperationException($"Android build failed: {report.summary.result}");
 
+            string archivedOutputPath = ArchiveBuildOutput(outputPath, PlayerSettings.bundleVersion, PlayerSettings.Android.bundleVersionCode);
             Debug.Log($"[BuildAndroid] Success. Output: {outputPath}");
+            Debug.Log($"[BuildAndroid] Archived release: {archivedOutputPath}");
             Debug.Log($"[BuildAndroid] Version: {PlayerSettings.bundleVersion} ({PlayerSettings.Android.bundleVersionCode})");
+            return new AndroidBuildResult(outputPath, archivedOutputPath, PlayerSettings.bundleVersion, PlayerSettings.Android.bundleVersionCode);
         }
         finally
         {
@@ -120,6 +123,31 @@ public static class BuildAndroid
             EditorUserBuildSettings.connectProfiler = previousConnectProfiler;
             EditorUserBuildSettings.allowDebugging = previousAllowDebugging;
         }
+    }
+
+    static string ArchiveBuildOutput(string outputPath, string bundleVersion, int versionCode)
+    {
+        if (!File.Exists(outputPath))
+            throw new FileNotFoundException($"Android build output not found at '{outputPath}'.");
+
+        string outputDirectory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            throw new InvalidOperationException("Failed to resolve Android build archive directory.");
+
+        string releasesDirectory = Path.Combine(outputDirectory, "releases");
+        Directory.CreateDirectory(releasesDirectory);
+
+        string baseName = Path.GetFileNameWithoutExtension(outputPath);
+        string safeBundleVersion = SanitizeFileNameSegment(string.IsNullOrWhiteSpace(bundleVersion) ? "unknown" : bundleVersion.Trim());
+        string archivedOutputPath = Path.Combine(releasesDirectory, $"{baseName}-v{safeBundleVersion}-code{versionCode}.aab");
+        File.Copy(outputPath, archivedOutputPath, true);
+        return archivedOutputPath;
+    }
+
+    static string SanitizeFileNameSegment(string value)
+    {
+        char[] invalidChars = Path.GetInvalidFileNameChars();
+        return new string(value.Select(ch => invalidChars.Contains(ch) ? '-' : ch).ToArray());
     }
 
     static string ResolveOutputPath(string projectRoot)
@@ -180,4 +208,20 @@ public static class BuildAndroid
 
         return settings;
     }
+}
+
+public sealed class AndroidBuildResult
+{
+    public AndroidBuildResult(string outputPath, string archivedOutputPath, string bundleVersion, int versionCode)
+    {
+        OutputPath = outputPath ?? throw new ArgumentNullException(nameof(outputPath));
+        ArchivedOutputPath = archivedOutputPath ?? throw new ArgumentNullException(nameof(archivedOutputPath));
+        BundleVersion = bundleVersion ?? throw new ArgumentNullException(nameof(bundleVersion));
+        VersionCode = versionCode;
+    }
+
+    public string OutputPath { get; }
+    public string ArchivedOutputPath { get; }
+    public string BundleVersion { get; }
+    public int VersionCode { get; }
 }

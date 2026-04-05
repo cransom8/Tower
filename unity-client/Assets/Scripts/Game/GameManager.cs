@@ -90,10 +90,10 @@ namespace CastleDefender.Game
             "barracks_pad",
             "market_pad",
             "gate_front_pad",
-            "turret_front_gate_left_pad",
-            "turret_front_gate_right_pad",
-            "turret_front_left_pad",
-            "turret_front_right_pad",
+            "tower_front_3_pad",
+            "tower_front_4_pad",
+            "tower_front_1_pad",
+            "tower_front_6_pad",
         };
 
         string _playerSide;     // "left" | "right" — cached on first snapshot

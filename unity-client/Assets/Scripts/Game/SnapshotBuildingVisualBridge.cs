@@ -27,6 +27,38 @@ namespace CastleDefender.Game
             public bool receiveShadows;
         }
 
+        readonly struct SharedWallLineVisualState
+        {
+            public readonly bool Visible;
+            public readonly bool Built;
+            public readonly bool Constructing;
+            public readonly int CurrentTier;
+            public readonly int ConstructionTargetTier;
+            public readonly float ConstructionProgress01;
+            public readonly bool UnderRepair;
+            public readonly float Hp01;
+
+            public SharedWallLineVisualState(
+                bool visible,
+                bool built,
+                bool constructing,
+                int currentTier,
+                int constructionTargetTier,
+                float constructionProgress01,
+                bool underRepair,
+                float hp01)
+            {
+                Visible = visible;
+                Built = built;
+                Constructing = constructing;
+                CurrentTier = Mathf.Max(1, currentTier);
+                ConstructionTargetTier = Mathf.Max(1, constructionTargetTier);
+                ConstructionProgress01 = Mathf.Clamp01(constructionProgress01);
+                UnderRepair = underRepair;
+                Hp01 = Mathf.Clamp01(hp01);
+            }
+        }
+
         [Header("Catalog")]
         [SerializeField] BuildingVisualCatalog catalog;
         [SerializeField] string buildingTypeOverride;
@@ -118,7 +150,7 @@ namespace CastleDefender.Game
                 visualParent = transform;
 
             if (_fortressPad != null)
-                legacyRenderers = ResolveLegacyVisualRenderers();
+                legacyRenderers = _fortressPad.GetPrimaryRenderers();
             else if (_barracksSiteView != null)
                 legacyRenderers = _barracksSiteView.GetPrimaryRenderers();
             else if (legacyRenderers == null || legacyRenderers.Length == 0)
@@ -343,20 +375,35 @@ namespace CastleDefender.Game
                 }
 
                 effectiveBuildingType = ResolveEffectiveBuildingType(lane, pad);
-                showUnbuiltTurretShell = ShouldShowUnbuiltTurretShell(lane, pad, effectiveBuildingType);
-                built = pad != null && pad.isBuilt;
-                tier = built ? Mathf.Max(1, pad.tier) : 1;
-                constructing = pad != null && pad.isConstructing;
-                constructionTargetTier = pad != null
-                    ? Mathf.Max(1, pad.constructionTargetTier > 0 ? pad.constructionTargetTier : (built ? pad.tier : 1))
-                    : 1;
-                constructionProgress01 = pad != null ? Mathf.Clamp01(pad.constructionProgress01) : 0f;
-                destroyed = pad != null && pad.isDestroyed;
-                underRepair = pad != null
-                    && (pad.isUnderRepair
-                        || string.Equals(pad.lifecycleState, "under_repair", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(pad.buildState, "under_repair", StringComparison.OrdinalIgnoreCase));
-                hp01 = pad != null && pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : 1f;
+                if (string.Equals(effectiveBuildingType, "wall_tower", StringComparison.OrdinalIgnoreCase))
+                {
+                    var sharedWallLineState = ResolveSharedWallLineVisualState(lane);
+                    showUnbuiltTurretShell = sharedWallLineState.Visible;
+                    built = sharedWallLineState.Built;
+                    tier = sharedWallLineState.CurrentTier;
+                    constructing = sharedWallLineState.Constructing;
+                    constructionTargetTier = sharedWallLineState.ConstructionTargetTier;
+                    constructionProgress01 = sharedWallLineState.ConstructionProgress01;
+                    destroyed = false;
+                    underRepair = sharedWallLineState.UnderRepair;
+                    hp01 = sharedWallLineState.Hp01;
+                }
+                else
+                {
+                    built = pad != null && pad.isBuilt;
+                    tier = built ? Mathf.Max(1, pad.tier) : 1;
+                    constructing = pad != null && pad.isConstructing;
+                    constructionTargetTier = pad != null
+                        ? Mathf.Max(1, pad.constructionTargetTier > 0 ? pad.constructionTargetTier : (built ? pad.tier : 1))
+                        : 1;
+                    constructionProgress01 = pad != null ? Mathf.Clamp01(pad.constructionProgress01) : 0f;
+                    destroyed = pad != null && pad.isDestroyed;
+                    underRepair = pad != null
+                        && (pad.isUnderRepair
+                            || string.Equals(pad.lifecycleState, "under_repair", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(pad.buildState, "under_repair", StringComparison.OrdinalIgnoreCase));
+                    hp01 = pad != null && pad.maxHp > 0f ? Mathf.Clamp01(pad.hp / pad.maxHp) : 1f;
+                }
             }
 
             EnsureVisualInstance(effectiveBuildingType);
@@ -387,9 +434,7 @@ namespace CastleDefender.Game
 
             int presentationTier = constructing
                 ? Mathf.Max(1, constructionTargetTier)
-                : showUnbuiltTurretShell
-                    ? ResolveSharedWallLineTier(resolvedLane)
-                    : Mathf.Max(1, tier);
+                : Mathf.Max(1, tier);
             destroyed = destroyed && built;
             if (destroyed)
                 constructing = false;
@@ -591,50 +636,6 @@ namespace CastleDefender.Game
             SetInteractionEnabled(enableInteraction);
         }
 
-        Renderer[] ResolveLegacyVisualRenderers()
-        {
-            if (_fortressPad == null)
-                return Array.Empty<Renderer>();
-
-            if (TryResolveSharedStructuralVisualRoot(out Transform sharedRoot))
-            {
-                var sharedRenderers = ResolveSharedStructuralRenderers(sharedRoot);
-                if (sharedRenderers.Length > 0)
-                    return sharedRenderers;
-            }
-
-            return _fortressPad.GetPrimaryRenderers();
-        }
-
-        Renderer[] ResolveSharedStructuralRenderers(Transform sharedRoot)
-        {
-            if (sharedRoot == null)
-                return Array.Empty<Renderer>();
-
-            var renderers = sharedRoot.GetComponentsInChildren<Renderer>(true);
-            if (renderers == null || renderers.Length <= 0)
-                return Array.Empty<Renderer>();
-
-            var filtered = new List<Renderer>(renderers.Length);
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                var renderer = renderers[i];
-                if (renderer == null)
-                    continue;
-
-                var owningAnchor = renderer.GetComponentInParent<FortressPadAnchor>();
-                if (owningAnchor != null
-                    && !IsSharedWallLineStructuralVisualBuildingType(owningAnchor.BuildingType))
-                {
-                    continue;
-                }
-
-                filtered.Add(renderer);
-            }
-
-            return filtered.ToArray();
-        }
-
         void ApplyTeamTint(GameObject root)
         {
             if (root == null)
@@ -685,64 +686,82 @@ namespace CastleDefender.Game
                 : "wall_tower";
         }
 
-        static bool LaneHasBuiltFortressPadType(MLLaneSnap lane, string buildingType)
-        {
-            if (lane?.fortressPads == null || string.IsNullOrWhiteSpace(buildingType))
-                return false;
-
-            for (int padIndex = 0; padIndex < lane.fortressPads.Length; padIndex++)
-            {
-                var pad = lane.fortressPads[padIndex];
-                if (pad == null
-                    || !string.Equals(pad.buildingType, buildingType, StringComparison.OrdinalIgnoreCase)
-                    || !pad.isBuilt
-                    || pad.isDestroyed)
-                    continue;
-
-                return true;
-            }
-
-            return false;
-        }
-
-        static int ResolveSharedWallLineTier(MLLaneSnap lane)
+        static SharedWallLineVisualState ResolveSharedWallLineVisualState(MLLaneSnap lane)
         {
             if (lane?.fortressPads == null)
-                return 1;
+                return default;
 
-            int highestTier = 1;
+            bool visible = false;
+            bool built = false;
+            bool constructing = false;
+            bool underRepair = false;
+            bool hasHp = false;
+            int highestBuiltTier = 0;
+            int highestConstructionTargetTier = 0;
+            float constructionProgress01 = 0f;
+            float lowestHp01 = 1f;
+
             for (int padIndex = 0; padIndex < lane.fortressPads.Length; padIndex++)
             {
                 var pad = lane.fortressPads[padIndex];
                 if (pad == null
-                    || !pad.isBuilt
-                    || pad.isDestroyed
                     || !IsSharedWallLineStructuralVisualBuildingType(pad.buildingType))
                 {
                     continue;
                 }
 
-                highestTier = Mathf.Max(highestTier, Mathf.Max(1, pad.tier));
+                bool padBuilt = pad.isBuilt && !pad.isDestroyed;
+                bool padConstructing = pad.isConstructing && !pad.isDestroyed;
+                if (!padBuilt && !padConstructing)
+                    continue;
+
+                visible = true;
+                if (padBuilt)
+                {
+                    built = true;
+                    highestBuiltTier = Mathf.Max(highestBuiltTier, Mathf.Max(1, pad.tier));
+                }
+
+                if (padConstructing)
+                {
+                    constructing = true;
+                    int padTargetTier = Mathf.Max(1, pad.constructionTargetTier > 0
+                        ? pad.constructionTargetTier
+                        : (padBuilt ? pad.tier : 1));
+                    highestConstructionTargetTier = Mathf.Max(highestConstructionTargetTier, padTargetTier);
+                    constructionProgress01 = Mathf.Max(constructionProgress01, Mathf.Clamp01(pad.constructionProgress01));
+                }
+
+                if (pad.isUnderRepair
+                    || string.Equals(pad.lifecycleState, "under_repair", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(pad.buildState, "under_repair", StringComparison.OrdinalIgnoreCase))
+                {
+                    underRepair = true;
+                }
+
+                if (pad.maxHp > 0f)
+                {
+                    hasHp = true;
+                    lowestHp01 = Mathf.Min(lowestHp01, Mathf.Clamp01(pad.hp / pad.maxHp));
+                }
             }
 
-            return highestTier;
-        }
+            if (!visible)
+                return default;
 
-        bool ShouldShowUnbuiltTurretShell(MLLaneSnap lane, MLFortressPad snapshotPad, string effectiveBuildingType)
-        {
-            if (_fortressPad == null
-                || lane == null
-                || snapshotPad == null
-                || !string.Equals(ResolveBuildingType(), "turret", StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(effectiveBuildingType, "wall_tower", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (snapshotPad.isBuilt || snapshotPad.isConstructing || snapshotPad.isDestroyed)
-                return false;
-
-            // Turret hardpoints are part of the fortress silhouette. Keep the authored shell
-            // visible once the shared wall line exists so locked turrets do not create visual gaps.
-            return LaneHasBuiltFortressPadType(lane, "wall") || LaneHasBuiltFortressPadType(lane, "gate");
+            int currentTier = built ? Mathf.Max(1, highestBuiltTier) : 1;
+            int targetTier = constructing
+                ? Mathf.Max(currentTier, highestConstructionTargetTier)
+                : currentTier;
+            return new SharedWallLineVisualState(
+                visible,
+                built,
+                constructing,
+                currentTier,
+                targetTier,
+                constructionProgress01,
+                underRepair,
+                hasHp ? lowestHp01 : 1f);
         }
 
         static bool ShouldShowLegacyStructuralShell(
@@ -784,24 +803,6 @@ namespace CastleDefender.Game
             }
         }
 
-        bool TryResolveSharedStructuralVisualRoot(out Transform sharedRoot)
-        {
-            sharedRoot = null;
-            if (_fortressPad == null || !IsSharedWallLineStructuralVisualBuildingType(ResolveBuildingType()))
-                return false;
-
-            Transform candidate = _fortressPad.transform.parent;
-            if (candidate == null)
-                return false;
-
-            var groupedAnchors = candidate.GetComponentsInChildren<FortressPadAnchor>(true);
-            if (groupedAnchors == null || groupedAnchors.Length <= 1)
-                return false;
-
-            sharedRoot = candidate;
-            return true;
-        }
-
         static bool IsSharedWallLineStructuralVisualBuildingType(string buildingType)
         {
             switch ((buildingType ?? string.Empty).Trim().ToLowerInvariant())
@@ -834,9 +835,6 @@ namespace CastleDefender.Game
             }
 
             if (!ShouldUseAuthoredBuiltVisuals(buildingType) || legacyRenderers == null || legacyRenderers.Length <= 0)
-                return results.ToArray();
-
-            if (TryResolveSharedStructuralVisualRoot(out _))
                 return results.ToArray();
 
             Transform primaryRoot = visualParent != null ? visualParent : transform;

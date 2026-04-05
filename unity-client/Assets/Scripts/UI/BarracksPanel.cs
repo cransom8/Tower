@@ -30,6 +30,7 @@ namespace CastleDefender.UI
         const float PanelViewportHeightRatio = 0.95f;
         const float MinimumPanelFontSize = 12f;
         const string MilitiaRosterKey = "militia";
+        const string TownCoreUpgradeActionIconResourcePath = "ClassicRpgIcons/Icon_Upgrade";
         static readonly Color ObsidianRootColor = new(0.04f, 0.04f, 0.05f, 0.99f);
         static readonly Color ObsidianSurfaceColor = new(0.07f, 0.07f, 0.09f, 0.98f);
         static readonly Color ObsidianElevatedColor = new(0.12f, 0.12f, 0.14f, 0.98f);
@@ -76,6 +77,7 @@ namespace CastleDefender.UI
         bool _networkHooksRegistered;
         string _statusMessage;
         string _pendingBarracksBuildId;
+        string _pendingTownCoreUpgradePadId;
         string _pendingBarracksSellKey;
         Coroutine _scaleCoroutine;
         string _focusedBarracksId;
@@ -85,6 +87,7 @@ namespace CastleDefender.UI
         readonly HashSet<string> _missingBarracksSiteLogs = new();
         readonly HashSet<string> _missingPortraitLogs = new();
         readonly HashSet<string> _missingUnitCardStatLogs = new();
+        readonly Dictionary<string, Sprite> _actionIconCache = new(System.StringComparer.OrdinalIgnoreCase);
         float _lastViewportWidth = -1f;
         float _lastViewportHeight = -1f;
         RectTransform _progressionViewerHost;
@@ -125,6 +128,7 @@ namespace CastleDefender.UI
         {
             public string ObjectName;
             public string Label;
+            public string IconResourcePath;
             public UnityEngine.Events.UnityAction Action;
             public bool Interactable;
             public bool Highlighted;
@@ -759,7 +763,10 @@ namespace CastleDefender.UI
                 case "sell_barracks_unit":
                     if (string.Equals(payload.type, "sell_barracks_unit", System.StringComparison.OrdinalIgnoreCase))
                         ClearPendingBarracksSell();
-                    _statusMessage = $"Applied: {HumanizeAction(payload.type)}";
+                    _statusMessage = string.Equals(payload.type, "upgrade_building", System.StringComparison.OrdinalIgnoreCase)
+                        && HasPendingTownCoreUpgrade()
+                        ? "Upgrading Town Core..."
+                        : $"Applied: {HumanizeAction(payload.type)}";
                     RefreshHeader(force: true);
                     RefreshContent(force: true);
                     break;
@@ -772,9 +779,11 @@ namespace CastleDefender.UI
                 return;
 
             _pendingBarracksBuildId = null;
+            ClearPendingTownCoreUpgrade();
             ClearPendingBarracksSell();
             _statusMessage = payload.message;
             RefreshHeader(force: true);
+            RefreshContent(force: true);
         }
 
         void HideImmediate()
@@ -1360,6 +1369,7 @@ namespace CastleDefender.UI
             int waveSeconds = snapshotApplier != null
                 ? snapshotApplier.GetWaveTimerSecondsRemaining()
                 : Mathf.CeilToInt((snap != null ? snap.waveTimerTicksRemaining : 0) / 20f);
+            SyncPendingTownCoreUpgradeState(lane);
             var focusedBarracks = GetFocusedBarracksSite(lane);
             var focusedPad = GetFocusedPad(lane);
 
@@ -1403,7 +1413,7 @@ namespace CastleDefender.UI
 
             if (TxtTitle != null)
                 TxtTitle.text = focusedPad != null && !string.Equals(focusedPad.buildingType, "barracks", System.StringComparison.OrdinalIgnoreCase)
-                    ? $"{focusedPad.buildingName}  {HumanizeBuildState(focusedPad.buildState)}"
+                    ? $"{focusedPad.buildingName}  {(IsComingSoonPad(focusedPad) ? ResolveTownCorePadStatusLabel(focusedPad) : HumanizeBuildState(focusedPad.buildState))}"
                     : "Building Overview";
 
             if (TxtBenefits != null)
@@ -1535,7 +1545,8 @@ namespace CastleDefender.UI
             if (lane == null)
                 return "no-lane";
 
-            bool suppressVolatileTownCoreTimers = IsTownCoreCommandView(lane);
+            bool suppressVolatileHeroCooldowns = IsTownCoreCommandView(lane);
+            bool suppressVolatileConstructionTimers = ShouldSuppressVolatileConstructionTimers(lane);
             int gold = Mathf.FloorToInt(lane.gold);
             int level = lane.barracksLevel;
             var sig =
@@ -1551,7 +1562,7 @@ namespace CastleDefender.UI
                     if (pad == null) continue;
                     sig +=
                         $"{pad.padId}:{pad.tier}:{pad.buildState}:{pad.isConstructing}:{pad.constructionKind}:" +
-                        $"{pad.constructionTargetTier}:{(suppressVolatileTownCoreTimers ? 0 : pad.constructionTimerTicksRemaining)}:{pad.canBuild}:{pad.canUpgrade}:" +
+                        $"{pad.constructionTargetTier}:{(suppressVolatileConstructionTimers ? 0 : pad.constructionTimerTicksRemaining)}:{pad.canBuild}:{pad.canUpgrade}:" +
                         $"{Mathf.RoundToInt(pad.hp)}:{Mathf.RoundToInt(pad.maxHp)}:{pad.foodUsed}:{pad.foodLimit}:{pad.foodRemaining}:{pad.isAtFoodLimit}:{pad.lockedReason}:{pad.upgradePanelDescription}|";
                     if (pad.buildingUpgrades == null) continue;
                     for (int upgradeIndex = 0; upgradeIndex < pad.buildingUpgrades.Length; upgradeIndex++)
@@ -1583,7 +1594,7 @@ namespace CastleDefender.UI
                     if (site == null) continue;
                     sig +=
                         $"{site.barracksId}:{site.isBuilt}:{site.level}:{site.buildState}:{site.isConstructing}:" +
-                        $"{site.constructionKind}:{site.constructionTargetLevel}:{(suppressVolatileTownCoreTimers ? 0 : site.constructionTimerTicksRemaining)}:" +
+                        $"{site.constructionKind}:{site.constructionTargetLevel}:{(suppressVolatileConstructionTimers ? 0 : site.constructionTimerTicksRemaining)}:" +
                         $"{site.canBuild}:{site.canUpgrade}:{Mathf.RoundToInt(site.hp)}:{Mathf.RoundToInt(site.maxHp)}:{site.foodUsed}:{site.foodLimit}:{site.foodRemaining}:{site.isAtFoodLimit}:" +
                         $"{site.hasActiveFoodState}:{site.activeFoodUsed}:{site.activeFoodRemaining}:{site.isAtActiveFoodLimit}:{site.lockedReason}|";
                     if (site.roster == null) continue;
@@ -1615,12 +1626,25 @@ namespace CastleDefender.UI
                     var hero = lane.heroRoster[i];
                     if (hero == null) continue;
                     sig +=
-                        $"hero:{hero.heroKey}:{hero.state}:{hero.canSummon}:{(suppressVolatileTownCoreTimers ? 0 : hero.cooldownTicksRemaining)}:" +
+                        $"hero:{hero.heroKey}:{hero.state}:{hero.canSummon}:{(suppressVolatileHeroCooldowns ? 0 : hero.cooldownTicksRemaining)}:" +
                         $"{hero.activeCount}:{hero.activeLimit}:{hero.disabledReason}:{hero.lockedReason}|";
                 }
             }
 
             return sig;
+        }
+
+        bool ShouldSuppressVolatileConstructionTimers(MLLaneSnap lane)
+        {
+            if (IsTownCoreCommandView(lane))
+                return true;
+
+            var focusedBarracks = GetFocusedBarracksSite(lane);
+            if (focusedBarracks != null && focusedBarracks.isConstructing)
+                return true;
+
+            var focusedPad = GetFocusedPad(lane);
+            return focusedPad != null && focusedPad.isConstructing;
         }
 
         bool IsTownCoreCommandView(MLLaneSnap lane)
@@ -2417,7 +2441,19 @@ namespace CastleDefender.UI
             row.Pills.Add(CreatePanelRowPill($"Barracks {builtBarracks}/{totalBarracks}", GunmetalColor, SilverTextColor));
             row.Pills.Add(CreatePanelRowPill($"Branches {builtBuildings}/{totalBuildings}", GunmetalSoftColor, SilverTextColor));
 
-            if (townCorePad.canUpgrade)
+            bool townCoreUpgradePending = IsPendingTownCoreUpgrade(townCorePad);
+            bool townCoreUpgrading = townCoreUpgradePending
+                || string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase);
+            if (townCoreUpgrading)
+            {
+                row.PrimaryAction = CreatePanelRowAction(
+                    "Upgrading Town Core",
+                    null,
+                    false,
+                    objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId),
+                    iconResourcePath: TownCoreUpgradeActionIconResourcePath);
+            }
+            else if (townCorePad.canUpgrade)
             {
                 bool canAfford = CanSpendGold(lane, townCorePad.upgradeCost);
                 int missingGold = lane != null ? Mathf.Max(0, townCorePad.upgradeCost - Mathf.FloorToInt(lane.gold)) : 0;
@@ -2426,19 +2462,32 @@ namespace CastleDefender.UI
                     : $"Need {missingGold}g";
                 row.PrimaryAction = CreatePanelRowAction(label, () =>
                 {
+                    _pendingTownCoreUpgradePadId = townCorePad.padId;
                     _statusMessage = $"Upgrading {townCorePad.buildingName}...";
                     ActionSender.UpgradeBuilding(townCorePad.padId, townCorePad.buildingType);
                     RefreshHeader(force: true);
-                }, canAfford, highlighted: true, objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId));
+                    RefreshContent(force: true);
+                },
+                    canAfford,
+                    highlighted: true,
+                    objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId),
+                    iconResourcePath: TownCoreUpgradeActionIconResourcePath);
             }
             else
             {
                 string disabledLabel = string.Equals(townCorePad.buildState, "max_tier", System.StringComparison.OrdinalIgnoreCase)
                     ? "Max Tier"
                     : string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase)
-                        ? "Upgrading"
+                        ? "Upgrading Town Core"
                         : ResolveTownCorePadStatusLabel(townCorePad);
-                row.PrimaryAction = CreatePanelRowAction(disabledLabel, null, false, objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId));
+                row.PrimaryAction = CreatePanelRowAction(
+                    disabledLabel,
+                    null,
+                    false,
+                    objectName: BuildTownCorePadActionObjectName("Primary", townCorePad.padId),
+                    iconResourcePath: string.Equals(disabledLabel, "Upgrading Town Core", System.StringComparison.OrdinalIgnoreCase)
+                        ? TownCoreUpgradeActionIconResourcePath
+                        : null);
             }
 
             return row;
@@ -2632,7 +2681,11 @@ namespace CastleDefender.UI
             }
             else
             {
-                row.PrimaryAction = CreatePanelRowAction("Locked", null, false, objectName: pad != null ? BuildTownCorePadActionObjectName("Primary", pad.padId) : null);
+                row.PrimaryAction = CreatePanelRowAction(
+                    ResolveUnavailablePadActionLabel(pad),
+                    null,
+                    false,
+                    objectName: pad != null ? BuildTownCorePadActionObjectName("Primary", pad.padId) : null);
             }
 
             return row;
@@ -2699,13 +2752,25 @@ namespace CastleDefender.UI
             if (townCorePad == null)
                 return null;
 
+            if (IsPendingTownCoreUpgrade(townCorePad)
+                || string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return CreatePanelRowAction(
+                    "Upgrading Town Core",
+                    null,
+                    false,
+                    objectName: objectName,
+                    iconResourcePath: TownCoreUpgradeActionIconResourcePath);
+            }
+
             bool canAfford = townCorePad.canUpgrade && CanSpendGold(lane, townCorePad.upgradeCost);
             return CreatePanelRowAction(
-                "\U0001F512: upgrade town core",
+                "Upgrade Town Core",
                 () => ExecuteTownCoreUpgradeRedirect(lane, townCorePad, requiredTownCoreTier, requiredTownCoreTierName),
                 true,
                 highlighted: canAfford,
-                objectName: objectName);
+                objectName: objectName,
+                iconResourcePath: TownCoreUpgradeActionIconResourcePath);
         }
 
         void ExecuteTownCoreUpgradeRedirect(MLLaneSnap lane, MLFortressPad townCorePad, int requiredTownCoreTier, string requiredTownCoreTierName)
@@ -2755,9 +2820,11 @@ namespace CastleDefender.UI
             string townCoreName = string.IsNullOrWhiteSpace(townCorePad.buildingName)
                 ? "Town Core"
                 : townCorePad.buildingName;
+            _pendingTownCoreUpgradePadId = townCorePad.padId;
             _statusMessage = $"Upgrading {townCoreName}...";
             ActionSender.UpgradeBuilding(townCorePad.padId, townCorePad.buildingType);
             RefreshHeader(force: true);
+            RefreshContent(force: true);
         }
 
         void CreateFocusedPadUpgradeSections(MLLaneSnap lane, MLFortressPad pad)
@@ -3019,6 +3086,16 @@ namespace CastleDefender.UI
             if (pad == null)
                 return null;
 
+            if (IsComingSoonPad(pad))
+            {
+                return CreatePanelRowAction(
+                    ResolveUnavailablePadActionLabel(pad),
+                    null,
+                    false,
+                    highlighted: guidedAction != GuidedPadAction.None,
+                    objectName: BuildFocusedPadActionObjectName("Primary", pad.padId));
+            }
+
             if (!pad.isBuilt || pad.canBuild || pad.canUpgrade)
             {
                 return CreatePanelRowAction(
@@ -3051,6 +3128,9 @@ namespace CastleDefender.UI
         PanelRowActionData BuildFocusedPadSecondaryAction(MLLaneSnap lane, MLFortressPad pad, GuidedPadAction guidedAction)
         {
             if (pad == null)
+                return null;
+
+            if (IsComingSoonPad(pad))
                 return null;
 
             if (TryBuildLumberMillRepairAction(lane, pad, out string repairLabel, out bool repairEnabled, out _))
@@ -3953,7 +4033,8 @@ namespace CastleDefender.UI
             string label,
             UnityEngine.Events.UnityAction action,
             bool interactable,
-            bool highlighted = false)
+            bool highlighted = false,
+            string iconResourcePath = null)
         {
             var button = CreateActionButton(
                 parent,
@@ -3961,7 +4042,8 @@ namespace CastleDefender.UI
                 action,
                 interactable,
                 minWidth: GetTownCorePrimaryActionColumnWidth(),
-                highlighted: highlighted);
+                highlighted: highlighted,
+                iconResourcePath: iconResourcePath);
             if (button != null && !string.IsNullOrWhiteSpace(objectName))
                 button.gameObject.name = objectName;
             var layout = button != null ? button.GetComponent<LayoutElement>() : null;
@@ -4020,12 +4102,19 @@ namespace CastleDefender.UI
             };
         }
 
-        static PanelRowActionData CreatePanelRowAction(string label, UnityEngine.Events.UnityAction action, bool interactable, bool highlighted = false, string objectName = null)
+        static PanelRowActionData CreatePanelRowAction(
+            string label,
+            UnityEngine.Events.UnityAction action,
+            bool interactable,
+            bool highlighted = false,
+            string objectName = null,
+            string iconResourcePath = null)
         {
             return new PanelRowActionData
             {
                 ObjectName = objectName,
                 Label = label,
+                IconResourcePath = iconResourcePath,
                 Action = action,
                 Interactable = interactable,
                 Highlighted = highlighted,
@@ -4101,7 +4190,8 @@ namespace CastleDefender.UI
                     data.PrimaryAction.Label,
                     data.PrimaryAction.Action,
                     data.PrimaryAction.Interactable,
-                    data.PrimaryAction.Highlighted);
+                    data.PrimaryAction.Highlighted,
+                    data.PrimaryAction.IconResourcePath);
             }
 
             if (data.SecondaryAction != null)
@@ -4112,7 +4202,8 @@ namespace CastleDefender.UI
                     data.SecondaryAction.Label,
                     data.SecondaryAction.Action,
                     data.SecondaryAction.Interactable,
-                    data.SecondaryAction.Highlighted);
+                    data.SecondaryAction.Highlighted,
+                    data.SecondaryAction.IconResourcePath);
             }
 
             return row;
@@ -4456,6 +4547,9 @@ namespace CastleDefender.UI
 
         string BuildTownCorePadGatePill(MLLaneSnap lane, MLFortressPad pad, MLFortressBuildingConfig config)
         {
+            if (IsComingSoonPad(pad))
+                return NormalizeTownCoreRequirementText(pad.lockedReason);
+
             int currentTownCoreTier = GetCurrentTownCoreTier(lane);
             int requiredTier = pad != null ? pad.requiredTownCoreTier : Mathf.Max(1, config != null ? config.requiredTownCoreTier : 1);
             string requiredTierName = pad != null
@@ -4472,6 +4566,8 @@ namespace CastleDefender.UI
         {
             if (pad != null)
             {
+                if (IsComingSoonPad(pad))
+                    return null;
                 if (!pad.isBuilt && pad.buildCost > 0)
                     return $"{Mathf.Max(0, pad.buildCost)}g";
                 if (pad.canUpgrade && pad.upgradeCost > 0)
@@ -4495,6 +4591,8 @@ namespace CastleDefender.UI
         {
             if (pad == null)
                 return "Locked";
+            if (IsComingSoonPad(pad))
+                return "Coming Soon";
 
             return pad.buildState switch
             {
@@ -4593,6 +4691,24 @@ namespace CastleDefender.UI
             if (trimmed.StartsWith(upgradePrefix, System.StringComparison.OrdinalIgnoreCase))
                 return $"Upgrade requires {trimmed.Substring(upgradePrefix.Length).Trim()}";
             return trimmed;
+        }
+
+        static bool IsComingSoonText(string text)
+        {
+            return !string.IsNullOrWhiteSpace(text)
+                && string.Equals(text.Trim(), "Coming Soon", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        static bool IsComingSoonPad(MLFortressPad pad)
+        {
+            return pad != null
+                && !pad.isBuilt
+                && IsComingSoonText(pad.lockedReason);
+        }
+
+        static string ResolveUnavailablePadActionLabel(MLFortressPad pad)
+        {
+            return IsComingSoonPad(pad) ? "Coming Soon" : "Locked";
         }
 
         bool SupportsBarracksPurchaseFlow(MLLaneSnap lane, MLFortressPad pad)
@@ -5411,6 +5527,8 @@ namespace CastleDefender.UI
         {
             if (pad == null)
                 return "Locked";
+            if (IsComingSoonPad(pad))
+                return "Coming Soon";
 
             int currentTier = Mathf.Max(0, pad.tier);
             if (currentTier <= 0)
@@ -5476,7 +5594,7 @@ namespace CastleDefender.UI
         Color ResolveTechTierChipTextColor(MLFortressPad pad, int tier)
         {
             string state = ResolveTechTierStateLabel(pad, tier);
-            return state == "Future Tier" || state == "Locked"
+            return state == "Future Tier" || state == "Locked" || state == "Coming Soon"
                 ? new Color(0.90f, 0.90f, 0.94f, 1f)
                 : new Color(0.10f, 0.09f, 0.06f, 1f);
         }
@@ -6301,6 +6419,51 @@ namespace CastleDefender.UI
                 && string.Equals(_pendingBarracksBuildId, NormalizeBarracksId(site.barracksId), System.StringComparison.OrdinalIgnoreCase);
         }
 
+        bool HasPendingTownCoreUpgrade()
+        {
+            return !string.IsNullOrWhiteSpace(_pendingTownCoreUpgradePadId);
+        }
+
+        void ClearPendingTownCoreUpgrade()
+        {
+            _pendingTownCoreUpgradePadId = null;
+        }
+
+        bool IsPendingTownCoreUpgrade(MLFortressPad pad)
+        {
+            if (pad == null
+                || string.IsNullOrWhiteSpace(_pendingTownCoreUpgradePadId)
+                || !string.Equals(_pendingTownCoreUpgradePadId, pad.padId, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (string.Equals(pad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
+            {
+                ClearPendingTownCoreUpgrade();
+                return false;
+            }
+
+            return true;
+        }
+
+        void SyncPendingTownCoreUpgradeState(MLLaneSnap lane)
+        {
+            if (!HasPendingTownCoreUpgrade())
+                return;
+
+            var townCorePad = FindFortressPadByBuildingType(lane, "town_core");
+            if (townCorePad == null
+                || !string.Equals(_pendingTownCoreUpgradePadId, townCorePad.padId, System.StringComparison.OrdinalIgnoreCase))
+            {
+                ClearPendingTownCoreUpgrade();
+                return;
+            }
+
+            if (string.Equals(townCorePad.buildState, "upgrading", System.StringComparison.OrdinalIgnoreCase))
+                ClearPendingTownCoreUpgrade();
+        }
+
         static string BuildPendingBarracksSellKey(MLBarracksSite site, MLBarracksRosterEntry entry)
         {
             if (site == null || entry == null)
@@ -6580,6 +6743,9 @@ namespace CastleDefender.UI
             }
 
             string unlocks = BuildUnlockPreview(pad, roster, heroRoster);
+            if (!pad.isBuilt && IsComingSoonPad(pad))
+                return $"Coming Soon   Unlocks {unlocks}";
+
             return pad.isBuilt
                 ? $"Health {Mathf.RoundToInt(pad.hp)}/{Mathf.RoundToInt(pad.maxHp)}   Unlocks {unlocks}"
                 : $"Cost {pad.buildCost}g   Unlocks {unlocks}";
@@ -6620,6 +6786,8 @@ namespace CastleDefender.UI
             {
                 primary = !pad.isBuilt && pad.canBuild
                     ? $"Open Town Core to construct {pad.buildingName}."
+                    : !pad.isBuilt && IsComingSoonPad(pad)
+                        ? $"{pad.buildingName} is coming soon."
                     : pad.canUpgrade
                         ? $"Open Town Core to advance {pad.buildingName}."
                         : !string.IsNullOrWhiteSpace(pad.lockedReason)
@@ -6847,6 +7015,8 @@ namespace CastleDefender.UI
         string BuildNextUpgradePreview(MLLaneSnap lane, MLFortressPad pad, MLBarracksRosterEntry[] roster, MLHeroRosterEntry[] heroRoster = null)
         {
             if (pad == null)
+                return string.Empty;
+            if (IsComingSoonPad(pad))
                 return string.Empty;
 
             if (pad.maxTier <= 0 || pad.tier >= pad.maxTier)
@@ -8633,7 +8803,8 @@ namespace CastleDefender.UI
             UnityEngine.Events.UnityAction action,
             bool interactable,
             float minWidth = 110f,
-            bool highlighted = false)
+            bool highlighted = false,
+            string iconResourcePath = null)
         {
             var go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
             go.transform.SetParent(parent, false);
@@ -8653,23 +8824,44 @@ namespace CastleDefender.UI
             element.minWidth = IsCompactPanelLayout() ? Mathf.Max(92f, minWidth - 14f) : minWidth;
             element.preferredHeight = IsCompactPanelLayout() ? 32f : 34f;
 
+            Sprite iconSprite = LoadActionIconSprite(iconResourcePath);
+            float labelLeftInset = 0f;
+            if (iconSprite != null)
+            {
+                float iconSize = IsCompactPanelLayout() ? 14f : 16f;
+                float iconInset = IsCompactPanelLayout() ? 8f : 10f;
+                float iconGap = IsCompactPanelLayout() ? 6f : 8f;
+
+                var iconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+                iconGo.transform.SetParent(go.transform, false);
+                var iconRect = iconGo.GetComponent<RectTransform>();
+                iconRect.anchorMin = new Vector2(0f, 0.5f);
+                iconRect.anchorMax = new Vector2(0f, 0.5f);
+                iconRect.pivot = new Vector2(0f, 0.5f);
+                iconRect.sizeDelta = new Vector2(iconSize, iconSize);
+                iconRect.anchoredPosition = new Vector2(iconInset, 0f);
+
+                var iconImage = iconGo.GetComponent<Image>();
+                iconImage.sprite = iconSprite;
+                iconImage.preserveAspect = true;
+                iconImage.raycastTarget = false;
+                iconImage.color = ResolveActionButtonForegroundColor(interactable, highlighted);
+                labelLeftInset = iconInset + iconSize + iconGap;
+            }
+
             var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
             labelGo.transform.SetParent(go.transform, false);
             var labelRt = labelGo.GetComponent<RectTransform>();
             labelRt.anchorMin = Vector2.zero;
             labelRt.anchorMax = Vector2.one;
-            labelRt.offsetMin = Vector2.zero;
+            labelRt.offsetMin = new Vector2(labelLeftInset, 0f);
             labelRt.offsetMax = Vector2.zero;
 
             var tmp = labelGo.GetComponent<TextMeshProUGUI>();
             tmp.font = TMP_Settings.defaultFontAsset;
             tmp.fontSize = IsCompactPanelLayout() ? 13f : 15f;
             tmp.alignment = TextAlignmentOptions.Center;
-            tmp.color = interactable
-                ? highlighted
-                    ? new Color(0.12f, 0.09f, 0.04f, 1f)
-                    : SilverTextColor
-                : MutedSilverTextColor;
+            tmp.color = ResolveActionButtonForegroundColor(interactable, highlighted);
             tmp.text = label;
             ClassicRpgUiRuntime.ApplyButton(
                 button,
@@ -8681,6 +8873,29 @@ namespace CastleDefender.UI
                 tmp,
                 label);
             return button;
+        }
+
+        Sprite LoadActionIconSprite(string resourcePath)
+        {
+            if (string.IsNullOrWhiteSpace(resourcePath))
+                return null;
+
+            if (_actionIconCache.TryGetValue(resourcePath, out var sprite))
+                return sprite;
+
+            sprite = Resources.Load<Sprite>(resourcePath);
+            _actionIconCache[resourcePath] = sprite;
+            return sprite;
+        }
+
+        static Color ResolveActionButtonForegroundColor(bool interactable, bool highlighted)
+        {
+            if (!interactable)
+                return MutedSilverTextColor;
+
+            return highlighted
+                ? ClassicRpgUiRuntime.WarmGold
+                : ClassicRpgUiRuntime.BrightText;
         }
 
         static IEnumerator ScaleIn(Transform t, float dur)

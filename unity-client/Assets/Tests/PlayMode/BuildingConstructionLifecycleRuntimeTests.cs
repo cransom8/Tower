@@ -206,9 +206,9 @@ public class BuildingConstructionLifecycleRuntimeTests
         var snapshotApplier = UnityEngine.Object.FindFirstObjectByType<SnapshotApplier>(FindObjectsInactive.Include);
         Assert.That(snapshotApplier, Is.Not.Null, "SnapshotApplier should exist in Game_ML.");
 
-        var wallFrontLeft01Pad = FindFortressPadById("wall_front_left_01_pad");
-        var wallFrontLeft02Pad = FindFortressPadById("wall_front_left_02_pad");
-        var turretFrontLeftPad = FindFortressPadById("turret_front_left_pad");
+        var wallFrontLeft01Pad = FindFortressPadById("wall_front_1_pad");
+        var wallFrontLeft02Pad = FindFortressPadById("wall_front_2_pad");
+        var turretFrontLeftPad = FindFortressPadById("tower_front_1_pad");
 
         Assert.That(wallFrontLeft01Pad, Is.Not.Null, "Wall front-left 01 pad should exist in Game_ML.");
         Assert.That(wallFrontLeft02Pad, Is.Not.Null, "Wall front-left 02 pad should exist in Game_ML.");
@@ -225,7 +225,7 @@ public class BuildingConstructionLifecycleRuntimeTests
         ApplyFortressSnapshot(
             snapshotApplier,
             BuildPad(
-                "wall_front_left_01_pad",
+                "wall_front_1_pad",
                 "wall",
                 "Wall",
                 built: false,
@@ -236,7 +236,7 @@ public class BuildingConstructionLifecycleRuntimeTests
                 constructionProgress01: 0.10f,
                 constructionTargetTierName: "Wall 1"),
             BuildPad(
-                "wall_front_left_02_pad",
+                "wall_front_2_pad",
                 "wall",
                 "Wall",
                 built: false,
@@ -247,7 +247,7 @@ public class BuildingConstructionLifecycleRuntimeTests
                 constructionProgress01: 0.10f,
                 constructionTargetTierName: "Wall 1"),
             BuildPad(
-                "turret_front_left_pad",
+                "tower_front_1_pad",
                 "turret",
                 "Turret",
                 built: false,
@@ -275,6 +275,217 @@ public class BuildingConstructionLifecycleRuntimeTests
             FindGeneratedVisualRoot(turretFrontLeftSupplemental),
             Is.Not.Null,
             "The grouped tower segment 'Red_Tower_Front_Left_Lvl_1 (1)' should receive a generated construction visual.");
+    }
+
+    [UnityTest]
+    public IEnumerator GameMl_WallTowerShells_Mirror_SharedWallLine_Build_And_Upgrade_State()
+    {
+        yield return LoadToGameMl();
+
+        var snapshotApplier = UnityEngine.Object.FindFirstObjectByType<SnapshotApplier>(FindObjectsInactive.Include);
+        Assert.That(snapshotApplier, Is.Not.Null, "SnapshotApplier should exist in Game_ML.");
+
+        var frontWallPad = FindFortressPadById("wall_front_1_pad");
+        var frontGatePad = FindFortressPadById("gate_front_pad");
+        var frontTurretPad = FindFortressPadById("tower_front_1_pad");
+        var rearTurretPad = FindFortressPadById("tower_rear_3_pad");
+
+        Assert.That(frontWallPad, Is.Not.Null, "Front wall pad should exist in Game_ML.");
+        Assert.That(frontGatePad, Is.Not.Null, "Front gate pad should exist in Game_ML.");
+        Assert.That(frontTurretPad, Is.Not.Null, "Front turret pad should exist in Game_ML.");
+        Assert.That(rearTurretPad, Is.Not.Null, "Rear turret pad should exist in Game_ML.");
+
+        ApplyFortressSnapshot(
+            snapshotApplier,
+            BuildPad(
+                "wall_front_1_pad",
+                "wall",
+                "Wall",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: true,
+                constructionTargetTier: 1,
+                constructionProgress01: 0.10f,
+                constructionTargetTierName: "Wall 1"),
+            BuildPad(
+                "gate_front_pad",
+                "gate",
+                "Gate",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: true,
+                constructionTargetTier: 1,
+                constructionProgress01: 0.10f,
+                constructionTargetTierName: "Gate 1"),
+            BuildPad(
+                "tower_front_1_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"),
+            BuildPad(
+                "tower_rear_3_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"));
+
+        frontWallPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontGatePad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        rearTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        yield return null;
+
+        var frontTurretVisual = FindGeneratedVisualRoot(frontTurretPad);
+        var rearTurretVisual = FindGeneratedVisualRoot(rearTurretPad);
+        Assert.That(frontTurretVisual, Is.Not.Null, "Front wall-tower shell should show generated construction visuals while the shared wall line is building.");
+        Assert.That(rearTurretVisual, Is.Not.Null, "Rear wall-tower shell should show generated construction visuals while the shared wall line is building.");
+        AssertConstructionStageState(
+            frontTurretVisual,
+            expectedTier: 1,
+            expectedConstructionTier: 1,
+            expectedStageIndex: 0,
+            hiddenTierRoots: new[] { "BaseModel" });
+        AssertConstructionStageState(
+            rearTurretVisual,
+            expectedTier: 1,
+            expectedConstructionTier: 1,
+            expectedStageIndex: 0,
+            hiddenTierRoots: new[] { "BaseModel" });
+
+        ApplyFortressSnapshot(
+            snapshotApplier,
+            BuildPad(
+                "wall_front_1_pad",
+                "wall",
+                "Wall",
+                built: true,
+                tier: 1,
+                maxTier: 3,
+                constructing: true,
+                constructionTargetTier: 2,
+                constructionProgress01: 0.10f,
+                constructionTargetTierName: "Wall 2"),
+            BuildPad(
+                "gate_front_pad",
+                "gate",
+                "Gate",
+                built: true,
+                tier: 1,
+                maxTier: 3,
+                constructing: true,
+                constructionTargetTier: 2,
+                constructionProgress01: 0.10f,
+                constructionTargetTierName: "Gate 2"),
+            BuildPad(
+                "tower_front_1_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"),
+            BuildPad(
+                "tower_rear_3_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"));
+
+        frontWallPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontGatePad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        rearTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        yield return null;
+
+        AssertConstructionStageState(
+            frontTurretVisual,
+            expectedTier: 2,
+            expectedConstructionTier: 2,
+            expectedStageIndex: 0,
+            hiddenTierRoots: new[] { "BaseModel", "Tier2_Visuals" });
+        AssertConstructionStageState(
+            rearTurretVisual,
+            expectedTier: 2,
+            expectedConstructionTier: 2,
+            expectedStageIndex: 0,
+            hiddenTierRoots: new[] { "BaseModel", "Tier2_Visuals" });
+
+        ApplyFortressSnapshot(
+            snapshotApplier,
+            BuildPad(
+                "wall_front_1_pad",
+                "wall",
+                "Wall",
+                built: true,
+                tier: 2,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 2,
+                constructionProgress01: 1f,
+                constructionTargetTierName: "Wall 2"),
+            BuildPad(
+                "gate_front_pad",
+                "gate",
+                "Gate",
+                built: true,
+                tier: 2,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 2,
+                constructionProgress01: 1f,
+                constructionTargetTierName: "Gate 2"),
+            BuildPad(
+                "tower_front_1_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"),
+            BuildPad(
+                "tower_rear_3_pad",
+                "turret",
+                "Turret",
+                built: false,
+                tier: 1,
+                maxTier: 3,
+                constructing: false,
+                constructionTargetTier: 1,
+                constructionProgress01: 0f,
+                constructionTargetTierName: "Turret 1"));
+
+        frontWallPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontGatePad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        frontTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        rearTurretPad.BroadcastMessage("RefreshFromSnapshot", SendMessageOptions.DontRequireReceiver);
+        yield return null;
+
+        AssertFinishedTierState(frontTurretVisual, expectedTier: 2, visibleTierRoots: new[] { "Tier2_Visuals" });
+        AssertFinishedTierState(rearTurretVisual, expectedTier: 2, visibleTierRoots: new[] { "Tier2_Visuals" });
     }
 
     static void AssertConstructionStageState(
