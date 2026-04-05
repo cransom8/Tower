@@ -179,6 +179,61 @@ test("ML snapshot leaves routeWorld null when a unit has no authoritative live w
   assert.equal(unit.routeWorldY, null);
 });
 
+test("ML snapshot keeps visibly displaced anchor-join defenders in a moving presentation instead of idle anchor-hold", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+  const displacedDefender = createSnapshotUnit("anchor_join_visual_motion", {
+    posX: 10.16,
+    posY: 22,
+    routeWorldX: 10.16,
+    routeWorldY: 22,
+    movementMode: "AnchorJoin",
+    commandState: "DEFEND",
+    sourceTeam: "red",
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    spawnSourceType: "barracks_roster",
+  });
+  displacedDefender.anchorTargetX = 10;
+  displacedDefender.anchorTargetY = 22;
+
+  lane.units.push(displacedDefender);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const unit = snapshot.lanes[0].units.find((entry) => entry && entry.id === "anchor_join_visual_motion");
+
+  assert.ok(unit, "expected the displaced defender to appear in the snapshot");
+  assert.equal(unit.presentationPhase, "AnchorJoin");
+  assert.equal(unit.presentationIntent, "Move");
+});
+
+test("ML snapshot serializes authoritative attack cadence and range for live unit presentation", () => {
+  const game = createGame();
+  const lane = game.lanes[0];
+  const upgradedDefender = createSnapshotUnit("authoritative_combat_profile", {
+    type: "raider",
+    unitTypeKey: "raider",
+    baseDmg: 13,
+    atkCdTicks: 8,
+    baseSpeed: 0.52,
+    posX: 11,
+    posY: 21,
+    routeWorldX: 11,
+    routeWorldY: 21,
+  });
+  upgradedDefender.attackRangeOverride = 3.4;
+
+  lane.units.push(upgradedDefender);
+
+  const snapshot = simMl.createMLSnapshot(game);
+  const unit = snapshot.lanes[0].units.find((entry) => entry && entry.id === "authoritative_combat_profile");
+
+  assert.ok(unit, "expected the upgraded defender to appear in the snapshot");
+  assert.equal(unit.attackDamage, 13);
+  assert.equal(unit.attackIntervalSeconds, 0.4);
+  assert.equal(unit.attackRange, 3.4);
+});
+
 test("ML public config serializes authoritative battlefield route segment world and route-space polylines", () => {
   const config = simMl.createMLPublicConfig({
     playerCount: 2,

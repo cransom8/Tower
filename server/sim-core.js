@@ -110,6 +110,14 @@ function fireProjectile(game, lane, source, targetId, stats) {
     ownerLane:      lane.laneIndex,
     sourceKind:     source.kind || "tower",
     sourceId:       source.id,
+    rewardLaneIndex: Number.isInteger(source.ownerLaneIndex)
+      ? source.ownerLaneIndex
+      : Number.isInteger(source.ownerLane)
+        ? source.ownerLane
+        : Number.isInteger(source.sourceLaneIndex)
+          ? source.sourceLaneIndex
+          : (source.kind === "tower" ? lane.laneIndex : -1),
+    sourceAllegianceKey: source.allegianceKey || null,
     projectileType: stats.projectileType || source.kind,
     damageType:     stats.damageType || "NORMAL",
     behavior:       stats.behavior   || "single",

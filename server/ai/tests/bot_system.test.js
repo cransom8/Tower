@@ -29,6 +29,7 @@ const LIVE_ACTION_TYPES = new Set([
   AI_ACTION_TYPE.BUILD_BARRACKS_SITE,
   AI_ACTION_TYPE.UPGRADE_BARRACKS_SITE,
   AI_ACTION_TYPE.BUY_BARRACKS_UNIT,
+  AI_ACTION_TYPE.BUY_MARKET_UNIT,
   AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO,
   AI_ACTION_TYPE.SET_LANE_COMMAND,
 ]);
@@ -143,6 +144,49 @@ function act(game, laneIndex, type, data) {
   return result;
 }
 
+function waitFor(game, predicate, message, maxTicks = 2400) {
+  for (let i = 0; i < maxTicks; i += 1) {
+    if (predicate())
+      return;
+    simMl.mlTick(game);
+  }
+  assert.fail(message || "Timed out waiting for game state");
+}
+
+function waitForBarracksBuilt(game, laneIndex, barracksId) {
+  waitFor(
+    game,
+    () => {
+      const snapshot = simMl.createBarracksSiteSnapshot(game, game.lanes[laneIndex], barracksId);
+      return !!(snapshot && snapshot.isBuilt && !snapshot.isConstructing);
+    },
+    `Timed out waiting for barracks '${barracksId}' to finish construction`
+  );
+}
+
+function waitForPadTier(game, laneIndex, padId, targetTier) {
+  waitFor(
+    game,
+    () => {
+      const pad = game.lanes[laneIndex].fortressPads.find((entry) => entry && entry.padId === padId);
+      return Math.max(0, Number(pad && pad.tier) || 0) >= targetTier;
+    },
+    `Timed out waiting for pad '${padId}' to reach tier ${targetTier}`
+  );
+}
+
+function upgradeTownCoreToTier(game, laneIndex, targetTier) {
+  while (true) {
+    const lane = game.lanes[laneIndex];
+    const townCore = lane.fortressPads.find((pad) => pad && pad.padId === "town_core_pad");
+    const currentTier = Math.max(1, Number(townCore && townCore.tier) || 1);
+    if (currentTier >= targetTier)
+      return;
+    act(game, laneIndex, "upgrade_building", { padId: "town_core_pad" });
+    waitForPadTier(game, laneIndex, "town_core_pad", currentTier + 1);
+  }
+}
+
 test("determinism: same seed yields identical replay log", () => {
   const options = {
     seed: "determinism-seed-1",
@@ -204,10 +248,14 @@ test("personalities diverge on their next fortress tech choice", () => {
   const signatures = new Set();
 
   for (const personality of personalities) {
-    const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 700, startIncome: 20 });
+    const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 900, startIncome: 20 });
     act(game, 0, "build_barracks_site", { barracksId: "center" });
+    waitForBarracksBuilt(game, 0, "center");
+    upgradeTownCoreToTier(game, 0, 2);
     act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
+    waitForPadTier(game, 0, "lumber_mill_pad", 1);
     act(game, 0, "build_on_pad", { padId: "blacksmith_pad" });
+    waitForPadTier(game, 0, "blacksmith_pad", 1);
     act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 3 });
 
     const bot = new BotBrain({
@@ -253,12 +301,12 @@ test("pressure response: bot switches the lane into defend posture", () => {
   assert.equal(action.commandState, "DEFEND");
 });
 
-test("banking logic: bot saves for first branch unlock instead of rebuying militia", () => {
-  const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 180, startIncome: 18 });
+test("banking logic: bot saves for Town Hall instead of rebuying militia", () => {
+  const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 240, startIncome: 18 });
   act(game, 0, "build_barracks_site", { barracksId: "center" });
-  act(game, 0, "build_on_pad", { padId: "lumber_mill_pad" });
+  waitForBarracksBuilt(game, 0, "center");
   act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 1 });
-  game.lanes[0].gold = 45;
+  game.lanes[0].gold = 78;
 
   const bot = new BotBrain({
     laneIndex: 0,
@@ -274,7 +322,37 @@ test("banking logic: bot saves for first branch unlock instead of rebuying milit
     runtime: { laneLeakHistory: { 0: [0], 1: [0] }, recentLifeLossByLane: { 0: 0, 1: 0 }, currentTargetByLane: {} },
   });
 
-  assert.notEqual(action.type, AI_ACTION_TYPE.BUY_BARRACKS_UNIT, "expected bot to bank for branch tech instead of rebuying militia");
+  assert.equal(action.type, AI_ACTION_TYPE.UPGRADE_PAD, "expected bot to upgrade Town Core before more militia");
+  assert.equal(action.padId, "town_core_pad");
+});
+
+test("economy logic: bot buys market workers when the market is online", () => {
+  const game = simMl.createMLGame(2, { laneTeams: ["red", "blue"], startGold: 900, startIncome: 18 });
+  game.lanes[0].commandState = "ATTACK";
+  game.lanes[0].commandAnchorProgress = 1;
+  game.lanes[0].commandTargetLaneIndex = 1;
+  upgradeTownCoreToTier(game, 0, 2);
+  act(game, 0, "build_on_pad", { padId: "market_pad" });
+  waitForPadTier(game, 0, "market_pad", 1);
+  game.lanes[0].gold = 36;
+
+  const bot = new BotBrain({
+    laneIndex: 0,
+    difficulty: "hard",
+    personality: "ECO",
+    seed: "market-workers-first",
+    unitDefMap: simMl.getMovingUnitDefMap(),
+  });
+
+  bot.memory.nextThinkTick = 0;
+  const action = bot.tick({
+    game,
+    runtime: { laneLeakHistory: { 0: [0], 1: [0] }, recentLifeLossByLane: { 0: 0, 1: 0 }, currentTargetByLane: {} },
+  });
+
+  assert.equal(action.type, AI_ACTION_TYPE.BUY_MARKET_UNIT, "expected bot to invest in market workers");
+  assert.equal(action.unitKey, "peasant");
+  assert.ok(Number(action.count) >= 1, "expected at least one market worker purchase");
 });
 
 test("ffa targeting: bot picks a target and retargets when target is removed", () => {

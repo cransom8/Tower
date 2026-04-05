@@ -339,14 +339,6 @@ public class CameraController : MonoBehaviour
             return;
 
         ClampZoomToBounds();
-
-        if (TryGetAllowedFocusRange(_targetZoom, out var minFocus, out var maxFocus))
-        {
-            _targetFocus.x = Mathf.Clamp(_targetFocus.x, minFocus.x, maxFocus.x);
-            _targetFocus.z = Mathf.Clamp(_targetFocus.z, minFocus.y, maxFocus.y);
-            return;
-        }
-
         _targetFocus.x = Mathf.Clamp(_targetFocus.x, BoundsMin.x, BoundsMax.x);
         _targetFocus.z = Mathf.Clamp(_targetFocus.z, BoundsMin.y, BoundsMax.y);
     }
@@ -683,9 +675,8 @@ public class CameraController : MonoBehaviour
         if (!hasBounds)
             return false;
 
-        const float inset = 6f;
-        BoundsMin = new Vector2(floorBounds.min.x + inset, floorBounds.min.z + inset);
-        BoundsMax = new Vector2(floorBounds.max.x - inset, floorBounds.max.z - inset);
+        BoundsMin = new Vector2(floorBounds.min.x, floorBounds.min.z);
+        BoundsMax = new Vector2(floorBounds.max.x, floorBounds.max.z);
         return true;
     }
 

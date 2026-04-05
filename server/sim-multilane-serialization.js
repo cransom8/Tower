@@ -190,6 +190,9 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
     ? Number(LANE_FORMATION_ARRIVAL_DEAD_ZONE)
     : 0.2;
   const settledAtAnchor = Number.isFinite(anchorDistance) && anchorDistance <= arrivalDeadZone;
+  const stationaryPresentationDeadZone = Math.min(arrivalDeadZone, 0.12);
+  const settledForStationaryPresentation = Number.isFinite(anchorDistance)
+    && anchorDistance <= stationaryPresentationDeadZone;
   const regroupTicksRemaining = Math.max(
     0,
     Math.floor(Number(unit && unit.regroupUntilTick) || 0) - currentTick
@@ -214,10 +217,10 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
   } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.RETURN_TO_ANCHOR || "ReturnToAnchor")) {
     presentationPhase = "ReturnToSlot";
   } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.ANCHOR_JOIN || "AnchorJoin")) {
-    presentationPhase = settledAtAnchor ? "AnchorHold" : "AnchorJoin";
+    presentationPhase = settledForStationaryPresentation ? "AnchorHold" : "AnchorJoin";
   } else if (movementMode === (UNIT_MOVEMENT_MODES && UNIT_MOVEMENT_MODES.LANE_TRAVEL || "LaneTravel")) {
     presentationPhase = "LaneTravel";
-  } else if (settledAtAnchor) {
+  } else if (settledForStationaryPresentation) {
     presentationPhase = "AnchorHold";
   }
 
@@ -236,13 +239,13 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
       presentationIntent = isDefending ? "Defend" : "Attack";
       break;
     case "CombatRegroup":
-      if (settledAtAnchor)
+      if (settledForStationaryPresentation)
         presentationIntent = isDefending ? "Defend" : "Idle";
       else
         presentationIntent = isRetreating ? "Retreat" : "Move";
       break;
     case "ReturnToSlot":
-      presentationIntent = settledAtAnchor
+      presentationIntent = settledForStationaryPresentation
         ? (isDefending ? "Defend" : "Idle")
         : (isRetreating ? "Retreat" : "Move");
       break;
@@ -254,7 +257,7 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
       presentationIntent = isRetreating ? "Retreat" : "Move";
       break;
     default:
-      presentationIntent = isDefending && settledAtAnchor ? "Defend" : "Idle";
+      presentationIntent = isDefending && settledForStationaryPresentation ? "Defend" : "Idle";
       break;
   }
 
@@ -270,6 +273,7 @@ function resolveSnapshotPresentationState(game, lane, unit, deps) {
 
 function createMLSnapshot(game, deps) {
   const {
+    TICK_HZ,
     WAVE_TIMER_TICKS,
     TEAM_HP_START,
     GRID_W,
@@ -293,6 +297,7 @@ function createMLSnapshot(game, deps) {
     createHeroRosterSnapshot,
     resolveLaneAllegianceKey,
     resolveUnitAllegianceKey,
+    resolveUnitDef,
     resolveUnitOwnerLaneIndex,
     resolveUnitTargetLaneIndex,
     resolveUnitPathContractType,
@@ -305,6 +310,7 @@ function createMLSnapshot(game, deps) {
     resolveWaveCombatTarget,
     getWaveUnitTargetDistance,
     getUnitStopDistance,
+    getUnitAttackRange,
     getLaneTotalIncome,
     recomputeTeamHpState,
   } = deps;
@@ -403,6 +409,13 @@ function createMLSnapshot(game, deps) {
         const spawnSourceType = typeof resolveSpawnSourceTypeFromUnit === "function"
           ? resolveSpawnSourceTypeFromUnit(u)
           : (u && u.spawnSourceType) || null;
+        const resolvedUnitDef = typeof resolveUnitDef === "function"
+          ? resolveUnitDef(u.unitTypeKey || u.type)
+          : null;
+        const authoritativeAttackRange = typeof getUnitAttackRange === "function"
+          ? Number(getUnitAttackRange(u)) || 0
+          : Number(u.attackRangeOverride) || Number(resolvedUnitDef && resolvedUnitDef.combatRange) || 0;
+        const authoritativeAttackIntervalTicks = Number(u.atkCdTicks) || Number(resolvedUnitDef && resolvedUnitDef.atkCdTicks) || 0;
         return {
           id: u.id,
           unitId: u.unitId || u.id,
@@ -470,6 +483,11 @@ function createMLSnapshot(game, deps) {
           hp: u.hp,
           maxHp: u.maxHp,
           moveSpeed: Number(u.baseSpeed) || 0,
+          attackDamage: Number(u.baseDmg) || Number(resolvedUnitDef && resolvedUnitDef.dmg) || 0,
+          attackIntervalSeconds: authoritativeAttackIntervalTicks > 0 && TICK_HZ > 0
+            ? authoritativeAttackIntervalTicks / TICK_HZ
+            : 0,
+          attackRange: authoritativeAttackRange,
           isWaveUnit: !!(typeof isScheduledWaveUnit === "function" ? isScheduledWaveUnit(u) : u.isWaveUnit),
           isAttacking: !!(u.combatTarget && u.combatTarget.unitId),
           combatTargetKind: presentation.combatTargetKind,

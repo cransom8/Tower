@@ -119,3 +119,33 @@ test("private lobbies always expose the FFA survival ruleset and reject team ass
     matchQueueManager.cleanupSocket("host-1");
   }
 });
+
+test("private lobby codes allow another human player to join and launch", () => {
+  const lobby = matchQueueManager.createLobby({
+    hostSocketId: "host-1",
+    hostDisplayName: "Host",
+    gameType: "line_wars",
+    matchFormat: "ffa",
+    pvpMode: "ffa",
+  });
+
+  try {
+    assert.equal(matchQueueManager.joinLobby(lobby.code, "guest-1", "Guest"), null);
+
+    const joined = matchQueueManager.getLobbyByCode(lobby.code);
+    assert.ok(joined);
+    assert.equal(joined.members.size, 2);
+    assert.equal(matchQueueManager.validateLaunch(joined), null);
+
+    const snapshot = matchQueueManager.lobbySnapshot(joined);
+    assert.equal(snapshot.members.length, 2);
+    assert.deepEqual(
+      snapshot.members.map((member) => member.name).sort(),
+      ["Guest", "Host"]
+    );
+  } finally {
+    matchQueueManager.disbandLobby(lobby.lobbyId);
+    matchQueueManager.cleanupSocket("host-1");
+    matchQueueManager.cleanupSocket("guest-1");
+  }
+});

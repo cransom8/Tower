@@ -1,27 +1,14 @@
-// ProjectileSystem.cs — Renders projectiles from ALL lanes in the ML battlefield.
-// Projectiles from the server have a 0..1 progress value; this script
-// resolves their endpoints from authoritative live objects each frame.
-//
-// SETUP (Game_ML.unity):
-//   Attach alongside GameplayPresentationRoot.
-//   Inspector:
-//     ProjectilePrefab  — small sphere / sprite (used for all types)
-//     CannonPrefab      — larger sphere for cannon shots (optional, falls back to ProjectilePrefab)
-//     SplashFxPrefab    — instantiated at landing position for cannon (optional)
-//     ArcHeight         — how high cannon shots arc (default 1.5 units)
-//
-// Projectile sync is snapshot-driven (not interpolated between frames).
-// Smooth motion between snapshots is achieved by lerping progress in Update.
+// ProjectileSystem.cs - Renders authoritative projectile snapshots and
+// lightweight client-side presentation shots for ranged/support attacks.
 
 using System.Collections.Generic;
-using UnityEngine;
 using CastleDefender.Net;
+using UnityEngine;
 
 namespace CastleDefender.Game
 {
     public class ProjectileSystem : MonoBehaviour
     {
-        // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Prefabs")]
         public GameObject ProjectilePrefab;
         public GameObject CannonPrefab;
@@ -30,34 +17,53 @@ namespace CastleDefender.Game
         [Header("Arc")]
         public float ArcHeight = 1.5f;
 
-        // ── Runtime state ─────────────────────────────────────────────────────
+        public static ProjectileSystem Instance { get; private set; }
+
         class ProjView
         {
-            public string     id;
+            public string id;
             public GameObject go;
-            public Vector3    from;
-            public Vector3    to;
-            public float      progress;
-            public float      smoothProg;
-            public bool       isSplash;
-            public bool       landedFxPlayed;
-            public bool       playAudio;
-            public string     projectileType;
-            public string     damageType;
-            public string     sourceId;
-            public string     targetId;
+            public Vector3 from;
+            public Vector3 to;
+            public float progress;
+            public float smoothProg;
+            public bool isSplash;
+            public bool landedFxPlayed;
+            public bool playAudio;
+            public bool authoritative;
+            public float manualDuration;
+            public float manualElapsed;
+            public string projectileType;
+            public string damageType;
+            public string sourceId;
+            public string targetId;
         }
 
         readonly Dictionary<string, ProjView> _projs = new();
         readonly HashSet<string> _loggedResolutionFailures = new();
+        readonly List<string> _completedProjectiles = new();
+        MaterialPropertyBlock _materialBlock;
+        Material _fallbackProjectileMaterial;
         bool _subscribed;
         SnapshotApplier _boundSnapshotApplier;
 
-        // ─────────────────────────────────────────────────────────────────────
-        void OnEnable()  => TrySubscribeSnapshots();
+        void Awake()
+        {
+            Instance = this;
+            _materialBlock = new MaterialPropertyBlock();
+        }
+
+        void OnEnable()
+        {
+            Instance = this;
+            TrySubscribeSnapshots();
+        }
 
         void OnDisable()
         {
+            if (Instance == this)
+                Instance = null;
+
             if (_boundSnapshotApplier != null)
                 _boundSnapshotApplier.OnMLSnapshotApplied -= OnSnapshot;
             _boundSnapshotApplier = null;
@@ -65,181 +71,414 @@ namespace CastleDefender.Game
             DestroyAll();
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        void OnDestroy()
+        {
+            if (Instance == this)
+                Instance = null;
+
+            if (_fallbackProjectileMaterial != null)
+                Destroy(_fallbackProjectileMaterial);
+        }
+
+        public bool SpawnPresentationProjectile(
+            string projectileId,
+            string projectileType,
+            string damageType,
+            Vector3 fromWorld,
+            Vector3 toWorld,
+            float travelSeconds,
+            bool isSplash = false,
+            bool playAudio = false)
+        {
+            if (!isActiveAndEnabled)
+                return false;
+
+            string resolvedId = !string.IsNullOrWhiteSpace(projectileId)
+                ? projectileId.Trim()
+                : $"client_proj_{Time.frameCount}_{_projs.Count}";
+            DestroyProjectileView(resolvedId);
+
+            ProjView view = CreateProjectileView(
+                resolvedId,
+                projectileType,
+                damageType,
+                fromWorld,
+                toWorld,
+                isSplash,
+                playAudio,
+                sourceId: null,
+                targetId: null,
+                authoritative: false,
+                initialProgress: 0f);
+            if (view == null || view.go == null)
+                return false;
+
+            view.manualDuration = Mathf.Max(0.06f, travelSeconds);
+            view.manualElapsed = 0f;
+            view.progress = 0f;
+            view.smoothProg = 0f;
+            return true;
+        }
+
         void OnSnapshot(MLSnapshot snap)
         {
-            if (snap?.lanes == null) return;
+            if (snap?.lanes == null)
+                return;
 
             var seen = new HashSet<string>();
             int localLaneIndex = ResolveLocalLaneIndex();
 
-            foreach (var lane in snap.lanes)
+            foreach (MLLaneSnap lane in snap.lanes)
             {
-                if (lane == null) continue;
+                if (lane == null)
+                    continue;
+
                 SyncLaneProjectiles(snap, lane, seen, localLaneIndex);
             }
 
-            // Remove projectiles that disappeared (assumed hit)
-            var toRemove = new List<string>();
+            _completedProjectiles.Clear();
             foreach (var kv in _projs)
-                if (!seen.Contains(kv.Key)) toRemove.Add(kv.Key);
-
-            foreach (var id in toRemove)
             {
-                var v = _projs[id];
-
-                if (v.isSplash && !v.landedFxPlayed)
+                if (kv.Value == null)
                 {
-                    if (CannonSplash._prefabSet) CannonSplash.Play(v.to);
-                    else if (SplashFxPrefab != null)
-                    {
-                        var fx = Instantiate(SplashFxPrefab, v.to, Quaternion.identity);
-                        Destroy(fx, 1.5f);
-                    }
-                    if (v.playAudio)
-                        AudioManager.I?.Play(AudioManager.SFX.CannonSplash);
-                }
-                else if (!v.isSplash && v.go != null)
-                {
-                    var hitEffect = HitEffectPool.Get();
-                    if (hitEffect != null) hitEffect.Play(v.to, TowerTypeFromString(v.projectileType, v.damageType));
-                    if (v.playAudio)
-                    {
-                        TryPlayProjectileCombatSfx(v.id, v.projectileType, v.damageType, UnitCombatSfxCue.Impact, 0.22f, HitSFXFor(v.projectileType, v.damageType));
-                    }
+                    _completedProjectiles.Add(kv.Key);
+                    continue;
                 }
 
-                if (v.go != null) Destroy(v.go);
-                _projs.Remove(id);
+                if (kv.Value.authoritative && !seen.Contains(kv.Key))
+                    _completedProjectiles.Add(kv.Key);
             }
+
+            for (int i = 0; i < _completedProjectiles.Count; i++)
+                CompleteProjectileView(_completedProjectiles[i]);
         }
 
         void SyncLaneProjectiles(MLSnapshot snap, MLLaneSnap lane, HashSet<string> seen, int localLaneIndex)
         {
-            if (lane.projectiles == null) return;
+            if (lane.projectiles == null)
+                return;
 
-            foreach (var p in lane.projectiles)
+            foreach (MLProjectile projectile in lane.projectiles)
             {
-                seen.Add(p.id);
-                bool playAudio = ShouldPlayProjectileAudio(snap, p, localLaneIndex);
+                seen.Add(projectile.id);
+                bool playAudio = ShouldPlayProjectileAudio(snap, projectile, localLaneIndex);
 
-                if (!TryResolveProjectileEndpointWorldPosition(p, lane, resolveSource: true, out Vector3 fromWorld, out string sourceFailure))
+                bool hasExistingAuthoritativeView =
+                    _projs.TryGetValue(projectile.id, out ProjView existingView)
+                    && existingView != null
+                    && existingView.go != null
+                    && existingView.authoritative;
+
+                if (!TryResolveProjectileEndpointWorldPosition(projectile, lane, true, out Vector3 fromWorld, out string sourceFailure))
                 {
-                    LogProjectileResolutionFailure(p, lane, "source", sourceFailure);
-                    DestroyProjectileView(p.id);
+                    LogProjectileResolutionFailure(projectile, lane, "source", sourceFailure);
+                    if (!hasExistingAuthoritativeView)
+                        DestroyProjectileView(projectile.id);
+                    else
+                        existingView.progress = projectile.progress;
                     continue;
                 }
 
-                if (!TryResolveProjectileEndpointWorldPosition(p, lane, resolveSource: false, out Vector3 toWorld, out string targetFailure))
+                if (!TryResolveProjectileEndpointWorldPosition(projectile, lane, false, out Vector3 toWorld, out string targetFailure))
                 {
-                    LogProjectileResolutionFailure(p, lane, "target", targetFailure);
-                    DestroyProjectileView(p.id);
+                    LogProjectileResolutionFailure(projectile, lane, "target", targetFailure);
+                    if (!hasExistingAuthoritativeView)
+                        DestroyProjectileView(projectile.id);
+                    else
+                        existingView.progress = projectile.progress;
                     continue;
                 }
 
-                if (!_projs.TryGetValue(p.id, out var view) || view.go == null)
-                    view = CreateProjectile(p, fromWorld, toWorld, playAudio);
+                if (!hasExistingAuthoritativeView)
+                    existingView = CreateProjectile(projectile, fromWorld, toWorld, playAudio);
 
-                if (view == null || view.go == null)
+                if (existingView == null || existingView.go == null)
                     continue;
 
-                view.from     = fromWorld;
-                view.to       = toWorld;
-                view.progress = p.progress;
-                view.isSplash = p.isSplash;
-                view.playAudio = playAudio;
-                view.sourceId = p.sourceId;
-                view.targetId = p.targetId;
+                existingView.from = fromWorld;
+                existingView.to = toWorld;
+                existingView.progress = projectile.progress;
+                existingView.isSplash = projectile.isSplash;
+                existingView.playAudio = playAudio;
+                existingView.projectileType = projectile.projectileType;
+                existingView.damageType = projectile.damageType;
+                existingView.sourceId = projectile.sourceId;
+                existingView.targetId = projectile.targetId;
             }
         }
 
-        ProjView CreateProjectile(MLProjectile p, Vector3 from, Vector3 to, bool playAudio)
+        ProjView CreateProjectile(MLProjectile projectile, Vector3 from, Vector3 to, bool playAudio)
         {
-            bool isCannon = p.projectileType == "cannon";
-            var  prefab   = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
-            if (prefab == null) return new ProjView();
+            return CreateProjectileView(
+                projectile.id,
+                projectile.projectileType,
+                projectile.damageType,
+                from,
+                to,
+                projectile.isSplash,
+                playAudio,
+                projectile.sourceId,
+                projectile.targetId,
+                authoritative: true,
+                initialProgress: projectile.progress);
+        }
 
-            var go   = Instantiate(prefab, from, Quaternion.identity, transform);
-            go.name  = $"Proj_{p.id}";
+        ProjView CreateProjectileView(
+            string id,
+            string projectileType,
+            string damageType,
+            Vector3 from,
+            Vector3 to,
+            bool isSplash,
+            bool playAudio,
+            string sourceId,
+            string targetId,
+            bool authoritative,
+            float initialProgress)
+        {
+            bool isCannon = string.Equals(projectileType, "cannon", System.StringComparison.OrdinalIgnoreCase);
+            GameObject prefab = (isCannon && CannonPrefab != null) ? CannonPrefab : ProjectilePrefab;
+            if (prefab == null)
+                return null;
 
-            string family = ResolveProjectileFamily(p.projectileType, p.damageType);
+            var go = Instantiate(prefab, from, Quaternion.identity, transform);
+            go.name = $"Proj_{id}";
+
+            string family = ResolveProjectileFamily(projectileType, damageType);
             float scale = family switch
             {
-                "cannon"   => 0.4f,
+                "cannon" => 0.4f,
                 "ballista" => 0.25f,
-                "mage"     => 0.2f,
-                "support"  => 0.22f,
-                _          => 0.15f,
+                "mage" => 0.2f,
+                "support" => 0.24f,
+                _ => 0.15f,
             };
             go.transform.localScale = Vector3.one * scale;
 
-            var rend = go.GetComponentInChildren<Renderer>();
-            if (rend != null)
-            {
-                rend.material.color = p.damageType switch
-                {
-                    "MAGIC"  => new Color(0.6f, 0.3f, 1.0f),
-                    "PIERCE" => new Color(0.8f, 0.7f, 0.3f),
-                    "SPLASH" => new Color(1.0f, 0.5f, 0.1f),
-                    "SIEGE"  => new Color(0.4f, 0.4f, 0.5f),
-                    _        => new Color(0.8f, 0.8f, 0.8f),
-                };
-            }
+            ApplyProjectileVisuals(go.GetComponentInChildren<Renderer>(), ResolveProjectileColor(projectileType, damageType));
 
             var view = new ProjView
             {
-                id             = p.id,
-                go             = go,
-                from           = from,
-                to             = to,
-                progress       = p.progress,
-                smoothProg     = p.progress,
-                isSplash       = p.isSplash,
+                id = id,
+                go = go,
+                from = from,
+                to = to,
+                progress = initialProgress,
+                smoothProg = initialProgress,
+                isSplash = isSplash,
                 landedFxPlayed = false,
-                playAudio      = playAudio,
-                projectileType = p.projectileType,
-                damageType     = p.damageType,
-                sourceId       = p.sourceId,
-                targetId       = p.targetId,
+                playAudio = playAudio,
+                authoritative = authoritative,
+                manualDuration = 0f,
+                manualElapsed = 0f,
+                projectileType = projectileType,
+                damageType = damageType,
+                sourceId = sourceId,
+                targetId = targetId,
             };
-            _projs[p.id] = view;
+            _projs[id] = view;
 
             if (playAudio)
             {
-                TryPlayProjectileCombatSfx(p.id, p.projectileType, p.damageType, UnitCombatSfxCue.Attack, 0.24f, ShootSFXFor(p.projectileType, p.damageType));
+                TryPlayProjectileCombatSfx(
+                    id,
+                    projectileType,
+                    damageType,
+                    UnitCombatSfxCue.Attack,
+                    0.24f,
+                    ShootSFXFor(projectileType, damageType));
             }
+
             return view;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
+        void ApplyProjectileVisuals(Renderer renderer, Color color)
+        {
+            if (renderer == null)
+                return;
+
+            if (_materialBlock == null)
+                _materialBlock = new MaterialPropertyBlock();
+
+            EnsureFallbackProjectileMaterial(renderer);
+            Material material = renderer.sharedMaterial;
+            if (material == null)
+                return;
+
+            _materialBlock.Clear();
+            if (material.HasProperty("_BaseColor"))
+                _materialBlock.SetColor("_BaseColor", color);
+            if (material.HasProperty("_Color"))
+                _materialBlock.SetColor("_Color", color);
+            if (material.HasProperty("_EmissionColor"))
+                _materialBlock.SetColor("_EmissionColor", color * 0.18f);
+            renderer.SetPropertyBlock(_materialBlock);
+        }
+
+        void EnsureFallbackProjectileMaterial(Renderer renderer)
+        {
+            if (renderer == null || renderer.sharedMaterial != null)
+                return;
+
+            if (_fallbackProjectileMaterial == null)
+            {
+                Shader shader = ResolveFallbackProjectileShader();
+                if (shader == null)
+                    return;
+
+                _fallbackProjectileMaterial = new Material(shader)
+                {
+                    name = "ProjectileFallbackMaterial",
+                };
+            }
+
+            renderer.sharedMaterial = _fallbackProjectileMaterial;
+        }
+
+        static Shader ResolveFallbackProjectileShader()
+        {
+            string[] shaderNames =
+            {
+                "Universal Render Pipeline/Unlit",
+                "Universal Render Pipeline/Lit",
+                "Sprites/Default",
+                "Standard",
+            };
+
+            for (int i = 0; i < shaderNames.Length; i++)
+            {
+                Shader shader = Shader.Find(shaderNames[i]);
+                if (shader != null)
+                    return shader;
+            }
+
+            return null;
+        }
+
+        static Color ResolveProjectileColor(string projectileType, string damageType)
+        {
+            switch (ResolveProjectileFamily(projectileType, damageType))
+            {
+                case "mage":
+                    return new Color(0.42f, 0.86f, 1.00f);
+                case "support":
+                    return new Color(0.58f, 1.00f, 0.68f);
+                case "cannon":
+                    return new Color(1.00f, 0.52f, 0.14f);
+                case "ballista":
+                    return new Color(0.78f, 0.70f, 0.34f);
+                case "fighter":
+                    return new Color(0.95f, 0.80f, 0.30f);
+                case "archer":
+                    return new Color(0.95f, 0.88f, 0.50f);
+            }
+
+            return damageType switch
+            {
+                "MAGIC" => new Color(0.6f, 0.3f, 1.0f),
+                "PIERCE" => new Color(0.8f, 0.7f, 0.3f),
+                "SPLASH" => new Color(1.0f, 0.5f, 0.1f),
+                "SIEGE" => new Color(0.4f, 0.4f, 0.5f),
+                _ => new Color(0.8f, 0.8f, 0.8f),
+            };
+        }
+
         void Update()
         {
             TrySubscribeSnapshots();
 
             const float lerpSpeed = 8f;
+            _completedProjectiles.Clear();
 
             foreach (var kv in _projs)
             {
-                var v = kv.Value;
-                if (v.go == null) continue;
+                ProjView view = kv.Value;
+                if (view?.go == null)
+                {
+                    _completedProjectiles.Add(kv.Key);
+                    continue;
+                }
 
-                v.smoothProg = Mathf.MoveTowards(v.smoothProg, v.progress, lerpSpeed * Time.deltaTime);
-                float t = Mathf.Clamp01(v.smoothProg);
+                if (view.authoritative)
+                {
+                    view.smoothProg = Mathf.MoveTowards(view.smoothProg, view.progress, lerpSpeed * Time.deltaTime);
+                }
+                else
+                {
+                    float duration = Mathf.Max(0.06f, view.manualDuration);
+                    view.manualElapsed += Time.deltaTime;
+                    view.progress = Mathf.Clamp01(view.manualElapsed / duration);
+                    view.smoothProg = view.progress;
+                    if (view.progress >= 0.999f)
+                        _completedProjectiles.Add(kv.Key);
+                }
 
-                Vector3 pos = Vector3.Lerp(v.from, v.to, t);
-                if (v.isSplash) pos.y += ArcHeight * 4f * t * (1f - t);
+                float t = Mathf.Clamp01(view.smoothProg);
+                Vector3 pos = Vector3.Lerp(view.from, view.to, t);
+                if (view.isSplash)
+                    pos.y += ArcHeight * 4f * t * (1f - t);
 
-                v.go.transform.position = pos;
+                view.go.transform.position = pos;
 
-                Vector3 dir = (v.to - v.from).normalized;
-                if (dir != Vector3.zero) v.go.transform.forward = dir;
+                Vector3 dir = (view.to - view.from).normalized;
+                if (dir != Vector3.zero)
+                    view.go.transform.forward = dir;
             }
+
+            for (int i = 0; i < _completedProjectiles.Count; i++)
+                CompleteProjectileView(_completedProjectiles[i]);
+        }
+
+        void CompleteProjectileView(string projectileId)
+        {
+            if (string.IsNullOrWhiteSpace(projectileId) || !_projs.TryGetValue(projectileId, out ProjView view) || view == null)
+                return;
+
+            if (view.isSplash && !view.landedFxPlayed)
+            {
+                if (CannonSplash._prefabSet)
+                {
+                    CannonSplash.Play(view.to);
+                }
+                else if (SplashFxPrefab != null)
+                {
+                    var fx = Instantiate(SplashFxPrefab, view.to, Quaternion.identity);
+                    Destroy(fx, 1.5f);
+                }
+
+                if (view.playAudio)
+                    AudioManager.I?.Play(AudioManager.SFX.CannonSplash);
+
+                view.landedFxPlayed = true;
+            }
+            else if (!view.isSplash && view.go != null)
+            {
+                var hitEffect = HitEffectPool.Get();
+                if (hitEffect != null)
+                    hitEffect.Play(view.to, TowerTypeFromString(view.projectileType, view.damageType));
+
+                if (view.playAudio)
+                {
+                    TryPlayProjectileCombatSfx(
+                        view.id,
+                        view.projectileType,
+                        view.damageType,
+                        UnitCombatSfxCue.Impact,
+                        0.22f,
+                        HitSFXFor(view.projectileType, view.damageType));
+                }
+            }
+
+            if (view.go != null)
+                Destroy(view.go);
+            _projs.Remove(projectileId);
         }
 
         void TrySubscribeSnapshots()
         {
-            var sa = SnapshotApplier.Instance;
-            if (_subscribed && _boundSnapshotApplier == sa && sa != null) return;
+            SnapshotApplier sa = SnapshotApplier.Instance;
+            if (_subscribed && _boundSnapshotApplier == sa && sa != null)
+                return;
 
             if (_boundSnapshotApplier != null)
             {
@@ -248,14 +487,16 @@ namespace CastleDefender.Game
                 _subscribed = false;
             }
 
-            if (sa == null) return;
+            if (sa == null)
+                return;
 
             sa.OnMLSnapshotApplied -= OnSnapshot;
             sa.OnMLSnapshotApplied += OnSnapshot;
             _boundSnapshotApplier = sa;
             _subscribed = true;
 
-            if (sa.LatestML != null) OnSnapshot(sa.LatestML);
+            if (sa.LatestML != null)
+                OnSnapshot(sa.LatestML);
         }
 
         int ResolveLocalLaneIndex()
@@ -270,8 +511,13 @@ namespace CastleDefender.Game
         void DestroyAll()
         {
             foreach (var kv in _projs)
-                if (kv.Value?.go != null) Destroy(kv.Value.go);
+            {
+                if (kv.Value?.go != null)
+                    Destroy(kv.Value.go);
+            }
+
             _projs.Clear();
+            _completedProjectiles.Clear();
         }
 
         bool TryResolveProjectileEndpointWorldPosition(
@@ -315,7 +561,7 @@ namespace CastleDefender.Game
             if (string.IsNullOrWhiteSpace(padId))
                 return false;
 
-            var anchor = FortressPadAnchor.FindAnchor(padId, lane?.slotColor, lane?.laneIndex ?? -1);
+            FortressPadAnchor anchor = FortressPadAnchor.FindAnchor(padId, lane?.slotColor, lane?.laneIndex ?? -1);
             if (anchor == null)
                 return false;
 
@@ -346,7 +592,7 @@ namespace CastleDefender.Game
             if (string.IsNullOrWhiteSpace(projectileId))
                 return;
 
-            if (!_projs.TryGetValue(projectileId, out var view))
+            if (!_projs.TryGetValue(projectileId, out ProjView view))
                 return;
 
             if (view?.go != null)
@@ -474,34 +720,33 @@ namespace CastleDefender.Game
                 || result == UnitCombatSfxPlaybackResult.MissingClips;
         }
 
-        // ── Audio / FX helpers ────────────────────────────────────────────────
         static AudioManager.SFX ShootSFXFor(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
-            "cannon"   => AudioManager.SFX.CannonShoot,
+            "cannon" => AudioManager.SFX.CannonShoot,
             "ballista" => AudioManager.SFX.BallistaShoot,
-            "mage"     => AudioManager.SFX.MageShoot,
-            "support"  => AudioManager.SFX.MageShoot,
-            "fighter"  => AudioManager.SFX.FighterSlash,
-            _          => AudioManager.SFX.ArcherShoot,
+            "mage" => AudioManager.SFX.MageShoot,
+            "support" => AudioManager.SFX.MageShoot,
+            "fighter" => AudioManager.SFX.FighterSlash,
+            _ => AudioManager.SFX.ArcherShoot,
         };
 
         static AudioManager.SFX HitSFXFor(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
-            "mage"    => AudioManager.SFX.MageShoot,
+            "mage" => AudioManager.SFX.MageShoot,
             "support" => AudioManager.SFX.MageShoot,
-            "cannon"  => AudioManager.SFX.CannonSplash,
-            _         => AudioManager.SFX.UnitDeath,
+            "cannon" => AudioManager.SFX.CannonSplash,
+            _ => AudioManager.SFX.UnitDeath,
         };
 
         static HitEffect.TowerType TowerTypeFromString(string projType, string damageType = null) => ResolveProjectileFamily(projType, damageType) switch
         {
-            "archer"   => HitEffect.TowerType.Archer,
-            "fighter"  => HitEffect.TowerType.Fighter,
-            "mage"     => HitEffect.TowerType.Mage,
-            "support"  => HitEffect.TowerType.Ballista,
+            "archer" => HitEffect.TowerType.Archer,
+            "fighter" => HitEffect.TowerType.Fighter,
+            "mage" => HitEffect.TowerType.Mage,
+            "support" => HitEffect.TowerType.Mage,
             "ballista" => HitEffect.TowerType.Ballista,
-            "cannon"   => HitEffect.TowerType.Cannon,
-            _          => HitEffect.TowerType.Archer,
+            "cannon" => HitEffect.TowerType.Cannon,
+            _ => HitEffect.TowerType.Archer,
         };
 
         static string ResolveProjectileFamily(string projType, string damageType)

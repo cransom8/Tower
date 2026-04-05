@@ -238,6 +238,20 @@ function issueLaneCommand(game, laneIndex, type, data = {}) {
   return result;
 }
 
+function activateCenterBarracks(lane) {
+  const centerState = lane && lane.barracksSiteStates
+    ? lane.barracksSiteStates.center
+    : null;
+  assert.ok(centerState, "expected the lane to expose center barracks state");
+  centerState.isBuilt = true;
+  centerState.level = 1;
+  centerState.hp = 260;
+  centerState.maxHp = 260;
+  centerState.lifecycleState = "active";
+  centerState.nextSendTick = 600;
+  return centerState;
+}
+
 test("reaching the Town Core only acquires a combat target and does not auto-damage on arrival", () => {
   const game = createGame(12);
   const lane = game.lanes[0];
@@ -585,6 +599,7 @@ test("wave units intercepted near the front gate keep the Town Core safe while d
   const lane = game.lanes[0];
   issueLaneCommand(game, lane.laneIndex, "set_lane_defend_point", { progress: 0 });
   const corePad = getTownCorePad(lane);
+  activateCenterBarracks(lane);
   primeDefendAnchor(game, lane);
   const defenderPoint = getDefendAnchorPosition(lane, -0.4, 0);
   const leftWavePoint = getDefendAnchorPosition(lane, 0.1, -0.2);
@@ -728,16 +743,7 @@ test("wave units near the fortress interior clear every defender in range before
 test("wave units can target the center barracks instead of skipping straight to the Town Core", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
-  const barracksBuilder = createDefender("guardian", {
-    id: "barracks_builder_guard",
-    posX: -24,
-    posY: 10,
-    guardAnchorX: -24,
-    guardAnchorY: 10,
-  });
-  lane.units.push(barracksBuilder);
-  tick(game, 1);
-  lane.units = lane.units.filter((unit) => unit.id !== barracksBuilder.id);
+  activateCenterBarracks(lane);
 
   const coreTarget = simMl.getLaneTownCoreCombatTarget(lane);
   const centerBarracksTarget = simMl.getBarracksSiteCombatTarget(lane, "center");
@@ -765,16 +771,7 @@ test("wave units can target the center barracks instead of skipping straight to 
 test("wave units retarget from a prelocked Town Core to a nearer center barracks", () => {
   const game = createGame(20);
   const lane = game.lanes[0];
-  const barracksBuilder = createDefender("guardian", {
-    id: "barracks_retarget_builder",
-    posX: -24,
-    posY: 10,
-    guardAnchorX: -24,
-    guardAnchorY: 10,
-  });
-  lane.units.push(barracksBuilder);
-  tick(game, 1);
-  lane.units = lane.units.filter((unit) => unit.id !== barracksBuilder.id);
+  activateCenterBarracks(lane);
 
   const coreTarget = simMl.getLaneTownCoreCombatTarget(lane);
   const centerBarracksTarget = simMl.getBarracksSiteCombatTarget(lane, "center");
@@ -847,6 +844,61 @@ test("wave units near the Town Core must retarget to fortress-interior defenders
   assert.equal(attacker.combatTarget?.kind, "unit", "the wave should drop the Town Core lock when a live defender still guards the fortress interior");
   assert.equal(attacker.combatTarget?.unitId, defender.id, "the wave should pick the fortress-interior defender before any structure");
   assert.equal(coreTarget.hp, 20, "the Town Core should stay untouched while the interior defender is still alive");
+});
+
+test("retreating units only re-engage after each unit reaches the Town Core defense zone", () => {
+  const game = createGame(20);
+  const homeLane = game.lanes[0];
+  const enemyLane = game.lanes[1];
+  const townCoreTarget = simMl.getLaneTownCoreCombatTarget(homeLane);
+  assert.ok(townCoreTarget, "expected the home lane to expose a Town Core combat target");
+
+  issueLaneCommand(game, homeLane.laneIndex, "set_lane_retreat");
+  tick(game, 1);
+
+  const coreDefender = createDefender("guardian", {
+    id: "retreat_home_ready",
+    posX: Number(townCoreTarget.posX) + 0.2,
+    posY: Number(townCoreTarget.posY) + 0.2,
+    pathIdx: 0,
+  });
+  const farDefender = createDefender("guardian", {
+    id: "retreat_far_away",
+    posX: Number(townCoreTarget.posX),
+    posY: Number(townCoreTarget.posY) + 18,
+    pathIdx: 18,
+  });
+  const intruder = createWaveUnit("raider", {
+    id: "home_intruder",
+    hp: 200,
+    maxHp: 200,
+    baseDmg: 0,
+    posX: Number(townCoreTarget.posX) + 0.6,
+    posY: Number(townCoreTarget.posY) + 0.4,
+    pathIdx: 1,
+    atkCd: 0,
+    atkCdTicks: 999,
+  });
+
+  homeLane.units.push(coreDefender, intruder);
+  enemyLane.units.push(farDefender);
+
+  tick(game, 1);
+
+  const liveUnits = game.lanes.flatMap((lane) => Array.isArray(lane.units) ? lane.units : []);
+  const liveCoreDefender = liveUnits.find((unit) => unit && unit.id === coreDefender.id);
+  const liveFarDefender = liveUnits.find((unit) => unit && unit.id === farDefender.id);
+  const liveIntruder = liveUnits.find((unit) => unit && unit.id === intruder.id);
+
+  assert.ok(liveCoreDefender, "expected the home-ready retreat unit to stay alive in the simulation");
+  assert.ok(liveFarDefender, "expected the far retreat unit to stay alive in the simulation");
+  assert.ok(liveIntruder, "expected the intruder to stay alive long enough for target acquisition");
+  assert.equal(liveCoreDefender.combatTarget?.unitId, liveIntruder.id, "expected the unit that reached the Town Core to start defending immediately");
+  assert.equal(liveCoreDefender.canEngage, true, "expected the Town Core defender to regain combat permission");
+  assert.equal(liveCoreDefender.stance, "DEFEND", "expected the recovered retreat unit to present as defending the Town Core");
+  assert.equal(liveFarDefender.commandState, "RETREAT", "expected far-away units to remain in retreat");
+  assert.equal(liveFarDefender.combatTarget, null, "expected units still traveling home to remain non-engaging");
+  assert.equal(liveFarDefender.canEngage, false, "expected units still far from home to keep combat disabled");
 });
 
 

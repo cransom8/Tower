@@ -40,6 +40,7 @@ namespace CastleDefender.UI
 
         [Header("Summary — one TMP_Text per lane (up to 4)")]
         public TMP_Text[] SummaryRows;   // populated programmatically
+        public TMP_Text SummaryBodyText;
 
         [Header("Charts")]
         public LineGraphUI EconomyGraph;
@@ -48,6 +49,7 @@ namespace CastleDefender.UI
         [Header("Waves tab")]
         public Transform   WaveRowContainer;
         public GameObject  WaveRowPrefab;
+        public TMP_Text    WavesBodyText;
 
         // ── State ─────────────────────────────────────────────────────────────
 
@@ -81,9 +83,25 @@ namespace CastleDefender.UI
             _economyPopulated = false;
             _buildPopulated   = false;
             _wavesPopulated   = false;
+            bool hasSummaryRows = payload?.finalStats != null && payload.finalStats.Length > 0;
+            bool hasWaveSnapshots = payload?.waveSnapshots != null && payload.waveSnapshots.Length > 0;
+            bool hasReadableWaveLog = payload?.balanceReadableLog != null && payload.balanceReadableLog.Length > 0;
+            bool hasDiagnosisLines = payload?.balanceDiagnosisLines != null && payload.balanceDiagnosisLines.Length > 0;
+            bool hasWaveDetails = hasWaveSnapshots || hasReadableWaveLog || hasDiagnosisLines;
+
+            if (Btn_Tab_Summary != null) Btn_Tab_Summary.gameObject.SetActive(hasSummaryRows || !hasWaveSnapshots);
+            if (Btn_Tab_Economy != null) Btn_Tab_Economy.gameObject.SetActive(hasWaveSnapshots);
+            if (Btn_Tab_Build   != null) Btn_Tab_Build  .gameObject.SetActive(hasWaveSnapshots);
+            if (Btn_Tab_Waves   != null) Btn_Tab_Waves  .gameObject.SetActive(hasWaveDetails);
 
             if (PanelRoot != null) PanelRoot.SetActive(true);
-            SwitchTab(0);
+            Debug.Log(
+                $"[PostGameReport] Opening report panel. " +
+                $"summaryRows={(payload?.finalStats?.Length ?? 0)} " +
+                $"waveSnapshots={(payload?.waveSnapshots?.Length ?? 0)} " +
+                $"readableLog={(payload?.balanceReadableLog?.Length ?? 0)} " +
+                $"diagnosis={(payload?.balanceDiagnosisLines?.Length ?? 0)}.");
+            SwitchTab(hasSummaryRows || !hasWaveDetails ? 0 : 3);
             StartCoroutine(ScaleIn(PanelRoot.transform, 0f, 1f, 0.3f));
         }
 
@@ -124,11 +142,58 @@ namespace CastleDefender.UI
 
         void PopulateSummary()
         {
-            if (_payload?.finalStats == null) return;
-            var stats = _payload.finalStats;
+            if (SummaryBodyText != null)
+            {
+                if (_payload?.finalStats == null || _payload.finalStats.Length == 0)
+                {
+                    SummaryBodyText.text = "No final lane stats were attached to this post-game payload.";
+                    return;
+                }
+
+                var builder = new System.Text.StringBuilder();
+                var stats = _payload.finalStats;
+                for (int i = 0; i < stats.Length; i++)
+                {
+                    var s = stats[i];
+                    if (s == null)
+                        continue;
+                    bool hasWinner = _payload.winnerLaneIndex >= 0;
+                    bool isWinner = !string.IsNullOrEmpty(_payload.winningTeam)
+                        ? s.team == _payload.winningTeam
+                        : hasWinner && s.laneIndex == _payload.winnerLaneIndex;
+                    string resultLabel = isWinner ? "WIN" : (s.eliminated ? "LOSS" : "ACTIVE");
+                    if (builder.Length > 0)
+                        builder.AppendLine().AppendLine();
+                    builder.Append($"<b>{s.displayName}</b>  {resultLabel}").AppendLine();
+                    builder.Append($"Income: {s.income:F0}    ");
+                    builder.Append($"Build: {s.buildValue:F0}    ");
+                    builder.Append($"BuildSpend: {s.totalBuildSpend:F0}").AppendLine();
+                    builder.Append($"Sends: {s.totalSendSpend:F0}/{s.totalSendCount}    ");
+                    builder.Append($"Leaks: {s.totalLeaksTaken}    ");
+                    builder.Append($"Hold: {s.longestHoldStreak}    ");
+                    builder.Append($"BigLeak: {s.biggestLeakTaken}");
+                }
+                SummaryBodyText.text = builder.ToString();
+                return;
+            }
 
             if (SummaryRows != null)
             {
+                if (_payload?.finalStats == null || _payload.finalStats.Length == 0)
+                {
+                    for (int i = 0; i < SummaryRows.Length; i++)
+                    {
+                        if (SummaryRows[i] == null) continue;
+                        SummaryRows[i].text = i == 0
+                            ? "No final lane stats were attached to this post-game payload."
+                            : string.Empty;
+                    }
+                    if (PanelSummary != null)
+                        LayoutRebuilder.ForceRebuildLayoutImmediate(PanelSummary.GetComponent<RectTransform>());
+                    return;
+                }
+
+                var stats = _payload.finalStats;
                 for (int i = 0; i < SummaryRows.Length && i < stats.Length; i++)
                 {
                     if (SummaryRows[i] == null) continue;
@@ -152,6 +217,12 @@ namespace CastleDefender.UI
                 for (int i = stats.Length; i < SummaryRows.Length; i++)
                 {
                     if (SummaryRows[i] != null) SummaryRows[i].text = string.Empty;
+                }
+
+                if (PanelSummary != null)
+                {
+                    Canvas.ForceUpdateCanvases();
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(PanelSummary.GetComponent<RectTransform>());
                 }
             }
         }
@@ -202,7 +273,74 @@ namespace CastleDefender.UI
 
         void PopulateWaves()
         {
-            if (WaveRowContainer == null || WaveRowPrefab == null || _payload?.waveSnapshots == null)
+            if (WavesBodyText != null)
+            {
+                EnsureWavesTabLayout();
+                PopulateLeakGraph();
+
+                var builder = new System.Text.StringBuilder();
+                if (_payload?.balanceDiagnosisLines != null)
+                {
+                    foreach (var line in _payload.balanceDiagnosisLines)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                            continue;
+                        if (builder.Length > 0)
+                            builder.AppendLine().AppendLine();
+                        builder.Append("<b>Diagnosis</b>  ").Append(line);
+                    }
+                }
+
+                if (_payload?.balanceReadableLog != null)
+                {
+                    foreach (var line in _payload.balanceReadableLog)
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                            continue;
+                        if (builder.Length > 0)
+                            builder.AppendLine().AppendLine();
+                        builder.Append(line);
+                    }
+                }
+
+                if (_payload?.waveSnapshots != null)
+                {
+                    foreach (var snap in _payload.waveSnapshots)
+                    {
+                        if (builder.Length > 0)
+                            builder.AppendLine().AppendLine();
+                        string waveLabel = snap.terminal ? "Final" : $"Wave {snap.round}";
+                        builder.Append($"<b>{waveLabel}</b>");
+                        if (snap.elapsedSeconds > 0)
+                            builder.Append($"  t={snap.elapsedSeconds / 60}m {snap.elapsedSeconds % 60}s");
+
+                        if (snap.lanes != null)
+                        {
+                            foreach (var l in snap.lanes)
+                            {
+                                builder.AppendLine();
+                                builder.Append($"[{GetLaneLabel(l.laneIndex)}] ");
+                                builder.Append($"Inc:{l.income:F0}  ");
+                                builder.Append($"Build:{l.buildValue:F0}  ");
+                                builder.Append($"BuildSpend:{l.buildSpend:F0}  ");
+                                builder.Append($"Sends:{l.sendSpend:F0}/{l.sendCount}  ");
+                                builder.Append($"Leak:{l.leaksTaken}  ");
+                                builder.Append($"CoreDmg:{l.leakDamage}  ");
+                                builder.Append($"Result:{l.holdResult}  ");
+                                builder.Append($"HP:{l.teamHp}");
+                            }
+                        }
+                    }
+                }
+
+                if (builder.Length <= 0)
+                    builder.Append("No wave snapshots were attached to this match.");
+
+                WavesBodyText.text = builder.ToString();
+                return;
+            }
+
+            if (WaveRowContainer == null || WaveRowPrefab == null)
                 return;
 
             EnsureWavesTabLayout();
@@ -211,6 +349,37 @@ namespace CastleDefender.UI
             // Clear existing rows
             foreach (Transform child in WaveRowContainer)
                 Destroy(child.gameObject);
+
+            bool addedAnyRows = false;
+
+            if (_payload?.balanceDiagnosisLines != null)
+            {
+                foreach (var line in _payload.balanceDiagnosisLines)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+                    AddWaveInfoRow($"<b>Diagnosis</b>  {line}");
+                    addedAnyRows = true;
+                }
+            }
+
+            if (_payload?.balanceReadableLog != null)
+            {
+                foreach (var line in _payload.balanceReadableLog)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+                    AddWaveInfoRow(line);
+                    addedAnyRows = true;
+                }
+            }
+
+            if (_payload?.waveSnapshots == null || _payload.waveSnapshots.Length == 0)
+            {
+                if (!addedAnyRows)
+                    AddWaveInfoRow("No wave snapshots were attached to this match.");
+                return;
+            }
 
             foreach (var snap in _payload.waveSnapshots)
             {
@@ -242,6 +411,14 @@ namespace CastleDefender.UI
                 }
                 lbl.text = sb.ToString();
             }
+        }
+
+        void AddWaveInfoRow(string text)
+        {
+            var row = Instantiate(WaveRowPrefab, WaveRowContainer);
+            var label = row.GetComponentInChildren<TMP_Text>();
+            if (label != null)
+                label.text = text;
         }
 
         void EnsureWavesTabLayout()

@@ -76,6 +76,7 @@ namespace CastleDefender.UI
         bool _networkHooksRegistered;
         string _statusMessage;
         string _pendingBarracksBuildId;
+        string _pendingBarracksSellKey;
         Coroutine _scaleCoroutine;
         string _focusedBarracksId;
         float _focusedBarracksRailNormalizedPosition;
@@ -756,6 +757,8 @@ namespace CastleDefender.UI
                 case "upgrade_barracks_site":
                 case "buy_barracks_unit":
                 case "sell_barracks_unit":
+                    if (string.Equals(payload.type, "sell_barracks_unit", System.StringComparison.OrdinalIgnoreCase))
+                        ClearPendingBarracksSell();
                     _statusMessage = $"Applied: {HumanizeAction(payload.type)}";
                     RefreshHeader(force: true);
                     RefreshContent(force: true);
@@ -769,6 +772,7 @@ namespace CastleDefender.UI
                 return;
 
             _pendingBarracksBuildId = null;
+            ClearPendingBarracksSell();
             _statusMessage = payload.message;
             RefreshHeader(force: true);
         }
@@ -776,6 +780,7 @@ namespace CastleDefender.UI
         void HideImmediate()
         {
             DestroyProgressionViewer();
+            ClearPendingBarracksSell();
             if (PanelBarracks != null)
             {
                 PanelBarracks.transform.localScale = Vector3.zero;
@@ -1569,7 +1574,8 @@ namespace CastleDefender.UI
                     sig +=
                         $"{site.barracksId}:{site.isBuilt}:{site.level}:{site.buildState}:{site.isConstructing}:" +
                         $"{site.constructionKind}:{site.constructionTargetLevel}:{(suppressVolatileTownCoreTimers ? 0 : site.constructionTimerTicksRemaining)}:" +
-                        $"{site.canBuild}:{site.canUpgrade}:{Mathf.RoundToInt(site.hp)}:{Mathf.RoundToInt(site.maxHp)}:{site.foodUsed}:{site.foodLimit}:{site.foodRemaining}:{site.isAtFoodLimit}:{site.lockedReason}|";
+                        $"{site.canBuild}:{site.canUpgrade}:{Mathf.RoundToInt(site.hp)}:{Mathf.RoundToInt(site.maxHp)}:{site.foodUsed}:{site.foodLimit}:{site.foodRemaining}:{site.isAtFoodLimit}:" +
+                        $"{site.hasActiveFoodState}:{site.activeFoodUsed}:{site.activeFoodRemaining}:{site.isAtActiveFoodLimit}:{site.lockedReason}|";
                     if (site.roster == null) continue;
                     for (int rosterIndex = 0; rosterIndex < site.roster.Length; rosterIndex++)
                     {
@@ -3239,9 +3245,17 @@ namespace CastleDefender.UI
                     GoldSurfaceBrightColor,
                     GoldTextColor));
                 row.Pills.Add(CreatePanelRowPill(
-                    BuildBarracksFoodLabel(site),
+                    BuildBarracksRosterFoodLabel(site),
                     GoldSurfaceColor,
                     GoldTextColor));
+                string activeFoodLabel = BuildBarracksActiveFoodLabel(site);
+                if (!string.IsNullOrWhiteSpace(activeFoodLabel))
+                {
+                    row.Pills.Add(CreatePanelRowPill(
+                        activeFoodLabel,
+                        GunmetalSoftColor,
+                        SilverTextColor));
+                }
                 row.Pills.Add(CreatePanelRowPill(
                     $"Active {CountActiveUnitsForBarracks(lane, site)}",
                     GunmetalSoftColor,
@@ -3341,7 +3355,7 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return null;
 
-            bool canSell = site.isBuilt && entry.ownedCount > 0 && CanEditBarracks();
+            bool canSell = CanSellBarracksRosterEntry(site, entry);
             if (isMilitia && !canSell)
             {
                 bool canSingleBuy = CanBuyBarracksRosterEntry(lane, site, entry);
@@ -3360,7 +3374,7 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return null;
 
-            bool canSell = site.isBuilt && entry.ownedCount > 0 && CanEditBarracks();
+            bool canSell = CanSellBarracksRosterEntry(site, entry);
             return CreatePanelRowAction(
                 BuildFocusedBarracksSellLabel(site, entry),
                 canSell ? () => ExecuteFocusedBarracksSell(site, entry) : null,
@@ -4716,12 +4730,47 @@ namespace CastleDefender.UI
             return Mathf.Max(0, limit - GetBarracksFoodUsed(site));
         }
 
-        string BuildBarracksFoodLabel(MLBarracksSite site)
+        bool HasBarracksActiveFoodState(MLBarracksSite site)
+        {
+            return site != null && site.hasActiveFoodState;
+        }
+
+        int GetBarracksActiveFoodUsed(MLBarracksSite site)
+        {
+            if (!HasBarracksActiveFoodState(site))
+                return 0;
+
+            return Mathf.Max(0, site.activeFoodUsed);
+        }
+
+        string BuildBarracksRosterFoodLabel(MLBarracksSite site)
         {
             int limit = GetBarracksFoodLimit(site);
             return limit > 0
-                ? $"Food {GetBarracksFoodUsed(site)}/{limit}"
+                ? $"Roster {GetBarracksFoodUsed(site)}/{limit}"
                 : string.Empty;
+        }
+
+        string BuildBarracksActiveFoodLabel(MLBarracksSite site)
+        {
+            if (!HasBarracksActiveFoodState(site))
+                return string.Empty;
+
+            int limit = GetBarracksFoodLimit(site);
+            return limit > 0
+                ? $"Field {GetBarracksActiveFoodUsed(site)}/{limit}"
+                : string.Empty;
+        }
+
+        string BuildBarracksFoodLabel(MLBarracksSite site)
+        {
+            string rosterLabel = BuildBarracksRosterFoodLabel(site);
+            string activeLabel = BuildBarracksActiveFoodLabel(site);
+            if (string.IsNullOrWhiteSpace(activeLabel))
+                return rosterLabel;
+            if (string.IsNullOrWhiteSpace(rosterLabel))
+                return activeLabel;
+            return $"{rosterLabel}   {activeLabel}";
         }
 
         int GetMarketFoodLimit(MLFortressPad pad)
@@ -4794,7 +4843,7 @@ namespace CastleDefender.UI
             int foodNeeded = ResolveBarracksEntryFoodCost(entry) * count;
             int foodRemaining = GetBarracksFoodRemaining(site);
             if (GetBarracksFoodLimit(site) > 0 && foodRemaining < foodNeeded)
-                return foodRemaining <= 0 ? "Food Full" : $"Need {Mathf.Max(0, foodNeeded - foodRemaining)} Food";
+                return foodRemaining <= 0 ? "Roster Full" : $"Need {Mathf.Max(0, foodNeeded - foodRemaining)} Roster Food";
 
             int totalCost = Mathf.Max(0, entry.buyCost * count);
             if (lane != null && lane.gold < totalCost)
@@ -5899,12 +5948,15 @@ namespace CastleDefender.UI
             var parts = new List<string>
             {
                 $"HP {Mathf.RoundToInt(site.hp)}/{Mathf.RoundToInt(site.maxHp)}",
-                BuildBarracksFoodLabel(site),
+                BuildBarracksRosterFoodLabel(site),
                 $"Active {CountActiveUnitsForBarracks(lane, site)}",
                 $"Owned {CountOwnedUnits(site.roster)}",
                 $"Current Options {CountPurchasableUnits(site.roster)}",
                 $"Level {Mathf.Max(1, site.level)}/{Mathf.Max(1, site.maxLevel)}",
             };
+            string activeFoodLabel = BuildBarracksActiveFoodLabel(site);
+            if (!string.IsNullOrWhiteSpace(activeFoodLabel))
+                parts.Add(activeFoodLabel);
             if (spawnIntervalSeconds >= 0)
                 parts.Add($"Interval {spawnIntervalSeconds}s");
             if (sendSeconds >= 0)
@@ -5957,7 +6009,7 @@ namespace CastleDefender.UI
                 return "No current barracks options are live yet. Use Town Core to unlock the required buildings first.";
 
             if (GetBarracksFoodLimit(site) > 0 && GetBarracksFoodRemaining(site) <= 0)
-                return $"{site.displayName} is at its food cap. Sell units or wait for losses before buying more.";
+                return $"{site.displayName} is at its roster cap. Sell owned units or wait for losses before buying more.";
 
             int cheapestCost = GetCheapestPurchasableCost(site.roster);
             if (lane != null && cheapestCost > 0 && lane.gold < cheapestCost)
@@ -6148,6 +6200,43 @@ namespace CastleDefender.UI
             return site != null
                 && !string.IsNullOrWhiteSpace(_pendingBarracksBuildId)
                 && string.Equals(_pendingBarracksBuildId, NormalizeBarracksId(site.barracksId), System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string BuildPendingBarracksSellKey(MLBarracksSite site, MLBarracksRosterEntry entry)
+        {
+            if (site == null || entry == null)
+                return null;
+
+            string barracksId = NormalizeBarracksId(site.barracksId);
+            string rosterKey = string.IsNullOrWhiteSpace(entry.rosterKey)
+                ? null
+                : entry.rosterKey.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(barracksId) || string.IsNullOrWhiteSpace(rosterKey))
+                return null;
+
+            return $"{barracksId}:{rosterKey}";
+        }
+
+        bool IsPendingBarracksSell(MLBarracksSite site, MLBarracksRosterEntry entry)
+        {
+            string key = BuildPendingBarracksSellKey(site, entry);
+            return !string.IsNullOrWhiteSpace(key)
+                && string.Equals(_pendingBarracksSellKey, key, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        void ClearPendingBarracksSell()
+        {
+            _pendingBarracksSellKey = null;
+        }
+
+        bool CanSellBarracksRosterEntry(MLBarracksSite site, MLBarracksRosterEntry entry)
+        {
+            return site != null
+                && entry != null
+                && site.isBuilt
+                && entry.ownedCount > 0
+                && CanEditBarracks()
+                && !IsPendingBarracksSell(site, entry);
         }
 
         int GetFocusedBarracksSpawnIntervalSeconds(MLBarracksSite site)
@@ -7878,7 +7967,7 @@ namespace CastleDefender.UI
                 BuildFocusedBarracksActionObjectName("Sell", entry.rosterKey),
                 BuildFocusedBarracksSellLabel(site, entry),
                 new Color(0.22f, 0.16f, 0.16f, 0.98f),
-                site.isBuilt && entry.ownedCount > 0 && CanEditBarracks(),
+                CanSellBarracksRosterEntry(site, entry),
                 () => ExecuteFocusedBarracksSell(site, entry));
         }
 
@@ -8071,11 +8160,14 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return "Sell";
 
+            if (IsPendingBarracksSell(site, entry))
+                return "Selling...";
+
             if (!site.isBuilt)
                 return "Locked";
 
             return entry.ownedCount > 0
-                ? $"Sell {entry.sellRefund}g"
+                ? $"Sell 1 for {entry.sellRefund}g"
                 : "No Units";
         }
 
@@ -8181,7 +8273,15 @@ namespace CastleDefender.UI
             if (site == null || entry == null)
                 return;
 
-            _statusMessage = $"Selling {entry.displayName} from {ResolveBarracksDisplayName(site)}...";
+            string pendingKey = BuildPendingBarracksSellKey(site, entry);
+            if (!string.IsNullOrWhiteSpace(pendingKey)
+                && string.Equals(_pendingBarracksSellKey, pendingKey, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _pendingBarracksSellKey = pendingKey;
+            _statusMessage = $"Selling 1 {entry.displayName} from {ResolveBarracksDisplayName(site)}...";
             ActionSender.SellBarracksUnit(entry.rosterKey, site.barracksId);
             RefreshHeader(force: true);
         }

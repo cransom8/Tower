@@ -81,6 +81,14 @@ function normalizeAction(action) {
     };
   }
 
+  if (type === AI_ACTION_TYPE.BUY_MARKET_UNIT) {
+    return {
+      type,
+      unitKey: String(action.unitKey || "").trim().toLowerCase(),
+      count: clampCountBucket(Math.max(1, Math.floor(Number(action.count) || 1))),
+    };
+  }
+
   if (type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
     return {
       type,
@@ -119,6 +127,11 @@ function validateActionShape(action) {
       return { ok: false, reason: "Missing barracksId", normalized };
     if (!normalized.rosterKey)
       return { ok: false, reason: "Missing rosterKey", normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_MARKET_UNIT) {
+    if (!normalized.unitKey)
+      return { ok: false, reason: "Missing unitKey", normalized };
   }
 
   if (normalized.type === AI_ACTION_TYPE.DEPLOY_BARRACKS_HERO) {
@@ -164,6 +177,15 @@ function getBarracksSiteSnapshot(game, lane, barracksId) {
 function getBarracksRosterEntry(siteSnapshot, rosterKey) {
   return siteSnapshot && Array.isArray(siteSnapshot.roster)
     ? siteSnapshot.roster.find((entry) => entry && entry.rosterKey === rosterKey)
+    : null;
+}
+
+function getMarketRosterEntry(game, lane, unitKey) {
+  const entries = typeof simMl.createMarketRosterSnapshot === "function"
+    ? simMl.createMarketRosterSnapshot(game, lane)
+    : [];
+  return Array.isArray(entries)
+    ? entries.find((entry) => entry && entry.unitKey === unitKey)
     : null;
 }
 
@@ -221,10 +243,32 @@ function validateActionAgainstGame(game, laneIndex, action) {
   if (normalized.type === AI_ACTION_TYPE.BUY_BARRACKS_UNIT) {
     const site = getBarracksSiteSnapshot(game, lane, normalized.barracksId);
     if (!site) return { ok: false, reason: "Unknown barracks", normalized };
+    if (!site.isBuilt || site.isDestroyed) return { ok: false, reason: site.lockedReason || "Barracks unavailable", normalized };
     const rosterEntry = getBarracksRosterEntry(site, normalized.rosterKey);
     if (!rosterEntry) return { ok: false, reason: "Unknown barracks unit", normalized };
     if (!rosterEntry.unlocked) return { ok: false, reason: rosterEntry.lockedReason || "Unit is locked", normalized };
+    if (!rosterEntry.availableForPurchase)
+      return { ok: false, reason: rosterEntry.lockedReason || "Unit is not available for purchase", normalized };
+    const totalFoodCost = Math.max(0, Number(rosterEntry.foodCost) || 0) * normalized.count;
+    if (Math.max(0, Number(site.foodRemaining) || 0) < totalFoodCost)
+      return { ok: false, reason: "Not enough barracks food space", normalized };
     const totalCost = Math.max(0, Number(rosterEntry.buyCost) || 0) * normalized.count;
+    if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold", normalized };
+    return { ok: true, normalized };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_MARKET_UNIT) {
+    const marketEntry = getMarketRosterEntry(game, lane, normalized.unitKey);
+    if (!marketEntry) return { ok: false, reason: "Unknown market unit", normalized };
+    if (!marketEntry.unlocked) return { ok: false, reason: marketEntry.lockedReason || "Market unit is locked", normalized };
+    if (!marketEntry.availableForPurchase)
+      return { ok: false, reason: marketEntry.lockedReason || "Market unit is not available for purchase", normalized };
+    const marketPad = getFortressPadSnapshot(game, lane, marketEntry.unlockPadId || "market_pad");
+    if (!marketPad || !marketPad.isBuilt) return { ok: false, reason: "Market unavailable", normalized };
+    const totalFoodCost = Math.max(0, Number(marketEntry.foodCost) || 0) * normalized.count;
+    if (Math.max(0, Number(marketPad.foodRemaining) || 0) < totalFoodCost)
+      return { ok: false, reason: "Not enough market food space", normalized };
+    const totalCost = Math.max(0, Number(marketEntry.buyCost) || 0) * normalized.count;
     if (lane.gold < totalCost) return { ok: false, reason: "Not enough gold", normalized };
     return { ok: true, normalized };
   }
@@ -298,6 +342,20 @@ function translateActionToCommands(game, laneIndex, action) {
         data: {
           barracksId: normalized.barracksId,
           rosterKey: normalized.rosterKey,
+          count: normalized.count,
+        },
+      }],
+      normalized,
+    };
+  }
+
+  if (normalized.type === AI_ACTION_TYPE.BUY_MARKET_UNIT) {
+    return {
+      ok: true,
+      commands: [{
+        type: "buy_market_unit",
+        data: {
+          unitKey: normalized.unitKey,
           count: normalized.count,
         },
       }],

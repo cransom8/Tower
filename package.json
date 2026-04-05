@@ -8,6 +8,7 @@
     "migrate": "node server/migrate.js",
     "compare:db": "node server/scripts/compareDbState.js",
     "sync:gameplay-config": "node server/scripts/syncGameplayConfig.js",
+    "balance:audit": "node server/scripts/analyzeAuthoredBalance.js",
     "voices:generate": "node scripts/voice/render-unit-voices.mjs",
     "play:upload": "node scripts/publish-google-play.js",
     "play:oauth-token": "node scripts/get-google-play-oauth-token.js"

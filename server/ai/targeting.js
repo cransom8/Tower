@@ -2,6 +2,13 @@
 
 const { summarizeLaneForAi, getOpponents } = require("./observe");
 
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
+
 function getRecentLeaks(runtime, laneIndex, waves) {
   const arr = runtime && runtime.laneLeakHistory && runtime.laneLeakHistory[laneIndex];
   if (!Array.isArray(arr) || arr.length === 0) return 0;
@@ -10,6 +17,24 @@ function getRecentLeaks(runtime, laneIndex, waves) {
   for (let i = Math.max(0, arr.length - n); i < arr.length; i++)
     total += Number(arr[i]) || 0;
   return total;
+}
+
+function countAlliedFocus(game, sourceLaneIndex, runtime, targetLaneIndex) {
+  if (!game || !Array.isArray(game.lanes) || !Number.isInteger(targetLaneIndex))
+    return 0;
+  const sourceLane = game.lanes[sourceLaneIndex];
+  if (!sourceLane)
+    return 0;
+  let allies = 0;
+  for (const lane of game.lanes) {
+    if (!lane || lane.laneIndex === sourceLaneIndex || lane.eliminated)
+      continue;
+    if (lane.team !== sourceLane.team)
+      continue;
+    if (runtime && runtime.currentTargetByLane && runtime.currentTargetByLane[lane.laneIndex] === targetLaneIndex)
+      allies += 1;
+  }
+  return allies;
 }
 
 function scoreOpponent(game, sourceLaneIndex, targetLaneIndex, runtime, unitDefMap) {
@@ -23,14 +48,32 @@ function scoreOpponent(game, sourceLaneIndex, targetLaneIndex, runtime, unitDefM
   const vulnerability = Math.max(0, (target.threat - target.defense) / Math.max(1, target.threat + target.defense));
   const structureLightness = Math.max(0, 1 - Math.min(1, target.frontDefensePads.length / 12));
   const barracksWeakness = Math.max(0, 1 - Math.min(1, target.builtBarracksSites / 3));
+  const allyFocusCount = countAlliedFocus(game, sourceLaneIndex, runtime, targetLaneIndex);
+  const retreatingScore = target.commandState === "RETREAT" ? 0.18 : 0;
+  const defendingPenalty = target.commandState === "DEFEND" ? 0.06 : 0;
+  const focusOpportunity = clamp01((weakestCoreScore * 0.45) + (recentLeakScore * 0.25) + (vulnerability * 0.3) + retreatingScore);
+  const allyFocusBonus = allyFocusCount > 0
+    ? Math.min(0.18, allyFocusCount * 0.09) * Math.max(0.35, focusOpportunity)
+    : 0;
+  const overcrowdPenalty = allyFocusCount > 0 && weakestCoreScore < 0.15 && recentLeakScore < 0.15 && vulnerability < 0.14
+    ? Math.min(0.14, allyFocusCount * 0.07)
+    : 0;
+  const urgentPickScore = source.pressureGap > 0
+    ? clamp01((weakestCoreScore * 0.5) + (recentLeakScore * 0.25) + (vulnerability * 0.45))
+    : 0;
 
   return (
-    weakestCoreScore * 0.42 +
-    highIncomeScore * 0.24 +
-    recentLeakScore * 0.18 +
-    vulnerability * 0.22 +
-    structureLightness * 0.18 +
-    barracksWeakness * 0.12
+    weakestCoreScore * 0.44 +
+    highIncomeScore * 0.18 +
+    recentLeakScore * 0.2 +
+    vulnerability * 0.28 +
+    structureLightness * 0.12 +
+    barracksWeakness * 0.12 +
+    retreatingScore +
+    allyFocusBonus +
+    urgentPickScore * 0.08 -
+    defendingPenalty -
+    overcrowdPenalty
   );
 }
 

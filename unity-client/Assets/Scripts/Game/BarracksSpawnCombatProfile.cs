@@ -38,6 +38,7 @@ namespace CastleDefender.Game
         const float DefaultBarracksLevelOneSpeedMultiplier = 0.5f;
         const float DefaultSpeedUpgradeStep = 0.25f;
         const float DefaultServerPathSpeedToUnityMoveSpeedScale = 20f;
+        const float DefaultServerCombatGridWidth = 11f;
         const float MinimumAttackIntervalSeconds = 0.25f;
         const float MaximumAttackIntervalSeconds = 2.25f;
 
@@ -76,10 +77,13 @@ namespace CastleDefender.Game
             return ResolveBaseCombatPathSpeed(movementTuning) * ResolveBarracksLevelSpeedMultiplier(level, movementTuning);
         }
 
-        public static float ResolveUpcomingWaveServerPathSpeed(MLUpcomingWaveEntry entry, MLMovementTuning movementTuning = null)
+        public static float ResolveUpcomingWaveServerPathSpeed(MLUpcomingWaveEntry entry, MLMovementTuning movementTuning = null, float baseUnitPathSpeed = 0f)
         {
             float effectiveSpeedMult = entry != null ? Mathf.Max(0.01f, entry.speedMult) : 1f;
-            return ResolveBaseCombatPathSpeed(movementTuning) * effectiveSpeedMult;
+            float resolvedBasePathSpeed = baseUnitPathSpeed > 0f
+                ? baseUnitPathSpeed
+                : ResolveBaseCombatPathSpeed(movementTuning);
+            return resolvedBasePathSpeed * effectiveSpeedMult;
         }
 
         public static float ConvertServerPathSpeedToUnityMoveSpeed(float serverPathSpeed, MLMovementTuning movementTuning = null)
@@ -94,6 +98,53 @@ namespace CastleDefender.Game
             return Mathf.Max(0.1f, serverPathSpeed * speedScale);
         }
 
+        public static float ConvertServerCombatRangeToUnityAttackRange(float serverCombatRange)
+        {
+            if (serverCombatRange <= 0f)
+                return 0f;
+
+            float configuredGridWidth = SnapshotApplier.Instance?.LatestMLMatchConfig != null
+                ? SnapshotApplier.Instance.LatestMLMatchConfig.gridW
+                : 0f;
+            float gridWidth = configuredGridWidth > 0f ? configuredGridWidth : DefaultServerCombatGridWidth;
+            float normalizedRange = serverCombatRange / Mathf.Max(1f, gridWidth);
+            return Mathf.Clamp(normalizedRange * RangeToGameFeet, MinimumAttackRange, MaximumAttackRange);
+        }
+
+        public static float ResolveEngagementRangeFromAttackRange(float attackRange)
+        {
+            return Mathf.Max(attackRange + EngagementPadding, MinimumEngagementRange);
+        }
+
+        public static void ApplyAuthoritativeSnapshot(
+            ref BarracksSpawnCombatProfile profile,
+            float serverPathSpeed = 0f,
+            float authoritativeDamagePerHit = 0f,
+            float authoritativeAttackIntervalSeconds = 0f,
+            float authoritativeAttackRange = 0f,
+            MLMovementTuning movementTuning = null)
+        {
+            if (serverPathSpeed > 0f)
+                profile.moveSpeed = ConvertServerPathSpeedToUnityMoveSpeed(serverPathSpeed, movementTuning);
+
+            if (authoritativeDamagePerHit > 0f)
+                profile.damagePerHit = Mathf.Max(1f, authoritativeDamagePerHit);
+
+            if (authoritativeAttackIntervalSeconds > 0f)
+            {
+                profile.attackIntervalSeconds = Mathf.Clamp(
+                    authoritativeAttackIntervalSeconds,
+                    MinimumAttackIntervalSeconds,
+                    MaximumAttackIntervalSeconds);
+            }
+
+            if (authoritativeAttackRange > 0f)
+            {
+                profile.attackRange = ConvertServerCombatRangeToUnityAttackRange(authoritativeAttackRange);
+                profile.engagementRange = ResolveEngagementRangeFromAttackRange(profile.attackRange);
+            }
+        }
+
         static BarracksSpawnCombatProfile BuildFromCatalog(string resolvedUnitTypeKey, UnitCatalogEntry catalogEntry, string skinKey, float serverPathSpeed)
         {
             float attackRange = ResolveAttackRange(catalogEntry, resolvedUnitTypeKey, skinKey);
@@ -105,7 +156,7 @@ namespace CastleDefender.Game
                 attackIntervalSeconds = ResolveAttackIntervalSeconds(catalogEntry),
                 moveSpeed = ResolveMoveSpeed(catalogEntry, serverPathSpeed),
                 attackRange = attackRange,
-                engagementRange = ResolveEngagementRange(attackRange),
+                engagementRange = ResolveEngagementRangeFromAttackRange(attackRange),
             };
         }
 
@@ -120,7 +171,7 @@ namespace CastleDefender.Game
                 attackIntervalSeconds = DefaultAttackIntervalSeconds,
                 moveSpeed = ResolveFallbackMoveSpeed(serverPathSpeed),
                 attackRange = attackRange,
-                engagementRange = ResolveEngagementRange(attackRange),
+                engagementRange = ResolveEngagementRangeFromAttackRange(attackRange),
             };
         }
 
@@ -175,11 +226,6 @@ namespace CastleDefender.Game
                 return ConvertServerPathSpeedToUnityMoveSpeed(serverPathSpeed);
 
             return DefaultMoveSpeed;
-        }
-
-        static float ResolveEngagementRange(float attackRange)
-        {
-            return Mathf.Max(attackRange + EngagementPadding, MinimumEngagementRange);
         }
 
         static float ResolveFallbackAttackRange(string unitTypeKey, string skinKey)

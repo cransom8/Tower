@@ -2508,7 +2508,8 @@ namespace CastleDefender.UI
             float damage = catalogEntry != null ? catalogEntry.attack_damage * Mathf.Max(0.01f, entry.dmgMult) : 0f;
             float speed = BarracksSpawnCombatProfileResolver.ResolveUpcomingWaveServerPathSpeed(
                 entry,
-                SnapshotApplier.Instance?.LatestMLMatchConfig?.movementTuning);
+                SnapshotApplier.Instance?.LatestMLMatchConfig?.movementTuning,
+                catalogEntry != null ? Mathf.Max(0f, catalogEntry.path_speed) : 0f);
             float range = catalogEntry != null ? catalogEntry.range : 0f;
 
             if (catalogEntry == null)

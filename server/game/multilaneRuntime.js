@@ -268,27 +268,111 @@ function createMultilaneRuntime({
     return `Lane ${Number(laneIndex) + 1}`;
   }
 
+  function getLaneOwnerMeta(room, laneIndex) {
+    const sid = room.players.find((socketId) => room.laneBySocketId.get(socketId) === laneIndex);
+    if (sid) {
+      return {
+        isAI: false,
+        difficulty: null,
+      };
+    }
+    const ai = (room.aiPlayers || []).find((entry) => entry.laneIndex === laneIndex) || null;
+    return {
+      isAI: !!ai,
+      difficulty: ai ? ai.difficulty || null : null,
+    };
+  }
+
+  function summarizeOwnedEntries(entries, keyField) {
+    const out = {};
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (!entry) continue;
+      const key = String(entry[keyField] || "").trim();
+      const ownedCount = Math.max(0, Math.floor(Number(entry.ownedCount) || 0));
+      if (!key || ownedCount <= 0) continue;
+      out[key] = ownedCount;
+    }
+    return out;
+  }
+
+  function summarizeBuiltFortress(snapshotLane) {
+    const tiers = {};
+    const counts = {};
+    for (const pad of snapshotLane && Array.isArray(snapshotLane.fortressPads) ? snapshotLane.fortressPads : []) {
+      if (!pad || !pad.isBuilt) continue;
+      const buildingType = String(pad.buildingType || "").trim();
+      if (!buildingType) continue;
+      tiers[buildingType] = Math.max(Number(tiers[buildingType]) || 0, Math.max(0, Number(pad.tier) || 0));
+      counts[buildingType] = (counts[buildingType] || 0) + 1;
+    }
+    return { tiers, counts };
+  }
+
+  function summarizeBarracksSites(snapshotLane) {
+    return (snapshotLane && Array.isArray(snapshotLane.barracksSites) ? snapshotLane.barracksSites : [])
+      .filter((site) => site && site.isBuilt)
+      .map((site) => ({
+        barracksId: site.barracksId,
+        level: site.level,
+        foodUsed: site.foodUsed,
+        foodLimit: site.foodLimit,
+        foodRemaining: site.foodRemaining,
+        isAtFoodLimit: !!site.isAtFoodLimit,
+        sendTimerTicksRemaining: site.sendTimerTicksRemaining,
+      }));
+  }
+
+  function summarizeHeroStates(snapshotLane) {
+    return (snapshotLane && Array.isArray(snapshotLane.heroRoster) ? snapshotLane.heroRoster : [])
+      .filter(Boolean)
+      .map((hero) => ({
+        heroKey: hero.heroKey,
+        state: hero.state,
+        canSummon: !!hero.canSummon,
+      }));
+  }
+
   function buildFinalStats(room, game) {
-    return game.lanes.map((lane) => ({
-      laneIndex: lane.laneIndex,
-      displayName: getLaneDisplayName(room, lane.laneIndex),
-      team: lane.team,
-      side: lane.side,
-      income: lane.income,
-      buildValue: simMl.getLaneBuildValue(lane),
-      gold: Math.floor(lane.gold),
-      totalSendSpend: lane.totalSendSpend,
-      totalSendCount: lane.totalSendCount || 0,
-      totalBuildSpend: lane.totalBuildSpend || 0,
-      totalLeaksTaken: lane.totalLeaksTaken,
-      biggestLeakTaken: lane.biggestLeakTaken || 0,
-      wavesHeld: lane.wavesHeld || 0,
-      wavesLeaked: lane.wavesLeaked || 0,
-      longestHoldStreak: lane.longestHoldStreak || 0,
-      lives: lane.lives,
-      teamHp: lane.lives,
-      eliminated: lane.eliminated,
-    }));
+    const snapshot = simMl.createMLSnapshot(game);
+    const snapshotByLaneIndex = new Map(
+      (snapshot && Array.isArray(snapshot.lanes) ? snapshot.lanes : []).map((laneSnapshot) => [laneSnapshot.laneIndex, laneSnapshot])
+    );
+
+    return game.lanes.map((lane) => {
+      const laneSnapshot = snapshotByLaneIndex.get(lane.laneIndex) || null;
+      const ownerMeta = getLaneOwnerMeta(room, lane.laneIndex);
+      const fortressSummary = summarizeBuiltFortress(laneSnapshot);
+      return {
+        laneIndex: lane.laneIndex,
+        displayName: getLaneDisplayName(room, lane.laneIndex),
+        isAI: ownerMeta.isAI,
+        difficulty: ownerMeta.difficulty,
+        team: lane.team,
+        side: lane.side,
+        income: lane.income,
+        buildValue: simMl.getLaneBuildValue(lane),
+        gold: Math.floor(lane.gold),
+        totalSendSpend: lane.totalSendSpend,
+        totalSendCount: lane.totalSendCount || 0,
+        totalBuildSpend: lane.totalBuildSpend || 0,
+        totalLeaksTaken: lane.totalLeaksTaken,
+        biggestLeakTaken: lane.biggestLeakTaken || 0,
+        wavesHeld: lane.wavesHeld || 0,
+        wavesLeaked: lane.wavesLeaked || 0,
+        longestHoldStreak: lane.longestHoldStreak || 0,
+        lives: lane.lives,
+        teamHp: lane.lives,
+        eliminated: lane.eliminated,
+        commandState: laneSnapshot ? laneSnapshot.commandState : null,
+        commandTargetLaneIndex: laneSnapshot ? laneSnapshot.commandTargetLaneIndex : null,
+        fortressTiers: fortressSummary.tiers,
+        builtStructureCounts: fortressSummary.counts,
+        barracksSites: summarizeBarracksSites(laneSnapshot),
+        barracksRosterOwned: summarizeOwnedEntries(laneSnapshot && laneSnapshot.barracksRoster, "rosterKey"),
+        marketRosterOwned: summarizeOwnedEntries(laneSnapshot && laneSnapshot.marketRoster, "unitKey"),
+        heroStates: summarizeHeroStates(laneSnapshot),
+      };
+    });
   }
 
   function buildOutcomePayload(room, entry) {
@@ -321,6 +405,12 @@ function createMultilaneRuntime({
       causeLoss: `Survival ended on Wave ${game.roundNumber}`,
       finalStats: buildFinalStats(room, game),
       waveSnapshots: game.roundSnapshots,
+      balanceReadableLog: Array.isArray(balanceData.summary?.readable?.perWaveLog)
+        ? balanceData.summary.readable.perWaveLog
+        : [],
+      balanceDiagnosisLines: Array.isArray(balanceData.summary?.readable?.diagnosis)
+        ? balanceData.summary.readable.diagnosis
+        : [],
       balanceSummary: balanceData.summary,
       balanceFlags: balanceData.flags,
       balanceDiagnosis: balanceData.diagnosis,

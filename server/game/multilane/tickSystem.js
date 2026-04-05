@@ -246,6 +246,85 @@ function areUnitsHostile(game, lane, sourceUnit, targetUnit, deps = {}) {
   return areAllegiancesHostile(sourceAllegiance, targetAllegiance);
 }
 
+function areSourceAndUnitHostile(game, lane, source, targetUnit, deps = {}) {
+  const resolveLaneAllegianceKey = requireDepFunction(deps, "resolveLaneAllegianceKey");
+  const resolveUnitAllegianceKey = requireDepFunction(deps, "resolveUnitAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
+  if (!source || !targetUnit)
+    return false;
+  if (source.unit)
+    return areUnitsHostile(game, lane, source.unit, targetUnit, deps);
+  const sourceAllegiance = source.allegianceKey
+    || (source.kind === "tower" ? resolveLaneAllegianceKey(lane) : null);
+  if (!sourceAllegiance)
+    return false;
+  const targetAllegiance = resolveUnitAllegianceKey(game, lane, targetUnit);
+  return areAllegiancesHostile(sourceAllegiance, targetAllegiance);
+}
+
+function resolveKillRewardLaneIndex(game, lane, source, deps = {}) {
+  if (!source)
+    return -1;
+  if (Number.isInteger(source.rewardLaneIndex))
+    return source.rewardLaneIndex;
+  if (source.unit) {
+    const resolveUnitOwnerLaneIndex = typeof deps.resolveUnitOwnerLaneIndex === "function"
+      ? deps.resolveUnitOwnerLaneIndex
+      : null;
+    if (resolveUnitOwnerLaneIndex)
+      return resolveUnitOwnerLaneIndex(game, lane, source.unit);
+    if (Number.isInteger(source.unit.ownerLaneIndex))
+      return source.unit.ownerLaneIndex;
+    if (Number.isInteger(source.unit.ownerLane))
+      return source.unit.ownerLane;
+    if (Number.isInteger(source.unit.sourceLaneIndex))
+      return source.unit.sourceLaneIndex;
+    return -1;
+  }
+  if (source.kind === "tower" && lane && Number.isInteger(lane.laneIndex))
+    return lane.laneIndex;
+  return -1;
+}
+
+function markUnitKillCredit(game, lane, targetUnit, source, deps = {}) {
+  if (!game || !lane || !targetUnit || !source)
+    return;
+  if (!areSourceAndUnitHostile(game, lane, source, targetUnit, deps))
+    return;
+  const rewardLaneIndex = resolveKillRewardLaneIndex(game, lane, source, deps);
+  if (!Number.isInteger(rewardLaneIndex) || rewardLaneIndex < 0)
+    return;
+  targetUnit.lastHostileKillCredit = {
+    rewardLaneIndex,
+    sourceKind: source.kind || "unit",
+    sourceId: source.sourceId || (source.unit && source.unit.id) || null,
+    sourceAllegianceKey: source.allegianceKey || null,
+    tick: Number.isInteger(game.tick) ? game.tick : 0,
+  };
+}
+
+function applyUnitKillReward(game, deadUnit, deps = {}) {
+  const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
+  const killCredit = deadUnit && deadUnit.lastHostileKillCredit;
+  const rewardLaneIndex = Number.isInteger(killCredit && killCredit.rewardLaneIndex)
+    ? killCredit.rewardLaneIndex
+    : -1;
+  if (rewardLaneIndex < 0)
+    return null;
+  const rewardLane = getLaneByIndex(game, rewardLaneIndex);
+  if (!rewardLane)
+    return null;
+  const bounty = Math.max(0, Number(deadUnit && deadUnit.bounty) || 0);
+  if (bounty <= 0)
+    return null;
+  rewardLane.gold = Math.max(0, Number(rewardLane.gold) || 0) + bounty;
+  return {
+    bounty,
+    killCredit,
+    rewardLane,
+  };
+}
+
 function findAdditionalSplashTargets(game, lane, attacker, primaryTarget, targetLane, maxTargets, radius, deps = {}) {
   if (!game || !attacker || !primaryTarget || !targetLane || !Array.isArray(targetLane.units) || maxTargets <= 0)
     return [];
@@ -374,6 +453,9 @@ function fireLaneWallArcherTurrets(game, lane, deps = {}) {
 function processLane(game, lane, deps = {}) {
   const log = deps && deps.log;
   const combatLog = deps && deps.combatLog;
+  const createCombatTargetingContext = typeof deps.createCombatTargetingContext === "function"
+    ? deps.createCombatTargetingContext
+    : null;
   const waveUnitStates = getWaveUnitStates(deps);
   const unitMovementModes = getUnitMovementModes(deps);
   const minUnitSpacing = getMinUnitSpacing(deps);
@@ -443,6 +525,9 @@ function processLane(game, lane, deps = {}) {
     : null;
   const isScheduledWaveUnit = requireDepFunction(deps, "isScheduledWaveUnit");
   const applyCanonicalUnitMirrors = requireDepFunction(deps, "applyCanonicalUnitMirrors");
+  const targetingContext = createCombatTargetingContext
+    ? createCombatTargetingContext(game)
+    : null;
 
   const laneHasActiveOccupiers = laneHasOccupyingForces(lane);
   if (lane.eliminated && !laneHasActiveOccupiers)
@@ -493,7 +578,7 @@ function processLane(game, lane, deps = {}) {
         const targetStillValid = !!resolvedCombatTarget && isUnitCombatTargetStillValid(game, lane, unit, resolvedCombatTarget);
         if (!targetStillValid) {
           clearUnitCombatTarget(unit, game.tick, {
-            suppressRegroup: !resolvedCombatTarget && hasImmediateFollowThroughCombatTarget(game, lane, unit),
+            suppressRegroup: !resolvedCombatTarget && hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
           });
           resolvedCombatTarget = null;
         }
@@ -534,7 +619,7 @@ function processLane(game, lane, deps = {}) {
       }
       let directPreferredTarget = null;
       if (canReacquireUnitTarget && canSeekCombat) {
-        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit);
+        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit, targetingContext);
         if (directPreferredTarget && currentDefenseStructureLock) {
           directPreferredTarget = null;
         }
@@ -549,7 +634,7 @@ function processLane(game, lane, deps = {}) {
 
       if (preferredTarget && preferredTarget.kind === "unit") {
         const shouldAssignPreferredTarget = !resolvedCombatTarget
-          || shouldSwitchCombatTarget(game, lane, unit, resolvedCombatTarget, preferredTarget);
+          || shouldSwitchCombatTarget(game, lane, unit, resolvedCombatTarget, preferredTarget, targetingContext);
         if (shouldAssignPreferredTarget) {
           assignUnitCombatTarget(unit, {
             unitId: preferredTarget.entity.id,
@@ -657,7 +742,7 @@ function processLane(game, lane, deps = {}) {
       const target = resolveWaveCombatTarget(game, lane, unit.combatTarget);
       if (!target) {
         clearUnitCombatTarget(unit, game.tick, {
-          suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit),
+          suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
         });
       } else if (target.kind === "unit") {
         unit.combatState = waveUnitStates.COMBAT;
@@ -679,14 +764,16 @@ function processLane(game, lane, deps = {}) {
         );
         const inCombatContact = allowImmediateLaneContact || isUnitInCombatContact(lane, unit, targetUnit);
         if (inCombatContact) {
-          if (unit.atkCd <= 0) {
-            const attackStats = resolveUnitAttackStats(unit, deps);
-            const appliedDamage = applyDirectUnitDamage(targetUnit, attackStats.damage);
-            if (recordBalanceDamage && appliedDamage > 0)
-              recordBalanceDamage(game, lane, unit, targetLane || lane, targetUnit, appliedDamage);
-            const splashExtraTargets = Math.max(0, Math.floor(Number(unit.splashExtraTargets) || 0));
-            if (splashExtraTargets > 0) {
-              const splashTargets = findAdditionalSplashTargets(
+            if (unit.atkCd <= 0) {
+              const attackStats = resolveUnitAttackStats(unit, deps);
+              const appliedDamage = applyDirectUnitDamage(targetUnit, attackStats.damage);
+              if (appliedDamage > 0)
+                markUnitKillCredit(game, targetLane || lane, targetUnit, { kind: "unit", unit }, deps);
+              if (recordBalanceDamage && appliedDamage > 0)
+                recordBalanceDamage(game, lane, unit, targetLane || lane, targetUnit, appliedDamage);
+              const splashExtraTargets = Math.max(0, Math.floor(Number(unit.splashExtraTargets) || 0));
+              if (splashExtraTargets > 0) {
+                const splashTargets = findAdditionalSplashTargets(
                 game,
                 targetLane || lane,
                 unit,
@@ -695,13 +782,15 @@ function processLane(game, lane, deps = {}) {
                 splashExtraTargets,
                 Math.max(0.5, Number(unit.splashRadius) || 1.5),
                 deps
-              );
-              for (const splashTarget of splashTargets) {
-                const splashDamage = applyDirectUnitDamage(splashTarget, attackStats.damage);
-                if (recordBalanceDamage && splashDamage > 0)
-                  recordBalanceDamage(game, lane, unit, targetLane || lane, splashTarget, splashDamage);
+                );
+                for (const splashTarget of splashTargets) {
+                  const splashDamage = applyDirectUnitDamage(splashTarget, attackStats.damage);
+                  if (splashDamage > 0)
+                    markUnitKillCredit(game, targetLane || lane, splashTarget, { kind: "unit", unit }, deps);
+                  if (recordBalanceDamage && splashDamage > 0)
+                    recordBalanceDamage(game, lane, unit, targetLane || lane, splashTarget, splashDamage);
+                }
               }
-            }
             unit.attackPulse = (unit.attackPulse || 0) + 1;
             if (targetUnit.hp <= 0) {
               combatLog.logEvent(game, "route_unit_killed", {
@@ -713,7 +802,7 @@ function processLane(game, lane, deps = {}) {
                 killedByLane: lane.laneIndex,
               });
               clearUnitCombatTarget(unit, game.tick, {
-                suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit),
+                suppressRegroup: hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext),
               });
             }
             unit.atkCd = attackStats.cooldownTicks;
@@ -870,10 +959,24 @@ function processLane(game, lane, deps = {}) {
       continue;
     }
     const { dead, hit } = resolveProjectile(game, lane, projectile);
+    const attackerUnit = projectile.sourceKind === "unit"
+      ? (lane.units || []).find((unit) => unit && unit.id === projectile.sourceId) || { type: projectile.projectileType || "projectile" }
+      : { type: projectile.projectileType || "tower" };
+    for (const hitId of hit) {
+      const hitUnit = (lane.units || []).find((unit) => unit && unit.id === hitId);
+      if (hitUnit) {
+        markUnitKillCredit(game, lane, hitUnit, {
+          kind: projectile.sourceKind || "tower",
+          unit: projectile.sourceKind === "unit" && attackerUnit && attackerUnit.id === projectile.sourceId
+            ? attackerUnit
+            : null,
+          rewardLaneIndex: Number.isInteger(projectile.rewardLaneIndex) ? projectile.rewardLaneIndex : null,
+          allegianceKey: projectile.sourceAllegianceKey || null,
+          sourceId: projectile.sourceId || null,
+        }, deps);
+      }
+    }
     if (recordBalanceDamage && hit.length > 0) {
-      const attackerUnit = projectile.sourceKind === "unit"
-        ? (lane.units || []).find((unit) => unit && unit.id === projectile.sourceId) || { type: projectile.projectileType || "projectile" }
-        : { type: projectile.projectileType || "tower" };
       const attackerTeam = projectile.sourceKind === "tower"
         ? "player"
         : attackerUnit && (attackerUnit.isWaveUnit || String(attackerUnit.spawnSourceType || "").trim().toLowerCase() === "dungeon_wave")
@@ -913,15 +1016,16 @@ function processLane(game, lane, deps = {}) {
       recordBalanceUnitDeath(game, lane, unit);
     if (unit.abilities && unit.abilities.length > 0)
       resolveAbilityHook(game, lane, unit, "onDeath", {});
+    const reward = applyUnitKillReward(game, unit, deps);
+    if (reward && recordBalanceIncome)
+      recordBalanceIncome(game, reward.rewardLane, "kill_reward", reward.bounty);
     if (isScheduledWaveUnit(unit)) {
-      lane.gold += unit.bounty || 1;
-      if (recordBalanceIncome)
-        recordBalanceIncome(game, lane, "kill_reward", unit.bounty || 1);
       combatLog.logEvent(game, "wave_unit_killed", {
         unitId: unit.id,
         unitType: unit.type,
-        bounty: unit.bounty || 1,
+        bounty: reward ? reward.bounty : Math.max(0, Number(unit.bounty) || 0),
         lane: lane.laneIndex,
+        rewardedLane: reward && reward.rewardLane ? reward.rewardLane.laneIndex : null,
       });
     }
   }

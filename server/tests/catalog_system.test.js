@@ -100,4 +100,41 @@ test("resolveUnitDef follows fortress presentation mapping before reading the un
   assert.equal(def.cost, 10);
   assert.equal(def.hp, 35);
   assert.equal(def.atkCdTicks, 13);
+  assert.equal(def.combatRange, 0);
+});
+
+test("resolveUnitDef exposes combat-range and projectile metadata for live unit combat", () => {
+  const def = catalogSystem.resolveUnitDef("tt_peasant", createDeps({
+    getUnitType(unitTypeKey) {
+      if (unitTypeKey !== "tt_peasant")
+        return null;
+
+      return {
+        key: "tt_peasant",
+        enabled: true,
+        send_cost: 10,
+        build_cost: 12,
+        income: 1,
+        hp: 35,
+        attack_damage: 6,
+        attack_speed: 1.5,
+        path_speed: 0.2,
+        range: 0.36,
+        projectile_travel_ticks: 9,
+        bounty: 2,
+        damage_type: "PIERCE",
+        armor_type: "LIGHT",
+        damage_reduction_pct: 0,
+        proj_behavior: "pierce",
+        proj_behavior_params: { maxTargets: 3 },
+        special_props: {},
+        abilities: [],
+      };
+    },
+  }));
+
+  assert.equal(def.combatRange, 3.96);
+  assert.equal(def.projectileTicks, 9);
+  assert.equal(def.projBehavior, "pierce");
+  assert.deepEqual(def.projBehaviorParams, { maxTargets: 3 });
 });

@@ -33,6 +33,9 @@ namespace CastleDefender.UI
             "FortressLanterns",
             "FortressLightPools",
         };
+        static readonly Color DefaultMarkerColor = Color.white;
+        static readonly Color DungeonMarkerColor = new(0.74f, 0.34f, 0.92f, 1f);
+        static Sprite s_unitDotSprite;
 
         sealed class HiddenRendererState
         {
@@ -537,16 +540,13 @@ namespace CastleDefender.UI
                     if (!TryResolveUnitWorldPosition(unit, lane, worldY, out var worldPos))
                         continue;
 
-                    Vector3 viewport = _miniMapCamera.WorldToViewportPoint(worldPos);
-                    if (viewport.z < 0f || viewport.x < 0f || viewport.x > 1f || viewport.y < 0f || viewport.y > 1f)
+                    if (!TryProjectWorldPointToMiniMap(worldPos, width, height, out var anchoredPosition))
                         continue;
 
                     var dot = GetOrCreateUnitDot(dotIndex++);
                     var dotRect = dot.rectTransform;
-                    dotRect.anchoredPosition = new Vector2(
-                        (viewport.x - 0.5f) * width,
-                        (viewport.y - 0.5f) * height);
-                    dot.color = ResolveUnitDotColor(unit, lane);
+                    dotRect.anchoredPosition = anchoredPosition;
+                    dot.color = ResolveUnitDotColor(unit);
                     dot.gameObject.SetActive(true);
                 }
             }
@@ -592,16 +592,13 @@ namespace CastleDefender.UI
                 if (!TryResolveTownCoreWorldPosition(townCorePad, lane, laneIndex, worldY, out var worldPos))
                     continue;
 
-                Vector3 viewport = _miniMapCamera.WorldToViewportPoint(worldPos);
-                if (viewport.z < 0f || viewport.x < 0f || viewport.x > 1f || viewport.y < 0f || viewport.y > 1f)
+                if (!TryProjectWorldPointToMiniMap(worldPos, width, height, out var anchoredPosition))
                     continue;
 
                 var star = GetOrCreateTownCoreStar(starIndex++);
                 var starRect = star.rectTransform;
-                starRect.anchoredPosition = new Vector2(
-                    (viewport.x - 0.5f) * width,
-                    (viewport.y - 0.5f) * height);
-                star.color = ResolveTownCoreStarColor(townCorePad, lane);
+                starRect.anchoredPosition = anchoredPosition;
+                star.color = ResolveTownCoreStarColor(townCorePad);
                 star.gameObject.SetActive(true);
             }
 
@@ -708,45 +705,37 @@ namespace CastleDefender.UI
             return true;
         }
 
-        Color ResolveUnitDotColor(MLUnit unit, MLLaneSnap lane)
+        bool TryProjectWorldPointToMiniMap(Vector3 worldPos, float width, float height, out Vector2 anchoredPosition)
         {
-            if (IsDungeonWaveUnit(unit))
-                return new Color(0.74f, 0.34f, 0.92f, 1f);
+            anchoredPosition = default;
+            if (_miniMapCamera == null)
+                return false;
 
-            string teamKey = BattleTeamUtility.NormalizeServerTeamKey(unit?.allegianceKey);
-            if (string.IsNullOrWhiteSpace(teamKey))
-                teamKey = BattleTeamUtility.NormalizeServerTeamKey(unit?.sourceTeam);
-            if (string.IsNullOrWhiteSpace(teamKey))
-                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.slotColor);
-            if (string.IsNullOrWhiteSpace(teamKey))
-                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.team);
+            Vector3 viewport = _miniMapCamera.WorldToViewportPoint(worldPos);
+            if (viewport.z < 0f)
+                return false;
 
-            if (BattleTeamUtility.TryParseServerTeamKey(teamKey, out var team))
-            {
-                var color = BattleTeamUtility.ToColor(team);
-                color.a = 1f;
-                return color;
-            }
-
-            return new Color(0.92f, 0.92f, 0.92f, 1f);
+            anchoredPosition = new Vector2(
+                (Mathf.Clamp01(viewport.x) - 0.5f) * width,
+                (Mathf.Clamp01(viewport.y) - 0.5f) * height);
+            return true;
         }
 
-        Color ResolveTownCoreStarColor(MLFortressPad townCorePad, MLLaneSnap lane)
+        static Color ResolveUnitDotColor(MLUnit unit)
+        {
+            if (IsDungeonWaveUnit(unit))
+                return DungeonMarkerColor;
+
+            return DefaultMarkerColor;
+        }
+
+        static Color ResolveTownCoreStarColor(MLFortressPad townCorePad)
         {
             string teamKey = BattleTeamUtility.NormalizeServerTeamKey(townCorePad?.allegianceKey);
-            if (string.IsNullOrWhiteSpace(teamKey))
-                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.slotColor);
-            if (string.IsNullOrWhiteSpace(teamKey))
-                teamKey = BattleTeamUtility.NormalizeServerTeamKey(lane?.team);
+            if (string.Equals(teamKey, "dungeon", System.StringComparison.OrdinalIgnoreCase))
+                return DungeonMarkerColor;
 
-            if (BattleTeamUtility.TryParseServerTeamKey(teamKey, out var team))
-            {
-                var color = BattleTeamUtility.ToColor(team);
-                color.a = 1f;
-                return color;
-            }
-
-            return new Color(0.96f, 0.92f, 0.72f, 1f);
+            return DefaultMarkerColor;
         }
 
         static bool IsDungeonWaveUnit(MLUnit unit)
@@ -781,6 +770,9 @@ namespace CastleDefender.UI
                 dotRect.sizeDelta = unitDotSize;
 
                 var dotImage = dotGo.GetComponent<Image>();
+                dotImage.sprite = GetUnitDotSprite();
+                dotImage.type = Image.Type.Simple;
+                dotImage.useSpriteMesh = false;
                 dotImage.raycastTarget = false;
 
                 var outline = dotGo.GetComponent<Outline>();
@@ -792,6 +784,20 @@ namespace CastleDefender.UI
             }
 
             return _unitDots[index];
+        }
+
+        static Sprite GetUnitDotSprite()
+        {
+            if (s_unitDotSprite != null)
+                return s_unitDotSprite;
+
+            s_unitDotSprite = Sprite.Create(
+                Texture2D.whiteTexture,
+                new Rect(0f, 0f, 1f, 1f),
+                new Vector2(0.5f, 0.5f),
+                1f);
+            s_unitDotSprite.name = "BattlefieldMiniMapUnitDot";
+            return s_unitDotSprite;
         }
 
         TextMeshProUGUI GetOrCreateTownCoreStar(int index)
@@ -808,7 +814,7 @@ namespace CastleDefender.UI
 
                 var starText = starGo.GetComponent<TextMeshProUGUI>();
                 starText.raycastTarget = false;
-                starText.text = "★";
+                starText.text = "\u2605";
                 starText.alignment = TextAlignmentOptions.Center;
                 starText.fontSize = townCoreStarFontSize;
                 starText.enableWordWrapping = false;

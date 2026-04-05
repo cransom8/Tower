@@ -179,9 +179,30 @@ namespace CastleDefender.Game
 #endif
         }
 
-        public void Initialize(string combatantId, string unitTypeKey, string skinKey, string defenderTeamKey, float hp, float maxHp, float serverMoveSpeed = 0f)
+        public void Initialize(
+            string combatantId,
+            string unitTypeKey,
+            string skinKey,
+            string defenderTeamKey,
+            float hp,
+            float maxHp,
+            float serverMoveSpeed = 0f,
+            float serverAttackDamage = 0f,
+            float serverAttackIntervalSeconds = 0f,
+            float serverAttackRange = 0f)
         {
-            InitializeInternal(combatantId, unitTypeKey, skinKey, defenderTeamKey, null, hp, maxHp, serverMoveSpeed);
+            InitializeInternal(
+                combatantId,
+                unitTypeKey,
+                skinKey,
+                defenderTeamKey,
+                null,
+                hp,
+                maxHp,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
         }
 
         public void InitializeSnapshot(
@@ -192,14 +213,43 @@ namespace CastleDefender.Game
             string ownerTeamKey,
             float hp,
             float maxHp,
-            float serverMoveSpeed = 0f)
+            float serverMoveSpeed = 0f,
+            float serverAttackDamage = 0f,
+            float serverAttackIntervalSeconds = 0f,
+            float serverAttackRange = 0f)
         {
-            InitializeInternal(combatantId, unitTypeKey, skinKey, defenderTeamKey, ownerTeamKey, hp, maxHp, serverMoveSpeed);
+            InitializeInternal(
+                combatantId,
+                unitTypeKey,
+                skinKey,
+                defenderTeamKey,
+                ownerTeamKey,
+                hp,
+                maxHp,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
         }
 
-        public void ApplySnapshot(string defenderTeamKey, float hp, float maxHp, float serverMoveSpeed = 0f)
+        public void ApplySnapshot(
+            string defenderTeamKey,
+            float hp,
+            float maxHp,
+            float serverMoveSpeed = 0f,
+            float serverAttackDamage = 0f,
+            float serverAttackIntervalSeconds = 0f,
+            float serverAttackRange = 0f)
         {
-            ApplySnapshotInternal(defenderTeamKey, null, hp, maxHp, serverMoveSpeed);
+            ApplySnapshotInternal(
+                defenderTeamKey,
+                null,
+                hp,
+                maxHp,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
         }
 
         public void ApplySnapshot(
@@ -207,9 +257,20 @@ namespace CastleDefender.Game
             string ownerTeamKey,
             float hp,
             float maxHp,
-            float serverMoveSpeed = 0f)
+            float serverMoveSpeed = 0f,
+            float serverAttackDamage = 0f,
+            float serverAttackIntervalSeconds = 0f,
+            float serverAttackRange = 0f)
         {
-            ApplySnapshotInternal(defenderTeamKey, ownerTeamKey, hp, maxHp, serverMoveSpeed);
+            ApplySnapshotInternal(
+                defenderTeamKey,
+                ownerTeamKey,
+                hp,
+                maxHp,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
         }
 
         public void NotifyAttack(float attackTime)
@@ -277,10 +338,19 @@ namespace CastleDefender.Game
             string ownerTeamKey,
             float hp,
             float maxHp,
-            float serverMoveSpeed)
+            float serverMoveSpeed,
+            float serverAttackDamage,
+            float serverAttackIntervalSeconds,
+            float serverAttackRange)
         {
             _combatantId = combatantId;
             _combatProfile = BarracksSpawnCombatProfileResolver.Resolve(unitTypeKey, skinKey, serverMoveSpeed);
+            BarracksSpawnCombatProfileResolver.ApplyAuthoritativeSnapshot(
+                ref _combatProfile,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
             ApplyAllegiance(defenderTeamKey, ownerTeamKey);
             _displayHp = Mathf.Max(1f, hp > 0f ? hp : _combatProfile.maxHp);
             _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _displayHp);
@@ -301,13 +371,19 @@ namespace CastleDefender.Game
             string ownerTeamKey,
             float hp,
             float maxHp,
-            float serverMoveSpeed)
+            float serverMoveSpeed,
+            float serverAttackDamage,
+            float serverAttackIntervalSeconds,
+            float serverAttackRange)
         {
             ApplyAllegiance(defenderTeamKey, ownerTeamKey);
             _maxHp = Mathf.Max(1f, maxHp > 0f ? maxHp : _maxHp);
-
-            if (serverMoveSpeed > 0f)
-                _combatProfile.moveSpeed = BarracksSpawnCombatProfileResolver.ConvertServerPathSpeedToUnityMoveSpeed(serverMoveSpeed);
+            BarracksSpawnCombatProfileResolver.ApplyAuthoritativeSnapshot(
+                ref _combatProfile,
+                serverMoveSpeed,
+                serverAttackDamage,
+                serverAttackIntervalSeconds,
+                serverAttackRange);
 
             float authoritativeHp = Mathf.Clamp(hp, 0f, _maxHp);
             if (!_initialized)

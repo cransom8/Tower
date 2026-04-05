@@ -763,6 +763,10 @@ namespace CastleDefender.Net
         public int    foodUsed;
         public int    foodRemaining;
         public bool   isAtFoodLimit;
+        public bool   hasActiveFoodState;
+        public int    activeFoodUsed;
+        public int    activeFoodRemaining;
+        public bool   isAtActiveFoodLimit;
         public string lockedReason;
         public float  hp;
         public float  maxHp;
@@ -905,6 +909,9 @@ namespace CastleDefender.Net
         public float  hp;
         public float  maxHp;
         public float  moveSpeed;    // authoritative server path speed for combat visuals
+        public float  attackDamage; // authoritative server damage per hit for live stat presentation
+        public float  attackIntervalSeconds; // authoritative server cadence for animation timing
+        public float  attackRange;  // authoritative server combat range in server-world units
         public bool   isWaveUnit;   // true = enemy wave unit; false = player-sent unit
         public bool   isAttacking;  // true when unit has a combat target (stops advancing)
         public string combatTargetKind;
@@ -1059,6 +1066,8 @@ namespace CastleDefender.Net
         public MLFinalLaneStat[] finalStats;
         // Phase 2 additions
         public MLWaveSnapshot[]  waveSnapshots;
+        public string[] balanceReadableLog;
+        public string[] balanceDiagnosisLines;
         public bool   continuedIntoSurvival;
         public int    survivalDuration;
         public int    survivalExtraRounds;

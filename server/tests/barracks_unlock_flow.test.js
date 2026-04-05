@@ -46,11 +46,11 @@ function makeUnit(key, options = {}) {
 }
 
 setUnitTypesForTests([
-  makeUnit("tt_peasant", { build_cost: 9 }),
-  makeUnit("tt_settler", { build_cost: 11 }),
-  makeUnit("tt_spearman", { build_cost: 12 }),
-  makeUnit("tt_heavy_infantry", { build_cost: 14 }),
-  makeUnit("tt_light_infantry", { build_cost: 18 }),
+  makeUnit("tt_peasant", { build_cost: 9, path_speed: 0.61 }),
+  makeUnit("tt_settler", { build_cost: 11, path_speed: 0.42 }),
+  makeUnit("tt_spearman", { build_cost: 12, path_speed: 0.34 }),
+  makeUnit("tt_heavy_infantry", { build_cost: 14, path_speed: 0.27 }),
+  makeUnit("tt_light_infantry", { build_cost: 18, path_speed: 0.49 }),
 ]);
 
 test.beforeEach(() => {
@@ -337,6 +337,45 @@ test("barracks site snapshot HP updates when the site takes structure damage", (
   assert.equal(centerBarracks.maxHp, 260, "expected the barracks snapshot max HP to stay intact");
 });
 
+test("destroyed barracks stay destroyed and do not resume spawning owned roster units", () => {
+  const game = createGame();
+  act(game, 0, "build_barracks_site", { barracksId: "center" });
+  finishBarracksConstruction(game, 0, "center");
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia" });
+
+  const lane = game.lanes[0];
+  lane.barracksSiteStates.center.nextSendTick = game.tick + 1;
+
+  const target = simMl.getBarracksSiteCombatTarget(lane, "center");
+  assert.ok(target, "expected the built center barracks to expose a combat target");
+
+  const attacker = {
+    id: "barracks_destroy_test",
+    type: "tt_spearman",
+    baseDmg: 1000,
+    atkCd: 0,
+    atkCdTicks: 20,
+    attackPulse: 0,
+  };
+  const result = simMl.attackFortressPad(game, lane, attacker, target);
+  assert.equal(result.destroyed, true, "expected the center barracks to be destroyed by lethal structure damage");
+
+  let centerBarracks = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(centerBarracks, "expected the center barracks snapshot to remain visible after destruction");
+  assert.equal(centerBarracks.isBuilt, true, "expected the destroyed barracks to remain a built structure site");
+  assert.equal(centerBarracks.isDestroyed, true, "expected the barracks to enter the destroyed state");
+  assert.equal(centerBarracks.buildState, "destroyed", "expected the barracks build state to report destroyed");
+  assert.equal(centerBarracks.hp, 0, "expected the destroyed barracks HP to stay at zero");
+
+  simMl.mlTick(game);
+
+  centerBarracks = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(centerBarracks, "expected the center barracks snapshot to remain available after an additional tick");
+  assert.equal(centerBarracks.isDestroyed, true, "expected the barracks to remain destroyed on later snapshots");
+  assert.equal(centerBarracks.hp, 0, "expected the destroyed barracks HP to remain zero on later snapshots");
+  assert.equal(game.lanes[0].spawnQueue.length, 0, "expected destroyed barracks to pause scheduled roster sends");
+});
+
 test("combat test militia keeps using the built center barracks identity", () => {
   const game = createGameWithStartingMilitia();
   const lane = laneSnapshot(game, 0);
@@ -371,6 +410,33 @@ test("combat test militia keeps using the built center barracks identity", () =>
 
   assert.equal(activeStartingMilitia.length, 5);
   assert.equal(centerBarracksAfterTick && centerBarracksAfterTick.isBuilt, true);
+});
+
+test("barracks roster units inherit their unit-specific catalog path speed", () => {
+  const game = createGameWithStartingMilitia();
+  const expectedBaseSpeed = 0.61 * barracksSystem.getBarracksSpeedMultForLevel(1);
+
+  assert.equal(game.lanes[0].spawnQueue.length, 5);
+  assert.ok(
+    game.lanes[0].spawnQueue.every((unit) =>
+      unit
+      && unit.rosterKey === "militia"
+      && Math.abs(Number(unit.baseSpeed) - expectedBaseSpeed) <= 0.0001
+    ),
+    "expected center-barracks militia to keep the tt_peasant path speed instead of inheriting a shared combat-speed baseline"
+  );
+});
+
+test("owned barracks roster counts alone do not auto-build an unpurchased site", () => {
+  const game = createGame();
+  game.lanes[0].barracksSiteRosterCounts.center.militia = 1;
+
+  const centerBarracks = findBarracksSite(laneSnapshot(game, 0), "center");
+  assert.ok(centerBarracks, "expected the center barracks site to exist in the snapshot");
+  assert.equal(centerBarracks.isBuilt, false, "expected roster ownership alone to not construct the center barracks");
+  assert.equal(centerBarracks.isDestroyed, false, "expected the unbuilt site to remain simply unavailable, not destroyed");
+  assert.equal(centerBarracks.hp, 0, "expected the unbuilt site to keep zero HP");
+  assert.equal(centerBarracks.canBuild, true, "expected the player to still need to purchase the center barracks normally");
 });
 
 test("building a barracks unlocks militia without requiring a blacksmith", () => {
@@ -647,6 +713,93 @@ test("barracks food limits follow barracks tier capacity and troop tier food cos
     assert.equal(overflow.ok, false);
     assert.match(String(overflow.reason || ""), /food/i);
   }
+});
+
+test("barracks snapshots report owned roster food separately from active field food", () => {
+  const game = createGame(5000);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 5 });
+
+  function makeActiveMilitia(id) {
+    return {
+      id: `militia_${id}`,
+      unitId: `militia_${id}`,
+      type: "tt_peasant",
+      unitTypeKey: "tt_peasant",
+      hp: 40,
+      spawnSourceType: "barracks_roster",
+      sourceBarracksId: "center",
+      sourceBarracksKey: "center",
+      barracksId: "center",
+      sourceLaneIndex: 0,
+      ownerLaneIndex: 0,
+      ownerLane: 0,
+      rosterKey: "militia",
+    };
+  }
+
+  for (let i = 0; i < 10; i += 1)
+    game.lanes[0].units.push(makeActiveMilitia(`lane0_${i}`));
+  for (let i = 0; i < 5; i += 1)
+    game.lanes[1].units.push(makeActiveMilitia(`lane1_${i}`));
+
+  let lane = laneSnapshot(game, 0);
+  let site = findBarracksSite(lane, "center");
+  assert.equal(site && site.foodUsed, 5, "owned roster food should stay tied to purchased units");
+  assert.equal(site && site.foodRemaining, 15, "owned roster food should still leave room for more purchases");
+  assert.equal(site && site.hasActiveFoodState, true, "snapshot should expose active field food state");
+  assert.equal(site && site.activeFoodUsed, 15, "active field food should count live units from this barracks across lanes");
+  assert.equal(site && site.activeFoodRemaining, 5);
+  assert.equal(site && site.isAtActiveFoodLimit, false);
+
+  for (let i = 0; i < 5; i += 1)
+    game.lanes[1].spawnQueue.push(makeActiveMilitia(`queue_${i}`));
+
+  lane = laneSnapshot(game, 0);
+  site = findBarracksSite(lane, "center");
+  assert.equal(site && site.activeFoodUsed, 20, "active field food should clamp at the barracks cap");
+  assert.equal(site && site.activeFoodRemaining, 0);
+  assert.equal(site && site.isAtActiveFoodLimit, true);
+});
+
+test("selling a barracks unit only decrements the selected barracks roster once", () => {
+  const game = createGame(2000);
+  upgradeTownCoreToTier(game, 0, 2);
+  upgradeBarracksSiteToLevel(game, 0, "left", 1);
+  upgradeBarracksSiteToLevel(game, 0, "center", 1);
+
+  act(game, 0, "buy_barracks_unit", { barracksId: "left", rosterKey: "militia", count: 2 });
+  act(game, 0, "buy_barracks_unit", { barracksId: "center", rosterKey: "militia", count: 3 });
+
+  let lane = laneSnapshot(game, 0);
+  let leftBarracks = findBarracksSite(lane, "left");
+  let centerBarracks = findBarracksSite(lane, "center");
+  let leftMilitia = findRosterEntry(leftBarracks && leftBarracks.roster, "militia");
+  let centerMilitia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
+  const aggregatedMilitiaBefore = findRosterEntry(lane.barracksRoster, "militia");
+  const goldBeforeSell = Math.floor(Number(lane.gold) || 0);
+
+  assert.equal(leftMilitia && leftMilitia.ownedCount, 2);
+  assert.equal(centerMilitia && centerMilitia.ownedCount, 3);
+  assert.equal(aggregatedMilitiaBefore && aggregatedMilitiaBefore.ownedCount, 5);
+
+  act(game, 0, "sell_barracks_unit", { barracksId: "left", rosterKey: "militia" });
+
+  lane = laneSnapshot(game, 0);
+  leftBarracks = findBarracksSite(lane, "left");
+  centerBarracks = findBarracksSite(lane, "center");
+  leftMilitia = findRosterEntry(leftBarracks && leftBarracks.roster, "militia");
+  centerMilitia = findRosterEntry(centerBarracks && centerBarracks.roster, "militia");
+  const aggregatedMilitiaAfter = findRosterEntry(lane.barracksRoster, "militia");
+
+  assert.equal(leftMilitia && leftMilitia.ownedCount, 1, "selling should only remove one unit from the targeted barracks");
+  assert.equal(centerMilitia && centerMilitia.ownedCount, 3, "other barracks should keep their owned units");
+  assert.equal(aggregatedMilitiaAfter && aggregatedMilitiaAfter.ownedCount, 4, "lane-wide totals should only fall by one");
+  assert.equal(
+    Math.floor(Number(lane.gold) || 0),
+    goldBeforeSell + Math.max(0, Math.floor(Number(leftMilitia && leftMilitia.sellRefund) || 0)),
+    "sell should refund the selected unit exactly once"
+  );
 });
 
 test("market caps owned traders at 10 regardless of tier and reports timed income correctly", () => {

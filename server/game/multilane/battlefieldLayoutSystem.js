@@ -592,6 +592,23 @@ function buildBattlefieldLayoutForSlotDefinitions(slotDefinitionsInput, opt, dep
   };
 }
 
+function mergeBattlefieldLayoutEntries(primaryEntries, fallbackEntries, idKey) {
+  const merged = [];
+  const seen = new Set();
+  for (const entries of [primaryEntries, fallbackEntries]) {
+    if (!Array.isArray(entries))
+      continue;
+    for (const entry of entries) {
+      const id = entry && entry[idKey];
+      if (!id || seen.has(id))
+        continue;
+      seen.add(id);
+      merged.push(entry);
+    }
+  }
+  return merged;
+}
+
 function buildBattlefieldLayout(opt, deps = {}) {
   const getDefaultSlotDefinitions = requireDepFunction(deps, "getDefaultSlotDefinitions");
   const activeSlotDefinitions = Array.isArray(opt && opt.battlefieldTopology && opt.battlefieldTopology.slotDefinitions)
@@ -622,8 +639,10 @@ function buildBattlefieldLayout(opt, deps = {}) {
     playerCount: canonicalLayout.playerCount,
     contentHash,
     lanes: canonicalLayout.lanes,
-    routeNodes: canonicalLayout.routeNodes,
-    routeSegments: canonicalLayout.routeSegments,
+    // Always publish the full authored route graph so clients can project
+    // legal server segments even when the active match uses a subset of lanes.
+    routeNodes: mergeBattlefieldLayoutEntries(canonicalLayout.routeNodes, environmentLayout.routeNodes, "nodeId"),
+    routeSegments: mergeBattlefieldLayoutEntries(canonicalLayout.routeSegments, environmentLayout.routeSegments, "segmentId"),
   };
 }
 

@@ -180,6 +180,8 @@ function buildAbilitiesForUnitType(unitTypeKey, deps = {}) {
 function resolveUnitDef(key, deps = {}) {
   const getUnitType = requireDepFunction(deps, "getUnitType");
   const tickHz = requireFiniteNumber(deps, "TICK_HZ");
+  const gridWidth = requireFiniteNumber(deps, "GRID_W");
+  const splashRadiusTiles = requireFiniteNumber(deps, "SPLASH_RADIUS_TILES");
   const resolvedUnitTypeKey = resolveGameplayCatalogUnitKey(key, null, deps);
   const unitType = getUnitType(resolvedUnitTypeKey);
   if (!unitType || Number(unitType.send_cost) <= 0)
@@ -188,19 +190,32 @@ function resolveUnitDef(key, deps = {}) {
     ? unitType.special_props
     : {};
   const attackSpeed = Math.max(0.01, Number(unitType.attack_speed) || 0.01);
+  const rawRange = Math.max(0, Number(unitType.range) || 0);
+  const dbBehavior = unitType.proj_behavior || null;
+  const dbBehaviorParams = (unitType.proj_behavior_params && typeof unitType.proj_behavior_params === "object")
+    ? unitType.proj_behavior_params
+    : null;
+  const fallbackBehavior = unitType.damage_type === "SPLASH" ? "splash" : "single";
+  const fallbackParams = unitType.damage_type === "SPLASH" ? { radius: splashRadiusTiles } : {};
   return {
     cost: Number(unitType.send_cost),
     income: Number(unitType.income),
     hp: Number(unitType.hp),
     dmg: Number(unitType.attack_damage),
+    attackSpeed,
     atkCdTicks: Math.max(1, Math.round(tickHz / attackSpeed)),
     pathSpeed: Number(unitType.path_speed),
     bounty: Number(unitType.bounty) || 1,
-    range: Number(unitType.range),
-    ranged: Number(unitType.range) > 0,
+    range: rawRange,
+    combatRange: rawRange * gridWidth,
+    ranged: rawRange > 0,
     armorType: unitType.armor_type || "MEDIUM",
     damageType: unitType.damage_type || "NORMAL",
     damageReductionPct: Number(unitType.damage_reduction_pct) || 0,
+    projectileTicks: Number(unitType.projectile_travel_ticks) || 7,
+    projBehavior: dbBehavior || fallbackBehavior,
+    projBehaviorParams: dbBehaviorParams || fallbackParams,
+    isSplash: (dbBehavior || fallbackBehavior) === "splash",
     warlockDebuff: specialProps.warlockDebuff != null ? !!specialProps.warlockDebuff : false,
     structBonus: specialProps.structBonus != null ? +specialProps.structBonus : 0,
     barracks_scales_hp: unitType.barracks_scales_hp === true,

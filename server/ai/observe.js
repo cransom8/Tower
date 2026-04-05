@@ -157,6 +157,55 @@ function summarizeRoster(rosterEntries) {
   };
 }
 
+function summarizeMarketRoster(rosterEntries) {
+  const byTier = { 1: 0, 2: 0, 3: 0 };
+  let ownedTotal = 0;
+  let unlockedTotal = 0;
+  let currentTier = 0;
+  let currentUnitKey = null;
+  let currentOwnedCount = 0;
+  let currentLapGold = 0;
+  let currentBuyCost = 0;
+  let currentFoodCost = 0;
+  let currentAvailableForPurchase = false;
+  let score = 0;
+
+  for (const entry of rosterEntries || []) {
+    if (!entry) continue;
+    const tier = Math.max(0, Math.floor(Number(entry.tier) || 0));
+    const owned = Math.max(0, Math.floor(Number(entry.ownedCount) || 0));
+    if (Object.prototype.hasOwnProperty.call(byTier, tier))
+      byTier[tier] += owned;
+    ownedTotal += owned;
+    if (entry.unlocked)
+      unlockedTotal += 1;
+    score += owned * (0.6 + tier * 0.35 + Math.max(0, Number(entry.economyLapGold) || 0) * 0.08);
+    if (entry.currentTier) {
+      currentTier = tier;
+      currentUnitKey = entry.unitKey || null;
+      currentOwnedCount = owned;
+      currentLapGold = Math.max(0, Number(entry.economyLapGold) || 0);
+      currentBuyCost = Math.max(0, Number(entry.buyCost) || 0);
+      currentFoodCost = Math.max(0, Number(entry.foodCost) || 0);
+      currentAvailableForPurchase = !!entry.availableForPurchase;
+    }
+  }
+
+  return {
+    byTier,
+    ownedTotal,
+    unlockedTotal,
+    currentTier,
+    currentUnitKey,
+    currentOwnedCount,
+    currentLapGold,
+    currentBuyCost,
+    currentFoodCost,
+    currentAvailableForPurchase,
+    score,
+  };
+}
+
 function estimateLaneThreat(lane, unitDefMap) {
   if (!lane || lane.eliminated || !Array.isArray(lane.units)) return 0;
   const pathLen = Math.max(1, (lane.fullPath && lane.fullPath.length) || (lane.path && lane.path.length) || simMl.GRID_H);
@@ -237,9 +286,13 @@ function summarizeLaneForAi(game, laneIndex, runtime, unitDefMap) {
   const padsByType = getPadsByType(padSnapshots);
   const barracksSites = getBarracksSiteSnapshots(game, lane);
   const barracksRoster = simMl.createBarracksRosterSnapshot(game, lane);
+  const marketRoster = typeof simMl.createMarketRosterSnapshot === "function"
+    ? simMl.createMarketRosterSnapshot(game, lane)
+    : [];
   const heroRoster = simMl.createHeroRosterSnapshot(game, lane);
   const padTiers = getPadTierMap(padSnapshots);
   const rosterSummary = summarizeRoster(barracksRoster);
+  const marketRosterSummary = summarizeMarketRoster(marketRoster);
   const corePad = padSnapshots.find((pad) => pad.buildingType === "town_core") || null;
   const coreHp = corePad ? Math.max(0, Number(corePad.hp) || 0) : 0;
   const coreMaxHp = corePad ? Math.max(1, Number(corePad.maxHp) || 1) : 1;
@@ -295,6 +348,8 @@ function summarizeLaneForAi(game, laneIndex, runtime, unitDefMap) {
     barracksSites,
     barracksRoster,
     barracksRosterSummary: rosterSummary,
+    marketRoster,
+    marketRosterSummary,
     heroRoster,
     heroReady,
     heroActive,
@@ -339,6 +394,8 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
     meleeRoster: norm(laneSummary.barracksRosterSummary.byRole.melee, 24),
     rangedRoster: norm(laneSummary.barracksRosterSummary.byRole.ranged, 24),
     supportRoster: norm(laneSummary.barracksRosterSummary.byRole.support, 18),
+    marketTier: norm(laneSummary.marketRosterSummary.currentTier, 3),
+    marketWorkers: norm(laneSummary.marketRosterSummary.ownedTotal, 10),
     heroReady: norm(laneSummary.heroReady, 3),
     commandState: [
       laneSummary.commandState === COMMAND_STATES.ATTACK ? 1 : 0,
@@ -355,6 +412,7 @@ function buildObservation(game, laneIndex, runtime, unitDefMap) {
     targetMeleeRoster: targetSummary ? norm(targetSummary.barracksRosterSummary.byRole.melee, 24) : 0,
     targetRangedRoster: targetSummary ? norm(targetSummary.barracksRosterSummary.byRole.ranged, 24) : 0,
     targetSupportRoster: targetSummary ? norm(targetSummary.barracksRosterSummary.byRole.support, 18) : 0,
+    targetMarketTier: targetSummary ? norm(targetSummary.marketRosterSummary.currentTier, 3) : 0,
     lastEnemySendSummary: buildLastSendVector(),
   };
 

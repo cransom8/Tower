@@ -700,12 +700,44 @@ function getLaneCommandStateForUnit(game, unit, deps = {}) {
   return getBarracksSiteCommandState(ownerLane, resolveUnitSourceBarracksId(unit, deps), deps);
 }
 
+function isLaneControlledUnitReadyToDefendHome(game, unit, deps = {}) {
+  const laneCommandStates = getLaneCommandStates(deps);
+  if (!game || !unit || !isLaneControlledUnit(unit, deps) || isMarketWorkerLaneControlledUnit(unit, deps))
+    return false;
+
+  const ownerLane = getLaneCommandOwnerLane(game, unit, deps);
+  if (!ownerLane)
+    return false;
+
+  const rawCommandState = getBarracksSiteCommandState(ownerLane, resolveUnitSourceBarracksId(unit, deps), deps);
+  if (rawCommandState !== laneCommandStates.RETREAT)
+    return false;
+
+  const townCoreTarget = typeof deps.getLaneTownCoreCombatTarget === "function"
+    ? deps.getLaneTownCoreCombatTarget(ownerLane)
+    : null;
+  if (!townCoreTarget)
+    return false;
+
+  const unitX = Number(unit.posX);
+  const unitY = Number(unit.posY);
+  const coreX = Number(townCoreTarget.posX);
+  const coreY = Number(townCoreTarget.posY);
+  if (!Number.isFinite(unitX) || !Number.isFinite(unitY) || !Number.isFinite(coreX) || !Number.isFinite(coreY))
+    return false;
+
+  const defendRadius = Math.max(0.75, Number(deps.FORTRESS_INTERIOR_ASSAULT_RADIUS) || 0);
+  return Math.hypot(unitX - coreX, unitY - coreY) <= defendRadius;
+}
+
 function isLaneCommandCombatEnabledForUnit(game, unit, deps = {}) {
   if (!isLaneControlledUnit(unit, deps))
     return true;
   const commandState = getLaneCommandStateForUnit(game, unit, deps);
   if (isMarketWorkerLaneControlledUnit(unit, deps))
     return commandState === getLaneCommandStates(deps).RETREAT;
+  if (commandState === getLaneCommandStates(deps).RETREAT)
+    return isLaneControlledUnitReadyToDefendHome(game, unit, deps);
   return isLaneCombatEnabledCommandState(commandState, deps);
 }
 
@@ -1445,6 +1477,43 @@ function buildMarketWorkerRetreatAnchorState(game, lane, anchorState, deps = {})
   };
 }
 
+function buildLaneControlledRetreatHomeDefenseAnchorState(game, lane, anchorState, deps = {}) {
+  if (!game || !lane)
+    return anchorState;
+  const townCoreTarget = typeof deps.getLaneTownCoreCombatTarget === "function"
+    ? deps.getLaneTownCoreCombatTarget(lane)
+    : null;
+  if (!townCoreTarget)
+    return anchorState;
+
+  const facing = anchorState && anchorState.facing
+    ? anchorState.facing
+    : { x: 0, y: -1 };
+  const lateral = anchorState && anchorState.lateral
+    ? anchorState.lateral
+    : perpendicular2D(facing);
+  return {
+    commandState: anchorState ? anchorState.commandState : getLaneCommandStates(deps).RETREAT,
+    combatEnabled: true,
+    engagementRadius: Math.max(
+      Number(anchorState && anchorState.engagementRadius) || 0,
+      Number(deps.FORTRESS_INTERIOR_ASSAULT_RADIUS) || 0
+    ),
+    objectiveLaneIndex: lane.laneIndex,
+    containerLaneIndex: lane.laneIndex,
+    anchorProgress: 0,
+    anchorKind: "town_core",
+    anchorX: Number(townCoreTarget.posX) || 0,
+    anchorY: Number(townCoreTarget.posY) || 0,
+    facing,
+    lateral,
+    insideGateAnchor: anchorState ? anchorState.insideGateAnchor : null,
+    outsideGateAnchor: anchorState ? anchorState.outsideGateAnchor : null,
+    enemyCoreAnchor: anchorState ? anchorState.enemyCoreAnchor : null,
+    baseRouteSegments: anchorState ? anchorState.baseRouteSegments : null,
+  };
+}
+
 function shouldKeepUnitAfterLaneDefeat(lane, unit, deps = {}) {
   if (!unit)
     return false;
@@ -1537,7 +1606,9 @@ function resolveUnitStance(game, fallbackLane, unit, deps = {}) {
   if (isLaneControlledUnit(unit, deps)) {
     const commandState = getLaneCommandStateForUnit(game, unit, deps);
     if (commandState === laneCommandStates.RETREAT)
-      return unitStances.RETREAT;
+      return isLaneControlledUnitReadyToDefendHome(game, unit, deps)
+        ? unitStances.DEFEND
+        : unitStances.RETREAT;
     if (commandState === laneCommandStates.DEFEND)
       return unitStances.DEFEND;
     return unitStances.ATTACK;
@@ -1596,6 +1667,8 @@ function resolveUnitPathContractType(game, fallbackLane, unit, deps = {}) {
   const spawnSourceTypes = getSpawnSourceTypes(deps);
   if (isLaneControlledUnit(unit, deps)) {
     const commandState = getLaneCommandStateForUnit(game, unit, deps);
+    const retreatHomeDefenseReady = commandState === laneCommandStates.RETREAT
+      && isLaneControlledUnitReadyToDefendHome(game, unit, deps);
     const combatTargetId = unit && (unit.combatTargetId || unit.combatTarget && unit.combatTarget.unitId);
     const attackPathContractType = mapRouteTypeToPathContractType(
       unit && unit.routeType,
@@ -1611,6 +1684,8 @@ function resolveUnitPathContractType(game, fallbackLane, unit, deps = {}) {
     }
     if (combatTargetId && isLaneCommandCombatEnabledForUnit(game, unit, deps))
       return pathContractTypes.INTERCEPT;
+    if (retreatHomeDefenseReady)
+      return pathContractTypes.GUARD_ANCHOR;
     if (commandState === laneCommandStates.RETREAT)
       return pathContractTypes.RETREAT_ANCHOR;
     if (commandState === laneCommandStates.DEFEND)
@@ -1852,7 +1927,7 @@ function syncLaneCommandAssignments(game, deps = {}) {
       const desiredPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
       if (routeContract && routeContract.ok
           && Array.isArray(unit.routeSegments) && unit.routeSegments.length > 0
-          && (lane !== targetLane || desiredPathId !== currentPathId || unit.objectiveLaneIndex !== routeObjectiveLaneIndex)) {
+          && (desiredPathId !== currentPathId || unit.objectiveLaneIndex !== routeObjectiveLaneIndex)) {
         routeContract = resolveRedirectRouteContractForExistingLaneControlledUnit(game, lane, targetLane, unit, deps);
       }
       const resolvedPathId = routeContract && routeContract.ok ? routeContract.pathId : null;
@@ -1966,6 +2041,7 @@ function syncLaneCommandAssignments(game, deps = {}) {
 
     const commandEntriesByState = new Map();
     const retreatingMarketEntries = [];
+    const retreatHomeDefenseEntries = [];
     const sourceEntries = liveLaneControlledEntriesBySourceLane.get(ownerLane.laneIndex) || [];
     for (const entry of sourceEntries) {
       const lane = entry.lane;
@@ -1994,6 +2070,11 @@ function syncLaneCommandAssignments(game, deps = {}) {
         }
       }
       const unitCommandState = getLaneCommandStateForUnit(game, unit, deps);
+      if (unitCommandState === laneCommandStates.RETREAT
+          && isLaneControlledUnitReadyToDefendHome(game, unit, deps)) {
+        retreatHomeDefenseEntries.push(entry);
+        continue;
+      }
       if (!commandEntriesByState.has(unitCommandState))
         commandEntriesByState.set(unitCommandState, []);
       commandEntriesByState.get(unitCommandState).push(entry);
@@ -2002,10 +2083,15 @@ function syncLaneCommandAssignments(game, deps = {}) {
     for (const entries of commandEntriesByState.values())
       entries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
     retreatingMarketEntries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
+    retreatHomeDefenseEntries.sort((left, right) => resolveLaneControlledUnitSortKey(left.unit).localeCompare(resolveLaneControlledUnitSortKey(right.unit)));
     const marketRetreatAnchorState = retreatingMarketEntries.length > 0
       ? buildMarketWorkerRetreatAnchorState(game, ownerLane, anchorState, deps)
       : null;
+    const retreatHomeDefenseAnchorState = retreatHomeDefenseEntries.length > 0
+      ? buildLaneControlledRetreatHomeDefenseAnchorState(game, ownerLane, anchorState, deps)
+      : null;
     const marketWaypointTarget = buildAnchorWaypointTarget(marketRetreatAnchorState);
+    const retreatHomeDefenseWaypointTarget = buildAnchorWaypointTarget(retreatHomeDefenseAnchorState);
     const marketCommandSlots = marketRetreatAnchorState
       ? retreatingMarketEntries.map((entry, unitIndex) => {
         const slot = buildLaneAnchorSlot(marketRetreatAnchorState, entry.unit, unitIndex, retreatingMarketEntries.length, deps);
@@ -2017,13 +2103,31 @@ function syncLaneCommandAssignments(game, deps = {}) {
         };
       })
       : [];
+    const retreatHomeDefenseSlots = retreatHomeDefenseAnchorState
+      ? retreatHomeDefenseEntries.map((entry, unitIndex) => {
+        const slot = buildLaneAnchorSlot(retreatHomeDefenseAnchorState, entry.unit, unitIndex, retreatHomeDefenseEntries.length, deps);
+        return {
+          slotIndex: unitIndex,
+          x: Number(slot.x.toFixed(3)),
+          y: Number(slot.y.toFixed(3)),
+          unitId: entry.unit.id,
+        };
+      })
+      : [];
     const marketAnchorHoldRadius = marketRetreatAnchorState
       ? computeLaneAnchorHoldRadius(marketRetreatAnchorState, marketCommandSlots, deps)
       : 0;
+    const retreatHomeDefenseHoldRadius = retreatHomeDefenseAnchorState
+      ? computeLaneAnchorHoldRadius(retreatHomeDefenseAnchorState, retreatHomeDefenseSlots, deps)
+      : 0;
     const marketAnchorCenterX = marketRetreatAnchorState ? Number(marketRetreatAnchorState.anchorX) : 0;
     const marketAnchorCenterY = marketRetreatAnchorState ? Number(marketRetreatAnchorState.anchorY) : 0;
+    const retreatHomeDefenseAnchorCenterX = retreatHomeDefenseAnchorState ? Number(retreatHomeDefenseAnchorState.anchorX) : 0;
+    const retreatHomeDefenseAnchorCenterY = retreatHomeDefenseAnchorState ? Number(retreatHomeDefenseAnchorState.anchorY) : 0;
     const marketAnchorFacing = marketRetreatAnchorState ? marketRetreatAnchorState.facing : { x: 0, y: -1 };
     const marketAnchorLateral = marketRetreatAnchorState ? marketRetreatAnchorState.lateral : { x: 1, y: 0 };
+    const retreatHomeDefenseAnchorFacing = retreatHomeDefenseAnchorState ? retreatHomeDefenseAnchorState.facing : { x: 0, y: -1 };
+    const retreatHomeDefenseAnchorLateral = retreatHomeDefenseAnchorState ? retreatHomeDefenseAnchorState.lateral : { x: 1, y: 0 };
 
     function assignAnchorEntries(entries, slots, activeAnchorState, activeWaypointTarget, activeHoldRadius, activeAnchorCenterX, activeAnchorCenterY, activeAnchorFacing, activeAnchorLateral) {
       for (let unitIndex = 0; unitIndex < entries.length; unitIndex += 1) {
@@ -2105,6 +2209,17 @@ function syncLaneCommandAssignments(game, deps = {}) {
       marketAnchorFacing,
       marketAnchorLateral
     );
+    assignAnchorEntries(
+      retreatHomeDefenseEntries,
+      retreatHomeDefenseSlots,
+      retreatHomeDefenseAnchorState,
+      retreatHomeDefenseWaypointTarget,
+      retreatHomeDefenseHoldRadius,
+      retreatHomeDefenseAnchorCenterX,
+      retreatHomeDefenseAnchorCenterY,
+      retreatHomeDefenseAnchorFacing,
+      retreatHomeDefenseAnchorLateral
+    );
 
     ownerLane.assignedUnitOrder = ownerLane.assignedUnits.slice();
   }
@@ -2134,6 +2249,7 @@ module.exports = {
   isLaneControlledUnit,
   getLaneCommandOwnerLane,
   getLaneCommandStateForUnit,
+  isLaneControlledUnitReadyToDefendHome,
   isLaneCommandCombatEnabledForUnit,
   resolveTargetLaneForBarracksSend,
   relaxUnitRouteOffsets,

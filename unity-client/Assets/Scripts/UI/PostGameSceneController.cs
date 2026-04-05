@@ -232,6 +232,14 @@ namespace CastleDefender.UI
         {
             if (_statsPanel != null && _payload != null)
             {
+                int finalStatsCount = _payload.finalStats != null ? _payload.finalStats.Length : 0;
+                int waveSnapshotCount = _payload.waveSnapshots != null ? _payload.waveSnapshots.Length : 0;
+                int readableLogCount = _payload.balanceReadableLog != null ? _payload.balanceReadableLog.Length : 0;
+                int diagnosisCount = _payload.balanceDiagnosisLines != null ? _payload.balanceDiagnosisLines.Length : 0;
+                Debug.Log(
+                    $"[PostGameReport] View Report clicked. " +
+                    $"finalStats={finalStatsCount} waveSnapshots={waveSnapshotCount} " +
+                    $"readableLog={readableLogCount} diagnosis={diagnosisCount}.");
                 if (!_statsPanel.gameObject.activeSelf)
                     _statsPanel.gameObject.SetActive(true);
                 _statsPanel.Show(_payload);
@@ -383,22 +391,18 @@ namespace CastleDefender.UI
             contentRt.offsetMax = Vector2.zero;
 
             panel.PanelSummary = MakePanel(content.transform, "PanelSummary", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            var summaryLayout = panel.PanelSummary.AddComponent<VerticalLayoutGroup>();
-            summaryLayout.padding = new RectOffset(24, 24, 24, 24);
-            summaryLayout.spacing = 14;
-            summaryLayout.childControlHeight = false;
-
-            panel.SummaryRows = new TMP_Text[4];
-            for (int i = 0; i < panel.SummaryRows.Length; i++)
-            {
-                var row = new GameObject($"SummaryRow_{i}");
-                row.transform.SetParent(panel.PanelSummary.transform, false);
-                row.AddComponent<LayoutElement>().preferredHeight = 42f;
-                panel.SummaryRows[i] = row.AddComponent<TextMeshProUGUI>();
-                panel.SummaryRows[i].fontSize = 16;
-                panel.SummaryRows[i].color = Color.white;
-                panel.SummaryRows[i].alignment = TextAlignmentOptions.MidlineLeft;
-            }
+            panel.SummaryRows = Array.Empty<TMP_Text>();
+            panel.SummaryBodyText = MakeText(
+                panel.PanelSummary.transform,
+                "SummaryBody",
+                string.Empty,
+                16,
+                new Vector2(0.03f, 0.04f),
+                new Vector2(0.97f, 0.96f),
+                FontStyles.Normal,
+                TextAlignmentOptions.TopLeft);
+            panel.SummaryBodyText.enableWordWrapping = true;
+            panel.SummaryBodyText.overflowMode = TextOverflowModes.Overflow;
 
             panel.PanelEconomy = MakePanel(content.transform, "PanelEconomy", new Color(0f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             panel.PanelEconomy.SetActive(false);
@@ -431,12 +435,28 @@ namespace CastleDefender.UI
             wavesRt.pivot = new Vector2(0.5f, 1f);
             wavesRt.offsetMin = new Vector2(0f, 0f);
             wavesRt.offsetMax = new Vector2(0f, 0f);
-            var waveLayout = contentGo.AddComponent<VerticalLayoutGroup>();
-            waveLayout.padding = new RectOffset(12, 12, 12, 12);
-            waveLayout.spacing = 6;
-            waveLayout.childControlHeight = false;
-            waveLayout.childForceExpandHeight = false;
+            var wavesLayout = contentGo.AddComponent<VerticalLayoutGroup>();
+            wavesLayout.padding = new RectOffset(0, 0, 12, 12);
+            wavesLayout.spacing = 0;
+            wavesLayout.childControlHeight = true;
+            wavesLayout.childControlWidth = true;
+            wavesLayout.childForceExpandHeight = false;
+            wavesLayout.childForceExpandWidth = true;
+            var wavesBody = new GameObject("WavesBody");
+            wavesBody.transform.SetParent(contentGo.transform, false);
+            var wavesBodyRt = wavesBody.AddComponent<RectTransform>();
+            wavesBodyRt.sizeDelta = new Vector2(0f, 0f);
+            wavesBody.AddComponent<LayoutElement>().preferredHeight = 32f;
+            var wavesBodyText = wavesBody.AddComponent<TextMeshProUGUI>();
+            wavesBodyText.text = string.Empty;
+            wavesBodyText.fontSize = 13;
+            wavesBodyText.color = Color.white;
+            wavesBodyText.alignment = TextAlignmentOptions.TopLeft;
+            wavesBodyText.margin = new Vector4(12f, 12f, 12f, 12f);
+            wavesBodyText.enableWordWrapping = true;
+            wavesBodyText.overflowMode = TextOverflowModes.Overflow;
             contentGo.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            wavesBody.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             scroll.viewport = viewport.GetComponent<RectTransform>();
             scroll.content = wavesRt;
@@ -445,6 +465,7 @@ namespace CastleDefender.UI
 
             panel.WaveRowContainer = wavesRt;
             panel.WaveRowPrefab = BuildWaveRowPrefab();
+            panel.WavesBodyText = wavesBodyText;
 
             return panel;
         }

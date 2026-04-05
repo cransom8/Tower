@@ -476,23 +476,58 @@ function getBarracksActiveFoodState(activeLane, sourceLaneIndex, barracksId, lev
 
   let foodUsed = 0;
   for (const collection of [activeLane.units, activeLane.spawnQueue]) {
-    if (!Array.isArray(collection))
+    foodUsed += getBarracksActiveFoodUsageForCollection(collection, sourceLaneIndex, normalizedId);
+  }
+
+  return {
+    foodLimit,
+    foodUsed,
+    foodRemaining: Math.max(0, foodLimit - foodUsed),
+    isAtFoodLimit: foodLimit > 0 && foodUsed >= foodLimit,
+  };
+}
+
+function getBarracksActiveFoodUsageForCollection(collection, sourceLaneIndex, normalizedBarracksId) {
+  if (!Array.isArray(collection) || !normalizedBarracksId)
+    return 0;
+
+  let foodUsed = 0;
+  for (const unit of collection) {
+    if (!unit)
+      continue;
+    if (Math.max(0, Math.floor(Number(unit.hp) || 0)) <= 0)
+      continue;
+    if (String(unit.spawnSourceType || "").trim().toLowerCase() !== "barracks_roster")
+      continue;
+    if (normalizeBarracksSiteId(unit.sourceBarracksId) !== normalizedBarracksId)
+      continue;
+    if (Number.isInteger(sourceLaneIndex) && Number(unit.sourceLaneIndex) !== Number(sourceLaneIndex))
       continue;
 
-    for (const unit of collection) {
-      if (!unit)
-        continue;
-      if (collection === activeLane.units && Math.max(0, Math.floor(Number(unit.hp) || 0)) <= 0)
-        continue;
-      if (String(unit.spawnSourceType || "").trim().toLowerCase() !== "barracks_roster")
-        continue;
-      if (normalizeBarracksSiteId(unit.sourceBarracksId) !== normalizedId)
-        continue;
-      if (Number.isInteger(sourceLaneIndex) && Number(unit.sourceLaneIndex) !== Number(sourceLaneIndex))
-        continue;
+    const rosterDef = getBarracksRosterDefinition(unit.rosterKey);
+    foodUsed += getBarracksRosterFoodCost(rosterDef);
+  }
+  return foodUsed;
+}
 
-      const rosterDef = getBarracksRosterDefinition(unit.rosterKey);
-      foodUsed += getBarracksRosterFoodCost(rosterDef);
+function getBarracksGlobalActiveFoodState(game, sourceLaneIndex, barracksId, level = 0) {
+  const normalizedId = normalizeBarracksSiteId(barracksId);
+  const foodLimit = getFoodLimitForTier(level);
+  if (!game || !Array.isArray(game.lanes) || !normalizedId) {
+    return {
+      foodLimit,
+      foodUsed: 0,
+      foodRemaining: foodLimit,
+      isAtFoodLimit: false,
+    };
+  }
+
+  let foodUsed = 0;
+  for (const lane of game.lanes) {
+    if (!lane)
+      continue;
+    for (const collection of [lane.units, lane.spawnQueue]) {
+      foodUsed += getBarracksActiveFoodUsageForCollection(collection, sourceLaneIndex, normalizedId);
     }
   }
 
@@ -728,8 +763,9 @@ function createBarracksSiteState(siteDef, options = {}) {
   const baseMaxHp = getBarracksSiteBaseMaxHp();
   const interval = level > 0 ? getBarracksSiteSendIntervalTicks(level) : 0;
   const maxHp = built ? baseMaxHp : 0;
+  const requestedHp = Math.floor(Number(options.hp));
   const hp = built
-    ? Math.max(0, Math.min(maxHp, Math.floor(Number(options.hp) || maxHp)))
+    ? Math.max(0, Math.min(maxHp, Number.isFinite(requestedHp) ? requestedHp : maxHp))
     : 0;
   const rawCommandState = String(options.commandState || "").trim().toUpperCase();
   const commandState = rawCommandState === "ATTACK" || rawCommandState === "RETREAT" || rawCommandState === "DEFEND"
@@ -812,12 +848,10 @@ function ensureBarracksSiteStates(lane, game) {
   for (const siteDef of BARRACKS_SITE_DEFS) {
     const siteId = siteDef.barracksId;
     const current = existing[siteId];
-    const shouldStartBuilt = !!siteDef.startsBuilt
-      || hasOwnedBarracksUnits(lane, siteId);
+    const shouldStartBuilt = !!siteDef.startsBuilt;
 
     if (current && typeof current === "object") {
-      const hasOwnedUnits = hasOwnedBarracksUnits(lane, siteId);
-      const built = !!siteDef.startsBuilt || !!current.isBuilt || hasOwnedUnits;
+      const built = !!siteDef.startsBuilt || !!current.isBuilt;
       next[siteId] = createBarracksSiteState(siteDef, {
         isBuilt: built,
         level: built ? Math.max(1, normalizeBarracksSiteLevel(current.level || legacyBarracksLevel || 1)) : 0,
@@ -1587,6 +1621,12 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
     ? deps.resolveLaneAllegianceKey(lane)
     : null;
   const foodState = getBarracksSiteFoodState(lane, normalizedId, descriptor.level);
+  const activeFoodState = getBarracksGlobalActiveFoodState(
+    game,
+    lane && Number.isInteger(lane.laneIndex) ? lane.laneIndex : -1,
+    normalizedId,
+    descriptor.level
+  );
 
   return {
     barracksId: normalizedId,
@@ -1628,6 +1668,10 @@ function createBarracksSiteSnapshot(game, lane, barracksId, deps = {}) {
     foodUsed: foodState.foodUsed,
     foodRemaining: foodState.foodRemaining,
     isAtFoodLimit: foodState.isAtFoodLimit,
+    hasActiveFoodState: true,
+    activeFoodUsed: activeFoodState.foodUsed,
+    activeFoodRemaining: activeFoodState.foodRemaining,
+    isAtActiveFoodLimit: activeFoodState.isAtFoodLimit,
     lockedReason: descriptor.lockedReason,
     hp,
     maxHp,
@@ -1899,10 +1943,7 @@ function applyLiveRosterDefinition(game, liveLane, unit, rosterDef, deps = {}) {
   const baseSpeed = typeof deps.getBaseCombatPathSpeed === "function"
     ? deps.getBaseCombatPathSpeed(rosterDef.archetypeKey)
     : Number(resolvedUnitDef.pathSpeed) || Number(unit.baseSpeed) || 0.18;
-  const towerDef = typeof deps.resolveTowerDef === "function"
-    ? deps.resolveTowerDef(rosterDef.archetypeKey)
-    : null;
-  const baseAttackRange = Number(towerDef && towerDef.range) || Number(resolvedUnitDef.combatRange) || 1.5;
+  const baseAttackRange = Number(resolvedUnitDef.combatRange) || Number(unit.attackRangeOverride) || 1.5;
   let resolvedDamage = Number(resolvedUnitDef.dmg) || Number(unit.baseDmg) || 0;
   if (frontlineDamageMultiplier !== 1)
     resolvedDamage *= frontlineDamageMultiplier;
@@ -2335,8 +2376,8 @@ function spawnScheduledBarracksRoster(game, lane, barracksId = null, deps = {}) 
   if (!sourceDescriptor || !sourceDescriptor.isBuilt || sourceDescriptor.destroyed)
     return 0;
 
-  const activeFoodState = getBarracksActiveFoodState(
-    targetLane,
+  const activeFoodState = getBarracksGlobalActiveFoodState(
+    game,
     lane.laneIndex,
     normalizedBarracksId,
     sourceDescriptor.level
@@ -2785,6 +2826,20 @@ function seedStartingCombatTestMilitia(game, lane, count, deps = {}) {
   const barracksRosterSource = deps.spawnSourceTypes && deps.spawnSourceTypes.BARRACKS_ROSTER
     ? deps.spawnSourceTypes.BARRACKS_ROSTER
     : "barracks_roster";
+  const siteStates = ensureBarracksSiteStates(lane, game);
+  const testSiteState = siteStates && typeof siteStates === "object"
+    ? siteStates[STARTING_COMBAT_TEST_BARRACKS_ID]
+    : null;
+  if (testSiteState) {
+    const testLevel = Math.max(1, normalizeBarracksSiteLevel(testSiteState.level || 1));
+    testSiteState.isBuilt = true;
+    testSiteState.level = testLevel;
+    testSiteState.maxHp = getBarracksSiteBaseMaxHp();
+    testSiteState.hp = testSiteState.maxHp;
+    testSiteState.lifecycleState = resolveLifecycleStateAfterConstructionComplete();
+    testSiteState.nextSendTick = getCurrentBarracksTick(game) + getBarracksSiteSendIntervalTicks(testLevel);
+    syncLegacyBarracksAggregate(lane);
+  }
   const pendingEntries = [];
   for (let i = 0; i < safeCount; i += 1) {
     pendingEntries.push({
@@ -2840,6 +2895,7 @@ module.exports = {
   getBarracksSiteCounts,
   getBarracksSiteFoodState,
   getBarracksActiveFoodState,
+  getBarracksGlobalActiveFoodState,
   getMarketRosterCounts,
   getMarketFoodState,
   getTotalOwnedMarketWorkers,

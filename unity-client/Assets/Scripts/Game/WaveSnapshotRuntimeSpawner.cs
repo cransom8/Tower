@@ -13,6 +13,7 @@ namespace CastleDefender.Game
         const float SnapshotCatchupMinStep = 0.12f;
         const float SnapshotCatchupSpeedScale = 2.35f;
         const float VisualMotionSqrThreshold = 0.0004f;
+        const float StationaryPresentationVisualMotionSqrThreshold = 0.0016f;
         const float StationarySnapshotSnapDistance = 0.32f;
         const float AttackVisualHoldSeconds = 0.32f;
         const float HitReactVisualHoldSeconds = 0.18f;
@@ -73,6 +74,7 @@ namespace CastleDefender.Game
             UnitVoiceCue.Retreat,
         };
         static readonly bool EnableVerboseSpawnAuditLogs = false;
+        static readonly int MovingParameterHash = Animator.StringToHash("Moving");
         static readonly int VelocityXParameterHash = Animator.StringToHash("Velocity X");
         static readonly int VelocityZParameterHash = Animator.StringToHash("Velocity Z");
         static readonly RaycastHit[] GroundHitBuffer = new RaycastHit[24];
@@ -132,6 +134,7 @@ namespace CastleDefender.Game
             public bool hasDesiredFacing;
             public UnitAnimationStateIntent visualState = UnitAnimationStateIntent.Idle;
             public Vector3 lastFramePosition;
+            public bool[] animatorHasMoving;
             public bool[] animatorHasVelocityX;
             public bool[] animatorHasVelocityZ;
             public float attackAnimatorSpeedMultiplier = 1f;
@@ -144,7 +147,7 @@ namespace CastleDefender.Game
         [SerializeField] bool returnToLobbyOnContentFailure = true;
         [SerializeField] float contentFailureLobbyReturnDelaySeconds = 1.5f;
         [Header("Combat Debug")]
-        [SerializeField] bool showEngagementRings = true;
+        [SerializeField] bool showEngagementRings = false;
         [SerializeField] KeyCode toggleEngagementRingsKey = KeyCode.F8;
 
         readonly Dictionary<string, WaveView> _views = new();
@@ -440,7 +443,15 @@ namespace CastleDefender.Game
                         instantiatedUnitCount++;
 
                     MLUnit previousSnapshotUnit = view.latestSnapshotUnit;
-                    view.combatant.ApplySnapshot(defenderTeamKey, ownerTeamKey, unit.hp, unit.maxHp, unit.moveSpeed);
+                    view.combatant.ApplySnapshot(
+                        defenderTeamKey,
+                        ownerTeamKey,
+                        unit.hp,
+                        unit.maxHp,
+                        unit.moveSpeed,
+                        unit.attackDamage,
+                        unit.attackIntervalSeconds,
+                        unit.attackRange);
                     view.combatant.ApplyPresentationSnapshot(unit);
                     ApplySnapshotTeamAccents(view.go, unit, ownerTeamKey);
 
@@ -689,7 +700,10 @@ namespace CastleDefender.Game
                 ownerTeamKey,
                 unit.hp,
                 unit.maxHp,
-                unit.moveSpeed);
+                unit.moveSpeed,
+                unit.attackDamage,
+                unit.attackIntervalSeconds,
+                unit.attackRange);
             InstallUnitQueryColliders(go, renderers);
 
             var view = new WaveView
@@ -1454,7 +1468,7 @@ namespace CastleDefender.Game
         static bool ShouldTreatSnapshotAsMoving(MLUnit unit, Vector3 flatDelta)
         {
             if (IsAuthoritativeStationaryPresentation(unit))
-                return false;
+                return flatDelta.sqrMagnitude > StationaryPresentationVisualMotionSqrThreshold;
             if (HasAuthoritativeMovingPresentation(unit))
                 return true;
 
@@ -3145,6 +3159,8 @@ namespace CastleDefender.Game
                 return;
 
             int animatorCount = view.animators.Length;
+            if (view.animatorHasMoving == null || view.animatorHasMoving.Length != animatorCount)
+                view.animatorHasMoving = new bool[animatorCount];
             if (view.animatorHasVelocityX == null || view.animatorHasVelocityX.Length != animatorCount)
                 view.animatorHasVelocityX = new bool[animatorCount];
             if (view.animatorHasVelocityZ == null || view.animatorHasVelocityZ.Length != animatorCount)
@@ -3153,9 +3169,28 @@ namespace CastleDefender.Game
             for (int i = 0; i < animatorCount; i++)
             {
                 var animator = view.animators[i];
+                view.animatorHasMoving[i] = HasAnimatorBoolParameter(animator, MovingParameterHash);
                 view.animatorHasVelocityX[i] = HasAnimatorFloatParameter(animator, VelocityXParameterHash);
                 view.animatorHasVelocityZ[i] = HasAnimatorFloatParameter(animator, VelocityZParameterHash);
             }
+        }
+
+        static bool HasAnimatorBoolParameter(Animator animator, int parameterHash)
+        {
+            if (animator == null)
+                return false;
+
+            var parameters = animator.parameters;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (parameters[i].type == AnimatorControllerParameterType.Bool
+                    && parameters[i].nameHash == parameterHash)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         static bool HasAnimatorFloatParameter(Animator animator, int parameterHash)
@@ -3237,6 +3272,13 @@ namespace CastleDefender.Game
                     continue;
 
                 animator.speed = baseAnimatorSpeed * stateSpeedMultiplier;
+                if (view.animatorHasMoving != null
+                    && i < view.animatorHasMoving.Length
+                    && view.animatorHasMoving[i])
+                {
+                    animator.SetBool(MovingParameterHash, locomoting);
+                }
+
                 if (view.animatorHasVelocityX != null
                     && i < view.animatorHasVelocityX.Length
                     && view.animatorHasVelocityX[i])
@@ -3287,13 +3329,37 @@ namespace CastleDefender.Game
 
             UnitAnimationAttackFamily family = UnitAnimationResolver.ResolveRuntimeAttackFamily(unit);
             TryPlayUnitCombatSfx(view, unit, UnitCombatSfxCue.Attack, now, AttackVolumeFor(family), AttackSfxFor(family));
-            if (!unit.combatContact)
-                return;
-
             string targetId = !string.IsNullOrWhiteSpace(unit.combatTargetId)
                 ? unit.combatTargetId
                 : previousSnapshotUnit != null ? previousSnapshotUnit.combatTargetId : null;
             if (string.IsNullOrWhiteSpace(targetId))
+                return;
+
+            if (ShouldSpawnPresentationProjectile(family)
+                && ProjectileSystem.Instance != null
+                && TryResolveCombatTargetWorldPosition(snap, targetId, lane, out Vector3 projectileTargetWorld))
+            {
+                Vector3 projectileSourceWorld = view?.go != null
+                    ? view.go.transform.position
+                    : view != null && view.hadSnapshot
+                        ? view.snapshotWorldPos
+                        : projectileTargetWorld;
+                projectileSourceWorld.y += ResolvePresentationProjectileLaunchHeight(family);
+                projectileTargetWorld.y += ResolvePresentationProjectileImpactHeight(family);
+
+                ProjectileSystem.Instance.SpawnPresentationProjectile(
+                    projectileId: $"client:{unit.id}:{unit.attackPulse}",
+                    projectileType: ResolvePresentationProjectileType(unit, family),
+                    damageType: null,
+                    fromWorld: projectileSourceWorld,
+                    toWorld: projectileTargetWorld,
+                    travelSeconds: ResolvePresentationProjectileTravelSeconds(family, Vector3.Distance(projectileSourceWorld, projectileTargetWorld)),
+                    isSplash: family == UnitAnimationAttackFamily.Siege,
+                    playAudio: false);
+                return;
+            }
+
+            if (!unit.combatContact)
                 return;
 
             if (!_lastImpactFxAtByTarget.TryGetValue(targetId, out float lastImpactAt)
@@ -3499,7 +3565,7 @@ namespace CastleDefender.Game
         {
             UnitAnimationAttackFamily.Ranged => HitEffect.TowerType.Archer,
             UnitAnimationAttackFamily.Magic => HitEffect.TowerType.Mage,
-            UnitAnimationAttackFamily.Support => HitEffect.TowerType.Ballista,
+            UnitAnimationAttackFamily.Support => HitEffect.TowerType.Mage,
             UnitAnimationAttackFamily.Siege => HitEffect.TowerType.Ballista,
             _ => HitEffect.TowerType.Fighter,
         };
@@ -3511,6 +3577,57 @@ namespace CastleDefender.Game
             UnitAnimationAttackFamily.Support => 0.24f,
             UnitAnimationAttackFamily.Siege => 0.28f,
             _ => 0.28f,
+        };
+
+        static bool ShouldSpawnPresentationProjectile(UnitAnimationAttackFamily family)
+        {
+            return family == UnitAnimationAttackFamily.Ranged
+                || family == UnitAnimationAttackFamily.Magic
+                || family == UnitAnimationAttackFamily.Support
+                || family == UnitAnimationAttackFamily.Siege;
+        }
+
+        static string ResolvePresentationProjectileType(MLUnit unit, UnitAnimationAttackFamily family)
+        {
+            if (!string.IsNullOrWhiteSpace(unit?.type))
+                return unit.type;
+
+            return family switch
+            {
+                UnitAnimationAttackFamily.Magic => "mage",
+                UnitAnimationAttackFamily.Support => "priest",
+                UnitAnimationAttackFamily.Siege => "ballista",
+                _ => "archer",
+            };
+        }
+
+        static float ResolvePresentationProjectileTravelSeconds(UnitAnimationAttackFamily family, float distance)
+        {
+            float safeDistance = Mathf.Max(0.5f, distance);
+            return family switch
+            {
+                UnitAnimationAttackFamily.Ranged => Mathf.Clamp(0.10f + (safeDistance * 0.022f), 0.10f, 0.30f),
+                UnitAnimationAttackFamily.Magic => Mathf.Clamp(0.12f + (safeDistance * 0.024f), 0.12f, 0.34f),
+                UnitAnimationAttackFamily.Support => Mathf.Clamp(0.14f + (safeDistance * 0.026f), 0.14f, 0.38f),
+                UnitAnimationAttackFamily.Siege => Mathf.Clamp(0.18f + (safeDistance * 0.030f), 0.18f, 0.48f),
+                _ => 0.18f,
+            };
+        }
+
+        static float ResolvePresentationProjectileLaunchHeight(UnitAnimationAttackFamily family) => family switch
+        {
+            UnitAnimationAttackFamily.Ranged => 1.35f,
+            UnitAnimationAttackFamily.Magic => 1.20f,
+            UnitAnimationAttackFamily.Support => 1.20f,
+            UnitAnimationAttackFamily.Siege => 1.45f,
+            _ => 1.10f,
+        };
+
+        static float ResolvePresentationProjectileImpactHeight(UnitAnimationAttackFamily family) => family switch
+        {
+            UnitAnimationAttackFamily.Support => 1.10f,
+            UnitAnimationAttackFamily.Siege => 1.00f,
+            _ => 0.95f,
         };
 
         void DestroyImpactFxHistory(string targetId)

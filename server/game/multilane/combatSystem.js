@@ -316,13 +316,13 @@ function getUnitAttackRange(subject, deps = {}) {
       return attackRangeOverride;
   }
   const typeKey = getUnitTypeKey(subject);
-  const stats = getTowerStats(typeKey, 1);
-  if (stats && stats.range)
-    return stats.range;
-
   const unitDef = resolveUnitDef(typeKey);
   if (unitDef && unitDef.combatRange)
     return unitDef.combatRange;
+
+  const stats = getTowerStats(typeKey, 1);
+  if (stats && stats.range)
+    return stats.range;
 
   return 1.5;
 }
@@ -600,6 +600,12 @@ function buildRouteUnitTargetPressureIndex(game, deps = {}) {
   };
 }
 
+function createCombatTargetingContext(game, deps = {}) {
+  return {
+    routeTargetPressureIndex: buildRouteUnitTargetPressureIndex(game, deps),
+  };
+}
+
 function getFriendlyPressureFactionKeys(pressureIndex, seekerFaction, areAllegiancesHostile) {
   if (!pressureIndex || !seekerFaction)
     return [];
@@ -738,7 +744,8 @@ function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAtta
   return approachDistance + (pressure * (Number.isFinite(penalty) ? penalty : 0.4));
 }
 
-function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget, deps = {}) {
+function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget, deps = {}, context = null) {
+  const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const normalizeLaneCommandState = requireDepFunction(deps, "normalizeLaneCommandState");
   if (!unit || !currentTarget || !nextTarget)
     return false;
@@ -769,12 +776,19 @@ function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget, d
 
   const currentScore = Number.isFinite(Number(currentTarget && currentTarget.preferenceScore))
     ? Number(currentTarget.preferenceScore)
-    : getRouteUnitTargetPreferenceScore(game, lane, unit, currentTarget, false, deps);
+    : getRouteUnitTargetPreferenceScore(game, lane, unit, currentTarget, false, deps, context);
   const nextScore = Number.isFinite(Number(nextTarget && nextTarget.preferenceScore))
     ? Number(nextTarget.preferenceScore)
-    : getRouteUnitTargetPreferenceScore(game, lane, unit, nextTarget, false, deps);
+    : getRouteUnitTargetPreferenceScore(game, lane, unit, nextTarget, false, deps, context);
   const laneCommandStates = getLaneCommandStates(deps);
-  const switchMargin = normalizeLaneCommandState(unit.commandState) === laneCommandStates.DEFEND
+  const normalizedCommandState = normalizeLaneCommandState(unit.commandState);
+  if (isLaneControlledUnit(unit)
+      && normalizedCommandState === laneCommandStates.ATTACK
+      && currentDistance <= getLaneControlledCombatLeashRadius(unit, deps) + getAnchorSupportTargetRadius(deps) + getContactSlotTolerance(deps)) {
+    return false;
+  }
+
+  const switchMargin = normalizedCommandState === laneCommandStates.DEFEND
     ? (currentTargetInContact
       ? Math.min(getLaneCombatSwitchDistanceMargin(deps), 0.35)
       : 0.05)
@@ -1211,7 +1225,7 @@ function updateBestHostileRouteUnitTarget(currentBest, candidate, laneIndex, dis
   return currentBest;
 }
 
-function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
+function scanHostileRouteUnitTargets(game, lane, unit, deps = {}, context = null) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const getLaneCommandStateForUnit = requireDepFunction(deps, "getLaneCommandStateForUnit");
   const getLaneCommandAnchorStateForUnit = requireDepFunction(deps, "getLaneCommandAnchorStateForUnit");
@@ -1228,8 +1242,13 @@ function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
 
   const unitIsLaneControlled = isLaneControlledUnit(unit);
   const laneCommandStates = getLaneCommandStates(deps);
+  const laneCommandState = unitIsLaneControlled
+    ? getLaneCommandStateForUnit(game, unit)
+    : null;
   const defendSeek = unitIsLaneControlled
-    && getLaneCommandStateForUnit(game, unit) === laneCommandStates.DEFEND;
+    && laneCommandState === laneCommandStates.DEFEND;
+  const attackSeek = unitIsLaneControlled
+    && laneCommandState === laneCommandStates.ATTACK;
   const defendAnchorState = defendSeek
     ? getLaneCommandAnchorStateForUnit(game, unit)
     : null;
@@ -1242,9 +1261,12 @@ function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
     (Number(defendAnchorState && defendAnchorState.engagementRadius) || getLaneCommandDefenseRadius(deps))
       + getRouteSlotRowSpacing(deps)
   ) + contactSlotTolerance;
+  const attackSeekRange = directEngagementRange;
   const scoreContext = {
     routeTargetPressureIndex: unitIsLaneControlled
-      ? buildRouteUnitTargetPressureIndex(game, deps)
+      ? (context && context.routeTargetPressureIndex
+        ? context.routeTargetPressureIndex
+        : buildRouteUnitTargetPressureIndex(game, deps))
       : null,
     contactSlotOccupancyByLane: new WeakMap(),
   };
@@ -1269,7 +1291,7 @@ function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
       const attackRangeLimit = getUnitStopDistance(unit, candidate, deps) + contactSlotTolerance;
       const engageRangeLimit = emergencyInteriorTarget
         ? fortressInteriorRange
-        : (defendSeek ? defendSeekRange : directEngagementRange);
+        : (defendSeek ? defendSeekRange : attackSeekRange);
       const inAttackRange = distance <= attackRangeLimit;
       const inDirectEngagementRange = distance <= directEngagementRange;
       const inEngageRange = distance <= engageRangeLimit;
@@ -1351,13 +1373,13 @@ function scanHostileRouteUnitTargets(game, lane, unit, deps = {}) {
   return summary;
 }
 
-function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}) {
+function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, deps = {}, context = null) {
   if (!game || !lane || !unit)
     return null;
 
   const directEngagementOnly = !!(options && options.directEngagementOnly);
   const fortressInteriorOnly = !!(options && options.fortressInteriorOnly);
-  const summary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+  const summary = scanHostileRouteUnitTargets(game, lane, unit, deps, context);
   if (requireAttackRange)
     return summary.attackRange;
   if (directEngagementOnly)
@@ -1367,8 +1389,8 @@ function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false
   return summary.engageRange;
 }
 
-function getWaveUnitPreferredTarget(game, lane, unit, deps = {}) {
-  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+function getWaveUnitPreferredTarget(game, lane, unit, deps = {}, context = null) {
+  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps, context);
   const routeUnitInAttackRange = targetSummary.attackRange;
   if (routeUnitInAttackRange) {
     return {
@@ -1463,7 +1485,7 @@ function isRouteUnitTargetBlockedByStructure(game, lane, unit, targetDescriptor,
   return false;
 }
 
-function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}) {
+function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}, context = null) {
   const isLaneControlledUnit = requireDepFunction(deps, "isLaneControlledUnit");
   const canLaneControlledUnitSeekCombat = requireDepFunction(deps, "canLaneControlledUnitSeekCombat");
   if (!game || !lane || !unit || !isLaneControlledUnit(unit))
@@ -1471,7 +1493,7 @@ function hasImmediateFollowThroughCombatTarget(game, lane, unit, deps = {}) {
   if (!canLaneControlledUnitSeekCombat(game, unit))
     return false;
 
-  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps);
+  const targetSummary = scanHostileRouteUnitTargets(game, lane, unit, deps, context);
   return !!(targetSummary.attackRange || targetSummary.directEngagement);
 }
 
@@ -1584,6 +1606,7 @@ function markTownCoreBreach(game, lane, unit, townCoreTarget, deps = {}) {
 
 function attackFortressPad(game, lane, attacker, target, deps = {}) {
   const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
+  const getTowerStats = requireDepFunction(deps, "getTowerStats");
   const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
   const getBarracksSiteState = requireDepFunction(deps, "getBarracksSiteState");
   const applyBarracksSiteDamage = requireDepFunction(deps, "applyBarracksSiteDamage");
@@ -1596,9 +1619,21 @@ function attackFortressPad(game, lane, attacker, target, deps = {}) {
   const targetLane = Number.isInteger(target.laneIndex)
     ? (getLaneByIndex(game, target.laneIndex) || lane)
     : lane;
+  const fallbackTowerStats = getTowerStats(attacker.type, 1);
   const unitDef = resolveUnitDef(attacker.type);
-  const rawDamage = Math.max(1, Math.floor(Number(attacker.baseDmg) || Number(unitDef && unitDef.dmg) || 1));
-  const cooldownTicks = Math.max(1, Math.floor(Number(attacker.atkCdTicks) || Number(unitDef && unitDef.atkCdTicks) || 20));
+  const rawDamage = Math.max(
+    1,
+    Math.floor(Number(attacker.baseDmg) || Number(unitDef && unitDef.dmg) || Number(fallbackTowerStats && fallbackTowerStats.dmg) || 1)
+  );
+  const cooldownTicks = Math.max(
+    1,
+    Math.floor(
+      Number(attacker.atkCdTicks)
+      || Number(unitDef && unitDef.atkCdTicks)
+      || Number(fallbackTowerStats && fallbackTowerStats.atkCdTicks)
+      || 20
+    )
+  );
   const targetId = String(target.padId || target.unitId || target.id || "");
   const barracksSiteMatch = targetId.match(/^barracks_site:(.+)$/);
   const targetPad = barracksSiteMatch ? null : getFortressPadState(targetLane, targetId);
@@ -2224,32 +2259,69 @@ function doAttack(game, lane, attacker, target, deps = {}) {
   const fireProjectile = requireDepFunction(deps, "fireProjectile");
   const getTowerStats = requireDepFunction(deps, "getTowerStats");
   const resolveUnitDef = requireDepFunction(deps, "resolveUnitDef");
+  const resolveUnitAllegianceKey = requireDepFunction(deps, "resolveUnitAllegianceKey");
+  const areAllegiancesHostile = requireDepFunction(deps, "areAllegiancesHostile");
   const stats = getTowerStats(attacker.type, 1);
   const unitDef = resolveUnitDef(attacker.type);
-  const damage = attacker.baseDmg || (stats ? stats.dmg : (unitDef ? unitDef.dmg : 5));
-  const cooldownTicks = attacker.atkCdTicks || (stats ? stats.atkCdTicks : 30);
+  const damage = Number(attacker.baseDmg) || Number(unitDef && unitDef.dmg) || (stats ? stats.dmg : 5);
+  const cooldownTicks = Number(attacker.atkCdTicks) || Number(unitDef && unitDef.atkCdTicks) || (stats ? stats.atkCdTicks : 30);
   const attackRange = getUnitAttackRange(attacker, deps);
+  const rewardLaneIndex = Number.isInteger(attacker && attacker.ownerLaneIndex)
+    ? attacker.ownerLaneIndex
+    : Number.isInteger(attacker && attacker.ownerLane)
+      ? attacker.ownerLane
+      : (Number.isInteger(attacker && attacker.sourceLaneIndex) ? attacker.sourceLaneIndex : -1);
+  const attackerAllegiance = resolveUnitAllegianceKey(game, lane, attacker);
+  const targetAllegiance = resolveUnitAllegianceKey(game, lane, target);
+  const canCreditKill = Number.isInteger(rewardLaneIndex)
+    && rewardLaneIndex >= 0
+    && areAllegiancesHostile(attackerAllegiance, targetAllegiance);
 
   if (attackRange > 2.0) {
-    const behavior = stats ? (stats.projBehavior || "single") : "single";
+    const behavior = unitDef
+      ? (unitDef.projBehavior || (unitDef.isSplash ? "splash" : "single"))
+      : stats
+        ? (stats.projBehavior || "single")
+        : "single";
     fireProjectile(
       game,
       lane,
-      { id: attacker.id, kind: "unit", x: attacker.posX, y: attacker.posY },
+      {
+        id: attacker.id,
+        kind: "unit",
+        x: attacker.posX,
+        y: attacker.posY,
+        ownerLaneIndex: rewardLaneIndex,
+        sourceLaneIndex: attacker.sourceLaneIndex,
+        allegianceKey: attackerAllegiance,
+      },
       target.id,
       {
         dmg: damage,
-        damageType: stats ? stats.damageType : "NORMAL",
+        damageType: unitDef ? (unitDef.damageType || "NORMAL") : (stats ? stats.damageType : "NORMAL"),
         behavior,
-        behaviorParams: stats ? (stats.projBehaviorParams || {}) : {},
-        travelTicks: stats ? (stats.projectileTicks || 8) : 8,
-        isSplash: behavior === "splash",
+        behaviorParams: unitDef
+          ? (unitDef.projBehaviorParams || {})
+          : (stats ? (stats.projBehaviorParams || {}) : {}),
+        travelTicks: unitDef
+          ? (unitDef.projectileTicks || 8)
+          : (stats ? (stats.projectileTicks || 8) : 8),
+        isSplash: unitDef ? !!unitDef.isSplash : behavior === "splash",
         projectileType: attacker.type,
         abilities: [],
       }
     );
   } else {
     target.hp = Math.max(0, target.hp - damage);
+    if (canCreditKill) {
+      target.lastHostileKillCredit = {
+        rewardLaneIndex,
+        sourceKind: "unit",
+        sourceId: attacker.id,
+        sourceAllegianceKey: attackerAllegiance || null,
+        tick: Number.isInteger(game && game.tick) ? game.tick : 0,
+      };
+    }
   }
 
   attacker.attackPulse = (attacker.attackPulse || 0) + 1;
@@ -2257,6 +2329,7 @@ function doAttack(game, lane, attacker, target, deps = {}) {
 }
 
 module.exports = {
+  createCombatTargetingContext,
   moveTowardContact2D,
   updateSimpleContactApproachMemory,
   moveTowardSimpleContact2D,

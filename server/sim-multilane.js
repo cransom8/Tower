@@ -317,6 +317,11 @@ const isLaneCommandCombatEnabledForUnit = bindSystemMethodWithDeps(
   "isLaneCommandCombatEnabledForUnit",
   () => LANE_COMMAND_SYSTEM_DEPS
 );
+const isLaneControlledUnitReadyToDefendHome = bindSystemMethodWithDeps(
+  laneCommandSystem,
+  "isLaneControlledUnitReadyToDefendHome",
+  () => LANE_COMMAND_SYSTEM_DEPS
+);
 const resolveTargetLaneForBarracksSend = bindSystemMethodWithDeps(
   laneCommandSystem,
   "resolveTargetLaneForBarracksSend",
@@ -552,7 +557,24 @@ const getBarracksSpeedMultForLevel = bindSystemMethod(
 );
 const getBarracksSpeedMult = bindSystemMethod(barracksSystem, "getBarracksSpeedMult");
 
-function getBaseCombatPathSpeed(_unitTypeKey) {
+function getBaseCombatPathSpeed(unitTypeKey) {
+  const unitDef = resolveUnitDef(unitTypeKey);
+  const resolvedDefPathSpeed = Number(unitDef && unitDef.pathSpeed);
+  if (Number.isFinite(resolvedDefPathSpeed) && resolvedDefPathSpeed > 0)
+    return resolvedDefPathSpeed;
+
+  let resolvedCatalogUnitKey = unitTypeKey;
+  try {
+    resolvedCatalogUnitKey = resolveGameplayCatalogUnitKey(unitTypeKey);
+  } catch (_error) {
+    resolvedCatalogUnitKey = unitTypeKey;
+  }
+
+  const unitType = resolvedCatalogUnitKey ? getUnitType(resolvedCatalogUnitKey) : null;
+  const rawCatalogPathSpeed = Number(unitType && unitType.path_speed);
+  if (Number.isFinite(rawCatalogPathSpeed) && rawCatalogPathSpeed > 0)
+    return rawCatalogPathSpeed;
+
   return BASE_COMBAT_PATH_SPEED;
 }
 
@@ -1048,6 +1070,7 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
   LANE_COMMAND_DEFENSE_RADIUS,
   LANE_COMMAND_COMBAT_LEASH,
   LANE_COMMAND_HOME_CONTAINER_PROGRESS,
+  FORTRESS_INTERIOR_ASSAULT_RADIUS,
   INSIDE_GATE_ANCHOR_OFFSET,
   OUTSIDE_GATE_ANCHOR_OFFSET,
   LANE_ANCHOR_MAX_COLUMNS,
@@ -1203,6 +1226,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   runScheduledBuildingConstruction,
   runScheduledBarracksSends,
   syncLaneCommandAssignments,
+  createCombatTargetingContext,
   laneHasOccupyingForces,
   initializeMovingUnitRouteState,
   resolveSpawnSourceTypeFromUnit,
@@ -1212,6 +1236,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   resolveUnitSupportProfile,
   resolveLaneAllegianceKey,
   resolveUnitAllegianceKey,
+  resolveUnitOwnerLaneIndex,
   areAllegiancesHostile,
   traceWaveUnitTick,
   resolveWaveCombatTarget,
@@ -1832,8 +1857,12 @@ function isTargetInsideLaneDefenseZone(game, attacker, target) {
     return true;
 
   const commandState = getLaneCommandStateForUnit(game, attacker);
+  const retreatHomeDefenseReady = commandState === LANE_COMMAND_STATES.RETREAT
+    && isLaneControlledUnitReadyToDefendHome(game, attacker);
+  if (retreatHomeDefenseReady)
+    return isTargetInsideHomeFortressEmergencyZone(game, attacker, target);
   if (commandState !== LANE_COMMAND_STATES.DEFEND)
-    return true;
+    return false;
   if (isTargetInsideHomeFortressEmergencyZone(game, attacker, target))
     return true;
 
@@ -1858,12 +1887,19 @@ function canLaneControlledUnitSeekCombat(game, attacker, target = null) {
     return false;
   if (!target)
     return true;
+  const commandState = getLaneCommandStateForUnit(game, attacker);
+  const retreatHomeDefenseReady = commandState === LANE_COMMAND_STATES.RETREAT
+    && isLaneControlledUnitReadyToDefendHome(game, attacker);
+  if (retreatHomeDefenseReady)
+    return isTargetInsideHomeFortressEmergencyZone(game, attacker, target);
   if (isTargetInsideLaneDefenseZone(game, attacker, target))
     return true;
 
   const liveDistance = getWaveUnitTargetDistance(attacker, target);
-  return Number.isFinite(liveDistance)
-    && liveDistance <= getUnitEngagementRange(attacker.type) + CONTACT_SLOT_TOLERANCE;
+  if (!Number.isFinite(liveDistance))
+    return false;
+
+  return liveDistance <= getUnitEngagementRange(attacker.type) + CONTACT_SLOT_TOLERANCE;
 }
 
 function areRouteUnitsHostile(game, attacker, target) {
@@ -2031,14 +2067,15 @@ function getRouteUnitTargetPreferenceScore(game, lane, unit, target, requireAtta
   );
 }
 
-function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget) {
+function shouldSwitchCombatTarget(game, lane, unit, currentTarget, nextTarget, targetingContext = null) {
   return combatSystem.shouldSwitchCombatTarget(
     game,
     lane,
     unit,
     currentTarget,
     nextTarget,
-    COMBAT_SYSTEM_DEPS
+    COMBAT_SYSTEM_DEPS,
+    targetingContext
   );
 }
 
@@ -2299,19 +2336,24 @@ function getStructureTargetAcquisitionRange(unit, target) {
   return combatSystem.getStructureTargetAcquisitionRange(unit, target, COMBAT_SYSTEM_DEPS);
 }
 
-function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null) {
+function findHostileRouteUnitTarget(game, lane, unit, requireAttackRange = false, options = null, targetingContext = null) {
   return combatSystem.findHostileRouteUnitTarget(
     game,
     lane,
     unit,
     requireAttackRange,
     options,
-    COMBAT_SYSTEM_DEPS
+    COMBAT_SYSTEM_DEPS,
+    targetingContext
   );
 }
 
-function getWaveUnitPreferredTarget(game, lane, unit) {
-  return combatSystem.getWaveUnitPreferredTarget(game, lane, unit, COMBAT_SYSTEM_DEPS);
+function createCombatTargetingContext(game) {
+  return combatSystem.createCombatTargetingContext(game, COMBAT_SYSTEM_DEPS);
+}
+
+function getWaveUnitPreferredTarget(game, lane, unit, targetingContext = null) {
+  return combatSystem.getWaveUnitPreferredTarget(game, lane, unit, COMBAT_SYSTEM_DEPS, targetingContext);
 }
 
 function isRouteUnitTargetBlockedByStructure(game, lane, unit, targetDescriptor, blockingTarget) {
@@ -2325,8 +2367,8 @@ function isRouteUnitTargetBlockedByStructure(game, lane, unit, targetDescriptor,
   );
 }
 
-function hasImmediateFollowThroughCombatTarget(game, lane, unit) {
-  return combatSystem.hasImmediateFollowThroughCombatTarget(game, lane, unit, COMBAT_SYSTEM_DEPS);
+function hasImmediateFollowThroughCombatTarget(game, lane, unit, targetingContext = null) {
+  return combatSystem.hasImmediateFollowThroughCombatTarget(game, lane, unit, COMBAT_SYSTEM_DEPS, targetingContext);
 }
 
 function getLaneBlockingStructureTargets(lane, unit = null) {
@@ -2422,6 +2464,7 @@ const getFixedUnitDefMap = bindSystemMethodWithDeps(
 );
 
 const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
+  TICK_HZ,
   WAVE_TIMER_TICKS,
   TEAM_HP_START,
   GRID_W,
@@ -2451,6 +2494,7 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   recomputeTeamHpState,
   resolveLaneAllegianceKey,
   resolveUnitAllegianceKey,
+  resolveUnitDef,
   resolveUnitOwnerLaneIndex,
   resolveUnitTargetLaneIndex,
   resolveUnitPathContractType,
@@ -2463,6 +2507,7 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   resolveWaveCombatTarget,
   getWaveUnitTargetDistance,
   getUnitStopDistance,
+  getUnitAttackRange,
   isUnitInCombatContact,
 });
 
@@ -2566,7 +2611,9 @@ module.exports = {
   createFortressPadSnapshot,
   createBarracksSiteSnapshot,
   createBarracksRosterSnapshot,
+  createMarketRosterSnapshot,
   createHeroRosterSnapshot,
+  spawnScheduledBarracksRoster,
   attackFortressPad,
   FORTRESS_BUILDING_DEFS,
   FORTRESS_PAD_DEFS,

@@ -51,6 +51,14 @@ setUnitTypesForTests([
     range: 0.08,
     armor_type: "LIGHT",
   }),
+  makeUnit("stalker", {
+    hp: 44,
+    attack_damage: 8,
+    attack_speed: 18,
+    path_speed: 0.61,
+    range: 0.12,
+    armor_type: "MEDIUM",
+  }),
 ]);
 
 test.beforeEach(() => {
@@ -128,4 +136,18 @@ test("starting a wave preserves the centered logical spawn position on queued un
   assert.equal(simMl.startNextWaveNow(game), true);
   assert.equal(game.lanes[0].spawnQueue.length, 1);
   assert.deepEqual(game.lanes[0].spawnQueue[0].spawnLogicalPos, { x: 5, y: 0 });
+});
+
+test("starting a wave uses the unit's catalog path speed instead of a shared combat-speed blanket", () => {
+  const game = createGame();
+  game.waveConfig = [
+    { wave_number: 1, unit_type: "stalker", spawn_qty: 1, hp_mult: 1, dmg_mult: 1, speed_mult: 1.5 },
+  ];
+
+  assert.equal(simMl.startNextWaveNow(game), true);
+  assert.equal(game.lanes[0].spawnQueue.length, 1);
+  assert.ok(
+    Math.abs(Number(game.lanes[0].spawnQueue[0].baseSpeed) - (0.61 * 1.5)) <= 0.0001,
+    `expected queued wave baseSpeed to inherit the unit path speed, got ${Number(game.lanes[0].spawnQueue[0].baseSpeed)}`
+  );
 });

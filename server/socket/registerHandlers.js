@@ -269,6 +269,8 @@ function registerSocketHandlers({
           matchFormat: "ffa",
         });
       });
+
+      startMLGame(roomId, code);
     }
 
     const seenParties = new Set();
@@ -348,6 +350,8 @@ function registerSocketHandlers({
         matchFormat: "ffa",
       });
     });
+
+    startMLGame(roomId, code);
 
     partyA.status = "in_match";
     partyA.queueMode = null;
@@ -1460,7 +1464,7 @@ function registerSocketHandlers({
       if (gamesByRoomId.has(room.roomId)) return socket.emit("error_message", { message: "Game already started." });
       const totalPlayers = room.players.length + (room.aiPlayers || []).length;
       if (totalPlayers >= 4) return socket.emit("error_message", { message: "Room is full (max 4 players)." });
-      const diff = VALID_AI_DIFFICULTIES.includes(String(difficulty)) ? String(difficulty) : "easy";
+      const diff = VALID_AI_DIFFICULTIES.includes(String(difficulty)) ? String(difficulty) : "medium";
       if (!room.aiPlayers) room.aiPlayers = [];
       const aiTeam = ffaTeamForLane(totalPlayers);
       room.aiPlayers.push({ laneIndex: totalPlayers, difficulty: diff, team: aiTeam });

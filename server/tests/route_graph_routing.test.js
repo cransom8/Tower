@@ -117,7 +117,7 @@ function createAttacker(overrides = {}) {
     armorType: overrides.armorType ?? def.armorType,
     damageReductionPct: overrides.damageReductionPct ?? def.damageReductionPct,
     abilities: [],
-    bounty: 1,
+    bounty: overrides.bounty ?? 1,
     isWaveUnit: overrides.isWaveUnit ?? isDungeonWave,
     isDefender: false,
     stance: overrides.stance ?? (isDungeonWave ? "ATTACK" : "ATTACK"),
@@ -495,10 +495,18 @@ test("battlefield layout emits authored world-space fortress positions instead o
 
   const redPadXs = redLane.fortressPads.map((pad) => Number(pad && pad.world && pad.world.x));
   const yellowPadXs = yellowLane.fortressPads.map((pad) => Number(pad && pad.world && pad.world.x));
-  assert.ok(Math.min(...redPadXs) < -40, "red lane should stay on the authored left-side fortress footprint");
-  assert.ok(Math.max(...yellowPadXs) > 40, "yellow lane should stay on the authored right-side fortress footprint");
-  assert.ok(Number(redLane.townCore.x) < -60, "red town core should be emitted in authored world space");
-  assert.ok(Number(yellowLane.townCore.x) > 60, "yellow town core should be emitted in authored world space");
+  assert.ok(
+    Math.max(...redPadXs) < Math.min(...yellowPadXs),
+    "red lane should stay on the authored left-side fortress footprint relative to yellow."
+  );
+  assert.ok(
+    (Math.min(...yellowPadXs) - Math.max(...redPadXs)) > 300,
+    "the two fortress footprints should preserve authored world-space separation instead of collapsing into compressed sim-space."
+  );
+  assert.ok(
+    Math.abs(Number(redLane.townCore.x) - Number(yellowLane.townCore.x)) > 400,
+    "town core coordinates should preserve authored world-space spacing."
+  );
 });
 
 test("battlefield layout perimeter segments follow the town-core box corners", () => {
@@ -549,6 +557,44 @@ test("battlefield layout perimeter segments follow the town-core box corners", (
     bottomLeftCorner,
     { x: Number(redLane.townCore.x), y: Number(redLane.townCore.y) },
   ]);
+});
+
+test("two-player battlefield layout still publishes outer-loop perimeter routes for side barracks", () => {
+  const twoPlayerConfig = simMl.createMLPublicConfig({
+    playerCount: 2,
+    laneTeams: ["red", "yellow"],
+  });
+  const fourPlayerConfig = simMl.createMLPublicConfig({
+    playerCount: 4,
+    laneTeams: ["red", "yellow", "blue", "green"],
+  });
+
+  const twoPlayerNodeIds = new Set(
+    (twoPlayerConfig.battlefieldLayout.routeNodes || [])
+      .filter((node) => node && node.nodeId)
+      .map((node) => node.nodeId)
+  );
+  const twoPlayerSegments = new Map(
+    (twoPlayerConfig.battlefieldLayout.routeSegments || [])
+      .filter((segment) => segment && segment.segmentId)
+      .map((segment) => [segment.segmentId, segment])
+  );
+  const fourPlayerSegments = new Map(
+    (fourPlayerConfig.battlefieldLayout.routeSegments || [])
+      .filter((segment) => segment && segment.segmentId)
+      .map((segment) => [segment.segmentId, segment])
+  );
+
+  assert.equal(twoPlayerNodeIds.has("C"), true, "expected the 2-player route graph to keep the lower-right perimeter corner node");
+  assert.equal(twoPlayerNodeIds.has("D"), true, "expected the 2-player route graph to keep the upper-left perimeter corner node");
+
+  for (const segmentId of ["A_D", "D_B", "B_C", "C_A", "A_C", "C_B", "B_D", "D_A"]) {
+    assert.deepEqual(
+      twoPlayerSegments.get(segmentId)?.points,
+      fourPlayerSegments.get(segmentId)?.points,
+      `expected 2-player layout to publish authored perimeter segment '${segmentId}' for side-barracks attack routes`
+    );
+  }
 });
 
 test("battlefield layout content hash matches the authored environment footprint across player counts", () => {
@@ -695,6 +741,45 @@ test("route initialization reflects the active lane-command contract for every b
   assert.equal(reverseAttackUnit.stance, "ATTACK");
   assert.equal(reverseAttackUnit.routeTargetNode, "C");
   assert.deepEqual(reverseAttackUnit.routeSegments, ["ARGT_A", "A_C", "C_B", "B_D", "D_A"]);
+});
+
+test("live left and right barracks attackers keep their authored outer-loop routes after reassignment", () => {
+  const game = createGame();
+  const sourceLane = game.lanes[0];
+  const targetLane = game.lanes[2];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  const leftUnit = createAttacker({
+    id: "left_live_outer_unit",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceBarracksId: "left",
+    sourceBarracksKey: "left",
+  });
+  const rightUnit = createAttacker({
+    id: "right_live_outer_unit",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceBarracksId: "right",
+    sourceBarracksKey: "right",
+  });
+
+  assert.equal(simMl.initializeMovingUnitRouteState(game, targetLane, leftUnit, { x: 5, y: 0 }).ok, true);
+  assert.equal(simMl.initializeMovingUnitRouteState(game, targetLane, rightUnit, { x: 6, y: 0 }).ok, true);
+
+  sourceLane.units.push(leftUnit, rightUnit);
+  tick(game, 1);
+
+  const liveLeft = game.lanes.flatMap((lane) => lane.units || []).find((unit) => unit && unit.id === leftUnit.id);
+  const liveRight = game.lanes.flatMap((lane) => lane.units || []).find((unit) => unit && unit.id === rightUnit.id);
+  assert.ok(liveLeft, "expected the live left-barracks unit to remain in the simulation");
+  assert.ok(liveRight, "expected the live right-barracks unit to remain in the simulation");
+  assert.equal(liveLeft.targetLaneIndex, targetLane.laneIndex);
+  assert.equal(liveRight.targetLaneIndex, targetLane.laneIndex);
+  assert.equal(liveLeft.routeType, simMl.ROUTE_TYPES.OUTER_LOOP);
+  assert.equal(liveRight.routeType, simMl.ROUTE_TYPES.OUTER_LOOP);
+  assert.equal(liveLeft.pathContractType, "barracks_loop");
+  assert.equal(liveRight.pathContractType, "barracks_loop");
+  assert.deepEqual(liveLeft.routeSegments, ["ALFT_A", "A_D", "D_B", "B_C", "C_A"]);
+  assert.deepEqual(liveRight.routeSegments, ["ARGT_A", "A_C", "C_B", "B_D", "D_A"]);
 });
 
 test("barracks route initialization preserves lateral travel spread before units reach the anchor", () => {
@@ -850,6 +935,7 @@ test("nearby attackers pick the nearest hostile structure regardless of building
   const game = createGame();
   const lane = game.lanes[0];
   issueLaneCommand(game, 1, "set_lane_attack", { targetLaneIndex: lane.laneIndex });
+  upgradeTownCoreToTier(game, lane.laneIndex, 2);
 
   const buildResult = simMl.applyMLAction(game, 0, {
     type: "build_on_pad",
@@ -1147,6 +1233,187 @@ test("attack-mode lane units share the first hostile contact instead of letting 
   assert.ok(
     liveAttackers.every((unit) => unit.pathContractType === "intercept"),
     "units that join the shared contact should publish intercept routing instead of continuing past the fight."
+  );
+});
+
+test("attack-mode lane units wait for local engagement range instead of auto-locking everything inside the wider combat leash", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
+  const attackerLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: attackerLane.laneIndex });
+
+  const attacker = createAttacker({
+    id: "attack_leash_attacker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
+    atkCd: 999,
+    baseSpeed: 1.2,
+  });
+  assert.equal(simMl.initializeMovingUnitRouteState(game, attackerLane, attacker, { x: 5, y: 0 }).ok, true);
+
+  const yellowHostile = createAttacker({
+    id: "attack_leash_yellow_hostile",
+    ownerLaneIndex: -1,
+    ownerLane: -1,
+    sourceLaneIndex: -1,
+    sourceTeam: null,
+    sourceBarracksId: null,
+    sourceBarracksKey: null,
+    targetLaneIndex: attackerLane.laneIndex,
+    laneId: attackerLane.laneIndex,
+    allegianceKey: "yellow",
+    routeSegments: ["WB_B"],
+    routeSegmentIndex: 0,
+    segmentProgress: 0,
+    atkCd: 999,
+    baseSpeed: 0,
+    posX: Number(attacker.posX) + 6,
+    posY: Number(attacker.posY),
+  });
+
+  attackerLane.units.push(attacker, yellowHostile);
+  tick(game, 1);
+
+  assert.equal(attacker.combatLeashRadius, 8);
+  assert.equal(
+    attacker.combatTarget ?? null,
+    null,
+    "attack-mode units should not pre-aggro hostiles that are only inside the broader combat leash."
+  );
+
+  yellowHostile.posX = Number(attacker.posX) + 4.2;
+  yellowHostile.posY = Number(attacker.posY);
+  yellowHostile.routeWorldX = yellowHostile.posX;
+  yellowHostile.routeWorldY = yellowHostile.posY;
+
+  advanceUntil(game, () => attacker.combatTarget?.unitId === yellowHostile.id, 8);
+
+  assert.equal(
+    attacker.combatTarget?.unitId,
+    yellowHostile.id,
+    "attack-mode units should still acquire a hostile once it enters true local engagement range."
+  );
+  assert.equal(attacker.movementMode, "CombatEngage");
+});
+
+test("cross-lane hostile kills pay the attacker's owning lane instead of the victim lane container", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
+  const targetLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  const attacker = createAttacker({
+    id: "reward_lane_attacker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: targetLane.laneIndex,
+    laneId: targetLane.laneIndex,
+    atkCd: 0,
+    baseDmg: 12,
+    baseSpeed: 1.1,
+  });
+  assert.equal(simMl.initializeMovingUnitRouteState(game, targetLane, attacker, { x: 5, y: 0 }).ok, true);
+
+  const yellowVictim = createAttacker({
+    id: "reward_lane_yellow_victim",
+    sourceLaneIndex: targetLane.laneIndex,
+    sourceTeam: targetLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: targetLane.laneIndex,
+    laneId: targetLane.laneIndex,
+    hp: 6,
+    maxHp: 6,
+    atkCd: 999,
+    baseDmg: 0,
+    baseSpeed: 0,
+    bounty: 5,
+    posX: attacker.posX,
+    posY: attacker.posY,
+  });
+
+  const redGoldBefore = sourceLane.gold;
+  const yellowGoldBefore = targetLane.gold;
+  targetLane.units.push(attacker, yellowVictim);
+
+  advanceUntil(game, () => !targetLane.units.some((unit) => unit && unit.id === yellowVictim.id), 80);
+
+  assert.equal(sourceLane.gold, redGoldBefore + 5);
+  assert.equal(targetLane.gold, yellowGoldBefore);
+});
+
+test("projectile kills on dungeon units still pay the hostile shooter's owning lane", () => {
+  const game = createTwoPlayerGame(["red", "yellow"]);
+  const sourceLane = game.lanes[0];
+  const targetLane = game.lanes[1];
+  issueLaneCommand(game, sourceLane.laneIndex, "set_lane_attack", { targetLaneIndex: targetLane.laneIndex });
+
+  const attacker = createAttacker({
+    id: "reward_projectile_attacker",
+    sourceLaneIndex: sourceLane.laneIndex,
+    sourceTeam: sourceLane.team,
+    sourceBarracksId: "center",
+    sourceBarracksKey: "center",
+    targetLaneIndex: targetLane.laneIndex,
+    laneId: targetLane.laneIndex,
+    atkCd: 999,
+    baseSpeed: 0,
+  });
+  assert.equal(simMl.initializeMovingUnitRouteState(game, targetLane, attacker, { x: 5, y: 0 }).ok, true);
+
+  const dungeonVictim = createAttacker({
+    id: "reward_projectile_dungeon_victim",
+    spawnSourceType: "dungeon_wave",
+    targetLaneIndex: targetLane.laneIndex,
+    laneId: targetLane.laneIndex,
+    hp: 4,
+    maxHp: 4,
+    atkCd: 999,
+    baseDmg: 0,
+    baseSpeed: 0,
+    bounty: 4,
+    posX: attacker.posX,
+    posY: attacker.posY,
+  });
+
+  const redGoldBefore = sourceLane.gold;
+  const yellowGoldBefore = targetLane.gold;
+  targetLane.units.push(attacker, dungeonVictim);
+  targetLane.projectiles.push({
+    id: "reward_projectile",
+    ownerLane: targetLane.laneIndex,
+    sourceKind: "unit",
+    sourceId: attacker.id,
+    rewardLaneIndex: sourceLane.laneIndex,
+    sourceAllegianceKey: attacker.allegianceKey,
+    projectileType: attacker.type,
+    damageType: "NORMAL",
+    behavior: "single",
+    behaviorParams: {},
+    targetId: dungeonVictim.id,
+    dmg: 8,
+    fromX: attacker.posX,
+    fromY: attacker.posY,
+    toX: dungeonVictim.posX,
+    toY: dungeonVictim.posY,
+    ticksRemaining: 1,
+    ticksTotal: 1,
+    abilities: [],
+  });
+
+  tick(game, 1);
+
+  assert.equal(sourceLane.gold, redGoldBefore + 4);
+  assert.equal(targetLane.gold, yellowGoldBefore);
+  assert.equal(
+    targetLane.units.some((unit) => unit && unit.id === dungeonVictim.id),
+    false,
+    "the projectile target should be removed after the lethal hit resolves."
   );
 });
 
