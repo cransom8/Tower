@@ -447,7 +447,13 @@ function fireLaneWallArcherTurrets(game, lane, deps = {}) {
     fireProjectile(
       game,
       lane,
-      { id: turretPadId, kind: "tower", x: turretTarget.posX, y: turretTarget.posY },
+      {
+        id: turretPadId,
+        kind: "tower",
+        x: turretTarget.posX,
+        y: turretTarget.posY,
+        allegianceKey: laneAllegiance,
+      },
       bestTarget.id,
       {
         dmg: profile.damage,
@@ -656,7 +662,14 @@ function processLane(game, lane, deps = {}) {
         && resolvedCombatTarget.entity
         && isUnitInCombatContact(lane, unit, resolvedCombatTarget.entity, unitTargetingContext)
       );
+      const targetIsLockedIn = !!(
+        resolvedCombatTarget
+        && resolvedCombatTarget.kind === "unit"
+        && resolvedCombatTarget.entity
+        && game.tick < (unit.combatTargetLockedUntilTick || 0)
+      );
       const canReacquireUnitTarget = !currentTargetInDirectContact
+        && !targetIsLockedIn
         && !isLaneControlledUnitInRegroupWindow(unit, game.tick);
       const canSeekCombat = canLaneControlledUnitSeekCombat(game, unit);
       const currentUnitTargetDescriptor = resolvedCombatTarget
@@ -670,8 +683,11 @@ function processLane(game, lane, deps = {}) {
           }
         : null;
       let blockingTarget = null;
-      if (canSeekCombat && (!resolvedCombatTarget || resolvedCombatTarget.kind !== "unit" || canReacquireUnitTarget || currentUnitTargetDescriptor))
+      let blockingTargetComputed = false;
+      if (canSeekCombat && (!resolvedCombatTarget || resolvedCombatTarget.kind !== "unit" || canReacquireUnitTarget || currentUnitTargetDescriptor)) {
         blockingTarget = findBlockingStructureTarget(game, lane, unit);
+        blockingTargetComputed = true;
+      }
       if (currentUnitTargetDescriptor
           && !currentTargetInDirectContact
           && isRouteUnitTargetBlockedByStructure(game, lane, unit, currentUnitTargetDescriptor, blockingTarget)) {
@@ -705,7 +721,7 @@ function processLane(game, lane, deps = {}) {
 
       const canReevaluateStructureTarget = !resolvedCombatTarget || resolvedCombatTarget.kind !== "unit";
       if (canReevaluateStructureTarget) {
-        const activeBlockingTarget = blockingTarget || findBlockingStructureTarget(game, lane, unit);
+        const activeBlockingTarget = blockingTargetComputed ? blockingTarget : findBlockingStructureTarget(game, lane, unit);
         const currentStructureTargetId = resolvedCombatTarget && resolvedCombatTarget.kind === "fortress_pad"
           ? String(resolvedCombatTarget.padId || resolvedCombatTarget.unitId || "")
           : "";

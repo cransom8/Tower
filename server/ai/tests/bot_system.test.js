@@ -55,8 +55,7 @@ function makeUnit(key, options = {}) {
     bounty: options.bounty ?? 2,
     special_props: options.special_props || {},
     abilities: options.abilities || [],
-    barracks_scales_hp: options.barracks_scales_hp ?? false,
-    barracks_scales_dmg: options.barracks_scales_dmg ?? false,
+
   };
 }
 

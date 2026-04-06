@@ -3,7 +3,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const barracksSystem = require("../game/multilane/barracksSystem");
 const gameConfig = require("../gameConfig");
 const { setUnitTypesForTests } = require("../unitTypes");
 const simMl = require("../sim-multilane");
@@ -40,8 +39,7 @@ function makeUnit(key, options = {}) {
     bounty: options.bounty ?? 1,
     special_props: options.special_props || {},
     abilities: options.abilities || [],
-    barracks_scales_hp: options.barracks_scales_hp ?? false,
-    barracks_scales_dmg: options.barracks_scales_dmg ?? false,
+
   };
 }
 
@@ -446,7 +444,7 @@ test("combat test militia keeps using the built center barracks identity", () =>
 
 test("barracks roster units inherit their unit-specific catalog path speed", () => {
   const game = createGameWithStartingMilitia();
-  const expectedBaseSpeed = 0.61 * barracksSystem.getBarracksSpeedMultForLevel(1);
+  const expectedBaseSpeed = 0.61;
 
   assert.equal(game.lanes[0].spawnQueue.length, 5);
   assert.ok(

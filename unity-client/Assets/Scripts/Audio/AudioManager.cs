@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.SceneManagement;
@@ -59,6 +60,11 @@ public class AudioManager : MonoBehaviour
     public AudioClip menuMusicLoop;     // login / lobby / loadout / postgame loop
     public AudioClip gameplayMusicLoop; // live match loop
     public AudioClip ambientLoop;       // legacy fallback loop
+
+    [Header("Remote Loop Music")]
+    public string remoteMenuMusicLoopAddress = "audio/music/winters-gloom-loop";
+    public string remoteGameplayMusicLoopAddress = "audio/music/winters-gloom-loop";
+    public string remoteAmbientMusicLoopAddress = "audio/music/winters-gloom-loop";
 
     // ── Sources ───────────────────────────────────────────────────────────────
     AudioSource _sfxSource;
@@ -282,7 +288,7 @@ public class AudioManager : MonoBehaviour
         _loopPlaybackRoutine = StartCoroutine(BeginLoopWhenReady());
     }
 
-    System.Collections.IEnumerator BeginLoopWhenReady()
+    IEnumerator BeginLoopWhenReady()
     {
         const float timeoutSeconds = 8f;
         float elapsed = 0f;

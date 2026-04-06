@@ -4009,12 +4009,6 @@ async function openUnitTypeModal(id) {
       <div class="form-group"><label>Refund % (0–100)</label>${inp('refund_pct','number','1')}</div>
     </div>
 
-    <h4 style="margin:16px 0 8px">Barracks Scaling</h4>
-    <div style="display:flex;gap:24px">
-      <label><input type="checkbox" id="ut-barracks_scales_hp" ${chk('barracks_scales_hp')}> Scale HP</label>
-      <label><input type="checkbox" id="ut-barracks_scales_dmg" ${chk('barracks_scales_dmg')}> Scale Damage</label>
-    </div>
-
     <h4 style="margin:16px 0 8px">Assets</h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div class="form-group">
@@ -4143,8 +4137,7 @@ function readUnitTypeForm() {
     build_cost:           int('ut-build_cost'),
     income:               int('ut-income'),
     refund_pct:           int('ut-refund_pct'),
-    barracks_scales_hp:   g('ut-barracks_scales_hp')?.checked ?? false,
-    barracks_scales_dmg:  g('ut-barracks_scales_dmg')?.checked ?? false,
+
     icon_url:             g('ut-icon_url')?.value.trim() || null,
     sprite_url:           g('ut-sprite_url')?.value.trim() || null,
     animation_url:        g('ut-animation_url')?.value.trim() || null,

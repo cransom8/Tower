@@ -195,46 +195,18 @@ function getBarracksLevelDef(level) {
   const lvl = Math.max(1, Math.floor(Number(level) || 1));
   if (lvl === 1) {
     return {
-      hpMult: 1,
-      dmgMult: 1,
-      speedMult: getBarracksSpeedMultForLevel(1),
-      structMult: 1,
-      unitCostMult: 1,
-      unitIncomeMult: 1,
-      incomeBonus: 0,
       cost: 0,
       reqIncome: 0,
     };
   }
 
-  const statMult = Math.pow(2, lvl - 1);
   const gateMult = Math.pow(2, lvl - 2);
   return {
-    hpMult: statMult,
-    dmgMult: statMult,
-    speedMult: getBarracksSpeedMultForLevel(lvl),
-    structMult: statMult,
-    unitCostMult: statMult,
-    unitIncomeMult: statMult,
-    incomeBonus: 0,
     cost: Math.ceil(BARRACKS_COST_BASE * gateMult),
     reqIncome: Math.ceil(BARRACKS_REQ_INCOME_BASE * gateMult),
   };
 }
 
-function getBarracksSpeedMultForLevel(level) {
-  const lvl = Math.max(1, Math.floor(Number(level) || 1));
-  return BARRACKS_LEVEL_ONE_SPEED_MULT + ((lvl - 1) * SPEED_UPGRADE_STEP);
-}
-
-function getBarracksSpeedMult(br) {
-  const barracks = br && typeof br === "object" ? br : null;
-  if (barracks && Number.isFinite(barracks.speedMult))
-    return Math.max(0.01, Number(barracks.speedMult));
-  if (barracks && Number.isFinite(barracks.level))
-    return Math.max(0.01, getBarracksSpeedMultForLevel(barracks.level));
-  return 1;
-}
 
 function getFoodLimitForTier(tier) {
   const safeTier = Math.max(0, Math.floor(Number(tier) || 0));
@@ -1952,9 +1924,7 @@ function applyLiveRosterDefinition(game, liveLane, unit, rosterDef, deps = {}) {
   const sourceLane = game && Array.isArray(game.lanes) && Number.isInteger(unit.sourceLaneIndex)
     ? game.lanes[unit.sourceLaneIndex]
     : null;
-  const speedScale = String(rosterDef.productionBuildingType || "").trim().toLowerCase() === "blacksmith"
-    ? getBarracksSpeedMult(sourceLane && sourceLane.barracks)
-    : 1;
+  const speedScale = 1;
   const specialProps = resolveUnitSpecialProps(resolvedUnitDef);
   const productionBuildingType = String(rosterDef.productionBuildingType || "").trim().toLowerCase();
   const branchKey = String(rosterDef.branchKey || "").trim().toLowerCase();
@@ -2989,8 +2959,7 @@ module.exports = {
   HERO_ROSTER_DEFS,
   MARKET_ROSTER_DEFS,
   getBarracksLevelDef,
-  getBarracksSpeedMultForLevel,
-  getBarracksSpeedMult,
+
   getFoodLimitForTier,
   getBarracksRosterFoodCost,
   getMarketRosterFoodCost,

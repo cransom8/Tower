@@ -35,32 +35,21 @@ function describeUnitIndex(unit, hpMult = 1, dmgMult = 1, speedMult = 1) {
   return round(unitIndex({ hp, damage, attackSpeed, pathSpeed }), 2);
 }
 
-function summarizeTopUnits(units, barracksMaxMultiplier) {
+function summarizeTopUnits(units) {
   const enriched = units.map((unit) => {
     const baseIndex = describeUnitIndex(unit);
-    const lateIndex = describeUnitIndex(
-      unit,
-      unit.barracks_scales_hp ? barracksMaxMultiplier : 1,
-      unit.barracks_scales_dmg ? barracksMaxMultiplier : 1,
-      1
-    );
     const buildCost = Math.max(1, n(unit.build_cost, 1));
     return {
       key: unit.key,
       name: unit.name,
       buildCost,
       baseIndex,
-      lateIndex,
       basePerGold: round(baseIndex / buildCost, 2),
-      latePerGold: round(lateIndex / buildCost, 2),
-      scalesHp: !!unit.barracks_scales_hp,
-      scalesDmg: !!unit.barracks_scales_dmg,
     };
   });
 
   const byBase = [...enriched].sort((a, b) => b.basePerGold - a.basePerGold).slice(0, 5);
-  const byLate = [...enriched].sort((a, b) => b.latePerGold - a.latePerGold).slice(0, 5);
-  return { byBase, byLate };
+  return { byBase };
 }
 
 function buildWavePressureRows(waves, waveUnits) {
@@ -125,7 +114,7 @@ async function loadState() {
     db.query(`
       SELECT
         key, name, usage_scope, build_cost, send_cost, income, hp, attack_damage,
-        attack_speed, range, path_speed, barracks_scales_hp, barracks_scales_dmg,
+        attack_speed, range, path_speed,
         display_to_players, enabled
       FROM unit_types
       WHERE enabled = TRUE
@@ -159,15 +148,12 @@ async function main() {
   const transitionPhaseTicks = n(globalParams.transitionPhaseTicks, 0);
   const waveUnits = new Map(unitTypes.filter((unit) => unit.usage_scope === "wave_only").map((unit) => [unit.key, unit]));
   const playerUnits = unitTypes.filter((unit) => unit.usage_scope === "loadout_only");
-  const barracksMaxMultiplier = barracksLevels.length > 0
-    ? Math.max(...barracksLevels.map((entry) => n(entry.multiplier, 1)))
-    : 1;
 
   const waveRows = buildWavePressureRows(waves, waveUnits);
   const backslides = findBackslides(waveRows);
   const flatSegments = findFlatSegments(waveRows);
   const flatOnly = flatSegments.filter((row) => row.deltaVsPreviousWavePct != null && row.deltaVsPreviousWavePct > -5);
-  const topUnits = summarizeTopUnits(playerUnits, barracksMaxMultiplier);
+  const topUnits = summarizeTopUnits(playerUnits);
 
   printSection("Persisted Reports");
   printKeyValue("Completed balance reports", reportState.completed_reports);
@@ -185,27 +171,13 @@ async function main() {
   printKeyValue("Transition phase ticks", transitionPhaseTicks);
   printKeyValue("Assumed wave groups per round", DEFAULT_GROUPS_PER_WAVE);
 
-  printSection("Barracks Multipliers");
-  for (const level of barracksLevels) {
-    console.log(
-      `L${level.level}: x${round(level.multiplier, 2)} stats for ${n(level.upgrade_cost, 0)} gold`
-    );
-  }
-
   printSection("Top Human Efficiency");
   console.log("Best base efficiency per gold:");
   for (const unit of topUnits.byBase) {
     console.log(
-      `- ${unit.name} (${unit.key}) cost ${unit.buildCost}, base/gold ${unit.basePerGold}, late/gold ${unit.latePerGold}, scales hp=${unit.scalesHp} dmg=${unit.scalesDmg}`
+      `- ${unit.name} (${unit.key}) cost ${unit.buildCost}, base/gold ${unit.basePerGold}`
     );
   }
-  console.log("Best late efficiency per gold:");
-  for (const unit of topUnits.byLate) {
-    console.log(
-      `- ${unit.name} (${unit.key}) cost ${unit.buildCost}, base/gold ${unit.basePerGold}, late/gold ${unit.latePerGold}, scales hp=${unit.scalesHp} dmg=${unit.scalesDmg}`
-    );
-  }
-
   printSection("Wave Pressure Curve");
   for (const row of waveRows) {
     const delta = row.deltaVsPreviousWavePct == null ? "n/a" : `${row.deltaVsPreviousWavePct}%`;

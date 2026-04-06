@@ -80,6 +80,35 @@ function computeDamage(baseDmg, damageType, armorType, damageReductionPct, speci
 
 // ── Projectile System ─────────────────────────────────────────────────────────
 
+const PROJECTILE_PLAYER_ALLEGIANCES = new Set(["red", "yellow", "blue", "green"]);
+
+function normalizeProjectileAllegianceKey(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized)
+    return null;
+  if (normalized === "gold")
+    return "yellow";
+  return normalized;
+}
+
+function areProjectileAllegiancesHostile(left, right) {
+  const source = normalizeProjectileAllegianceKey(left);
+  const target = normalizeProjectileAllegianceKey(right);
+  if (!source || !target)
+    return false;
+  if (source === target)
+    return false;
+  if (source === "dungeon" || target === "dungeon")
+    return true;
+  return PROJECTILE_PLAYER_ALLEGIANCES.has(source) && PROJECTILE_PLAYER_ALLEGIANCES.has(target);
+}
+
+function getProjectileUnitAllegianceKey(unit) {
+  if (!unit)
+    return null;
+  return normalizeProjectileAllegianceKey(unit.allegianceKey || unit.sourceTeam || null);
+}
+
 /**
  * Create and push a projectile onto lane.projectiles.
  * @param {object} game
@@ -117,7 +146,7 @@ function fireProjectile(game, lane, source, targetId, stats) {
         : Number.isInteger(source.sourceLaneIndex)
           ? source.sourceLaneIndex
           : (source.kind === "tower" ? lane.laneIndex : -1),
-    sourceAllegianceKey: source.allegianceKey || null,
+    sourceAllegianceKey: source.allegianceKey || stats.sourceAllegianceKey || null,
     projectileType: stats.projectileType || source.kind,
     damageType:     stats.damageType || "NORMAL",
     behavior:       stats.behavior   || "single",
@@ -177,14 +206,30 @@ function resolveProjectile(game, lane, proj) {
     return false;
   }
 
+  function shouldDamageAdditionalUnit(unit, primaryTarget = null) {
+    if (!unit || unit.hp <= 0)
+      return false;
+    if (primaryTarget && unit.id === primaryTarget.id)
+      return true;
+
+    const sourceAllegiance = normalizeProjectileAllegianceKey(proj.sourceAllegianceKey);
+    const candidateAllegiance = getProjectileUnitAllegianceKey(unit);
+    if (!sourceAllegiance || !candidateAllegiance)
+      return false;
+
+    return areProjectileAllegiancesHostile(sourceAllegiance, candidateAllegiance);
+  }
+
   const behavior = proj.behavior || "single";
   const bp = proj.behaviorParams || {};
 
   // ── Splash ──────────────────────────────────────────────────────────────────
   if (behavior === "splash") {
+    const primary = lane.units.find(u => u.id === proj.targetId && u.hp > 0) || null;
     const radius = bp.radius || 1.5;
     for (const u of lane.units) {
       if (u.hp <= 0) continue;
+      if (!shouldDamageAdditionalUnit(u, primary)) continue;
       const pos = getUnitPos(u);
       if (!pos) continue;
       if (tileDist(proj.toX, proj.toY, pos.x, pos.y) <= radius) damageUnit(u);
@@ -205,6 +250,7 @@ function resolveProjectile(game, lane, proj) {
         for (const u of lane.units) {
           if (count >= maxTargets) break;
           if (u.id === primary.id || u.hp <= 0) continue;
+          if (!shouldDamageAdditionalUnit(u, primary)) continue;
           const pos = getUnitPos(u);
           if (!pos) continue;
           if (tileDist(primaryPos.x, primaryPos.y, pos.x, pos.y) <= pierceRadius) {
@@ -236,6 +282,7 @@ function resolveProjectile(game, lane, proj) {
       let next = null, nextDist = Infinity;
       for (const u of lane.units) {
         if (chainHit.has(u.id) || u.hp <= 0) continue;
+        if (!shouldDamageAdditionalUnit(u, current)) continue;
         const pos = getUnitPos(u);
         if (!pos) continue;
         const d = tileDist(currentPos.x, currentPos.y, pos.x, pos.y);
@@ -262,6 +309,7 @@ function resolveProjectile(game, lane, proj) {
       let next = null, nextDist = Infinity;
       for (const u of lane.units) {
         if (bounceHit.has(u.id) || u.hp <= 0) continue;
+        if (!shouldDamageAdditionalUnit(u, current)) continue;
         const pos = getUnitPos(u);
         if (!pos) continue;
         const d = tileDist(currentPos.x, currentPos.y, pos.x, pos.y);

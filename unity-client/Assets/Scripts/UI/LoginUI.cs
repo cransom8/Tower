@@ -756,12 +756,12 @@ namespace CastleDefender.UI
 
             foreach (var clipName in IntroClipFileNames)
             {
-                string path = BuildStreamingAssetUrl(clipName);
+                string path = BuildRemoteCinematicUrl(clipName);
                 if (!string.IsNullOrWhiteSpace(path))
                     _resolvedIntroVideoPaths.Add(path);
             }
 
-            _loopVideoPath = BuildStreamingAssetUrl(LoginLoopClipFileName);
+            _loopVideoPath = BuildRemoteCinematicUrl(LoginLoopClipFileName);
         }
 
         void StartNextIntroClip()
@@ -1198,13 +1198,13 @@ namespace CastleDefender.UI
             _skipIntroButton.gameObject.SetActive(show);
         }
 
-        string BuildStreamingAssetUrl(string fileName)
+        string BuildRemoteCinematicUrl(string fileName)
         {
             if (string.IsNullOrWhiteSpace(fileName))
                 return string.Empty;
 
-            string basePath = Application.streamingAssetsPath?.TrimEnd('/', '\\') ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(basePath))
+            string baseUrl = ResolvedBaseUrl?.TrimEnd('/') ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(baseUrl))
                 return string.Empty;
 
             string normalizedFolder = (LoginCinematicFolder ?? string.Empty).Trim().Trim('/', '\\');
@@ -1212,25 +1212,11 @@ namespace CastleDefender.UI
             if (string.IsNullOrWhiteSpace(normalizedFile))
                 return string.Empty;
 
-            if (basePath.Contains("://", StringComparison.Ordinal))
-            {
-                string url = string.IsNullOrWhiteSpace(normalizedFolder)
-                    ? $"{basePath}/{normalizedFile}"
-                    : $"{basePath}/{normalizedFolder}/{normalizedFile}";
-                return url.Replace("\\", "/");
-            }
-
-            string path = string.IsNullOrWhiteSpace(normalizedFolder)
-                ? Path.Combine(basePath, normalizedFile)
-                : Path.Combine(basePath, normalizedFolder, normalizedFile);
-
-            if (!File.Exists(path))
-            {
-                Debug.LogWarning($"[LoginUI] Login cinematic clip not found at '{path}'.");
-                return string.Empty;
-            }
-
-            return path;
+            string escapedFile = Uri.EscapeDataString(normalizedFile);
+            string normalizedRoute = normalizedFolder.Replace("\\", "/");
+            return string.IsNullOrWhiteSpace(normalizedRoute)
+                ? $"{baseUrl}/{escapedFile}"
+                : $"{baseUrl}/{normalizedRoute}/{escapedFile}";
         }
 
         static void SetCanvasGroupState(CanvasGroup group, float alpha, bool interactive)

@@ -106,6 +106,11 @@ function getLaneCombatSwitchDistanceMargin(deps = {}) {
   return Number.isFinite(value) && value > 0 ? value : 0.75;
 }
 
+function getLaneCombatTargetLockTicks(deps = {}) {
+  const value = Math.floor(Number(deps.LANE_COMBAT_TARGET_LOCK_TICKS));
+  return Number.isInteger(value) && value > 0 ? value : 10;
+}
+
 function getEngagementRangePadding(deps = {}) {
   const value = Number(deps.ENGAGEMENT_RANGE_PADDING);
   return Number.isFinite(value) && value >= 0 ? value : 2.0;
@@ -437,13 +442,14 @@ function clearUnitSupportTarget(unit, gameTick = 0, options = {}, deps = {}) {
   }, deps);
 }
 
-function assignUnitCombatTarget(unit, targetDescriptor, gameTick = 0) {
+function assignUnitCombatTarget(unit, targetDescriptor, gameTick = 0, deps = {}) {
   if (!unit || !targetDescriptor || !targetDescriptor.unitId)
     return false;
 
   const previousTargetId = unit.combatTarget && unit.combatTarget.unitId
     ? unit.combatTarget.unitId
     : null;
+  const isNewTarget = !previousTargetId || previousTargetId !== targetDescriptor.unitId;
   unit.combatTarget = {
     unitId: targetDescriptor.unitId,
     kind: targetDescriptor.kind || "unit",
@@ -452,15 +458,15 @@ function assignUnitCombatTarget(unit, targetDescriptor, gameTick = 0) {
   };
   unit.combatTargetId = targetDescriptor.unitId;
   unit.currentTargetId = targetDescriptor.unitId;
-  unit.combatTargetLockedUntilTick = 0;
+  unit.combatTargetLockedUntilTick = gameTick + getLaneCombatTargetLockTicks(deps);
   unit.routeRecoveringFromCombatTicks = 0;
-  if (!previousTargetId || previousTargetId !== targetDescriptor.unitId)
+  if (isNewTarget)
     unit.regroupUntilTick = 0;
   return true;
 }
 
-function assignUnitSupportTarget(unit, targetDescriptor, gameTick = 0) {
-  return assignUnitCombatTarget(unit, targetDescriptor, gameTick);
+function assignUnitSupportTarget(unit, targetDescriptor, gameTick = 0, deps = {}) {
+  return assignUnitCombatTarget(unit, targetDescriptor, gameTick, deps);
 }
 
 function isLaneControlledUnitInRegroupWindow(unit, gameTick, deps = {}) {

@@ -2079,7 +2079,7 @@ const UNIT_TYPE_FIELDS = [
   'damage_type','armor_type','damage_reduction_pct',
   'send_cost','build_cost','income','refund_pct',
   'bounty','projectile_travel_ticks','special_props',
-  'barracks_scales_hp','barracks_scales_dmg',
+
   'icon_url','sprite_url','animation_url',
   'sprite_url_front','sprite_url_back',
   'animation_url_front','animation_url_back',

@@ -218,8 +218,7 @@ function resolveUnitDef(key, deps = {}) {
     isSplash: (dbBehavior || fallbackBehavior) === "splash",
     warlockDebuff: specialProps.warlockDebuff != null ? !!specialProps.warlockDebuff : false,
     structBonus: specialProps.structBonus != null ? +specialProps.structBonus : 0,
-    barracks_scales_hp: unitType.barracks_scales_hp === true,
-    barracks_scales_dmg: unitType.barracks_scales_dmg === true,
+
   };
 }
 

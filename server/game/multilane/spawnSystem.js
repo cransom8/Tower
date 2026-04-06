@@ -257,13 +257,8 @@ function validateSpawnDefinition(game, targetLane, waveDef, options = {}, deps =
 }
 
 function getEffectiveWaveEntrySpeedMult(game, lane, waveDef, deps = {}) {
-  const getSourceLane = requireDepFunction(deps, "getSourceLane");
-  const getBarracksSpeedMult = requireDepFunction(deps, "getBarracksSpeedMult");
   const safeWaveDef = waveDef && typeof waveDef === "object" ? waveDef : {};
   const authoredSpeedMult = Math.max(0.01, Number(safeWaveDef.speed_mult || 1));
-  const sourceLane = getSourceLane(game, safeWaveDef.sourceLaneIndex);
-  if (sourceLane)
-    return authoredSpeedMult * getBarracksSpeedMult(sourceLane.barracks);
   return authoredSpeedMult * getLaneWaveSpeedMult(lane);
 }
 

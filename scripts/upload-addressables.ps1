@@ -156,6 +156,34 @@ function Upload-Object {
     }
 }
 
+function Publish-UploadProgress {
+    param(
+        [string]$Phase,
+        [long]$ProcessedBytes,
+        [long]$TotalBytes,
+        [string]$CurrentItem
+    )
+
+    $safeItemName = if ([string]::IsNullOrWhiteSpace($CurrentItem)) {
+        ""
+    }
+    else {
+        $CurrentItem.Replace('|', '/')
+    }
+
+    $clampedTotalBytes = [Math]::Max(1L, $TotalBytes)
+    $percentComplete = [int][Math]::Floor(([double]$ProcessedBytes / [double]$clampedTotalBytes) * 100.0)
+    $status = if ([string]::IsNullOrWhiteSpace($safeItemName)) {
+        "$ProcessedBytes / $TotalBytes bytes"
+    }
+    else {
+        "$safeItemName ($ProcessedBytes / $TotalBytes bytes)"
+    }
+
+    Write-Progress -Id 1 -Activity "Uploading $Platform addressables" -Status $status -PercentComplete $percentComplete
+    Write-Output "##UPLOAD_PROGRESS|$Phase|$ProcessedBytes|$TotalBytes|$safeItemName"
+}
+
 function Get-RepoRelativePath {
     param([string]$AbsolutePath)
 
@@ -201,17 +229,6 @@ foreach ($catalogFile in $catalogFiles) {
     }
 
     $metadataFiles += $sourcePath
-    Write-Host "Uploading metadata: $catalogFile"
-    $contentType = if ($catalogFile -eq "settings.json") {
-        "application/json"
-    }
-    elseif ($catalogFile -like "*.hash") {
-        "text/plain"
-    }
-    else {
-        "application/octet-stream"
-    }
-    Upload-Object -FilePath $sourcePath -ObjectName "addressables/$Platform/$catalogFile" -ContentType $contentType -CacheControl "public, max-age=0, must-revalidate"
 }
 
 if ($metadataFiles.Count -eq 0) {
@@ -223,12 +240,83 @@ if ($bundleFiles.Count -eq 0) {
     throw "No .bundle files were found in $resolvedSourceDir"
 }
 
-foreach ($bundleFile in $bundleFiles) {
-    Write-Host "Uploading bundle: $($bundleFile.Name)"
-    Upload-Object -FilePath $bundleFile.FullName -ObjectName "addressables/$Platform/$($bundleFile.Name)" -ContentType "application/octet-stream" -CacheControl "public, max-age=31536000, immutable"
+$loginCinematicsDir = Resolve-WorkspacePath "unity-client/Assets/AddressableContent/LoginCinematics"
+$loginCinematicFiles = @()
+if (Test-Path -LiteralPath $loginCinematicsDir) {
+    $loginCinematicFiles = @(Get-ChildItem -LiteralPath $loginCinematicsDir -File -Filter *.mp4)
+}
+else {
+    Write-Host "Login cinematics directory not found; skipping video upload: $loginCinematicsDir"
 }
 
+$uploadItems = @()
+foreach ($metadataFile in $metadataFiles) {
+    $metadataFileName = [System.IO.Path]::GetFileName($metadataFile)
+    $metadataContentType = if ($metadataFileName -eq "settings.json") {
+        "application/json"
+    }
+    elseif ($metadataFileName -like "*.hash") {
+        "text/plain"
+    }
+    else {
+        "application/octet-stream"
+    }
+
+    $uploadItems += [PSCustomObject]@{
+        Kind = "metadata"
+        Label = "metadata: $metadataFileName"
+        FileName = $metadataFileName
+        FilePath = $metadataFile
+        ObjectName = "addressables/$Platform/$metadataFileName"
+        ContentType = $metadataContentType
+        CacheControl = "public, max-age=0, must-revalidate"
+        SizeBytes = [int64](Get-Item -LiteralPath $metadataFile).Length
+    }
+}
+
+foreach ($bundleFile in $bundleFiles) {
+    $uploadItems += [PSCustomObject]@{
+        Kind = "bundle"
+        Label = "bundle: $($bundleFile.Name)"
+        FileName = $bundleFile.Name
+        FilePath = $bundleFile.FullName
+        ObjectName = "addressables/$Platform/$($bundleFile.Name)"
+        ContentType = "application/octet-stream"
+        CacheControl = "public, max-age=31536000, immutable"
+        SizeBytes = [int64]$bundleFile.Length
+    }
+}
+
+foreach ($loginCinematicFile in $loginCinematicFiles) {
+    $uploadItems += [PSCustomObject]@{
+        Kind = "login-cinematic"
+        Label = "login cinematic: $($loginCinematicFile.Name)"
+        FileName = $loginCinematicFile.Name
+        FilePath = $loginCinematicFile.FullName
+        ObjectName = "addressables/LoginCinematics/$($loginCinematicFile.Name)"
+        ContentType = "video/mp4"
+        CacheControl = "public, max-age=31536000, immutable"
+        SizeBytes = [int64]$loginCinematicFile.Length
+    }
+}
+
+[long]$totalUploadBytes = ($uploadItems | Measure-Object -Property SizeBytes -Sum).Sum
+[long]$processedUploadBytes = 0L
+Publish-UploadProgress -Phase "start" -ProcessedBytes $processedUploadBytes -TotalBytes $totalUploadBytes -CurrentItem "starting"
+
+foreach ($uploadItem in $uploadItems) {
+    Publish-UploadProgress -Phase "file-start" -ProcessedBytes $processedUploadBytes -TotalBytes $totalUploadBytes -CurrentItem $uploadItem.FileName
+    Write-Host "Uploading $($uploadItem.Label)"
+    Upload-Object -FilePath $uploadItem.FilePath -ObjectName $uploadItem.ObjectName -ContentType $uploadItem.ContentType -CacheControl $uploadItem.CacheControl
+    $processedUploadBytes += $uploadItem.SizeBytes
+    Publish-UploadProgress -Phase "file-complete" -ProcessedBytes $processedUploadBytes -TotalBytes $totalUploadBytes -CurrentItem $uploadItem.FileName
+}
+
+Write-Progress -Id 1 -Activity "Uploading $Platform addressables" -Completed
+Write-Output "##UPLOAD_PROGRESS|end|$processedUploadBytes|$totalUploadBytes|complete"
+
 Write-Host "Uploaded $($metadataFiles.Count) metadata file(s) and $($bundleFiles.Count) bundle(s)."
+Write-Host "Uploaded $($loginCinematicFiles.Count) login cinematic file(s)."
 
 if ($StageRailwayMetadata.IsPresent) {
     $relativeMetadataFiles = @()

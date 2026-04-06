@@ -556,11 +556,6 @@ const resolveTowerDef = bindSystemMethodWithDeps(
 // ── Barracks helpers ───────────────────────────────────────────────────────────
 
 const getBarracksLevelDef = bindSystemMethod(barracksSystem, "getBarracksLevelDef");
-const getBarracksSpeedMultForLevel = bindSystemMethod(
-  barracksSystem,
-  "getBarracksSpeedMultForLevel"
-);
-const getBarracksSpeedMult = bindSystemMethod(barracksSystem, "getBarracksSpeedMult");
 
 function getBaseCombatPathSpeed(unitTypeKey) {
   const unitDef = resolveUnitDef(unitTypeKey);
@@ -687,19 +682,7 @@ const getEffectiveWaveEntrySpeedMult = bindSystemMethodWithDeps(
   () => SPAWN_SYSTEM_DEPS
 );
 
-function getBarracksUnitCostMult(br) {
-  if (!br || typeof br !== "object") return 1;
-  if (Number.isFinite(br.unitCostMult)) return Math.max(0, Number(br.unitCostMult));
-  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
-  return 1;
-}
 
-function getBarracksUnitIncomeMult(br) {
-  if (!br || typeof br !== "object") return 1;
-  if (Number.isFinite(br.unitIncomeMult)) return Math.max(0, Number(br.unitIncomeMult));
-  if (Number.isFinite(br.hpMult)) return Math.max(0, Number(br.hpMult));
-  return 1;
-}
 
 const getFortressMaxTier = bindSystemMethod(fortressSystem, "getFortressMaxTier");
 const createFortressPadStates = bindSystemMethod(
@@ -1090,7 +1073,6 @@ const LANE_COMMAND_SYSTEM_DEPS = Object.freeze({
 const SPAWN_SYSTEM_DEPS = Object.freeze({
   log,
   getSourceLane,
-  getBarracksSpeedMult,
   markLaneCommandAssignmentsDirty,
   normalizeAllegianceKey,
   normalizeBarracksSiteId,
@@ -1202,6 +1184,7 @@ const COMBAT_SYSTEM_DEPS = Object.freeze({
   LANE_COMBAT_POCKET_RADIUS_SCALE,
   LANE_COMBAT_POCKET_RADIUS_PADDING,
   LANE_COMBAT_REGROUP_TICKS,
+  LANE_COMBAT_TARGET_LOCK_TICKS,
   LANE_COMBAT_SWITCH_DISTANCE_MARGIN,
   ENGAGEMENT_RANGE_PADDING,
   DEFENDER_ENGAGEMENT_RANGE,
@@ -1316,6 +1299,7 @@ const TICK_SYSTEM_DEPS = Object.freeze({
   ENABLE_SPAWN_AUDIT_LOGS,
   WAVE_ROUTE_COMBAT_RECOVERY_TICKS,
   ENABLE_WAVE_UNIT_TRACE,
+  LANE_COMBAT_TARGET_LOCK_TICKS,
 });
 
 const GAME_RUNTIME_SYSTEM_DEPS = Object.freeze({

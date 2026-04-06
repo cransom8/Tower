@@ -193,9 +193,11 @@ namespace CastleDefender.UI
         const float CivicLaneRowHeight = 564f;
         const float ChainArrowWidth = 34f;
         const float CompactArrowWidth = 28f;
-        const float RaceCardHeight = 404f;
+        // Race cards include portrait, dossier copy, and the selected-card Continue button.
+        // Keep enough fixed height so the footer action does not get clipped off-screen.
+        const float RaceCardHeight = 484f;
         const float RaceCardWidth = 316f;
-        const float CompactRaceCardHeight = 332f;
+        const float CompactRaceCardHeight = 392f;
         const float CompactRaceCardWidth = 264f;
         const int PlaceholderRaceCardCount = 3;
         const float MinLaneRowWidth = 960f;

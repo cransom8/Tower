@@ -8,31 +8,63 @@ using UnityEngine;
 
 public static class BuildAndroid
 {
-    const string DefaultOutputRelativePath = "../builds/android/forge-wars.aab";
+    const string DefaultBundleOutputRelativePath = "../builds/android/forge-wars.aab";
+    const string DefaultLocalApkOutputRelativePath = "../builds/android/forge-wars-local.apk";
     const string DefaultSecretsRelativePath = "../.local-secrets/forge-wars-upload.env";
 
     [MenuItem("Castle Defender/Build/Build Android App Bundle")]
     public static void BuildReleaseMenu() => BuildRelease();
 
-    public static AndroidBuildResult BuildRelease()
+    [MenuItem("Castle Defender/Build/Build Local Android APK")]
+    public static void BuildLocalApkMenu() => BuildLocalApk();
+
+    public static AndroidBuildResult BuildRelease(bool buildRemoteContent = true)
+    {
+        return BuildConfiguredPackage(
+            buildRemoteContent: buildRemoteContent,
+            buildAppBundle: true,
+            developmentBuild: false,
+            allowDebugging: false,
+            connectProfiler: false,
+            outputSettingNames: new[] { "ANDROID_BUILD_OUTPUT" },
+            defaultOutputRelativePath: DefaultBundleOutputRelativePath,
+            requireCustomKeystore: true);
+    }
+
+    public static AndroidBuildResult BuildLocalApk(bool buildRemoteContent = true)
+    {
+        return BuildConfiguredPackage(
+            buildRemoteContent: buildRemoteContent,
+            buildAppBundle: false,
+            developmentBuild: true,
+            allowDebugging: true,
+            connectProfiler: false,
+            outputSettingNames: new[] { "ANDROID_LOCAL_BUILD_OUTPUT", "ANDROID_APK_OUTPUT" },
+            defaultOutputRelativePath: DefaultLocalApkOutputRelativePath,
+            requireCustomKeystore: false);
+    }
+
+    static AndroidBuildResult BuildConfiguredPackage(
+        bool buildRemoteContent,
+        bool buildAppBundle,
+        bool developmentBuild,
+        bool allowDebugging,
+        bool connectProfiler,
+        IReadOnlyList<string> outputSettingNames,
+        string defaultOutputRelativePath,
+        bool requireCustomKeystore)
     {
         string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-        string outputPath = ResolveOutputPath(unityProjectRoot);
-        string outputDirectory = Path.GetDirectoryName(outputPath);
         var localSettings = LoadLocalSettings(unityProjectRoot);
+        string outputPath = ResolveOutputPath(unityProjectRoot, localSettings, outputSettingNames, defaultOutputRelativePath);
+        string outputDirectory = Path.GetDirectoryName(outputPath);
 
         if (string.IsNullOrWhiteSpace(outputDirectory))
             throw new InvalidOperationException("Failed to resolve Android build output directory.");
 
         Directory.CreateDirectory(outputDirectory);
 
-        string keystorePath = RequireSetting("ANDROID_KEYSTORE_PATH", localSettings);
-        string keystorePassword = RequireSetting("ANDROID_KEYSTORE_PASS", localSettings);
-        string keyaliasName = RequireSetting("ANDROID_KEYALIAS_NAME", localSettings);
-        string keyaliasPassword = RequireSetting("ANDROID_KEYALIAS_PASS", localSettings);
-
-        if (!File.Exists(keystorePath))
-            throw new FileNotFoundException($"Android keystore not found at '{keystorePath}'.");
+        ValidateOutputPath(outputPath, buildAppBundle ? ".aab" : ".apk");
 
         var enabledScenes = EditorBuildSettings.scenes
             .Where(scene => scene.enabled)
@@ -57,23 +89,29 @@ public static class BuildAndroid
 
         string previousBundleVersion = PlayerSettings.bundleVersion;
         int previousVersionCode = PlayerSettings.Android.bundleVersionCode;
+        string previousApplicationIdentifier = PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android);
 
         try
         {
             if (previousTarget != BuildTarget.Android)
                 EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
 
-            EditorUserBuildSettings.buildAppBundle = true;
-            EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
-            EditorUserBuildSettings.development = false;
-            EditorUserBuildSettings.connectProfiler = false;
-            EditorUserBuildSettings.allowDebugging = false;
+            if (buildRemoteContent)
+            {
+                CastleDefender.Editor.AddressablesBuildResult addressablesBuild =
+                    CastleDefender.Editor.RemoteContentBuildAddressables.BuildForTarget(BuildTarget.Android, restorePreviousTarget: false);
+                Debug.Log(
+                    $"[BuildAndroid] Remote content built for Android. " +
+                    $"{addressablesBuild.Summary} PublishedPath={addressablesBuild.PublishedPath ?? "unpublished"}");
+            }
 
-            PlayerSettings.Android.useCustomKeystore = true;
-            PlayerSettings.Android.keystoreName = keystorePath;
-            PlayerSettings.Android.keystorePass = keystorePassword;
-            PlayerSettings.Android.keyaliasName = keyaliasName;
-            PlayerSettings.Android.keyaliasPass = keyaliasPassword;
+            ConfigureSigning(localSettings, requireCustomKeystore);
+
+            EditorUserBuildSettings.buildAppBundle = buildAppBundle;
+            EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+            EditorUserBuildSettings.development = developmentBuild;
+            EditorUserBuildSettings.connectProfiler = connectProfiler;
+            EditorUserBuildSettings.allowDebugging = allowDebugging;
 
             string bundleVersion = ReadSetting("ANDROID_BUNDLE_VERSION", localSettings);
             if (!string.IsNullOrWhiteSpace(bundleVersion))
@@ -88,12 +126,25 @@ public static class BuildAndroid
                 PlayerSettings.Android.bundleVersionCode = parsedVersionCode;
             }
 
+            string buildOptionsLabel = buildAppBundle ? "Android App Bundle" : "local Android APK";
+            string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android);
+            if (string.IsNullOrWhiteSpace(applicationIdentifier))
+                throw new InvalidOperationException($"Android application identifier is not configured. Set it in Player Settings before building the {buildOptionsLabel}.");
+
+            BuildOptions buildOptions = BuildOptions.None;
+            if (developmentBuild)
+                buildOptions |= BuildOptions.Development;
+            if (allowDebugging)
+                buildOptions |= BuildOptions.AllowDebugging;
+            if (connectProfiler)
+                buildOptions |= BuildOptions.ConnectWithProfiler;
+
             var buildPlayerOptions = new BuildPlayerOptions
             {
                 scenes = enabledScenes,
                 locationPathName = outputPath,
                 target = BuildTarget.Android,
-                options = BuildOptions.None
+                options = buildOptions
             };
 
             BuildReport report = BuildPipeline.BuildPlayer(buildPlayerOptions);
@@ -104,12 +155,19 @@ public static class BuildAndroid
             Debug.Log($"[BuildAndroid] Success. Output: {outputPath}");
             Debug.Log($"[BuildAndroid] Archived release: {archivedOutputPath}");
             Debug.Log($"[BuildAndroid] Version: {PlayerSettings.bundleVersion} ({PlayerSettings.Android.bundleVersionCode})");
-            return new AndroidBuildResult(outputPath, archivedOutputPath, PlayerSettings.bundleVersion, PlayerSettings.Android.bundleVersionCode);
+            return new AndroidBuildResult(
+                outputPath,
+                archivedOutputPath,
+                PlayerSettings.bundleVersion,
+                PlayerSettings.Android.bundleVersionCode,
+                applicationIdentifier,
+                buildAppBundle);
         }
         finally
         {
             PlayerSettings.bundleVersion = previousBundleVersion;
             PlayerSettings.Android.bundleVersionCode = previousVersionCode;
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, previousApplicationIdentifier);
 
             PlayerSettings.Android.useCustomKeystore = previousUseCustomKeystore;
             PlayerSettings.Android.keystoreName = previousKeystoreName;
@@ -139,7 +197,11 @@ public static class BuildAndroid
 
         string baseName = Path.GetFileNameWithoutExtension(outputPath);
         string safeBundleVersion = SanitizeFileNameSegment(string.IsNullOrWhiteSpace(bundleVersion) ? "unknown" : bundleVersion.Trim());
-        string archivedOutputPath = Path.Combine(releasesDirectory, $"{baseName}-v{safeBundleVersion}-code{versionCode}.aab");
+        string extension = Path.GetExtension(outputPath);
+        if (string.IsNullOrWhiteSpace(extension))
+            throw new InvalidOperationException($"Android build output '{outputPath}' is missing a file extension.");
+
+        string archivedOutputPath = Path.Combine(releasesDirectory, $"{baseName}-v{safeBundleVersion}-code{versionCode}{extension}");
         File.Copy(outputPath, archivedOutputPath, true);
         return archivedOutputPath;
     }
@@ -150,26 +212,78 @@ public static class BuildAndroid
         return new string(value.Select(ch => invalidChars.Contains(ch) ? '-' : ch).ToArray());
     }
 
-    static string ResolveOutputPath(string projectRoot)
+    static void ValidateOutputPath(string outputPath, string expectedExtension)
     {
-        var localSettings = LoadLocalSettings(projectRoot);
-        string configuredOutput = ReadSetting("ANDROID_BUILD_OUTPUT", localSettings);
+        if (!string.Equals(Path.GetExtension(outputPath), expectedExtension, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Android build output '{outputPath}' must use the '{expectedExtension}' extension.");
+    }
+
+    static void ConfigureSigning(IReadOnlyDictionary<string, string> localSettings, bool requireCustomKeystore)
+    {
+        string keystorePath = ReadSetting("ANDROID_KEYSTORE_PATH", localSettings);
+        string keystorePassword = ReadSetting("ANDROID_KEYSTORE_PASS", localSettings);
+        string keyaliasName = ReadSetting("ANDROID_KEYALIAS_NAME", localSettings);
+        string keyaliasPassword = ReadSetting("ANDROID_KEYALIAS_PASS", localSettings);
+
+        bool hasAnyKeystoreSetting =
+            !string.IsNullOrWhiteSpace(keystorePath) ||
+            !string.IsNullOrWhiteSpace(keystorePassword) ||
+            !string.IsNullOrWhiteSpace(keyaliasName) ||
+            !string.IsNullOrWhiteSpace(keyaliasPassword);
+
+        bool hasAllKeystoreSettings =
+            !string.IsNullOrWhiteSpace(keystorePath) &&
+            !string.IsNullOrWhiteSpace(keystorePassword) &&
+            !string.IsNullOrWhiteSpace(keyaliasName) &&
+            !string.IsNullOrWhiteSpace(keyaliasPassword);
+
+        if (requireCustomKeystore && !hasAllKeystoreSettings)
+            throw new InvalidOperationException("Missing required Android signing settings for the release build.");
+
+        if (!hasAnyKeystoreSetting)
+        {
+            if (requireCustomKeystore)
+                throw new InvalidOperationException("Android release builds require a custom keystore.");
+
+            PlayerSettings.Android.useCustomKeystore = false;
+            Debug.LogWarning("[BuildAndroid] No custom keystore configured for the local APK build. Unity will use its default debug signing.");
+            return;
+        }
+
+        if (!hasAllKeystoreSettings)
+            throw new InvalidOperationException("Android keystore settings are incomplete. Either provide all ANDROID_KEYSTORE_* values or remove them for the local APK build.");
+
+        if (!File.Exists(keystorePath))
+            throw new FileNotFoundException($"Android keystore not found at '{keystorePath}'.");
+
+        PlayerSettings.Android.useCustomKeystore = true;
+        PlayerSettings.Android.keystoreName = keystorePath;
+        PlayerSettings.Android.keystorePass = keystorePassword;
+        PlayerSettings.Android.keyaliasName = keyaliasName;
+        PlayerSettings.Android.keyaliasPass = keyaliasPassword;
+    }
+
+    static string ResolveOutputPath(
+        string projectRoot,
+        IReadOnlyDictionary<string, string> localSettings,
+        IReadOnlyList<string> settingNames,
+        string defaultOutputRelativePath)
+    {
+        string configuredOutput = null;
+        foreach (string settingName in settingNames)
+        {
+            configuredOutput = ReadSetting(settingName, localSettings);
+            if (!string.IsNullOrWhiteSpace(configuredOutput))
+                break;
+        }
+
         string pathToResolve = string.IsNullOrWhiteSpace(configuredOutput)
-            ? DefaultOutputRelativePath
+            ? defaultOutputRelativePath
             : configuredOutput.Trim();
 
         return Path.IsPathRooted(pathToResolve)
             ? pathToResolve
             : Path.GetFullPath(Path.Combine(projectRoot, pathToResolve));
-    }
-
-    static string RequireSetting(string name, IReadOnlyDictionary<string, string> localSettings)
-    {
-        string value = ReadSetting(name, localSettings);
-        if (string.IsNullOrWhiteSpace(value))
-            throw new InvalidOperationException($"Missing required setting '{name}'.");
-
-        return value.Trim();
     }
 
     static string ReadSetting(string name, IReadOnlyDictionary<string, string> localSettings)
@@ -212,16 +326,26 @@ public static class BuildAndroid
 
 public sealed class AndroidBuildResult
 {
-    public AndroidBuildResult(string outputPath, string archivedOutputPath, string bundleVersion, int versionCode)
+    public AndroidBuildResult(
+        string outputPath,
+        string archivedOutputPath,
+        string bundleVersion,
+        int versionCode,
+        string applicationIdentifier,
+        bool isAppBundle)
     {
         OutputPath = outputPath ?? throw new ArgumentNullException(nameof(outputPath));
         ArchivedOutputPath = archivedOutputPath ?? throw new ArgumentNullException(nameof(archivedOutputPath));
         BundleVersion = bundleVersion ?? throw new ArgumentNullException(nameof(bundleVersion));
         VersionCode = versionCode;
+        ApplicationIdentifier = applicationIdentifier ?? throw new ArgumentNullException(nameof(applicationIdentifier));
+        IsAppBundle = isAppBundle;
     }
 
     public string OutputPath { get; }
     public string ArchivedOutputPath { get; }
     public string BundleVersion { get; }
     public int VersionCode { get; }
+    public string ApplicationIdentifier { get; }
+    public bool IsAppBundle { get; }
 }

@@ -96,6 +96,8 @@ namespace CastleDefender.Editor
         {
             if (!EditorApplication.ExecuteMenuItem("Castle Defender/Remote Content/Sync Registry To Addressables"))
                 Debug.LogWarning("[RemoteContentBuildAddressables] Failed to execute registry-to-addressables sync before build.");
+
+            SetupRemoteAudioAddressables.SyncRemoteAudio();
         }
 
         static void SwitchBuildTarget(BuildTarget target)

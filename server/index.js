@@ -5,6 +5,7 @@ require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
+const https = require("https");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
@@ -383,6 +384,10 @@ const unityAddressablesDirCandidates = [
   path.join(__dirname, "..", "unity-client", "ServerData"),
   path.join(__dirname, "unity-client", "ServerData"),
 ];
+const loginCinematicsDirCandidates = [
+  path.join(__dirname, "..", "unity-client", "Assets", "AddressableContent", "LoginCinematics"),
+  path.join(__dirname, "unity-client", "Assets", "AddressableContent", "LoginCinematics"),
+];
 
 // Unity WebGL build is served from the dedicated Unity client path.
 const unityClientDir =
@@ -404,6 +409,11 @@ const unityAddressablesDir =
   unityAddressablesDirCandidates.find((dir) => fs.existsSync(dir)) ||
   unityAddressablesDirCandidates[0];
 log.info("unity addressables dir", { unityAddressablesDir });
+
+const loginCinematicsDir =
+  loginCinematicsDirCandidates.find((dir) => fs.existsSync(dir)) ||
+  loginCinematicsDirCandidates[0];
+log.info("login cinematics dir", { loginCinematicsDir });
 
 // Unity WebGL Brotli middleware — must run BEFORE express.static.
 // Unity builds output .js.br / .wasm.br / .data.br files that need
@@ -437,6 +447,73 @@ function unityWebGLMiddleware(baseDir) {
   };
 }
 
+function createCdnProxyMiddleware(cdnBase, assetBasePath, logLabel) {
+  const cdnUrl = new URL(cdnBase.replace(/\/$/, "") + "/");
+  const upstreamBasePath = cdnUrl.pathname.replace(/\/$/, "") + assetBasePath;
+  return (req, res) => {
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Range");
+      res.setHeader("Access-Control-Max-Age", "86400");
+      return res.status(204).end();
+    }
+
+    req.socket.setTimeout(0);
+    if (res.socket) {
+      res.socket.setTimeout(0);
+    }
+
+    const upstreamPath = upstreamBasePath + req.url;
+    const requestHeaders = {};
+    const passthroughRequestHeaders = ["range", "if-none-match", "if-modified-since"];
+    for (const headerName of passthroughRequestHeaders) {
+      if (req.headers[headerName]) {
+        requestHeaders[headerName] = req.headers[headerName];
+      }
+    }
+
+    const proxyReq = https.request(
+      {
+        hostname: cdnUrl.hostname,
+        port: cdnUrl.port || undefined,
+        path: upstreamPath,
+        method: req.method,
+        headers: requestHeaders,
+      },
+      (proxyRes) => {
+        const forwardedHeaders = [
+          "content-type",
+          "content-length",
+          "content-encoding",
+          "cache-control",
+          "etag",
+          "last-modified",
+          "accept-ranges",
+          "content-range",
+        ];
+        for (const headerName of forwardedHeaders) {
+          if (proxyRes.headers[headerName]) {
+            res.setHeader(headerName, proxyRes.headers[headerName]);
+          }
+        }
+
+        res.status(proxyRes.statusCode || 502);
+        proxyRes.pipe(res);
+      }
+    );
+
+    proxyReq.on("error", (err) => {
+      log.error(`${logLabel} proxy error`, { path: req.path, err: err.message });
+      if (!res.headersSent) {
+        res.status(502).end();
+      }
+    });
+
+    proxyReq.end();
+  };
+}
+
 app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 if (process.env.ADDRESSABLES_CDN_URL) {
@@ -445,39 +522,16 @@ if (process.env.ADDRESSABLES_CDN_URL) {
   // Proxy GCS responses directly — redirecting to GCS causes CORS failures because
   // Unity WebGL's internal XHR wrapper does not trigger standard browser CORS redirect
   // handling. By proxying, the browser sees everything as same-origin (no CORS needed).
-  const https = require("https");
-  const cdnUrl = new URL(cdnBase + "/");
-  app.use("/addressables", (req, res) => {
-    if (req.method === "OPTIONS") {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-      res.setHeader("Access-Control-Max-Age", "86400");
-      return res.status(204).end();
-    }
-    // Disable socket timeouts so large bundles (50-100MB) aren't cut mid-stream
-    req.socket.setTimeout(0);
-    res.socket && res.socket.setTimeout(0);
-    const upstreamPath = cdnUrl.pathname.replace(/\/$/, "") + req.path;
-    const proxyReq = https.request(
-      { hostname: cdnUrl.hostname, path: upstreamPath, method: req.method },
-      (proxyRes) => {
-        const fwd = ["content-type", "content-length", "content-encoding", "cache-control", "etag", "last-modified", "accept-ranges"];
-        for (const h of fwd) {
-          if (proxyRes.headers[h]) res.setHeader(h, proxyRes.headers[h]);
-        }
-        res.status(proxyRes.statusCode);
-        proxyRes.pipe(res);
-      }
-    );
-    proxyReq.on("error", (err) => {
-      log.error("addressables proxy error", { path: req.path, err: err.message });
-      if (!res.headersSent) res.status(502).end();
-    });
-    proxyReq.end();
-  });
+  app.use("/addressables", createCdnProxyMiddleware(cdnBase, "", "addressables"));
+  app.use("/LoginCinematics", createCdnProxyMiddleware(cdnBase, "/LoginCinematics", "login cinematics"));
 } else {
   log.info("addressables served from local filesystem", { unityAddressablesDir });
   app.use("/addressables", express.static(unityAddressablesDir, { index: false }));
+  if (fs.existsSync(loginCinematicsDir)) {
+    app.use("/LoginCinematics", express.static(loginCinematicsDir, { index: false, immutable: true, maxAge: "1y" }));
+  } else {
+    log.warn("login cinematics directory missing; remote intro videos will 404", { loginCinematicsDir });
+  }
 }
 app.use("/assets", express.static(adminAssetDir, { index: false }));
 
