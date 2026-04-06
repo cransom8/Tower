@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -63,18 +64,46 @@ namespace CastleDefender.Editor
             EditorUtility.DisplayProgressBar(progressTitle, "Building Android addressables...", 0.15f);
             AddressablesBuildResult addressablesBuild = RemoteContentBuildAddressables.BuildForTarget(BuildTarget.Android, restorePreviousTarget: false);
 
-            EditorUtility.DisplayProgressBar(progressTitle, "Building Android app bundle...", 0.55f);
-            AndroidBuildResult androidBuild = BuildAndroid.BuildRelease(buildRemoteContent: false);
-
-            ProcessResult uploadResult = RunUploadScript(
+            EditorUtility.DisplayProgressBar(progressTitle, "Starting GCS upload...", 0.52f);
+            using RunningProcess uploadProcess = StartUploadScript(
                 context,
                 progressTitle,
-                progressStart: 0.82f,
+                progressStart: 0.84f,
                 progressEnd: 0.97f,
                 stageRailwayMetadata: true,
                 failurePrefix: "[DeployAndroid] Upload step failed.");
 
-            LogProcessOutput(uploadResult);
+            ExceptionDispatchInfo buildFailure = null;
+            AndroidBuildResult androidBuild = null;
+            try
+            {
+                EditorUtility.DisplayProgressBar(progressTitle, "Building Android app bundle while addressables upload...", 0.55f);
+                androidBuild = BuildAndroid.BuildRelease(buildRemoteContent: false);
+            }
+            catch (Exception ex)
+            {
+                buildFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+
+            ExceptionDispatchInfo uploadFailure = null;
+            ProcessResult uploadResult = null;
+            try
+            {
+                uploadResult = WaitForProcess(uploadProcess);
+            }
+            catch (Exception ex)
+            {
+                uploadFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+
+            if (uploadResult != null)
+                LogProcessOutput(uploadResult);
+
+            if (buildFailure != null)
+                buildFailure.Throw();
+
+            if (uploadFailure != null)
+                uploadFailure.Throw();
 
             EditorUtility.DisplayProgressBar(progressTitle, "Finishing Android deploy...", 1f);
             Debug.Log(
@@ -95,18 +124,46 @@ namespace CastleDefender.Editor
             EditorUtility.DisplayProgressBar(progressTitle, "Building Android addressables...", 0.32f);
             AddressablesBuildResult addressablesBuild = RemoteContentBuildAddressables.BuildForTarget(BuildTarget.Android, restorePreviousTarget: false);
 
-            EditorUtility.DisplayProgressBar(progressTitle, "Building local Android APK...", 0.60f);
-            AndroidBuildResult androidBuild = BuildAndroid.BuildLocalApk(buildRemoteContent: false);
-
-            ProcessResult uploadResult = RunUploadScript(
+            EditorUtility.DisplayProgressBar(progressTitle, "Starting GCS upload...", 0.56f);
+            using RunningProcess uploadProcess = StartUploadScript(
                 context,
                 progressTitle,
-                progressStart: 0.70f,
+                progressStart: 0.84f,
                 progressEnd: 0.94f,
                 stageRailwayMetadata: false,
                 failurePrefix: "[DeployLocalAndroid] Addressables upload failed.");
 
-            LogProcessOutput(uploadResult);
+            ExceptionDispatchInfo buildFailure = null;
+            AndroidBuildResult androidBuild = null;
+            try
+            {
+                EditorUtility.DisplayProgressBar(progressTitle, "Building local Android APK while addressables upload...", 0.60f);
+                androidBuild = BuildAndroid.BuildLocalApk(buildRemoteContent: false);
+            }
+            catch (Exception ex)
+            {
+                buildFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+
+            ExceptionDispatchInfo uploadFailure = null;
+            ProcessResult uploadResult = null;
+            try
+            {
+                uploadResult = WaitForProcess(uploadProcess);
+            }
+            catch (Exception ex)
+            {
+                uploadFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+
+            if (uploadResult != null)
+                LogProcessOutput(uploadResult);
+
+            if (buildFailure != null)
+                buildFailure.Throw();
+
+            if (uploadFailure != null)
+                uploadFailure.Throw();
 
             InstallResult installResult = TryInstallApkOnConnectedDevice(context, androidBuild, progressTitle, 0.95f, 0.99f);
             EditorUtility.DisplayProgressBar(progressTitle, "Finalizing local Android deploy...", 1f);
@@ -153,15 +210,37 @@ namespace CastleDefender.Editor
             if (string.IsNullOrWhiteSpace(databaseUrl))
                 throw new InvalidOperationException("[DeployLocalAndroid] DATABASE_URL was not found in the Unity process environment, .env, or .env.local.");
 
+            string npmCommandPath = TryResolveNpmCommandPath(envOverrides);
+            if (string.IsNullOrWhiteSpace(npmCommandPath))
+                throw new InvalidOperationException("[DeployLocalAndroid] npm.cmd was not found. Install Node.js or set NPM_CMD_PATH before running the local Android deploy.");
+
             return RunProcess(
-                "npm.cmd",
-                "run migrate",
+                "cmd.exe",
+                $"/d /s /c \"\"{npmCommandPath}\" run migrate\"",
                 context.RepoRoot,
                 "[DeployLocalAndroid] Database migration step failed.",
                 envOverrides);
         }
 
         static ProcessResult RunUploadScript(
+            DeploymentContext context,
+            string progressTitle,
+            float progressStart,
+            float progressEnd,
+            bool stageRailwayMetadata,
+            string failurePrefix)
+        {
+            using RunningProcess runningProcess = StartUploadScript(
+                context,
+                progressTitle,
+                progressStart,
+                progressEnd,
+                stageRailwayMetadata,
+                failurePrefix);
+            return WaitForProcess(runningProcess);
+        }
+
+        static RunningProcess StartUploadScript(
             DeploymentContext context,
             string progressTitle,
             float progressStart,
@@ -177,7 +256,7 @@ namespace CastleDefender.Editor
             if (stageRailwayMetadata)
                 arguments.Append(" -StageRailwayMetadata");
 
-            return RunProcess(
+            return StartProcess(
                 "powershell.exe",
                 arguments.ToString(),
                 context.RepoRoot,
@@ -320,6 +399,38 @@ namespace CastleDefender.Editor
             return null;
         }
 
+        static string TryResolveNpmCommandPath(IReadOnlyDictionary<string, string> envOverrides)
+        {
+            string configuredPath = ResolveEnvironmentValue("NPM_CMD_PATH", envOverrides);
+            if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+                return Path.GetFullPath(configuredPath);
+
+            string pathValue = ResolveEnvironmentValue("PATH", envOverrides) ?? string.Empty;
+            foreach (string pathEntry in pathValue.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(pathEntry))
+                    continue;
+
+                string candidate = Path.Combine(pathEntry.Trim(), "npm.cmd");
+                if (File.Exists(candidate))
+                    return Path.GetFullPath(candidate);
+            }
+
+            string[] commonInstallRoots =
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "npm.cmd"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "npm.cmd")
+            };
+
+            foreach (string candidate in commonInstallRoots)
+            {
+                if (File.Exists(candidate))
+                    return Path.GetFullPath(candidate);
+            }
+
+            return null;
+        }
+
         static List<string> ParseConnectedDevices(string standardOutput)
         {
             return (standardOutput ?? string.Empty)
@@ -381,6 +492,24 @@ namespace CastleDefender.Editor
             IReadOnlyDictionary<string, string> environmentOverrides = null,
             Func<string, bool> outputInterceptor = null)
         {
+            using RunningProcess runningProcess = StartProcess(
+                fileName,
+                arguments,
+                workingDirectory,
+                failurePrefix,
+                environmentOverrides,
+                outputInterceptor);
+            return WaitForProcess(runningProcess);
+        }
+
+        static RunningProcess StartProcess(
+            string fileName,
+            string arguments,
+            string workingDirectory,
+            string failurePrefix,
+            IReadOnlyDictionary<string, string> environmentOverrides = null,
+            Func<string, bool> outputInterceptor = null)
+        {
             var startInfo = new ProcessStartInfo
             {
                 FileName = fileName,
@@ -403,23 +532,19 @@ namespace CastleDefender.Editor
                 }
             }
 
-            using Process process = Process.Start(startInfo)
+            Process process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"{failurePrefix} Failed to start '{fileName}'.");
 
-            var sync = new object();
-            var pendingStdout = new Queue<string>();
-            var pendingStderr = new Queue<string>();
-            var standardOutputLines = new List<string>();
-            var standardErrorLines = new List<string>();
+            var runningProcess = new RunningProcess(process, failurePrefix, outputInterceptor);
 
             process.OutputDataReceived += (_, e) =>
             {
                 if (e.Data == null)
                     return;
 
-                lock (sync)
+                lock (runningProcess.SyncRoot)
                 {
-                    pendingStdout.Enqueue(e.Data);
+                    runningProcess.PendingStdout.Enqueue(e.Data);
                 }
             };
 
@@ -428,28 +553,32 @@ namespace CastleDefender.Editor
                 if (e.Data == null)
                     return;
 
-                lock (sync)
+                lock (runningProcess.SyncRoot)
                 {
-                    pendingStderr.Enqueue(e.Data);
+                    runningProcess.PendingStderr.Enqueue(e.Data);
                 }
             };
 
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
+            return runningProcess;
+        }
 
-            while (!process.WaitForExit(50))
-                DrainProcessOutput(sync, pendingStdout, pendingStderr, standardOutputLines, standardErrorLines, outputInterceptor);
+        static ProcessResult WaitForProcess(RunningProcess runningProcess)
+        {
+            while (!runningProcess.Process.WaitForExit(50))
+                DrainProcessOutput(runningProcess);
 
-            process.WaitForExit();
-            DrainProcessOutput(sync, pendingStdout, pendingStderr, standardOutputLines, standardErrorLines, outputInterceptor);
+            runningProcess.Process.WaitForExit();
+            DrainProcessOutput(runningProcess);
 
-            string standardOutput = string.Join(Environment.NewLine, standardOutputLines);
-            string standardError = string.Join(Environment.NewLine, standardErrorLines);
+            string standardOutput = string.Join(Environment.NewLine, runningProcess.StandardOutputLines);
+            string standardError = string.Join(Environment.NewLine, runningProcess.StandardErrorLines);
 
-            if (process.ExitCode != 0)
+            if (runningProcess.Process.ExitCode != 0)
             {
                 var message = new StringBuilder();
-                message.AppendLine($"{failurePrefix} Exit code {process.ExitCode}.");
+                message.AppendLine($"{runningProcess.FailurePrefix} Exit code {runningProcess.Process.ExitCode}.");
                 if (!string.IsNullOrWhiteSpace(standardOutput))
                 {
                     message.AppendLine("STDOUT:");
@@ -465,29 +594,23 @@ namespace CastleDefender.Editor
                 throw new InvalidOperationException(message.ToString().TrimEnd());
             }
 
-            return new ProcessResult(process.ExitCode, standardOutput, standardError);
+            return new ProcessResult(runningProcess.Process.ExitCode, standardOutput, standardError);
         }
 
-        static void DrainProcessOutput(
-            object sync,
-            Queue<string> pendingStdout,
-            Queue<string> pendingStderr,
-            List<string> standardOutputLines,
-            List<string> standardErrorLines,
-            Func<string, bool> outputInterceptor)
+        static void DrainProcessOutput(RunningProcess runningProcess)
         {
-            lock (sync)
+            lock (runningProcess.SyncRoot)
             {
-                while (pendingStdout.Count > 0)
+                while (runningProcess.PendingStdout.Count > 0)
                 {
-                    string line = pendingStdout.Dequeue();
-                    bool consumed = outputInterceptor != null && outputInterceptor(line);
+                    string line = runningProcess.PendingStdout.Dequeue();
+                    bool consumed = runningProcess.OutputInterceptor != null && runningProcess.OutputInterceptor(line);
                     if (!consumed)
-                        standardOutputLines.Add(line);
+                        runningProcess.StandardOutputLines.Add(line);
                 }
 
-                while (pendingStderr.Count > 0)
-                    standardErrorLines.Add(pendingStderr.Dequeue());
+                while (runningProcess.PendingStderr.Count > 0)
+                    runningProcess.StandardErrorLines.Add(runningProcess.PendingStderr.Dequeue());
             }
         }
 
@@ -513,6 +636,30 @@ namespace CastleDefender.Editor
             public string UnityProjectRoot { get; }
             public string RepoRoot { get; }
             public string UploadScriptPath { get; }
+        }
+
+        sealed class RunningProcess : IDisposable
+        {
+            public RunningProcess(Process process, string failurePrefix, Func<string, bool> outputInterceptor)
+            {
+                Process = process ?? throw new ArgumentNullException(nameof(process));
+                FailurePrefix = failurePrefix ?? throw new ArgumentNullException(nameof(failurePrefix));
+                OutputInterceptor = outputInterceptor;
+            }
+
+            public Process Process { get; }
+            public string FailurePrefix { get; }
+            public Func<string, bool> OutputInterceptor { get; }
+            public object SyncRoot { get; } = new object();
+            public Queue<string> PendingStdout { get; } = new Queue<string>();
+            public Queue<string> PendingStderr { get; } = new Queue<string>();
+            public List<string> StandardOutputLines { get; } = new List<string>();
+            public List<string> StandardErrorLines { get; } = new List<string>();
+
+            public void Dispose()
+            {
+                Process.Dispose();
+            }
         }
 
         sealed class ProcessResult
