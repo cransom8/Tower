@@ -26,7 +26,7 @@ namespace CastleDefender.Net
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Connection")]
         [Tooltip("Production server URL (used in builds and WebGL)")]
-        public string ServerUrl = "https://castle-defender-production.up.railway.app";
+        public string ServerUrl = "https://app.ransomforge.com";
 
         [Tooltip("Server URL used when running in the Unity Editor (overrides ServerUrl)")]
         public string EditorServerUrl = "http://127.0.0.1:3000";

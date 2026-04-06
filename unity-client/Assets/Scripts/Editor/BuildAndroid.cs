@@ -18,6 +18,9 @@ public static class BuildAndroid
     [MenuItem("Castle Defender/Build/Build Local Android APK")]
     public static void BuildLocalApkMenu() => BuildLocalApk();
 
+    [MenuItem("Castle Defender/Build/Build Local Android APK (Skip Addressables)")]
+    public static void BuildLocalApkWithoutRemoteContentMenu() => BuildLocalApk(buildRemoteContent: false);
+
     public static AndroidBuildResult BuildRelease(bool buildRemoteContent = true)
     {
         return BuildConfiguredPackage(

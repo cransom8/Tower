@@ -149,7 +149,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 75284670af76c4449af8bcd0e3ac438d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CastleDefender.Net.NetworkManager
-  ServerUrl: https://castle-defender-production.up.railway.app
+  ServerUrl: https://app.ransomforge.com
   EditorServerUrl: http://127.0.0.1:3000
 --- !u!4 &803473424
 Transform:
