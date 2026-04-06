@@ -42,6 +42,9 @@ client/assets/
 unity-client/Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/
 unity-client/Assets/Dimensional-3D-Design/
 unity-client/Assets/ToonyTinyPeople/
+unity-client-test-runner/Assets/HEROIC FANTASY CREATURES FULL PACK VOL 1/
+unity-client-test-runner/Assets/Dimensional-3D-Design/
+unity-client-test-runner/Assets/ToonyTinyPeople/
 
 # Addressable bundles live in GCS, not git
 unity-client/ServerData/WebGL/**/*.bundle
