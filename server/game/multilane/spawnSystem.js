@@ -119,6 +119,14 @@ function getLaneWaveSpeedMult(lane) {
   return Math.max(0.01, Number(lane.waveSpeedMult));
 }
 
+function getGameDungeonHpMult(game) {
+  return Math.max(0.01, Number(game && game.dungeonHpMult) || 1);
+}
+
+function getGameDungeonDmgMult(game) {
+  return Math.max(0.01, Number(game && game.dungeonDmgMult) || 1);
+}
+
 function resolveSpawnSourceTypeFromWaveDef(waveDef, deps = {}) {
   const spawnSourceTypes = getSpawnSourceTypes(deps);
   const explicitSourceType = normalizeSpawnSourceType(waveDef && waveDef.spawnSourceType, deps);
@@ -307,11 +315,16 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   }
 
   const effectiveSpeedMult = getEffectiveWaveEntrySpeedMult(game, lane, waveDef, deps);
-  const hp = Math.ceil(def.hp * Number(waveDef.hp_mult || 1));
-  const dmg = def.dmg * Number(waveDef.dmg_mult || 1);
+  const spawnSourceType = spawnValidation.spawnType;
+  const hpMult = Number(waveDef.hp_mult || 1)
+    * (spawnSourceType === spawnSourceTypes.DUNGEON_WAVE ? getGameDungeonHpMult(game) : 1);
+  const dmgMult = Number(waveDef.dmg_mult || 1)
+    * (spawnSourceType === spawnSourceTypes.DUNGEON_WAVE ? getGameDungeonDmgMult(game) : 1);
+  const hp = Math.ceil(def.hp * hpMult);
+  const dmg = def.dmg * dmgMult;
   const spd = getBaseCombatPathSpeed(unitType) * effectiveSpeedMult;
   logSpawnAuditInfo(deps, "[SpawnAudit][ServerQueue] queued", {
-    spawnType: spawnValidation.spawnType,
+    spawnType: spawnSourceType,
     unitType,
     laneIndex: lane.laneIndex,
     team: lane.team || null,
@@ -331,13 +344,13 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
     authoring: "server",
   });
 
-  const ownerLaneIndex = spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
+  const ownerLaneIndex = spawnSourceType === spawnSourceTypes.DUNGEON_WAVE
     ? -1
     : spawnValidation.sourceLaneIndex;
   const sourceLane = getSourceLane(game, spawnValidation.sourceLaneIndex);
-  const objectiveLaneIndex = spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
+  const objectiveLaneIndex = spawnSourceType === spawnSourceTypes.DUNGEON_WAVE
     ? lane.laneIndex
-    : spawnValidation.spawnType === spawnSourceTypes.MARKET_ROSTER
+    : spawnSourceType === spawnSourceTypes.MARKET_ROSTER
       ? spawnValidation.sourceLaneIndex
     : getLaneCommandRouteObjectiveLaneIndex(game, sourceLane);
   const queuedUnit = {
@@ -352,8 +365,8 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
     sourceBarracksKey: spawnValidation.sourceBarracksKey,
     sourceBarracksId: spawnValidation.sourceBarracksKey,
     barracksId: spawnValidation.sourceBarracksKey,
-    spawnSourceType: spawnValidation.spawnType,
-    allegianceKey: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
+    spawnSourceType,
+    allegianceKey: spawnSourceType === spawnSourceTypes.DUNGEON_WAVE
       ? allegianceKeys.DUNGEON
       : resolveLaneAllegianceKey(getSourceLane(game, spawnValidation.sourceLaneIndex)),
     type: unitType,
@@ -384,11 +397,11 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
     damageReductionPct: def.damageReductionPct || 0,
     abilities: buildAbilitiesForUnitType(unitType),
     bounty: def.bounty || 1,
-    stance: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE ? unitStances.ATTACK : null,
-    pathContractType: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE
+    stance: spawnSourceType === spawnSourceTypes.DUNGEON_WAVE ? unitStances.ATTACK : null,
+    pathContractType: spawnSourceType === spawnSourceTypes.DUNGEON_WAVE
       ? pathContractTypes.WAVE_LANE
       : null,
-    isWaveUnit: spawnValidation.spawnType === spawnSourceTypes.DUNGEON_WAVE,
+    isWaveUnit: spawnSourceType === spawnSourceTypes.DUNGEON_WAVE,
     isDefender: false,
     combatTarget: null,
     combatTargetId: null,
@@ -404,7 +417,7 @@ function spawnWaveUnit(game, lane, waveDef, options = {}, deps = {}) {
   };
   applyCanonicalUnitMirrors(game, lane, queuedUnit);
   lane.spawnQueue.push(queuedUnit);
-  if (markLaneCommandAssignmentsDirty && spawnValidation.spawnType !== spawnSourceTypes.DUNGEON_WAVE)
+  if (markLaneCommandAssignmentsDirty && spawnSourceType !== spawnSourceTypes.DUNGEON_WAVE)
     markLaneCommandAssignmentsDirty(game);
 }
 

@@ -1626,6 +1626,10 @@ function createMLGame(playerCount, options) {
   return gameRuntimeSystem.createMLGame(playerCount, options, GAME_RUNTIME_SYSTEM_DEPS);
 }
 
+function getFeedDungeonCost(lane) {
+  return gameRuntimeSystem.getFeedDungeonCost(lane);
+}
+
 function parseBulkTiles(rawTiles) {
   if (!Array.isArray(rawTiles)) return { ok: false, reason: "Tiles must be an array" };
   if (rawTiles.length === 0) return { ok: false, reason: "No tiles selected" };
@@ -2487,6 +2491,7 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   createBarracksRosterSnapshot,
   createMarketRosterSnapshot,
   createHeroRosterSnapshot,
+  getFeedDungeonCost,
   getLaneTotalIncome,
   recomputeTeamHpState,
   resolveLaneAllegianceKey,
@@ -2596,6 +2601,7 @@ module.exports = {
   countRemainingWaveMobs,
   isCurrentWaveComplete,
   resolveWaveForRound,
+  spawnWaveUnit: _spawnWaveUnit,
   ROUTE_TYPES,
   resolveTargetLaneForBarracksSend,
   buildRouteSegments,

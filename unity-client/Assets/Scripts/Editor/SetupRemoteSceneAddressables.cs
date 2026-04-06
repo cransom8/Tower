@@ -19,7 +19,6 @@ namespace CastleDefender.Editor
         {
             ("Login", "Assets/Scenes/Login.unity"),
             ("Lobby", "Assets/Scenes/Lobby.unity"),
-            ("Loading", "Assets/Scenes/Loading.unity"),
             ("Loadout", "Assets/Scenes/Loadout.unity"),
             ("Game_ML", "Assets/Scenes/Game_ML.unity"),
             ("PostGame", "Assets/Scenes/PostGame.unity"),
@@ -67,6 +66,7 @@ namespace CastleDefender.Editor
                 return;
             }
 
+            int pruned = ClearManagedEntries(group);
             int synced = 0;
             int missing = 0;
             foreach (var scene in SceneEntries)
@@ -94,7 +94,7 @@ namespace CastleDefender.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             EnsureBootstrapOnlyBuildScenes();
-            Debug.Log($"[SetupRemoteSceneAddressables] Synced={synced} missing={missing} group='{GroupName}'.");
+            Debug.Log($"[SetupRemoteSceneAddressables] Synced={synced} missing={missing} pruned={pruned} group='{GroupName}'.");
         }
 
         static void EnsureBootstrapOnlyBuildScenes()
@@ -203,7 +203,7 @@ namespace CastleDefender.Editor
             if (group != null && templateGroup != null)
                 CopySchemaSettings(templateGroup, group, bundledSchemaType, contentUpdateSchemaType);
 
-            ForceRemotePaths(group, bundledSchemaType);
+            ForceRemotePaths(group, bundledSchemaType, contentUpdateSchemaType);
             return group;
         }
 
@@ -216,6 +216,23 @@ namespace CastleDefender.Editor
                 return createOrMoveEntryMethod.Invoke(settings, new[] { guid, group, (object)false });
 
             return createOrMoveEntryMethod.Invoke(settings, new[] { guid, group });
+        }
+
+        static int ClearManagedEntries(object group)
+        {
+            if (group is not UnityEngine.Object groupObject)
+                return 0;
+
+            var serialized = new SerializedObject(groupObject);
+            var entries = serialized.FindProperty("m_SerializeEntries");
+            if (entries == null || entries.arraySize == 0)
+                return 0;
+
+            int removed = entries.arraySize;
+            entries.ClearArray();
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(groupObject);
+            return removed;
         }
 
         static void CopySchemaSettings(object sourceGroup, object targetGroup, Type bundledSchemaType, Type contentUpdateSchemaType)
@@ -266,7 +283,7 @@ namespace CastleDefender.Editor
             EditorUtility.SetDirty(targetGroup as UnityEngine.Object);
         }
 
-        static void ForceRemotePaths(object group, Type bundledSchemaType)
+        static void ForceRemotePaths(object group, Type bundledSchemaType, Type contentUpdateSchemaType)
         {
             if (group == null || bundledSchemaType == null)
                 return;
@@ -284,11 +301,28 @@ namespace CastleDefender.Editor
                 return;
 
             var serialized = new SerializedObject(bundledSchema);
+            serialized.FindProperty("m_Name")?.SetValueIfPresent($"{GroupName}_BundledAssetGroupSchema");
             serialized.FindProperty("m_BuildPath.m_Id")?.SetValueIfPresent(RemoteBuildPathProfileId);
             serialized.FindProperty("m_LoadPath.m_Id")?.SetValueIfPresent(RemoteLoadPathProfileId);
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(bundledSchema);
             EditorUtility.SetDirty(group as UnityEngine.Object);
+            NormalizeSchemaName(group, getSchemaMethod, contentUpdateSchemaType, $"{GroupName}_ContentUpdateGroupSchema");
+        }
+
+        static void NormalizeSchemaName(object group, MethodInfo getSchemaMethod, Type schemaType, string expectedName)
+        {
+            if (group == null || getSchemaMethod == null || schemaType == null || string.IsNullOrWhiteSpace(expectedName))
+                return;
+
+            var schema = getSchemaMethod.Invoke(group, new object[] { schemaType }) as UnityEngine.Object;
+            if (schema == null)
+                return;
+
+            var serialized = new SerializedObject(schema);
+            serialized.FindProperty("m_Name")?.SetValueIfPresent(expectedName);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(schema);
         }
 
         static void SetValueIfPresent(this SerializedProperty property, string value)

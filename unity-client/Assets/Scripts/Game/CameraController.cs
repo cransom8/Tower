@@ -197,7 +197,7 @@ public class CameraController : MonoBehaviour
 
     void ScrollZoom()
     {
-        if (IsPointerOverUi())
+        if (IsPointerOverUi(Input.mousePosition))
             return;
 
         float scroll = Input.GetAxis("Mouse ScrollWheel");
@@ -214,7 +214,7 @@ public class CameraController : MonoBehaviour
             _lmbDownPos = Input.mousePosition;
             _lmbDragStarted = false;
             IsLmbPanning = false;
-            _lmbBlocked = IsPointerOverUi();
+            _lmbBlocked = IsPointerOverUi(Input.mousePosition);
         }
 
         if (!_lmbBlocked && Input.GetMouseButton(0))
@@ -246,7 +246,7 @@ public class CameraController : MonoBehaviour
 
         if (pressedDown)
         {
-            _isPanning = !IsPointerOverUi();
+            _isPanning = !IsPointerOverUi(Input.mousePosition);
             _lastPan = Input.mousePosition;
         }
 
@@ -287,7 +287,7 @@ public class CameraController : MonoBehaviour
         if (touchCount == 1)
         {
             Touch touch = Input.GetTouch(0);
-            if (IsPointerOverUi(touch.fingerId))
+            if (IsPointerOverUi(touch.position, touch.fingerId))
                 return;
 
             if (touch.phase == TouchPhase.Moved)
@@ -297,7 +297,7 @@ public class CameraController : MonoBehaviour
 
         Touch touch0 = Input.GetTouch(0);
         Touch touch1 = Input.GetTouch(1);
-        if (IsPointerOverUi(touch0.fingerId) || IsPointerOverUi(touch1.fingerId))
+        if (IsPointerOverUi(touch0.position, touch0.fingerId) || IsPointerOverUi(touch1.position, touch1.fingerId))
             return;
 
         Vector2 prev0 = touch0.position - touch0.deltaPosition;
@@ -838,14 +838,14 @@ public class CameraController : MonoBehaviour
         targetRotation = Quaternion.LookRotation(forward, planarUp);
     }
 
-    bool IsPointerOverUi()
+    bool IsPointerOverUi(Vector2 screenPosition)
     {
-        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
+        return SceneEventSystemUtility.IsPointerOverUi(screenPosition);
     }
 
-    bool IsPointerOverUi(int pointerId)
+    bool IsPointerOverUi(Vector2 screenPosition, int pointerId)
     {
-        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject(pointerId);
+        return SceneEventSystemUtility.IsPointerOverUi(screenPosition, pointerId);
     }
 
     void ReportPreferenceChange()

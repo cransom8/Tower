@@ -492,6 +492,7 @@ namespace CastleDefender.Net
                         Addressables.Release(downloadHandle);
                 }
 
+                var missingPrefabCatalogRequests = new List<DownloadRequest>();
                 for (int i = 0; i < requests.Count; i++)
                 {
                     var request = requests[i];
@@ -500,6 +501,15 @@ namespace CastleDefender.Net
 
                     if (_loadedPrefabsByContentKey.ContainsKey(request.ContentKey))
                         continue;
+
+                    int failureCountBeforeValidation = failures.Count;
+                    int missingCatalogCountBeforeValidation = missingPrefabCatalogRequests.Count;
+                    yield return ValidatePrefabAssetAddress(request, failures, missingPrefabCatalogRequests);
+                    if (failures.Count != failureCountBeforeValidation
+                        || missingPrefabCatalogRequests.Count != missingCatalogCountBeforeValidation)
+                    {
+                        continue;
+                    }
 
                     string label = $"Loading prefab {i + 1}/{requests.Count}: {request.DisplayKey}";
                     AsyncOperationHandle<GameObject> loadHandle;
@@ -557,6 +567,15 @@ namespace CastleDefender.Net
 
                     _loadedPrefabsByContentKey[request.ContentKey] = prefab;
                     _assetHandlesByContentKey[request.ContentKey] = loadHandle;
+                }
+
+                if (missingPrefabCatalogRequests.Count > 0)
+                {
+                    string missingCatalogMessage = BuildMissingPrefabCatalogMessage(missingPrefabCatalogRequests);
+                    if (LastFailureStage == CriticalPreloadFailureStage.None)
+                        LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                    Debug.LogWarning($"[RemoteContent] {missingCatalogMessage}");
+                    failures.Add(missingCatalogMessage);
                 }
 
                 if (failures.Count > 0)
@@ -1288,6 +1307,68 @@ namespace CastleDefender.Net
                 Addressables.Release(locationsHandle);
         }
 
+        IEnumerator ValidatePrefabAssetAddress(
+            DownloadRequest request,
+            List<string> failures,
+            List<DownloadRequest> missingCatalogRequests)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.AssetKey))
+                yield break;
+
+            AsyncOperationHandle<IList<IResourceLocation>> locationsHandle;
+            try
+            {
+                locationsHandle = Addressables.LoadResourceLocationsAsync(request.AssetKey, typeof(GameObject));
+            }
+            catch (Exception ex)
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                failures.Add(
+                    $"Failed to resolve required {request.Kind ?? "content"} address '{request.AssetKey}' for '{request.DisplayKey}': {ex.Message}");
+                yield break;
+            }
+
+            if (!locationsHandle.IsValid())
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                failures.Add(
+                    $"Addressables returned an invalid lookup handle for required {request.Kind ?? "content"} '{request.DisplayKey}' at '{request.AssetKey}'.");
+                yield break;
+            }
+
+            while (locationsHandle.IsValid() && !locationsHandle.IsDone)
+                yield return null;
+
+            if (!locationsHandle.IsValid())
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                failures.Add(
+                    $"Required {request.Kind ?? "content"} lookup for '{request.DisplayKey}' at '{request.AssetKey}' became invalid before completion.");
+                yield break;
+            }
+
+            bool hasLocations = locationsHandle.Status == AsyncOperationStatus.Succeeded
+                && locationsHandle.Result != null
+                && locationsHandle.Result.Count > 0;
+
+            if (!hasLocations)
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                if (!missingCatalogRequests.Exists(existing =>
+                        string.Equals(existing.AssetKey, request.AssetKey, StringComparison.OrdinalIgnoreCase)))
+                {
+                    missingCatalogRequests.Add(request);
+                }
+
+                if (locationsHandle.IsValid())
+                    Addressables.Release(locationsHandle);
+                yield break;
+            }
+
+            if (locationsHandle.IsValid())
+                Addressables.Release(locationsHandle);
+        }
+
         public IEnumerator EnsureUnitPrefabLoaded(string unitKey, string requester = null)
         {
             RemoteContentVerification.RecordAwaitOnly(requester ?? "unknown", $"unit_prefab:{unitKey}");
@@ -1390,6 +1471,33 @@ namespace CastleDefender.Net
 
             if (string.IsNullOrWhiteSpace(assetKey))
                 yield break;
+
+            var loadRequest = new DownloadRequest
+            {
+                Kind = "unit",
+                DisplayKey = normalizedKey,
+                ContentKey = contentKey,
+                AssetKey = assetKey,
+                DependencyKeys = manifestUnit.remote_content.dependency_keys ?? Array.Empty<string>(),
+            };
+            var validationFailures = new List<string>();
+            var missingPrefabCatalogRequests = new List<DownloadRequest>();
+            yield return ValidatePrefabAssetAddress(loadRequest, validationFailures, missingPrefabCatalogRequests);
+            if (validationFailures.Count > 0)
+            {
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                LastError = string.Join("\n", validationFailures);
+                yield break;
+            }
+
+            if (missingPrefabCatalogRequests.Count > 0)
+            {
+                string missingCatalogMessage = BuildMissingPrefabCatalogMessage(missingPrefabCatalogRequests);
+                LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                LastError = missingCatalogMessage;
+                Debug.LogWarning($"[RemoteContent] {LastError}");
+                yield break;
+            }
 
             AsyncOperationHandle<GameObject> loadHandle;
             try
@@ -1579,6 +1687,7 @@ namespace CastleDefender.Net
                 yield break;
 
             int loadedAssets = 0;
+            var missingPrefabCatalogRequests = new List<DownloadRequest>();
             for (int i = 0; i < requests.Count; i++)
             {
                 var request = requests[i];
@@ -1589,6 +1698,15 @@ namespace CastleDefender.Net
                 {
                     MarkRequestAsPreloaded(request);
                     loadedAssets++;
+                    continue;
+                }
+
+                int failureCountBeforeValidation = failures.Count;
+                int missingCatalogCountBeforeValidation = missingPrefabCatalogRequests.Count;
+                yield return ValidatePrefabAssetAddress(request, failures, missingPrefabCatalogRequests);
+                if (failures.Count != failureCountBeforeValidation
+                    || missingPrefabCatalogRequests.Count != missingCatalogCountBeforeValidation)
+                {
                     continue;
                 }
 
@@ -1654,6 +1772,15 @@ namespace CastleDefender.Net
                 _assetHandlesByContentKey[request.ContentKey] = loadHandle;
                 MarkRequestAsPreloaded(request);
                 loadedAssets++;
+            }
+
+            if (missingPrefabCatalogRequests.Count > 0)
+            {
+                string missingCatalogMessage = BuildMissingPrefabCatalogMessage(missingPrefabCatalogRequests);
+                if (LastFailureStage == CriticalPreloadFailureStage.None)
+                    LastFailureStage = CriticalPreloadFailureStage.ManifestValidation;
+                Debug.LogWarning($"[RemoteContent] {missingCatalogMessage}");
+                failures.Add(missingCatalogMessage);
             }
         }
 
@@ -2247,6 +2374,43 @@ namespace CastleDefender.Net
         {
             string normalized = string.IsNullOrWhiteSpace(address) ? fallback : address.Trim();
             return string.IsNullOrWhiteSpace(normalized) ? fallback : normalized;
+        }
+
+        string BuildMissingPrefabCatalogMessage(List<DownloadRequest> requests)
+        {
+            if (requests == null || requests.Count == 0)
+            {
+                return
+                    "Required prefab addresses are missing from the active Addressables catalog. " +
+                    "Rebuild Addressables, clear the catalog/cache, and confirm the active player is loading the latest remote catalog.";
+            }
+
+            var missingEntries = new List<string>(requests.Count);
+            for (int i = 0; i < requests.Count; i++)
+            {
+                var request = requests[i];
+                if (request == null)
+                    continue;
+
+                string assetKey = request.AssetKey?.Trim();
+                string displayKey = request.DisplayKey?.Trim();
+                if (string.IsNullOrWhiteSpace(assetKey) && string.IsNullOrWhiteSpace(displayKey))
+                    continue;
+
+                if (string.IsNullOrWhiteSpace(assetKey) || string.Equals(assetKey, displayKey, StringComparison.OrdinalIgnoreCase))
+                    missingEntries.Add(string.IsNullOrWhiteSpace(displayKey) ? assetKey : displayKey);
+                else
+                    missingEntries.Add($"{displayKey} ({assetKey})");
+            }
+
+            string missingSummary = missingEntries.Count > 0
+                ? string.Join(", ", missingEntries.Distinct(StringComparer.OrdinalIgnoreCase))
+                : "unknown prefabs";
+
+            return
+                $"Required prefab addresses are missing from the active Addressables catalog: {missingSummary}. " +
+                $"Active catalog state: {DescribeActiveCatalogState()}. " +
+                "Rebuild Addressables, clear the catalog/cache, and confirm the active player is loading the latest remote catalog.";
         }
 
         CriticalContentEntry[] GetT1ContentEntries()

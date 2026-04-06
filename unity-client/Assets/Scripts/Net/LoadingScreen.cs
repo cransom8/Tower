@@ -19,6 +19,7 @@ namespace CastleDefender.Net
 public class LoadingScreen : MonoBehaviour
 {
     const string BootstrapSceneName = "Bootstrap";
+    static readonly string[] LoadingDotLabels = { "Loading", "Loading.", "Loading..", "Loading..." };
 
     public static LoadingScreen Instance { get; private set; }
     public static bool IsTransitionInProgress => _transitionInProgress;
@@ -62,6 +63,8 @@ public class LoadingScreen : MonoBehaviour
 
     readonly Dictionary<string, AsyncOperationHandle<SceneInstance>> _loadedSceneHandles =
         new(StringComparer.OrdinalIgnoreCase);
+    readonly HashSet<string> _validatedSceneCatalogEntries =
+        new(StringComparer.OrdinalIgnoreCase);
 
     Coroutine _activeTransition;
     float _tipTimer;
@@ -92,6 +95,15 @@ public class LoadingScreen : MonoBehaviour
             return;
 
         instance.BeginTransition(sceneName, requiredGameBootstrap: true, lobbyEntryPreparation: false, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
+    }
+
+    public static void LoadSceneWithLobbyEntryPreparation(string sceneName)
+    {
+        var instance = EnsureInstance();
+        if (instance == null)
+            return;
+
+        instance.BeginTransition(sceneName, requiredGameBootstrap: false, lobbyEntryPreparation: true, preloadT1Gameplay: false, portraitKeys: null, preloadEnvironment: false);
     }
 
     public static void LoadSceneWithRemoteContentGate(
@@ -265,35 +277,46 @@ public class LoadingScreen : MonoBehaviour
             yield break;
         }
 
-        AsyncOperationHandle<IList<IResourceLocation>> sceneLocationHandle;
-        try
+        bool sceneCatalogResolved = _validatedSceneCatalogEntries.Contains(_pendingScene);
+        if (!sceneCatalogResolved)
         {
-            sceneLocationHandle = Addressables.LoadResourceLocationsAsync(_pendingScene, typeof(SceneInstance));
+            AsyncOperationHandle<IList<IResourceLocation>> sceneLocationHandle;
+            try
+            {
+                sceneLocationHandle = Addressables.LoadResourceLocationsAsync(_pendingScene, typeof(SceneInstance));
+            }
+            catch (Exception ex)
+            {
+                FailTransition(
+                    "Remote scene catalog lookup failed.",
+                    $"Addressables threw while resolving scene '{_pendingScene}' in the active catalog: {ex.Message}");
+                yield break;
+            }
+
+            while (sceneLocationHandle.IsValid() && !sceneLocationHandle.IsDone)
+                yield return null;
+
+            if (!sceneLocationHandle.IsValid())
+            {
+                FailTransition(
+                    "Remote scene catalog lookup failed.",
+                    $"Scene catalog lookup for '{_pendingScene}' became invalid before completion.");
+                yield break;
+            }
+
+            sceneCatalogResolved = sceneLocationHandle.Status == AsyncOperationStatus.Succeeded
+                && sceneLocationHandle.Result != null
+                && sceneLocationHandle.Result.Count > 0;
+            if (sceneLocationHandle.IsValid())
+                Addressables.Release(sceneLocationHandle);
+
+            if (sceneCatalogResolved)
+                _validatedSceneCatalogEntries.Add(_pendingScene);
         }
-        catch (Exception ex)
+        else
         {
-            FailTransition(
-                "Remote scene catalog lookup failed.",
-                $"Addressables threw while resolving scene '{_pendingScene}' in the active catalog: {ex.Message}");
-            yield break;
+            Debug.Log($"[LoadingScreen] Reusing cached scene catalog validation for '{_pendingScene}'.");
         }
-
-        while (sceneLocationHandle.IsValid() && !sceneLocationHandle.IsDone)
-            yield return null;
-
-        if (!sceneLocationHandle.IsValid())
-        {
-            FailTransition(
-                "Remote scene catalog lookup failed.",
-                $"Scene catalog lookup for '{_pendingScene}' became invalid before completion.");
-            yield break;
-        }
-
-        bool sceneCatalogResolved = sceneLocationHandle.Status == AsyncOperationStatus.Succeeded
-            && sceneLocationHandle.Result != null
-            && sceneLocationHandle.Result.Count > 0;
-        if (sceneLocationHandle.IsValid())
-            Addressables.Release(sceneLocationHandle);
 
         if (!sceneCatalogResolved)
         {
@@ -953,7 +976,12 @@ public class LoadingScreen : MonoBehaviour
         HideRetryAction();
         if (loadingLabel)
             loadingLabel.text = "Retrying...";
-        SetLoadingStatusText(_pendingRequiredGameBootstrap ? "Retrying required game content..." : "Retrying...");
+        SetLoadingStatusText(
+            _pendingRequiredGameBootstrap
+                ? "Retrying required game content..."
+                : _pendingLobbyEntryPreparation
+                    ? "Retrying lobby content..."
+                    : "Retrying...");
 
         if (!_transitionInProgress)
             RestartPendingTransition();
@@ -996,7 +1024,7 @@ public class LoadingScreen : MonoBehaviour
         {
             _dotTimer = 0f;
             _dotCount = (_dotCount + 1) % 4;
-            loadingLabel.text = "Loading" + new string('.', _dotCount);
+            loadingLabel.text = LoadingDotLabels[_dotCount];
         }
     }
 

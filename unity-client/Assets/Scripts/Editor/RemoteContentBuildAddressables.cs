@@ -1,8 +1,10 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
@@ -10,6 +12,9 @@ namespace CastleDefender.Editor
 {
     public static class RemoteContentBuildAddressables
     {
+        static readonly Regex BundleNameRegex = new Regex("\"Name\":\"([^\"]+\\.bundle)\"", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        static readonly Regex BuildStartTimeRegex = new Regex("\"BuildStartTime\":\"([^\"]+)\"", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         [MenuItem("Castle Defender/Remote Content/Build Addressables Content")]
         static void BuildAddressablesContent()
         {
@@ -34,9 +39,8 @@ namespace CastleDefender.Editor
             try
             {
                 SwitchBuildTarget(target);
-                SetupRemoteEnvironmentAddressables.RemoveEmbeddedGameMlEnvironmentRoots(logResult: true);
-                SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
-                SyncRegistryToAddressables();
+                SyncManagedRemoteContent();
+                DateTime buildStartedAtUtc = DateTime.UtcNow;
 
                 var cleanPlayerContent = settingsType.GetMethod("CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);
                 cleanPlayerContent?.Invoke(null, new object[] { null });
@@ -61,12 +65,13 @@ namespace CastleDefender.Editor
                     buildPlayerContent.Invoke(null, null);
                 }
 
-                string summary = DescribeResult(result);
-                string publishedPath = PublishBuildOutput(result, target);
-                string[] catalogs = FindCatalogs(target);
                 string error = ExtractError(result);
                 if (!string.IsNullOrWhiteSpace(error))
                     throw new InvalidOperationException($"[RemoteContentBuildAddressables] Addressables build failed: {error}");
+
+                string summary = DescribeResult(result);
+                string publishedPath = PublishBuildOutput(result, target, buildStartedAtUtc);
+                string[] catalogs = FindCatalogs(target);
 
                 Debug.Log($"[RemoteContentBuildAddressables] Build complete for {target}. {summary} PublishedPath={publishedPath ?? "unpublished"}");
                 if (catalogs.Length > 0)
@@ -92,8 +97,11 @@ namespace CastleDefender.Editor
             return settingsDefaultType.GetProperty("Settings", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
         }
 
-        static void SyncRegistryToAddressables()
+        static void SyncManagedRemoteContent()
         {
+            SetupRemoteSceneAddressables.SyncRemoteScenes();
+            SetupPortraitAddressables.MovePortraitsToAddressables();
+            BuildWinterEnvironmentAddressables.SyncManagedAddressables();
             if (!EditorApplication.ExecuteMenuItem("Castle Defender/Remote Content/Sync Registry To Addressables"))
                 Debug.LogWarning("[RemoteContentBuildAddressables] Failed to execute registry-to-addressables sync before build.");
 
@@ -138,24 +146,21 @@ namespace CastleDefender.Editor
                 ?? resultType.GetField("Error")?.GetValue(result) as string;
         }
 
-        static string PublishBuildOutput(object result, BuildTarget target)
+        static string PublishBuildOutput(object result, BuildTarget target, DateTime buildStartedAtUtc)
         {
             string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string remoteOutputDir = Path.Combine(unityProjectRoot, "ServerData", target.ToString());
-            if (Directory.Exists(remoteOutputDir))
-                return remoteOutputDir;
+            string normalizedPublishedRoot = Path.GetFullPath(Path.Combine(unityProjectRoot, "ServerData", target.ToString()));
+            if (!Directory.Exists(normalizedPublishedRoot))
+            {
+                string outputPath = GetOutputPath(result);
+                if (!string.IsNullOrWhiteSpace(outputPath))
+                    Debug.LogWarning($"[RemoteContentBuildAddressables] Expected remote publish directory '{normalizedPublishedRoot}' was not created. Addressables reported OutputPath='{outputPath}'.");
 
-            string outputPath = GetOutputPath(result);
-            if (string.IsNullOrWhiteSpace(outputPath)) return null;
-            string sourceDir = Directory.Exists(outputPath)
-                ? outputPath
-                : Path.GetDirectoryName(outputPath);
-            if (string.IsNullOrWhiteSpace(sourceDir) || !Directory.Exists(sourceDir))
                 return null;
+            }
 
-            string publishedRoot = remoteOutputDir;
-            CopyDirectory(sourceDir, publishedRoot);
-            return publishedRoot;
+            PruneOrphanedPublishedFiles(normalizedPublishedRoot, target, buildStartedAtUtc);
+            return normalizedPublishedRoot;
         }
 
         static string GetOutputPath(object result)
@@ -166,18 +171,141 @@ namespace CastleDefender.Editor
                 ?? resultType.GetField("OutputPath")?.GetValue(result) as string;
         }
 
-        static void CopyDirectory(string sourceDir, string destinationDir)
+        static void PruneOrphanedPublishedFiles(string publishedRoot, BuildTarget target, DateTime buildStartedAtUtc)
         {
-            if (Directory.Exists(destinationDir))
-                Directory.Delete(destinationDir, true);
+            if (!Directory.Exists(publishedRoot))
+                return;
 
-            Directory.CreateDirectory(destinationDir);
+            HashSet<string> retainedPaths = CollectRetainedPublishedArtifacts(publishedRoot, target, buildStartedAtUtc);
+            if (retainedPaths == null || retainedPaths.Count == 0)
+            {
+                Debug.LogWarning($"[RemoteContentBuildAddressables] Skipped pruning {target} publish output because the active bundle list could not be resolved.");
+                return;
+            }
 
-            foreach (string filePath in Directory.GetFiles(sourceDir))
-                File.Copy(filePath, Path.Combine(destinationDir, Path.GetFileName(filePath)), true);
+            string[] publishedFiles = Directory.EnumerateFiles(publishedRoot, "*", SearchOption.AllDirectories).ToArray();
+            int prunedCount = 0;
+            long reclaimedBytes = 0;
 
-            foreach (string childDir in Directory.GetDirectories(sourceDir))
-                CopyDirectory(childDir, Path.Combine(destinationDir, Path.GetFileName(childDir)));
+            foreach (string filePath in publishedFiles)
+            {
+                string relativePath = ToRelativePath(publishedRoot, filePath);
+                if (retainedPaths.Contains(relativePath))
+                    continue;
+
+                var fileInfo = new FileInfo(filePath);
+                if (fileInfo.Exists)
+                    reclaimedBytes += fileInfo.Length;
+
+                File.Delete(filePath);
+                prunedCount++;
+            }
+
+            RemoveEmptyDirectories(publishedRoot);
+
+            if (prunedCount > 0)
+                Debug.Log($"[RemoteContentBuildAddressables] Pruned {prunedCount} orphaned published files for {target}, reclaiming {FormatBytes(reclaimedBytes)}.");
+        }
+
+        static HashSet<string> CollectRetainedPublishedArtifacts(string publishedRoot, BuildTarget target, DateTime buildStartedAtUtc)
+        {
+            var retainedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string catalogPath in Directory.EnumerateFiles(publishedRoot, "catalog_*", SearchOption.TopDirectoryOnly))
+            {
+                string extension = Path.GetExtension(catalogPath);
+                if (string.Equals(extension, ".bin", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(extension, ".hash", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    retainedPaths.Add(Path.GetFileName(catalogPath));
+                }
+            }
+
+            bool layoutMatchesCurrentBuild;
+            string[] bundleNames = LoadPublishedBundleNames(target, buildStartedAtUtc, out layoutMatchesCurrentBuild);
+            if (!layoutMatchesCurrentBuild)
+            {
+                DateTime buildWindowStartUtc = buildStartedAtUtc.AddSeconds(-5);
+                foreach (string filePath in Directory.EnumerateFiles(publishedRoot, "*", SearchOption.AllDirectories))
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    if (fileInfo.Exists && fileInfo.LastWriteTimeUtc >= buildWindowStartUtc)
+                        retainedPaths.Add(ToRelativePath(publishedRoot, filePath));
+                }
+            }
+
+            if (bundleNames.Length == 0 && retainedPaths.Count == 0)
+                return null;
+
+            foreach (string bundleName in bundleNames)
+                retainedPaths.Add(bundleName);
+
+            return retainedPaths;
+        }
+
+        static string[] LoadPublishedBundleNames(BuildTarget target, DateTime buildStartedAtUtc, out bool layoutMatchesCurrentBuild)
+        {
+            layoutMatchesCurrentBuild = false;
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string buildLayoutPath = Path.Combine(unityProjectRoot, "Library", "com.unity.addressables", "buildlayout.json");
+            if (!File.Exists(buildLayoutPath))
+                return Array.Empty<string>();
+
+            string buildLayoutContents = File.ReadAllText(buildLayoutPath);
+            string expectedRemotePathForwardSlash = $"\"RemoteCatalogBuildPath\":\"ServerData/{target}\"";
+            string expectedRemotePathBackslash = $"\"RemoteCatalogBuildPath\":\"ServerData\\\\{target}\"";
+            if (buildLayoutContents.IndexOf(expectedRemotePathForwardSlash, StringComparison.OrdinalIgnoreCase) < 0
+                && buildLayoutContents.IndexOf(expectedRemotePathBackslash, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            Match buildStartMatch = BuildStartTimeRegex.Match(buildLayoutContents);
+            if (buildStartMatch.Success && DateTime.TryParse(buildStartMatch.Groups[1].Value, out DateTime buildStartTime))
+            {
+                DateTime buildLayoutStartUtc = buildStartTime.Kind == DateTimeKind.Unspecified
+                    ? DateTime.SpecifyKind(buildStartTime, DateTimeKind.Local).ToUniversalTime()
+                    : buildStartTime.ToUniversalTime();
+                layoutMatchesCurrentBuild = buildLayoutStartUtc >= buildStartedAtUtc.AddSeconds(-10);
+            }
+
+            return BundleNameRegex.Matches(buildLayoutContents)
+                .Cast<Match>()
+                .Select(match => match.Groups[1].Value)
+                .Where(bundleName => !string.IsNullOrWhiteSpace(bundleName))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        static string ToRelativePath(string rootPath, string fullPath)
+        {
+            string relativePath = Path.GetRelativePath(rootPath, fullPath);
+            return relativePath.Replace(Path.DirectorySeparatorChar, '/');
+        }
+
+        static void RemoveEmptyDirectories(string rootPath)
+        {
+            foreach (string childDir in Directory.GetDirectories(rootPath))
+            {
+                RemoveEmptyDirectories(childDir);
+                if (!Directory.EnumerateFileSystemEntries(childDir).Any())
+                    Directory.Delete(childDir);
+            }
+        }
+
+        static string FormatBytes(long bytes)
+        {
+            string[] units = { "B", "KB", "MB", "GB", "TB" };
+            double size = Math.Max(bytes, 0);
+            int unitIndex = 0;
+            while (size >= 1024d && unitIndex < units.Length - 1)
+            {
+                size /= 1024d;
+                unitIndex++;
+            }
+
+            return unitIndex == 0 ? $"{size:0} {units[unitIndex]}" : $"{size:0.##} {units[unitIndex]}";
         }
 
         static string[] FindCatalogs(BuildTarget target)
@@ -187,7 +315,8 @@ namespace CastleDefender.Editor
             if (!Directory.Exists(serverData))
                 return Array.Empty<string>();
 
-            return Directory.EnumerateFiles(serverData, "*.json", SearchOption.AllDirectories)
+            return Directory.EnumerateFiles(serverData, "*.bin", SearchOption.AllDirectories)
+                .Concat(Directory.EnumerateFiles(serverData, "*.json", SearchOption.AllDirectories))
                 .Concat(Directory.EnumerateFiles(serverData, "*.hash", SearchOption.AllDirectories))
                 .OrderBy(path => path)
                 .Select(path => path.Replace(unityProjectRoot + Path.DirectorySeparatorChar, string.Empty))

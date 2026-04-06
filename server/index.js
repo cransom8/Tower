@@ -14,6 +14,7 @@ const { Server } = require("socket.io");
 const authService = require("./auth");
 const barracksLevels = require("./barracksLevels");
 const branding = require("./branding");
+const { renderDeviceAuthorizationPage, renderPlatformRetiredPage } = require("./deviceAuthPages");
 const gameConfig = require("./gameConfig");
 const { renderPrivacyPolicyPage } = require("./legalPages");
 const log = require("./logger");
@@ -139,20 +140,16 @@ app.use((req, _res, next) => {
 
 app.use((req, res, next) => {
   const isAdminDocument = req.path === "/admin.html" || req.path === "/admin";
-  const isUnityDocument = req.path === "/" || req.path === "/index.html";
-  const isUnityAsset    = req.path.startsWith("/client") || req.path.startsWith("/Build/") || req.path.startsWith("/TemplateData/");
-  const isUnityClient   = isUnityDocument || isUnityAsset;
+  const isDeviceAuthorizationPage = req.path === "/authorize";
   const gcsCdnHost = process.env.BUILD_CDN_URL || process.env.ADDRESSABLES_CDN_URL
     ? new URL((process.env.BUILD_CDN_URL || process.env.ADDRESSABLES_CDN_URL)).origin
     : null;
   const gcsCdnSrc = gcsCdnHost ? ` ${gcsCdnHost}` : "";
-  const scriptSrc = isAdminDocument
+  const scriptSrc = isAdminDocument || isDeviceAuthorizationPage
     ? "script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.socket.io; "
-    : isUnityClient
-    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `
     : "script-src 'self' https://accounts.google.com https://cdn.socket.io; ";
 
-  if (isAdminDocument) {
+  if (isAdminDocument || isDeviceAuthorizationPage) {
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
     res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   }
@@ -163,16 +160,12 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   const hstsTtl = process.env.NODE_ENV === "production" ? 31536000 : 3600;
   res.setHeader("Strict-Transport-Security", `max-age=${hstsTtl}; includeSubDomains; preload`);
-  const connectSrc = isUnityClient
-    ? `connect-src 'self' wss: ws: blob: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `
-    : `connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `;
-  const workerSrc = isUnityClient ? "worker-src blob:; " : "";
+  const connectSrc = `connect-src 'self' wss: ws: https://accounts.google.com https://cdn.socket.io${gcsCdnSrc}; `;
   res.setHeader(
     "Content-Security-Policy",
     "default-src 'self'; " +
       scriptSrc +
       connectSrc +
-      workerSrc +
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; " +
       "font-src 'self' https://fonts.gstatic.com; " +
       "img-src 'self' data: https:; " +
@@ -370,13 +363,6 @@ app.get("/api/barracks-levels", async (_req, res) => {
   }
 });
 
-const unityClientDirCandidates = [
-  path.join(__dirname, "client"),
-  path.join(__dirname, "unity-client"),
-  path.join(__dirname, "client_backup_20260307_002446"),
-  path.join(__dirname, "client_backup_20260306_235052"),
-];
-
 const adminClientDir = path.join(__dirname, "admin-client");
 const adminAssetDir = path.join(adminClientDir, "assets");
 
@@ -388,12 +374,6 @@ const loginCinematicsDirCandidates = [
   path.join(__dirname, "..", "unity-client", "Assets", "AddressableContent", "LoginCinematics"),
   path.join(__dirname, "unity-client", "Assets", "AddressableContent", "LoginCinematics"),
 ];
-
-// Unity WebGL build is served from the dedicated Unity client path.
-const unityClientDir =
-  unityClientDirCandidates.find((dir) => fs.existsSync(path.join(dir, "index.html"))) ||
-  unityClientDirCandidates[0];
-log.info("unity client dir", { unityClientDir });
 
 if (!fs.existsSync(path.join(adminClientDir, "admin.html"))) {
   throw new Error(`Admin client missing at ${adminClientDir}. Deploy server/admin-client with the release.`);
@@ -418,35 +398,6 @@ log.info("login cinematics dir", { loginCinematicsDir });
 // Unity WebGL Brotli middleware — must run BEFORE express.static.
 // Unity builds output .js.br / .wasm.br / .data.br files that need
 // Content-Encoding: br + the right Content-Type for the browser to handle them.
-const unityBrExtMap = {
-  // Legacy .br / .gz Unity builds
-  '.js.br':              { encoding: 'br',   type: 'application/javascript' },
-  '.wasm.br':            { encoding: 'br',   type: 'application/wasm' },
-  '.data.br':            { encoding: 'br',   type: 'application/octet-stream' },
-  '.js.gz':              { encoding: 'gzip', type: 'application/javascript' },
-  '.wasm.gz':            { encoding: 'gzip', type: 'application/wasm' },
-  '.data.gz':            { encoding: 'gzip', type: 'application/octet-stream' },
-  // Unity 2022+ .unityweb (Brotli by default)
-  '.framework.js.unityweb': { encoding: 'br', type: 'application/javascript' },
-  '.wasm.unityweb':         { encoding: 'br', type: 'application/wasm' },
-  '.data.unityweb':         { encoding: 'br', type: 'application/octet-stream' },
-  '.loader.js':             { encoding: null, type: 'application/javascript' },
-};
-
-function unityWebGLMiddleware(baseDir) {
-  return (req, res, next) => {
-    const url = req.path;
-    for (const [ext, meta] of Object.entries(unityBrExtMap)) {
-      if (url.endsWith(ext)) {
-        if (meta.encoding) res.setHeader('Content-Encoding', meta.encoding);
-        res.setHeader('Content-Type', meta.type);
-        break;
-      }
-    }
-    next();
-  };
-}
-
 function createCdnProxyMiddleware(cdnBase, assetBasePath, logLabel) {
   const cdnUrl = new URL(cdnBase.replace(/\/$/, "") + "/");
   const upstreamBasePath = cdnUrl.pathname.replace(/\/$/, "") + assetBasePath;
@@ -514,8 +465,6 @@ function createCdnProxyMiddleware(cdnBase, assetBasePath, logLabel) {
   };
 }
 
-app.use(unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
-app.use("/client", unityWebGLMiddleware(unityClientDir), express.static(unityClientDir, { index: false }));
 if (process.env.ADDRESSABLES_CDN_URL) {
   const cdnBase = process.env.ADDRESSABLES_CDN_URL.replace(/\/$/, "");
   log.info("addressables proxied from CDN", { cdnBase });
@@ -534,14 +483,6 @@ if (process.env.ADDRESSABLES_CDN_URL) {
   }
 }
 app.use("/assets", express.static(adminAssetDir, { index: false }));
-
-function sendUnityClientFile(res, filename) {
-  const candidate = [unityClientDir, ...unityClientDirCandidates]
-    .map((dir) => path.join(dir, filename))
-    .find((filePath) => fs.existsSync(filePath));
-  if (candidate) return res.sendFile(candidate);
-  return res.status(404).json({ error: `${filename} not found` });
-}
 
 function sendAdminClientFile(res, filename) {
   const candidate = path.join(adminClientDir, filename);
@@ -720,18 +661,35 @@ app.locals.terminateMatch = async function terminateMatch(roomId) {
   return true;
 };
 
-app.get("/", (_req, res) => {
-  if (!process.env.BUILD_CDN_URL) return sendUnityClientFile(res, "index.html");
-  const candidate = [unityClientDir, ...unityClientDirCandidates]
-    .map((dir) => path.join(dir, "index.html"))
-    .find((p) => fs.existsSync(p));
-  if (!candidate) return res.status(404).json({ error: "index.html not found" });
-  const buildCdnBase = process.env.BUILD_CDN_URL.replace(/\/$/, "");
-  const html = fs.readFileSync(candidate, "utf8")
-    .replace(/var buildUrl = "Build"/, `var buildUrl = "${buildCdnBase}/Build"`);
+app.get(["/", "/index.html"], (req, res) => {
+  const authorizeCode = typeof req.query.authorize === "string" ? req.query.authorize.trim() : "";
+  if (authorizeCode) {
+    return res.redirect(302, `/authorize?code=${encodeURIComponent(authorizeCode)}`);
+  }
 
-  res.setHeader("Content-Type", "text/html");
-  res.send(html);
+  res.type("html").send(renderPlatformRetiredPage());
+});
+app.get("/authorize", async (req, res) => {
+  let appName = "Castle Defender";
+  try {
+    const uiBranding = await branding.getBranding(db);
+    if (uiBranding && typeof uiBranding.appName === "string" && uiBranding.appName.trim()) {
+      appName = uiBranding.appName.trim();
+    }
+  } catch (err) {
+    log.warn("device authorization branding load failed", {
+      err: err && (err.stack || err.message || String(err)),
+    });
+  }
+
+  const code = typeof req.query.code === "string" ? req.query.code.trim() : "";
+  res
+    .type("html")
+    .send(renderDeviceAuthorizationPage({
+      appName,
+      googleClientId: process.env.GOOGLE_CLIENT_ID || "",
+      code,
+    }));
 });
 app.get("/compendium", (_req, res) =>
   res.sendFile(path.join(__dirname, "compendium.html"))
@@ -741,8 +699,8 @@ app.get("/admin.html", (_req, res) => sendAdminClientFile(res, "admin.html"));
 app.get("/admin.css", (_req, res) => sendAdminClientFile(res, "admin.css"));
 app.get("/admin.js", (_req, res) => sendAdminClientFile(res, "admin.js"));
 app.get("/render/assets.js", (_req, res) => sendAdminClientFile(res, path.join("render", "assets.js")));
-app.get("/terms", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
-app.get("/terms-of-service", (_req, res) => res.status(410).type("text/plain").send("Legacy web client removed. Use the Unity client instead."));
+app.get("/terms", (_req, res) => res.status(410).type("text/plain").send("WebGL support has been retired. Use the Android or PC standalone client instead."));
+app.get("/terms-of-service", (_req, res) => res.status(410).type("text/plain").send("WebGL support has been retired. Use the Android or PC standalone client instead."));
 app.get(["/privacy", "/privacy-policy"], (_req, res) => {
   try {
     res.type("html").send(renderPrivacyPolicyPage());

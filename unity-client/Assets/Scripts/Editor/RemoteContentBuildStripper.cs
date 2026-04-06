@@ -118,7 +118,7 @@ namespace CastleDefender.Editor
 
         static bool ShouldStripForBuild(BuildTarget target)
         {
-            return target == BuildTarget.WebGL || target == BuildTarget.Android;
+            return target == BuildTarget.Android;
         }
 
         static void PersistBackupToDisk(string assetPath, string contents)

@@ -50,6 +50,7 @@ namespace CastleDefender.UI
         Image _bubbleImage;
         Button _bubbleButton;
         Button _collapseButton;
+        Button _maximizeButton;
         Button _chatTabButton;
         Button _friendsTabButton;
         Button _systemTabButton;
@@ -59,6 +60,8 @@ namespace CastleDefender.UI
         Button _copyButton;
         Button _sendButton;
         Button _addFriendButton;
+        Scrollbar _logScrollbar;
+        Scrollbar _friendsScrollbar;
         TMP_Text _bubbleLabel;
         TMP_Text _badgeLabel;
         TMP_Text _titleLabel;
@@ -67,6 +70,7 @@ namespace CastleDefender.UI
         TMP_InputField _chatInput;
         TMP_InputField _friendInput;
         ScrollRect _scrollRect;
+        ScrollRect _friendsScrollRect;
         RectTransform _friendsListRoot;
         GameObject _logScrollRoot;
         GameObject _friendsScrollRoot;
@@ -77,6 +81,7 @@ namespace CastleDefender.UI
 
         PanelTab _currentTab = PanelTab.Chat;
         bool _isExpanded;
+        bool _isMaximized;
         bool _showErrors = true;
         bool _showWarnings = true;
         bool _showInfo;
@@ -427,6 +432,7 @@ namespace CastleDefender.UI
                 _textDirty = true;
             _layoutDirty = true;
             RefreshBadge();
+            RefreshWindowVisuals();
         }
 
         void SetFriendOnlineState(FriendPresencePayload payload, bool online)
@@ -637,7 +643,12 @@ namespace CastleDefender.UI
             header.gameObject.AddComponent<DraggablePanel>().Configure(_widgetRect, "runtime.chatdebug");
 
             _titleLabel = CreateText("Title", header, "CHAT / FRIENDS / SYSTEM", 18f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
-            Stretch(_titleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(0.72f, 1f), new Vector2(16f, 0f), new Vector2(-8f, 0f));
+            Stretch(_titleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(16f, 0f), new Vector2(-112f, 0f));
+
+            _maximizeButton = CreateButton("MaximizeButton", header, "Max", new Color(0.18f, 0.26f, 0.36f, 1f));
+            _maximizeButton.onClick.AddListener(ToggleMaximized);
+            Anchor(_maximizeButton.transform as RectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(54f, 26f), new Vector2(-52f, 0f));
+            SetButtonWidth(_maximizeButton, 54f);
 
             _collapseButton = CreateButton("CollapseButton", header, "-", new Color(0.18f, 0.26f, 0.36f, 1f));
             _collapseButton.onClick.AddListener(() => SetExpanded(false));
@@ -678,16 +689,29 @@ namespace CastleDefender.UI
             var content = CreateRect("Content", viewport, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f));
             content.offsetMin = Vector2.zero;
             content.offsetMax = Vector2.zero;
-            content.sizeDelta = new Vector2(0f, 600f);
+            content.sizeDelta = Vector2.zero;
+            var contentLayout = content.gameObject.AddComponent<VerticalLayoutGroup>();
+            contentLayout.childAlignment = TextAnchor.UpperLeft;
+            contentLayout.childControlWidth = true;
+            contentLayout.childControlHeight = true;
+            contentLayout.childForceExpandWidth = true;
+            contentLayout.childForceExpandHeight = false;
             content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             _logLabel = CreateText("LogText", content, string.Empty, 16f, FontStyles.Normal, TextAlignmentOptions.TopLeft);
             _logLabel.richText = true;
             _logLabel.textWrappingMode = TextWrappingModes.Normal;
             _logLabel.overflowMode = TextOverflowModes.Overflow;
-            Stretch(_logLabel.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
+            _logLabel.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var logLayout = _logLabel.gameObject.AddComponent<LayoutElement>();
+            logLayout.flexibleWidth = 1f;
+            logLayout.minHeight = 24f;
             _scrollRect.viewport = viewport;
             _scrollRect.content = content;
+            _logScrollbar = CreateVerticalScrollbar("LogScrollbar", _logScrollRoot.transform);
+            _scrollRect.verticalScrollbar = _logScrollbar;
+            _scrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            _scrollRect.verticalScrollbarSpacing = 6f;
 
             _friendsScrollRoot = CreatePanel("FriendsScrollRoot", _bodyRect, new Color(0.06f, 0.08f, 0.12f, 0.98f)).gameObject;
             Stretch(_friendsScrollRoot.transform as RectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(12f, 58f), new Vector2(-12f, -140f));
@@ -707,12 +731,16 @@ namespace CastleDefender.UI
             friendsLayout.childForceExpandHeight = false;
             friendsLayout.spacing = 10f;
             _friendsListRoot.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            var friendsScrollRect = _friendsScrollRoot.AddComponent<ScrollRect>();
-            friendsScrollRect.horizontal = false;
-            friendsScrollRect.movementType = ScrollRect.MovementType.Clamped;
-            friendsScrollRect.scrollSensitivity = 20f;
-            friendsScrollRect.viewport = friendsViewport;
-            friendsScrollRect.content = _friendsListRoot;
+            _friendsScrollRect = _friendsScrollRoot.AddComponent<ScrollRect>();
+            _friendsScrollRect.horizontal = false;
+            _friendsScrollRect.movementType = ScrollRect.MovementType.Clamped;
+            _friendsScrollRect.scrollSensitivity = 20f;
+            _friendsScrollRect.viewport = friendsViewport;
+            _friendsScrollRect.content = _friendsListRoot;
+            _friendsScrollbar = CreateVerticalScrollbar("FriendsScrollbar", _friendsScrollRoot.transform);
+            _friendsScrollRect.verticalScrollbar = _friendsScrollbar;
+            _friendsScrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            _friendsScrollRect.verticalScrollbarSpacing = 6f;
 
             _statusLabel = CreateText("Status", _bodyRect, string.Empty, 14f, FontStyles.Italic, TextAlignmentOptions.MidlineLeft);
             _statusLabel.color = new Color(0.82f, 0.85f, 0.90f, 0.92f);
@@ -788,6 +816,7 @@ namespace CastleDefender.UI
             RefreshLayout();
             RefreshFilterVisuals();
             RefreshTabVisuals();
+            RefreshWindowVisuals();
             RefreshRenderedText(forceScrollToBottom);
             RefreshBadge();
         }
@@ -835,14 +864,43 @@ namespace CastleDefender.UI
                 _addFriendButton.interactable = canSubmitFriendRequest;
         }
 
-        static Vector2 GetExpandedSize(bool mobile)
+        Vector2 GetExpandedSize(bool mobile)
         {
+            if (_isMaximized)
+                return GetMaximizedSize(mobile);
+
             return mobile ? new Vector2(360f, 360f) : new Vector2(520f, 420f);
         }
 
         static Vector2 GetCollapsedSize(bool mobile)
         {
             return mobile ? new Vector2(64f, 64f) : new Vector2(72f, 72f);
+        }
+
+        Vector2 GetMaximizedSize(bool mobile)
+        {
+            var parentRect = _widgetRect != null ? _widgetRect.parent as RectTransform : null;
+            if (parentRect == null)
+                return mobile ? new Vector2(360f, 360f) : new Vector2(520f, 420f);
+
+            float margin = mobile ? 12f : 20f;
+            Vector2 parentSize = parentRect.rect.size;
+            return new Vector2(
+                Mathf.Max(mobile ? 320f : 480f, parentSize.x - (margin * 2f)),
+                Mathf.Max(mobile ? 260f : 360f, parentSize.y - (margin * 2f)));
+        }
+
+        void ToggleMaximized()
+        {
+            _isMaximized = !_isMaximized;
+            _layoutDirty = true;
+            RefreshWindowVisuals();
+        }
+
+        void RefreshWindowVisuals()
+        {
+            SetButtonText(_maximizeButton, _isMaximized ? "Fit" : "Max");
+            StyleButton(_maximizeButton, _isMaximized ? new Color(0.30f, 0.40f, 0.18f, 1f) : new Color(0.18f, 0.26f, 0.36f, 1f));
         }
 
         void ClampWidgetToParent()
@@ -908,11 +966,7 @@ namespace CastleDefender.UI
                         : "Chat send is disabled until the socket is connected.";
                     if (_logLabel != null)
                         _logLabel.text = _currentRenderedText;
-                    if (_scrollRect != null && forceScrollToBottom)
-                    {
-                        Canvas.ForceUpdateCanvases();
-                        _scrollRect.verticalNormalizedPosition = 0f;
-                    }
+                    RefreshLogScrollLayout(forceScrollToBottom);
                     break;
 
                 case PanelTab.Friends:
@@ -923,6 +977,7 @@ namespace CastleDefender.UI
                     if (_logLabel != null)
                         _logLabel.text = string.Empty;
                     RefreshFriendsContent();
+                    RefreshFriendsScrollLayout(forceScrollToBottom);
                     break;
 
                 default:
@@ -931,13 +986,37 @@ namespace CastleDefender.UI
                     _statusLabel.text = "Unity log stream plus loud runtime diagnostics. Errors and warnings always surface here.";
                     if (_logLabel != null)
                         _logLabel.text = _currentRenderedText;
-                    if (_scrollRect != null && forceScrollToBottom)
-                    {
-                        Canvas.ForceUpdateCanvases();
-                        _scrollRect.verticalNormalizedPosition = 0f;
-                    }
+                    RefreshLogScrollLayout(forceScrollToBottom);
                     break;
             }
+        }
+
+        void RefreshLogScrollLayout(bool forceScrollToBottom)
+        {
+            if (_scrollRect == null || _logLabel == null)
+                return;
+
+            Canvas.ForceUpdateCanvases();
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_logLabel.rectTransform);
+            if (_scrollRect.content != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_scrollRect.content);
+            Canvas.ForceUpdateCanvases();
+
+            if (forceScrollToBottom)
+                _scrollRect.verticalNormalizedPosition = 0f;
+        }
+
+        void RefreshFriendsScrollLayout(bool forceScrollToBottom)
+        {
+            if (_friendsScrollRect == null || _friendsListRoot == null)
+                return;
+
+            Canvas.ForceUpdateCanvases();
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_friendsListRoot);
+            Canvas.ForceUpdateCanvases();
+
+            if (forceScrollToBottom)
+                _friendsScrollRect.verticalNormalizedPosition = 1f;
         }
 
         void RefreshFriendsContent()
@@ -1662,6 +1741,7 @@ namespace CastleDefender.UI
             label.fontStyle = style;
             label.alignment = alignment;
             label.color = Color.white;
+            label.raycastTarget = false;
             if (TMP_Settings.defaultFontAsset != null)
                 label.font = TMP_Settings.defaultFontAsset;
             return label;
@@ -1729,6 +1809,34 @@ namespace CastleDefender.UI
             return input;
         }
 
+        static Scrollbar CreateVerticalScrollbar(string name, Transform parent)
+        {
+            var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Scrollbar));
+            root.transform.SetParent(parent, false);
+            var rootRect = root.GetComponent<RectTransform>();
+            rootRect.anchorMin = new Vector2(1f, 0f);
+            rootRect.anchorMax = new Vector2(1f, 1f);
+            rootRect.pivot = new Vector2(1f, 0.5f);
+            rootRect.sizeDelta = new Vector2(14f, 0f);
+            rootRect.anchoredPosition = new Vector2(-6f, 0f);
+            root.GetComponent<Image>().color = new Color(0.11f, 0.14f, 0.19f, 0.92f);
+
+            var slidingArea = CreateRect("SlidingArea", root.transform, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
+            slidingArea.offsetMin = new Vector2(2f, 2f);
+            slidingArea.offsetMax = new Vector2(-2f, -2f);
+
+            var handle = CreatePanel("Handle", slidingArea, new Color(0.76f, 0.66f, 0.42f, 0.95f));
+            Stretch(handle, new Vector2(0f, 0f), new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, 48f));
+
+            var scrollbar = root.GetComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handle;
+            scrollbar.targetGraphic = handle.GetComponent<Image>();
+            scrollbar.size = 0.2f;
+            scrollbar.numberOfSteps = 0;
+            return scrollbar;
+        }
+
         static void SetButtonWidth(Button button, float width)
         {
             if (button == null)
@@ -1740,6 +1848,16 @@ namespace CastleDefender.UI
             layout.flexibleWidth = 0f;
             layout.minWidth = width;
             layout.preferredWidth = width;
+        }
+
+        static void SetButtonText(Button button, string text)
+        {
+            if (button == null)
+                return;
+
+            var label = button.GetComponentInChildren<TextMeshProUGUI>();
+            if (label != null)
+                label.text = text ?? string.Empty;
         }
 
         static void ClearChildren(Transform root)

@@ -72,6 +72,12 @@ const DEFAULT_OPPOSING_LANE_INDEX = Object.freeze([1, 0, 3, 2]);
 const DEFAULT_LEGACY_ACTION_REJECTION_REASONS = Object.freeze({});
 const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
 const DEFAULT_BARRACKS_ROSTER_DEFS = Object.freeze([]);
+const FEED_DUNGEON_UNLOCK_WAVE = 6;
+const FEED_DUNGEON_BASE_COST = 500;
+const FEED_DUNGEON_COST_STEP = 100;
+const FEED_DUNGEON_HP_MULT_STEP = 0.02;
+const FEED_DUNGEON_DMG_MULT_STEP = 0.01;
+const FEED_DUNGEON_GOLD_MULT_STEP = 0.03;
 
 function requireDepFunction(deps, name) {
   const fn = deps && deps[name];
@@ -193,6 +199,65 @@ function getBarracksSiteDefs(deps = {}) {
 
 function getBarracksRosterDefs(deps = {}) {
   return Array.isArray(deps.BARRACKS_ROSTER_DEFS) ? deps.BARRACKS_ROSTER_DEFS : DEFAULT_BARRACKS_ROSTER_DEFS;
+}
+
+function getFeedDungeonCost(lane) {
+  const purchaseCount = Math.max(0, Math.floor(Number(lane && lane.feedDungeonCount) || 0));
+  return FEED_DUNGEON_BASE_COST + (purchaseCount * FEED_DUNGEON_COST_STEP);
+}
+
+function getFeedDungeonBlockedReason(game, lane, deps = {}) {
+  if (!game || game.phase !== "playing")
+    return "Game not active";
+  if (!lane)
+    return "Lane unavailable";
+
+  const getFortressPadByBuildingType = requireDepFunction(deps, "getFortressPadByBuildingType");
+  const marketPad = getFortressPadByBuildingType(lane, "market");
+  if (!marketPad || Math.max(0, Math.floor(Number(marketPad.tier) || 0)) <= 0)
+    return "Build the Market first";
+
+  const currentWaveNumber = Math.max(1, Math.floor(Number(game.roundNumber) || 1));
+  if (currentWaveNumber < FEED_DUNGEON_UNLOCK_WAVE)
+    return `Unlocks at Wave ${FEED_DUNGEON_UNLOCK_WAVE}`;
+
+  if (lane.feedDungeonPurchasedThisWave)
+    return "Already purchased this wave";
+
+  const cost = getFeedDungeonCost(lane);
+  const availableGold = Math.max(0, Number(lane.gold) || 0);
+  if (availableGold < cost)
+    return `Need ${Math.max(0, cost - Math.floor(availableGold))}g`;
+
+  return null;
+}
+
+function applyFeedDungeonPurchase(game, lane, deps = {}) {
+  const blockedReason = getFeedDungeonBlockedReason(game, lane, deps);
+  if (blockedReason)
+    return { ok: false, reason: blockedReason };
+
+  const cost = getFeedDungeonCost(lane);
+  lane.gold = Math.max(0, Number(lane.gold) || 0) - cost;
+  lane.totalBuildSpend = Math.max(0, Number(lane.totalBuildSpend) || 0) + cost;
+  lane.buildSpendThisRound = Math.max(0, Number(lane.buildSpendThisRound) || 0) + cost;
+  lane.feedDungeonCount = Math.max(0, Math.floor(Number(lane.feedDungeonCount) || 0)) + 1;
+  lane.feedDungeonPurchasedThisWave = true;
+  lane.totalGoldSpentOnFeedDungeon = Math.max(0, Number(lane.totalGoldSpentOnFeedDungeon) || 0) + cost;
+  lane.goldPerKillMult = Math.max(0.01, Number(lane.goldPerKillMult) || 1) + FEED_DUNGEON_GOLD_MULT_STEP;
+
+  game.dungeonHpMult = Math.max(0.01, Number(game.dungeonHpMult) || 1) + FEED_DUNGEON_HP_MULT_STEP;
+  game.dungeonDmgMult = Math.max(0.01, Number(game.dungeonDmgMult) || 1) + FEED_DUNGEON_DMG_MULT_STEP;
+  game.totalDungeonScalingApplied = Math.max(0, Math.floor(Number(game.totalDungeonScalingApplied) || 0)) + 1;
+
+  return {
+    ok: true,
+    cost,
+    dungeonHpMult: game.dungeonHpMult,
+    dungeonDmgMult: game.dungeonDmgMult,
+    goldPerKillMult: lane.goldPerKillMult,
+    feedDungeonCount: lane.feedDungeonCount,
+  };
 }
 
 function hasExplicitMlOption(src, key) {
@@ -430,6 +495,10 @@ function createMLGame(playerCount, options, deps = {}) {
       barracksSiteStates: createBarracksSiteStates(opt.teamHpStart, 1),
       barracksSiteRosterCounts: createBarracksSiteRosterCounts(),
       marketRosterCounts: createMarketRosterCounts(),
+      feedDungeonCount: 0,
+      feedDungeonPurchasedThisWave: false,
+      totalGoldSpentOnFeedDungeon: 0,
+      goldPerKillMult: 1,
       heroCooldownReadyTicks: {},
       units: [],
       spawnQueue: [],
@@ -497,6 +566,9 @@ function createMLGame(playerCount, options, deps = {}) {
     lastWaveSpawnTick: null,
     hasSpawnedWave: false,
     activeWaveSession: null,
+    dungeonHpMult: 1,
+    dungeonDmgMult: 1,
+    totalDungeonScalingApplied: 0,
     waveConfig: [],
     roundSnapshots: [],
     startedAt: null,
@@ -992,6 +1064,9 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
     return buyMarketUnit(game, laneIndex, lane, unitKey, count, deps);
   }
 
+  if (type === "feed_dungeon")
+    return applyFeedDungeonPurchase(game, lane, deps);
+
   if (type === "sell_barracks_unit") {
     const rosterKey = String((data && data.rosterKey) || "").trim();
     const requestedBarracksId = String((data && data.barracksId) || "").trim();
@@ -1042,6 +1117,7 @@ function applyMLAction(game, laneIndex, action, deps = {}) {
 }
 
 module.exports = {
+  getFeedDungeonCost,
   getDefaultSlotDefinitions,
   normalizeGameOptions,
   createMLGame,

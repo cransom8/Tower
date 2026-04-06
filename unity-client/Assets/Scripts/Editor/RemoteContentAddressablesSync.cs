@@ -24,9 +24,11 @@ namespace CastleDefender.Editor
         const int SkinGroupCount = 3;
         const string SharedLabel = "shared";
         const string SharedSkinLabel = "skin-shared";
+        const string SharedAnimationProfilesRoot = "Assets/Registry/AnimationProfiles";
         static readonly string[] SharedSkinDependencyRoots =
         {
             "Assets/ExplosiveLLC/",
+            "Assets/Registry/AnimationProfiles/",
             "Assets/Materials/TT/",
             "Assets/ToonyTinyPeople/TT_RTS/TT_RTS_Standard/models/",
         };
@@ -231,6 +233,11 @@ namespace CastleDefender.Editor
                 .Where(pair => pair.Value > 1 && !skinPrefabPaths.Contains(pair.Key))
                 .Select(pair => pair.Key)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            IncludeExplicitSharedDependencies(sharedDependencyPaths, SharedAnimationProfilesRoot);
+
+            var orderedSharedDependencyPaths = sharedDependencyPaths
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
@@ -239,9 +246,9 @@ namespace CastleDefender.Editor
             api.RegisterLabel(SharedSkinLabel);
 
             int synced = 0;
-            for (int i = 0; i < sharedDependencyPaths.Length; i++)
+            for (int i = 0; i < orderedSharedDependencyPaths.Length; i++)
             {
-                string dependencyPath = sharedDependencyPaths[i];
+                string dependencyPath = orderedSharedDependencyPaths[i];
                 string guid = AssetDatabase.AssetPathToGUID(dependencyPath);
                 if (string.IsNullOrWhiteSpace(guid))
                     continue;
@@ -259,6 +266,28 @@ namespace CastleDefender.Editor
             }
 
             return synced;
+        }
+
+        static void IncludeExplicitSharedDependencies(HashSet<string> results, string rootPath)
+        {
+            if (results == null || string.IsNullOrWhiteSpace(rootPath) || !AssetDatabase.IsValidFolder(rootPath))
+                return;
+
+            string[] assetGuids = AssetDatabase.FindAssets(string.Empty, new[] { rootPath });
+            for (int i = 0; i < assetGuids.Length; i++)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[i]);
+                if (string.IsNullOrWhiteSpace(assetPath))
+                    continue;
+
+                if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                    || assetPath.EndsWith(".asmdef", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                results.Add(assetPath);
+            }
         }
 
         static bool IsSharedSkinDependencyCandidate(string assetPath)

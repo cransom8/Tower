@@ -20,6 +20,11 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 05f7e428d3fea03419b5ea0300f9b201
+    m_Address: portraits/tt_settler
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 0957c3bd3c47c9640ba68bf0eb76fbc3
     m_Address: portraits/chimera
     m_ReadOnly: 0
@@ -40,18 +45,13 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 124bb722f1eec0c4a9a9324cbd173ac8
-    m_Address: portraits/tt_peasant
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 15458776b4a06354aa2c9079d5a943ed
-    m_Address: portraits/tt_mage
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 156b79da721f6b741b6ad2da790425d7
     m_Address: portraits/mountain_dragon
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 204a1f216af190d459e0b0d3d8bd64fc
+    m_Address: portraits/tt_high_priest
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -60,23 +60,23 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 238f01e803fe6e2469e7e5cf381acd0e
-    m_Address: portraits/tt_mounted_mage
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 2c0904d3de8877c43b166d289e752b1f
     m_Address: portraits/harpy
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 3475e00b2b8607f4da7861ee3977be63
-    m_Address: portraits/vampire
+  - m_GUID: 2e5da3f9630a48b44b68d9672296d31e
+    m_Address: portraits/tt_heavy_swordman
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 35594555e43ce6248b5d02a5c4d83db3
-    m_Address: portraits/tt_light_cavalry
+  - m_GUID: 3309d377e1d4a9b418953d9f1f53353c
+    m_Address: portraits/tt_mounted_king
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3475e00b2b8607f4da7861ee3977be63
+    m_Address: portraits/vampire
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -90,8 +90,8 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 3999f158cc3e3d64c96a29c7ba820bc3
-    m_Address: portraits/tt_heavy_infantry
+  - m_GUID: 373dc080b25e71e48825ed150f8d03f5
+    m_Address: portraits/tt_light_infantry
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -100,18 +100,28 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 3e68a9ca9f43495439f3c8302c32cd23
+    m_Address: portraits/tt_mounted_knight
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 3f4cbe63c612e624e86a63cad4bfce0e
     m_Address: portraits/cyclops
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 4e9994d235eb0004aaab42eb93bee72d
-    m_Address: portraits/tt_priest
+  - m_GUID: 43b4e3ac6f293ac44b89576879e126d5
+    m_Address: portraits/tt_heavy_infantry
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 53b227d52d23ecf40a578baad3fbd981
-    m_Address: portraits/tt_mounted_priest
+  - m_GUID: 491acefc62afa5d45b689e89fbd79486
+    m_Address: portraits/tt_crossbowman
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 4b785b8f843728c4eb0a98f537504f65
+    m_Address: portraits/tt_priest
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -120,8 +130,13 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 68fb2a6c380fdac47bbccaf762e1a77f
-    m_Address: portraits/tt_paladin
+  - m_GUID: 586ba7deafd533c4d94c3c786d7069cc
+    m_Address: portraits/tt_archer
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5ac2aff56320a124eb4ab97d96976d86
+    m_Address: portraits/tt_mage
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -135,23 +150,43 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 81d7b391faf45af498e5f095c0e25771
+  - m_GUID: 74213b03d402e7a4c881997e2ee13b60
+    m_Address: portraits/tt_halberdier
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 7c575184836d29b489956bd971b64827
+    m_Address: portraits/tt_mounted_priest
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 83149d8572f99154ba9151ae5d4d7b0a
+    m_Address: portraits/tt_mounted_scout
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8381b84f46e80b04c8800423a3c962a0
+    m_Address: portraits/tt_king
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 83b3531053f84e646b6a2b62d18062ae
+    m_Address: portraits/tt_spearman
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 852744932a61e1e418d39c71bf772a4f
     m_Address: portraits/tt_scout
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 8391dc854755e4143b3645dd2a0587e6
-    m_Address: portraits/tt_mounted_knight
+  - m_GUID: 8ea940f40e3008c44b2cee864590705c
+    m_Address: portraits/tt_peasant
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 84819c0948f6dd441ac58f4b4ad822ab
-    m_Address: portraits/tt_crossbowman
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: 89eb928f5c9cd1d45b2de3b7bdd1be8e
-    m_Address: portraits/tt_spearman
+  - m_GUID: 9009be3fa0d64f442867e5a160496d84
+    m_Address: portraits/tt_heavy_cavalry
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -160,13 +195,8 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: a0937c94d5a25f84caa48d90e2469570
-    m_Address: portraits/tt_king
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: a2e11bbb97a60ef4e9ff5be035c28016
-    m_Address: portraits/tt_archer
+  - m_GUID: 9ef37dcc194683e4fb5edd69d1874efc
+    m_Address: portraits/tt_mounted_mage
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -175,13 +205,13 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: ad8f7e112d626914196a76cdeae6b43e
-    m_Address: portraits/tt_mounted_scout
+  - m_GUID: af3b93d7400c6c143a1c80cef7bc8c65
+    m_Address: portraits/griffin
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: af3b93d7400c6c143a1c80cef7bc8c65
-    m_Address: portraits/griffin
+  - m_GUID: af9dc86fa89f7c548adce550696bf5a5
+    m_Address: portraits/tt_light_cavalry
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -195,16 +225,6 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: b926f6564d1203548913ea1b8cd38ebb
-    m_Address: portraits/tt_heavy_swordman
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: bbf62ed824168344ba24cfc7cb48d9d1
-    m_Address: portraits/tt_heavy_cavalry
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: bc81e1595ecce774ba69816f796474d1
     m_Address: portraits/werewolf
     m_ReadOnly: 0
@@ -215,28 +235,23 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: c6dc3c23cc350a8419e658f3f5ae3978
+    m_Address: portraits/tt_paladin
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: cb224b2cadefb0d49a5938bea9e67fc9
     m_Address: portraits/dragonide
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: d057394dd08fd71488de0915013a0daf
-    m_Address: portraits/tt_mounted_king
+  - m_GUID: d1a8aadd7cf18ca40898b559483c2fc9
+    m_Address: portraits/tt_commander
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: d2387cf2ceda633458b9e194c9de0b81
     m_Address: portraits/ice_golem
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: e0ed246c222497e44b2dd41833f69cfc
-    m_Address: portraits/tt_commander
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: e358307611d542f44873c67aedb0b591
-    m_Address: portraits/tt_mounted_paladin
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -250,18 +265,8 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: e8efa06001831d64b94d56d4fb9fea55
-    m_Address: portraits/tt_settler
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: ef188cd000c444d49b55bd64911630f8
-    m_Address: portraits/tt_high_priest
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: f5a250ab42a5bc74293a8edc98fce3b4
-    m_Address: portraits/tt_halberdier
+  - m_GUID: f35d043ff912e734abc2a8a204252c0b
+    m_Address: portraits/tt_mounted_paladin
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
@@ -277,11 +282,6 @@ MonoBehaviour:
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: f87378e5412996a4ebdf46029266d99e
     m_Address: portraits/mummy
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
-  - m_GUID: ff7de9f9cceffba4aaf332385e4e413f
-    m_Address: portraits/tt_light_infantry
     m_ReadOnly: 0
     m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0

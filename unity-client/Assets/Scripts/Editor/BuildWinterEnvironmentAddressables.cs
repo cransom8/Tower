@@ -71,13 +71,23 @@ namespace CastleDefender.Editor
         [MenuItem("Castle Defender/Remote Content/Build Winter Environment Addressables")]
         static void Build()
         {
+            SyncManagedAddressables();
+        }
+
+        public static void SyncManagedAddressables()
+        {
             try
             {
                 EnsureFolder("Assets/AddressableContent");
                 EnsureFolder(EnvironmentFolder);
 
+                SetupRemoteEnvironmentAddressables.RemoveEmbeddedGameMlEnvironmentRoots(logResult: true);
                 SetupRemoteEnvironmentAddressables.SanitizeGameEnvironmentPrefab();
                 BuildOptionalEnvironmentPrefab();
+                int pruned = 0;
+                pruned += ClearManagedEntries(CriticalGroupName);
+                pruned += ClearManagedEntries(OptionalGroupName);
+                pruned += ClearManagedEntries(SharedGroupName);
                 EnsureAddressablesEntry(CriticalPrefabPath, RemoteContentManager.GameMlEnvironmentAddress, CriticalGroupName);
                 EnsureAddressablesEntry(OptionalPrefabPath, RemoteContentManager.GameMlEnvironmentDressingAddress, OptionalGroupName);
                 EnsureSharedAddressablesEntries();
@@ -87,7 +97,7 @@ namespace CastleDefender.Editor
                 AssetDatabase.Refresh();
                 WriteReport();
 
-                Debug.Log("[BuildWinterEnvironmentAddressables] Winter environment addressables updated.");
+                Debug.Log($"[BuildWinterEnvironmentAddressables] Winter environment addressables updated. pruned={pruned}");
             }
             catch (Exception ex)
             {
@@ -403,20 +413,7 @@ namespace CastleDefender.Editor
 
         static void EnsureAddressablesEntry(string assetPath, string address, string groupName)
         {
-            var settingsDefaultType = Type.GetType(
-                "UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject, Unity.Addressables.Editor");
-            if (settingsDefaultType == null)
-                throw new InvalidOperationException("Addressables editor API unavailable.");
-
-            object settings = null;
-            var getSettings = settingsDefaultType.GetMethod(
-                "GetSettings", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(bool) }, null);
-            if (getSettings != null)
-                settings = getSettings.Invoke(null, new object[] { true });
-            settings ??= settingsDefaultType
-                .GetProperty("Settings", BindingFlags.Public | BindingFlags.Static)
-                ?.GetValue(null);
-
+            object settings = ResolveSettings();
             if (settings == null)
                 throw new InvalidOperationException("Could not load AddressableAssetSettings.");
 
@@ -497,6 +494,56 @@ namespace CastleDefender.Editor
             ForceRemoteBundledSchema(group, groupName, bundledSchemaType, contentUpdateSchemaType);
             SafeSetDirty(entry);
             SafeSetDirty(group);
+        }
+
+        static object ResolveSettings()
+        {
+            var settingsDefaultType = Type.GetType(
+                "UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject, Unity.Addressables.Editor");
+            if (settingsDefaultType == null)
+                throw new InvalidOperationException("Addressables editor API unavailable.");
+
+            object settings = null;
+            var getSettings = settingsDefaultType.GetMethod(
+                "GetSettings", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(bool) }, null);
+            if (getSettings != null)
+                settings = getSettings.Invoke(null, new object[] { true });
+            settings ??= settingsDefaultType
+                .GetProperty("Settings", BindingFlags.Public | BindingFlags.Static)
+                ?.GetValue(null);
+
+            return settings;
+        }
+
+        static int ClearManagedEntries(string groupName)
+        {
+            if (string.IsNullOrWhiteSpace(groupName))
+                return 0;
+
+            object settings = ResolveSettings();
+            if (settings == null)
+                return 0;
+
+            var findGroupMethod = settings.GetType().GetMethod(
+                "FindGroup",
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
+                new[] { typeof(string) },
+                null);
+            object group = findGroupMethod?.Invoke(settings, new object[] { groupName });
+            if (group is not UnityEngine.Object groupObject)
+                return 0;
+
+            var serialized = new SerializedObject(groupObject);
+            var entries = serialized.FindProperty("m_SerializeEntries");
+            if (entries == null || entries.arraySize == 0)
+                return 0;
+
+            int removed = entries.arraySize;
+            entries.ClearArray();
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            SafeSetDirty(groupObject);
+            return removed;
         }
 
         static void CopySchemaSettings(object sourceGroup, object targetGroup, Type bundledType, Type contentUpdateType)
@@ -626,7 +673,7 @@ namespace CastleDefender.Editor
             builder.AppendLine("## Performance Notes");
             builder.AppendLine();
             builder.AppendLine("- Optional props are collider-free so they do not affect gameplay pathing or collision.");
-            builder.AppendLine("- Backdrop renderers have shadows disabled to keep the streamed dressing lighter for WebGL/mobile.");
+            builder.AppendLine("- Backdrop renderers have shadows disabled to keep the streamed dressing lighter for Android and lower-tier mobile devices.");
             builder.AppendLine("- Reused a small curated subset of winter prefabs with scale and rotation variation instead of pulling the full demo scene.");
             builder.AppendLine("- Optional warm lights are limited to four non-shadowed point lights near focal landmarks.");
             builder.AppendLine();

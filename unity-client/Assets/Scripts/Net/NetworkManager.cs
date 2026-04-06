@@ -5,12 +5,10 @@
 //   2. Attach this script.
 //   3. Set ServerUrl to Railway URL or http://localhost:3000
 //
-// WebGL builds: uses native browser Socket.IO via SocketIOBridge.jslib.
-// Editor / Standalone: uses SocketIOUnity (itisnajim/SocketIOUnity).
+// Android, PC standalone, and the Unity Editor use SocketIOUnity.
 
 using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Newtonsoft.Json;
@@ -25,7 +23,7 @@ namespace CastleDefender.Net
 
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Connection")]
-        [Tooltip("Production server URL (used in builds and WebGL)")]
+        [Tooltip("Production server URL used on Android and PC standalone builds")]
         public string ServerUrl = "https://app.ransomforge.com";
 
         [Tooltip("Server URL used when running in the Unity Editor (overrides ServerUrl)")]
@@ -138,36 +136,17 @@ namespace CastleDefender.Net
         public event Action               OnDisconnected;
 
         // ── Private (native/editor only) ──────────────────────────────────────
-#if !UNITY_WEBGL || UNITY_EDITOR
         private SocketIOUnity _socket;
-#endif
 
         // ── WebGL jslib imports ───────────────────────────────────────────────
-#if UNITY_WEBGL && !UNITY_EDITOR
-        [DllImport("__Internal")] static extern void   JSIO_Connect(string url, string goName);
-        [DllImport("__Internal")] static extern void   JSIO_On(string ev);
-        [DllImport("__Internal")] static extern void   JSIO_Emit(string eventName, string json);
-        [DllImport("__Internal")] static extern void   JSIO_Disconnect();
         // JWT helpers — declared here for completeness; AuthManager also imports them
-        [DllImport("__Internal")] static extern string JSIO_GetJWT();
-        [DllImport("__Internal")] static extern void   JSIO_SetJWT(string token);
-        [DllImport("__Internal")] static extern void   JSIO_ClearJWT();
-#endif
 
         // ── Resolved URL ──────────────────────────────────────────────────────
         public string ResolvedServerUrl
         {
             get
             {
-#if UNITY_WEBGL && !UNITY_EDITOR
-                var page = new Uri(Application.absoluteURL);
-                bool standard = (page.Scheme == "https" && page.Port == 443)
-                             || (page.Scheme == "http"  && page.Port == 80)
-                             || page.Port < 0;
-                return standard
-                    ? $"{page.Scheme}://{page.Host}"
-                    : $"{page.Scheme}://{page.Host}:{page.Port}";
-#elif UNITY_EDITOR
+#if UNITY_EDITOR
                 return !string.IsNullOrEmpty(EditorServerUrl) ? EditorServerUrl : ServerUrl;
 #else
                 return ServerUrl;
@@ -206,18 +185,13 @@ namespace CastleDefender.Net
         {
             string url = ResolvedServerUrl;
             Debug.Log($"[NM] Connecting to {url}...");
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            ConnectWebGL(url);
-#else
             ConnectNative(url);
-#endif
         }
 
         // ═════════════════════════════════════════════════════════════════════
-        // WebGL path — uses SocketIOBridge.jslib (browser native Socket.IO)
+        // Retired browser Socket.IO path kept only as a disabled reference.
         // ═════════════════════════════════════════════════════════════════════
-#if UNITY_WEBGL && !UNITY_EDITOR
+#if false
 
         void ConnectWebGL(string url)
         {
@@ -641,14 +615,12 @@ namespace CastleDefender.Net
             yield return null; // wait one frame for socket to be fully ready
             Emit("reconnect", new { token });
         }
+#endif
 
-#endif // UNITY_WEBGL && !UNITY_EDITOR
 
         // ═════════════════════════════════════════════════════════════════════
         // Native / Editor path — uses SocketIOUnity
         // ═════════════════════════════════════════════════════════════════════
-#if !UNITY_WEBGL || UNITY_EDITOR
-
         void ConnectNative(string url)
         {
             _socket?.Disconnect();
@@ -1055,7 +1027,6 @@ namespace CastleDefender.Net
         static T FromResp<T>(SocketIOClient.SocketIOResponse resp) =>
             FromJson<T>(resp.GetValue<System.Text.Json.JsonElement>().GetRawText());
 
-#endif // !UNITY_WEBGL || UNITY_EDITOR
 
         static T FromJson<T>(string json) =>
             JsonConvert.DeserializeObject<T>(json, _respSettings);
@@ -1361,33 +1332,23 @@ namespace CastleDefender.Net
                 return;
             }
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // Newtonsoft.Json handles anonymous types and Dictionary<> that JsonUtility cannot.
-            string json = data != null ? JsonConvert.SerializeObject(data) : "";
-            JSIO_Emit(eventName, json);
-#else
             if (data == null)
             {
                 _socket.Emit(eventName);
             }
             else
             {
-                // Keep native/editor payloads aligned with the WebGL path so gameplay
+                // Keep native/editor payloads aligned across supported platforms so gameplay
                 // actions serialize as plain JSON objects instead of library-specific wrappers.
                 string json = JsonConvert.SerializeObject(data);
                 _socket.EmitStringAsJSON(eventName, json);
             }
-#endif
         }
 
         void DisconnectActiveSocket()
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            JSIO_Disconnect();
-#else
             _socket?.Disconnect();
             _socket = null;
-#endif
         }
 
         void OnDestroy()

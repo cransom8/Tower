@@ -127,6 +127,13 @@ MonoBehaviour:
     - shared
     - skin-shared
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 20d0423872eebca4b91564a004b2f366
+    m_Address: skins/shared/Registry/AnimationProfiles/Explosive_TwoHanded
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - shared
+    - skin-shared
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 210673136f79e994bacabf18c52d91e8
     m_Address: skins/shared/ExplosiveLLC/Mage Warrior Mecanim Animation Pack/Animations/Mage@Attack3
     m_ReadOnly: 0
@@ -262,6 +269,13 @@ MonoBehaviour:
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 3664d56bf6a4bc1438322b95c455764a
     m_Address: skins/shared/ExplosiveLLC/Knight Warrior Mecanim Animation Pack/Animations/Knight@DashBackward2
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - shared
+    - skin-shared
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 38e1bf33ceeb5764b96da7f5e8206d9a
+    m_Address: skins/shared/Registry/AnimationProfiles/Explosive_TTRTS_Default
     m_ReadOnly: 0
     m_SerializedLabels:
     - shared
@@ -587,6 +601,13 @@ MonoBehaviour:
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 7788596610f36c5489e324dcff9fe6a0
     m_Address: skins/shared/ExplosiveLLC/Archer Warrior Mecanim Animation Pack/Animations/Archer@Aiming
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - shared
+    - skin-shared
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 77a8584e25b3908428f82d5aebec3277
+    m_Address: skins/shared/Registry/AnimationProfiles/Explosive_Mage
     m_ReadOnly: 0
     m_SerializedLabels:
     - shared
@@ -971,6 +992,13 @@ MonoBehaviour:
     - shared
     - skin-shared
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: c63b563a6f16184478fbb87984a3254d
+    m_Address: skins/shared/Registry/AnimationProfiles/Explosive_Archer
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - shared
+    - skin-shared
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: cc40f1b9a8fbd6642ad5b1f7b08366e7
     m_Address: skins/shared/ExplosiveLLC/Knight Warrior Mecanim Animation Pack/Materials/Knight
     m_ReadOnly: 0
@@ -1071,6 +1099,13 @@ MonoBehaviour:
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: d9df1cda255b26346b529017fb07c83a
     m_Address: skins/shared/ExplosiveLLC/Knight Warrior Mecanim Animation Pack/Animations/Knight@WalkForward-Right
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - shared
+    - skin-shared
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: da0c122cf728d1f47aac824984397d1a
+    m_Address: skins/shared/Registry/AnimationProfiles/Explosive_Knight
     m_ReadOnly: 0
     m_SerializedLabels:
     - shared

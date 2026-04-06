@@ -1,9 +1,12 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 
 public static class SceneEventSystemUtility
 {
+    static readonly List<RaycastResult> s_uiRaycastScratch = new();
+
     public static EventSystem FindInScene(Scene scene, bool includeInactive = true)
     {
         if (scene.IsValid())
@@ -40,6 +43,28 @@ public static class SceneEventSystemUtility
     public static EventSystem FindBest(Component component)
     {
         return component == null ? FindBest(default(Scene)) : FindBest(component.gameObject.scene);
+    }
+
+    public static bool IsPointerOverUi(Vector2 screenPosition, int pointerId = -1, EventSystem eventSystem = null)
+    {
+        eventSystem ??= EventSystem.current;
+        if (eventSystem == null)
+            return false;
+
+        bool pointerOverTrackedUi = pointerId >= 0
+            ? eventSystem.IsPointerOverGameObject(pointerId)
+            : eventSystem.IsPointerOverGameObject();
+        if (pointerOverTrackedUi)
+            return true;
+
+        s_uiRaycastScratch.Clear();
+        var eventData = new PointerEventData(eventSystem)
+        {
+            pointerId = pointerId,
+            position = screenPosition,
+        };
+        eventSystem.RaycastAll(eventData, s_uiRaycastScratch);
+        return s_uiRaycastScratch.Count > 0;
     }
 
     static void DeactivateCompetingEventSystems(EventSystem keep, Scene targetScene, string logContext)

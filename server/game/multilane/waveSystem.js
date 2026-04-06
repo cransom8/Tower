@@ -10,6 +10,14 @@ const DEFAULT_INITIAL_WAVE_DELAY_TICKS = 30 * 20;
 const DEFAULT_TICK_HZ = 20;
 const DEFAULT_BARRACKS_SITE_DEFS = Object.freeze([]);
 
+function getGameDungeonHpMult(game) {
+  return Math.max(0.01, Number(game && game.dungeonHpMult) || 1);
+}
+
+function getGameDungeonDmgMult(game) {
+  return Math.max(0.01, Number(game && game.dungeonDmgMult) || 1);
+}
+
 function requireDepFunction(deps, name) {
   const fn = deps && deps[name];
   if (typeof fn !== "function")
@@ -272,8 +280,8 @@ function createLaneUpcomingWavePreview(game, lane, waveNumber = null, deps = {})
       presentationKey: scheduledWave.presentationKey || null,
       skinKey: scheduledWave.skinKey || null,
       count: totalScheduledCount,
-      hpMult: scheduledWave.hp_mult,
-      dmgMult: scheduledWave.dmg_mult,
+      hpMult: Number(scheduledWave.hp_mult || 1) * getGameDungeonHpMult(game),
+      dmgMult: Number(scheduledWave.dmg_mult || 1) * getGameDungeonDmgMult(game),
       speedMult: getEffectiveWaveEntrySpeedMult(game, lane, scheduledWave, deps),
       isHero: !!scheduledWave.isHero,
       heroKey: scheduledWave.heroKey || null,
@@ -354,6 +362,7 @@ function resetWaveIntervalState(game) {
     lane.sendCountThisRound = 0;
     lane.sendSpendThisRound = 0;
     lane.buildSpendThisRound = 0;
+    lane.feedDungeonPurchasedThisWave = false;
   }
 }
 

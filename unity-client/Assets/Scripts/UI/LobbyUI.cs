@@ -104,6 +104,8 @@ namespace CastleDefender.UI
 
         // ── Wizard state ──────────────────────────────────────────────────────
         const  string _gameType = "line_wars";
+        const  string LeaderboardMode = "ffa_ranked";
+        const  int LeaderboardPreviewCount = 20;
         const  int RankedQueueCasualRequirement = 5;
         const  string WinterBackdropResourcePath = "UI/Lobby/WinterForestBackdrop";
         static Sprite _winterBackdropSprite;
@@ -223,7 +225,6 @@ namespace CastleDefender.UI
 
             // Fetch leaderboard + season info in background
             StartCoroutine(FetchLeaderboard());
-            StartCoroutine(FetchSeasonInfo());
         }
 
         void OnDestroy()
@@ -711,7 +712,12 @@ namespace CastleDefender.UI
         // ── Leaderboard (Phase U8) ────────────────────────────────────────────
         void ShowLeaderboard()
         {
-            if (Panel_Leaderboard != null) Panel_Leaderboard.SetActive(true);
+            if (Panel_Leaderboard != null)
+            {
+                Panel_Leaderboard.SetActive(true);
+                BringLeaderboardToFront();
+                StartCoroutine(FetchLeaderboard());
+            }
             Play(AudioManager.SFX.ButtonClick);
         }
 
@@ -725,7 +731,7 @@ namespace CastleDefender.UI
         {
             if (Txt_LeaderboardList == null) yield break;
 
-            string url = BaseUrl + "/leaderboard?mode=ffa_ranked&limit=20";
+            string url = $"{BaseUrl}/leaderboard?mode={LeaderboardMode}&limit={LeaderboardPreviewCount}";
             using var req = UnityWebRequest.Get(url);
             req.timeout = 10;
             yield return req.SendWebRequest();
@@ -733,26 +739,19 @@ namespace CastleDefender.UI
             if (req.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogWarning($"[Lobby] Leaderboard fetch failed: {req.error}");
+                ApplyLeaderboardText("<b>Leaderboard</b>\nWar records are unavailable right now.");
                 yield break;
             }
 
             try
             {
                 var resp = JsonConvert.DeserializeObject<LeaderboardResponse>(req.downloadHandler.text);
-                if (resp?.entries == null) yield break;
-
-                var sb = new StringBuilder();
-                sb.AppendLine("<b>Leaderboard</b>");
-                foreach (var e in resp.entries)
-                {
-                    string losses = e.losses > 0 ? $"  {e.wins}W/{e.losses}L" : "";
-                    sb.AppendLine($"{e.rank,3}. {e.display_name,-20} {e.rating:F0}{losses}");
-                }
-                Txt_LeaderboardList.text = sb.ToString();
+                ApplyLeaderboardResponse(resp);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[Lobby] Leaderboard parse error: {ex.Message}");
+                ApplyLeaderboardText("<b>Leaderboard</b>\nWar records are unavailable right now.");
             }
         }
 
@@ -761,7 +760,7 @@ namespace CastleDefender.UI
         {
             if (Txt_SeasonInfo == null) yield break;
 
-            string url = BaseUrl + "/leaderboard?mode=ffa_ranked&limit=1";
+            string url = $"{BaseUrl}/leaderboard?mode={LeaderboardMode}&limit=1";
             using var req = UnityWebRequest.Get(url);
             req.timeout = 10;
             yield return req.SendWebRequest();
@@ -776,7 +775,7 @@ namespace CastleDefender.UI
                     Txt_SeasonInfo.text = "";
                     yield break;
                 }
-                Txt_SeasonInfo.text = resp.season.id.ToString();
+                Txt_SeasonInfo.text = !string.IsNullOrWhiteSpace(resp.season.name) ? resp.season.name : resp.season.id;
             }
             catch
             {
@@ -1106,10 +1105,10 @@ namespace CastleDefender.UI
                 var layout = body.gameObject.AddComponent<VerticalLayoutGroup>();
                 layout.childAlignment = TextAnchor.UpperCenter;
                 layout.childControlWidth = true;
-                layout.childControlHeight = false;
+                layout.childControlHeight = true;
                 layout.childForceExpandWidth = true;
                 layout.childForceExpandHeight = false;
-                layout.spacing = 14f;
+                layout.spacing = 16f;
             }
             else
             {
@@ -1140,6 +1139,12 @@ namespace CastleDefender.UI
             railLayout.preferredWidth = compact ? 0f : 286f;
             railLayout.flexibleWidth = compact ? 1f : 0f;
             railLayout.minWidth = 0f;
+            railLayout.preferredHeight = compact ? GetCompactRailPreferredHeight() : 0f;
+            railLayout.minHeight = compact ? GetCompactRailPreferredHeight() : 0f;
+            railLayout.flexibleHeight = 0f;
+
+            if (compact)
+                _premiumRailColumn.SetSiblingIndex(0);
         }
 
         void BuildPremiumRail(Transform parent, bool compact)
@@ -1149,8 +1154,8 @@ namespace CastleDefender.UI
 
             if (compact)
             {
-                var compactLayout = parent.gameObject.AddComponent<HorizontalLayoutGroup>();
-                compactLayout.childAlignment = TextAnchor.MiddleCenter;
+                var compactLayout = parent.gameObject.AddComponent<VerticalLayoutGroup>();
+                compactLayout.childAlignment = TextAnchor.UpperCenter;
                 compactLayout.childControlWidth = true;
                 compactLayout.childControlHeight = true;
                 compactLayout.childForceExpandWidth = true;
@@ -1169,7 +1174,7 @@ namespace CastleDefender.UI
                 layout.padding = new RectOffset(6, 6, 6, 6);
             }
 
-            var commandCard = CreateCard(parent, "CommanderCard", compact ? 104f : 112f);
+            var commandCard = CreateCard(parent, "CommanderCard", compact ? 88f : 112f);
             if (compact) commandCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var commandHeader = CreateUiText("Header", commandCard.transform, "Commander", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
             commandHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
@@ -1188,7 +1193,7 @@ namespace CastleDefender.UI
                 TextAlignmentOptions.Center,
                 allowWrap: false);
 
-            var seasonCard = CreateCard(parent, "SeasonCard", compact ? 100f : 108f);
+            var seasonCard = CreateCard(parent, "SeasonCard", compact ? 84f : 108f);
             if (compact) seasonCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var seasonHeader = CreateUiText("Header", seasonCard.transform, "Season", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
             seasonHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
@@ -1205,7 +1210,7 @@ namespace CastleDefender.UI
                 TextAlignmentOptions.Center,
                 allowWrap: false);
 
-            var statusCard = CreateCard(parent, "StatusCard", compact ? 112f : 124f);
+            var statusCard = CreateCard(parent, "StatusCard", compact ? 96f : 124f);
             if (compact) statusCard.GetComponent<LayoutElement>().flexibleWidth = 1f;
             var statusHeader = CreateUiText("Header", statusCard.transform, "Status", compact ? 20f : 22f, ClassicRpgTextTone.Accent, ClassicRpgUiRuntime.WarmGold);
             statusHeader.gameObject.AddComponent<LayoutElement>().preferredHeight = compact ? 24f : 26f;
@@ -1237,6 +1242,7 @@ namespace CastleDefender.UI
             var card = CreateUiImage(name, parent, ClassicRpgPanelSkin.PortraitBackdrop, new Color(0.01f, 0.02f, 0.04f, 0.94f), true);
             var rect = card.rectTransform;
             var layoutElement = card.gameObject.AddComponent<LayoutElement>();
+            layoutElement.minHeight = preferredHeight;
             layoutElement.preferredHeight = preferredHeight;
             var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.childAlignment = TextAnchor.MiddleCenter;
@@ -1248,6 +1254,15 @@ namespace CastleDefender.UI
             layout.padding = new RectOffset(16, 16, 14, 14);
             EnsureDecorativeFrame(rect);
             return rect;
+        }
+
+        static float GetCompactRailPreferredHeight()
+        {
+            const float commandCardHeight = 88f;
+            const float seasonCardHeight = 84f;
+            const float statusCardHeight = 96f;
+            const float compactSpacing = 10f;
+            return commandCardHeight + seasonCardHeight + statusCardHeight + (compactSpacing * 2f);
         }
 
         void StyleStepPanels(Transform host, bool compact)
@@ -1490,10 +1505,15 @@ namespace CastleDefender.UI
             if (rect == null)
                 return;
 
+            if (_canvasRect != null && rect.parent != _canvasRect)
+                rect.SetParent(_canvasRect, false);
+
             rect.anchorMin = _premiumCompactLayout ? new Vector2(0.04f, 0.08f) : new Vector2(0.17f, 0.12f);
             rect.anchorMax = _premiumCompactLayout ? new Vector2(0.96f, 0.92f) : new Vector2(0.83f, 0.88f);
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
 
             var image = Panel_Leaderboard.GetComponent<Image>();
             if (image != null)
@@ -1545,6 +1565,9 @@ namespace CastleDefender.UI
                     closeRect.SetAsLastSibling();
                 }
             }
+
+            if (Panel_Leaderboard.activeSelf)
+                BringLeaderboardToFront();
         }
 
         void RefreshPremiumStepCopy(int step)
@@ -1882,6 +1905,74 @@ namespace CastleDefender.UI
             return seasonSummary.Trim();
         }
 
+        void BringLeaderboardToFront()
+        {
+            var rect = Panel_Leaderboard != null ? Panel_Leaderboard.transform as RectTransform : null;
+            if (rect != null)
+                rect.SetAsLastSibling();
+        }
+
+        void ApplyLeaderboardResponse(LeaderboardResponse response)
+        {
+            UpdateSeasonInfo(response != null ? response.season : null);
+
+            if (response?.entries == null || response.entries.Length == 0)
+            {
+                ApplyLeaderboardText("<b>Leaderboard</b>\nNo commanders have posted a ranked result yet.");
+                return;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("<b>Leaderboard</b>");
+            if (response.season != null && !string.IsNullOrWhiteSpace(response.season.name))
+            {
+                sb.AppendLine(response.season.name.Trim());
+                if (!string.IsNullOrWhiteSpace(response.season.start_date)
+                    && DateTime.TryParse(response.season.start_date, out var startedOn))
+                    sb.AppendLine($"Started {startedOn:MMM d}");
+                sb.AppendLine();
+            }
+
+            foreach (var entry in response.entries)
+            {
+                string commanderName = string.IsNullOrWhiteSpace(entry.display_name)
+                    ? "Unknown Commander"
+                    : entry.display_name.Trim();
+                string record = (entry.wins > 0 || entry.losses > 0)
+                    ? $"  {entry.wins}W/{entry.losses}L"
+                    : string.Empty;
+                sb.AppendLine($"{entry.rank,3}. {commanderName,-20} {entry.rating:F0}{record}");
+            }
+
+            ApplyLeaderboardText(sb.ToString());
+        }
+
+        void ApplyLeaderboardText(string text)
+        {
+            if (Txt_LeaderboardList != null)
+                Txt_LeaderboardList.text = string.IsNullOrWhiteSpace(text) ? "<b>Leaderboard</b>" : text;
+        }
+
+        void UpdateSeasonInfo(LeaderboardSeason season)
+        {
+            if (Txt_SeasonInfo == null)
+                return;
+
+            if (!string.IsNullOrWhiteSpace(season?.name))
+            {
+                Txt_SeasonInfo.text = season.name.Trim();
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(season?.id))
+            {
+                Txt_SeasonInfo.text = season.id.Trim();
+                return;
+            }
+
+            Txt_SeasonInfo.text = "Off Season";
+        }
+
         static void CreateTintLayer(
             RectTransform parent,
             string name,
@@ -2072,19 +2163,9 @@ namespace CastleDefender.UI
         {
             get
             {
-#if UNITY_WEBGL && !UNITY_EDITOR
-                var page = new Uri(Application.absoluteURL);
-                bool standard = (page.Scheme == "https" && page.Port == 443)
-                             || (page.Scheme == "http"  && page.Port == 80)
-                             || page.Port < 0;
-                return standard
-                    ? $"{page.Scheme}://{page.Host}"
-                    : $"{page.Scheme}://{page.Host}:{page.Port}";
-#else
                 return NetworkManager.Instance != null
                     ? NetworkManager.Instance.ResolvedServerUrl
                     : "http://localhost:3000";
-#endif
             }
         }
 
@@ -2714,10 +2795,7 @@ namespace CastleDefender.UI
 
         static bool TryQuitGame(Action<string> onUnsupported = null)
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            onUnsupported?.Invoke("Exit is not supported on WebGL. Close the browser tab to leave the game.");
-            return false;
-#elif UNITY_EDITOR
+#if UNITY_EDITOR
             onUnsupported?.Invoke("Exit from the menu will stop Play Mode in the Unity Editor.");
             return false;
 #else

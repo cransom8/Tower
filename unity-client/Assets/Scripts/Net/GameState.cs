@@ -478,6 +478,9 @@ namespace CastleDefender.Net
         public int          transitionPhaseTotal;
         public int          waveTimerTicksRemaining;
         public int          waveTimerTotalTicks;
+        public float        dungeonHpMult;
+        public float        dungeonDmgMult;
+        public int          totalDungeonScalingApplied;
         public MLTeamHp     teamHp;                 // { left, right }
         public int          teamHpMax;
         // ─────────────────────────────────────────────────────────────────────
@@ -513,6 +516,11 @@ namespace CastleDefender.Net
         public float          gold;
         public float          income;
         public float          buildValue;
+        public float          goldPerKillMult;
+        public int            feedDungeonCount;
+        public bool           feedDungeonPurchasedThisWave;
+        public int            totalGoldSpentOnFeedDungeon;
+        public int            feedDungeonCost;
         public int            lives; // legacy field; mirrors current Town Core HP
         public int            barracksLevel;
         public MLFortressPad[] fortressPads;
@@ -1664,6 +1672,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class LeaderboardEntry
     {
+        public string id;
         public int    rank;
         public string display_name;     // server field
         public float  rating;
@@ -1675,7 +1684,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class LeaderboardSeason
     {
-        public int    id;
+        public string id;
         public string name;
         public string start_date;
     }
@@ -1695,7 +1704,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class SeasonPayload
     {
-        public int    id;
+        public string id;
         public string name;
         public string end_date;     // ISO date string
         public bool   is_active;

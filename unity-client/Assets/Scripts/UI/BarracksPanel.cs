@@ -31,6 +31,8 @@ namespace CastleDefender.UI
         const float MinimumPanelFontSize = 12f;
         const string MilitiaRosterKey = "militia";
         const string TownCoreUpgradeActionIconResourcePath = "ClassicRpgIcons/Icon_Upgrade";
+        const int FeedDungeonUnlockWave = 6;
+        const string FeedDungeonTooltipText = "Offer gold to the depths. The dungeon will grow stronger... and more bountiful.";
         static readonly Color ObsidianRootColor = new(0.04f, 0.04f, 0.05f, 0.99f);
         static readonly Color ObsidianSurfaceColor = new(0.07f, 0.07f, 0.09f, 0.98f);
         static readonly Color ObsidianElevatedColor = new(0.12f, 0.12f, 0.14f, 0.98f);
@@ -761,6 +763,7 @@ namespace CastleDefender.UI
                 case "upgrade_barracks_site":
                 case "buy_barracks_unit":
                 case "sell_barracks_unit":
+                case "feed_dungeon":
                     if (string.Equals(payload.type, "sell_barracks_unit", System.StringComparison.OrdinalIgnoreCase))
                         ClearPendingBarracksSell();
                     _statusMessage = string.Equals(payload.type, "upgrade_building", System.StringComparison.OrdinalIgnoreCase)
@@ -1549,9 +1552,12 @@ namespace CastleDefender.UI
             bool suppressVolatileConstructionTimers = ShouldSuppressVolatileConstructionTimers(lane);
             int gold = Mathf.FloorToInt(lane.gold);
             int level = lane.barracksLevel;
+            var snap = SnapshotApplier.Instance?.LatestML;
             var sig =
                 $"{gold}|{level}|focus-pad:{_focusedPadId}|focus-barracks:{_focusedBarracksId}|" +
                 $"guided-pad:{_guidedUnlockPadId}|guided-unit:{_guidedUnlockUnitKey}|guided-tier:{_guidedUnlockRequiredTier}|" +
+                $"dungeon:{snap?.dungeonHpMult ?? 1f}:{snap?.dungeonDmgMult ?? 1f}:{snap?.totalDungeonScalingApplied ?? 0}|" +
+                $"feed:{lane.feedDungeonCount}:{lane.feedDungeonPurchasedThisWave}:{lane.feedDungeonCost}:{lane.totalGoldSpentOnFeedDungeon}:{lane.goldPerKillMult}|" +
                 $"catalog:{CatalogLoader.UnitByKey.Count}|";
 
             if (lane.fortressPads != null)
@@ -1776,6 +1782,7 @@ namespace CastleDefender.UI
 
             var nextEntry = GetNextMarketRosterEntry(lane, currentEntry);
             CreatePanelTemplateRow(_contentRoot, BuildFocusedMarketEntryRowData(lane, pad, currentEntry, nextEntry));
+            CreatePanelTemplateRow(_contentRoot, BuildFeedDungeonRowData(lane, pad));
         }
 
         void CreateFocusedBarracksHeroSection(MLLaneSnap lane, MLBarracksSite site)
@@ -3371,6 +3378,78 @@ namespace CastleDefender.UI
                     false,
                     objectName: BuildFocusedMarketActionObjectName("Next", nextEntry.unitKey));
             }
+
+            return row;
+        }
+
+        PanelRowTemplateData BuildFeedDungeonRowData(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (lane == null || pad == null)
+                return null;
+
+            string blockedReason = GetFeedDungeonBlockedReason(lane, pad);
+            bool canFeedDungeon = CanFeedDungeon(lane, pad);
+            string statusText;
+            Color statusColor;
+            if (!pad.isBuilt)
+            {
+                statusText = "Build Market";
+                statusColor = GunmetalColor;
+            }
+            else if (string.IsNullOrWhiteSpace(blockedReason))
+            {
+                statusText = "Ready";
+                statusColor = GoldSurfaceBrightColor;
+            }
+            else if (blockedReason.IndexOf("Unlock", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                statusText = blockedReason;
+                statusColor = GunmetalSoftColor;
+            }
+            else if (blockedReason.IndexOf("Need", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                statusText = "Need Gold";
+                statusColor = GoldSurfaceColor;
+            }
+            else
+            {
+                statusText = blockedReason;
+                statusColor = GunmetalColor;
+            }
+
+            var snap = SnapshotApplier.Instance?.LatestML;
+            float dungeonHpBonusPct = Mathf.Max(0f, ((snap != null ? snap.dungeonHpMult : 1f) - 1f) * 100f);
+            float dungeonDmgBonusPct = Mathf.Max(0f, ((snap != null ? snap.dungeonDmgMult : 1f) - 1f) * 100f);
+            float killGoldBonusPct = Mathf.Max(0f, (lane.goldPerKillMult - 1f) * 100f);
+            int currentCost = GetFeedDungeonCost(lane);
+
+            var row = new PanelRowTemplateData
+            {
+                Eyebrow = "MARKET PRESSURE",
+                Title = "Feed the Dungeon",
+                StatusText = statusText,
+                StatusColor = statusColor,
+                Description =
+                    $"{FeedDungeonTooltipText}\n" +
+                    $"Current Global: +{dungeonHpBonusPct:0.#}% dungeon HP   +{dungeonDmgBonusPct:0.#}% dungeon damage\n" +
+                    $"Your Bonus: +{killGoldBonusPct:0.#}% gold on dungeon mob kills\n" +
+                    "Each purchase: +2% dungeon HP   +1% dungeon damage   +3% your kill gold   Max 1 purchase each wave",
+                BackgroundColor = new Color(0.16f, 0.11f, 0.09f, 0.98f),
+                AccentColor = GoldAccentColor,
+                MinHeight = IsCompactPanelLayout() ? 150f : 164f,
+            };
+
+            row.Pills.Add(CreatePanelRowPill($"Cost {currentCost}g", GoldSurfaceBrightColor, GoldTextColor));
+            row.Pills.Add(CreatePanelRowPill($"Purchases {Mathf.Max(0, lane.feedDungeonCount)}", GunmetalColor, SilverTextColor));
+            row.Pills.Add(CreatePanelRowPill($"+{killGoldBonusPct:0.#}% Kill Gold", GoldSurfaceColor, GoldTextColor));
+            row.Pills.Add(CreatePanelRowPill($"Spent {Mathf.Max(0, lane.totalGoldSpentOnFeedDungeon)}g", GunmetalSoftColor, SilverTextColor));
+
+            row.PrimaryAction = CreatePanelRowAction(
+                BuildFeedDungeonActionLabel(lane, pad),
+                canFeedDungeon ? ExecuteFeedDungeon : null,
+                canFeedDungeon,
+                highlighted: true,
+                objectName: BuildFocusedMarketActionObjectName("Feed"));
 
             return row;
         }
@@ -5105,6 +5184,56 @@ namespace CastleDefender.UI
                 return string.IsNullOrWhiteSpace(entry.lockedReason) ? "Unavailable" : entry.lockedReason;
 
             return null;
+        }
+
+        int GetFeedDungeonCost(MLLaneSnap lane)
+        {
+            if (lane == null)
+                return 500;
+
+            if (lane.feedDungeonCost > 0)
+                return Mathf.Max(0, lane.feedDungeonCost);
+
+            return 500 + (Mathf.Max(0, lane.feedDungeonCount) * 100);
+        }
+
+        bool CanFeedDungeon(MLLaneSnap lane, MLFortressPad pad)
+        {
+            return CanEditBarracks()
+                && lane != null
+                && pad != null
+                && pad.isBuilt
+                && string.IsNullOrWhiteSpace(GetFeedDungeonBlockedReason(lane, pad));
+        }
+
+        string GetFeedDungeonBlockedReason(MLLaneSnap lane, MLFortressPad pad)
+        {
+            if (lane == null)
+                return "Unavailable";
+            if (pad == null || !pad.isBuilt)
+                return "Build Market";
+
+            int roundNumber = Mathf.Max(1, SnapshotApplier.Instance?.LatestML?.roundNumber ?? 1);
+            if (roundNumber < FeedDungeonUnlockWave)
+                return $"Unlocks W{FeedDungeonUnlockWave}";
+
+            if (lane.feedDungeonPurchasedThisWave)
+                return "Fed This Wave";
+
+            int cost = GetFeedDungeonCost(lane);
+            if (lane.gold < cost)
+                return $"Need {Mathf.Max(0, cost - Mathf.FloorToInt(lane.gold))}g";
+
+            return null;
+        }
+
+        string BuildFeedDungeonActionLabel(MLLaneSnap lane, MLFortressPad pad)
+        {
+            string blockedReason = GetFeedDungeonBlockedReason(lane, pad);
+            if (!string.IsNullOrWhiteSpace(blockedReason))
+                return blockedReason;
+
+            return $"Feed the Dungeon {GetFeedDungeonCost(lane)}g";
         }
 
         string BuildBuildingOverviewHeaderText(MLLaneSnap lane, int sendSeconds, int waveSeconds)
@@ -8503,6 +8632,13 @@ namespace CastleDefender.UI
 
             _statusMessage = $"Buying {entry.displayName} market income...";
             ActionSender.BuyMarketUnit(entry.unitKey);
+            RefreshHeader(force: true);
+        }
+
+        void ExecuteFeedDungeon()
+        {
+            _statusMessage = "Feeding the Dungeon...";
+            ActionSender.FeedDungeon();
             RefreshHeader(force: true);
         }
 

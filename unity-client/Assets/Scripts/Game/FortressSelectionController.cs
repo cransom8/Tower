@@ -18,8 +18,6 @@ namespace CastleDefender.Game
         static readonly RaycastHit[] s_hitBuffer = new RaycastHit[32];
         static readonly List<FortressPadAnchor> s_anchorScratch = new();
         static readonly List<BarracksSiteView> s_barracksScratch = new();
-        static readonly List<RaycastResult> s_uiRaycastScratch = new();
-
         readonly HashSet<string> _missingPadLogs = new();
         readonly HashSet<string> _missingBarracksLogs = new();
 
@@ -490,24 +488,7 @@ namespace CastleDefender.Game
 
         static bool IsPointerOverUi(Vector2 screenPosition, int pointerId = -1)
         {
-            var eventSystem = EventSystem.current;
-            if (eventSystem == null)
-                return false;
-
-            bool pointerOverTrackedUi = pointerId >= 0
-                ? eventSystem.IsPointerOverGameObject(pointerId)
-                : eventSystem.IsPointerOverGameObject();
-            if (pointerOverTrackedUi)
-                return true;
-
-            s_uiRaycastScratch.Clear();
-            var eventData = new PointerEventData(eventSystem)
-            {
-                pointerId = pointerId,
-                position = screenPosition,
-            };
-            eventSystem.RaycastAll(eventData, s_uiRaycastScratch);
-            return s_uiRaycastScratch.Count > 0;
+            return SceneEventSystemUtility.IsPointerOverUi(screenPosition, pointerId);
         }
 
         static MLFortressPad FindPad(MLLaneSnap lane, string padId)

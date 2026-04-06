@@ -24,7 +24,7 @@ namespace CastleDefender.UI
         const string ProgressionDockWidgetName = "ProgressionDockWidget";
         const string QuitConfirmationModalName = "QuitConfirmationModal";
         const string WaveOverviewWidgetPrefsKey = "hud.wave_overview_widget.command_deck_v4";
-        const string MyStatsWidgetPrefsKey = "hud.my_stats_widget.top_right_v3";
+        const string MyStatsWidgetPrefsKey = "hud.my_stats_widget.top_right_v4";
         const string MiniMapWidgetPrefsKey = "hud.minimap_widget.top_right_v2";
         const string WaveTimeIcon = "ETA ";
         const string WaveMobsIcon = "MOB ";

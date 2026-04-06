@@ -42,6 +42,8 @@ namespace CastleDefender.Game
         readonly Dictionary<string, ProjView> _projs = new();
         readonly HashSet<string> _loggedResolutionFailures = new();
         readonly List<string> _completedProjectiles = new();
+        readonly Queue<GameObject> _projPool = new Queue<GameObject>(16);
+        readonly Queue<GameObject> _cannonPool = new Queue<GameObject>(8);
         MaterialPropertyBlock _materialBlock;
         Material _fallbackProjectileMaterial;
         bool _subscribed;
@@ -241,7 +243,18 @@ namespace CastleDefender.Game
             if (prefab == null)
                 return null;
 
-            var go = Instantiate(prefab, from, Quaternion.identity, transform);
+            Queue<GameObject> pool = isCannon ? _cannonPool : _projPool;
+            GameObject go;
+            if (pool.Count > 0)
+            {
+                go = pool.Dequeue();
+                go.transform.SetPositionAndRotation(from, Quaternion.identity);
+                go.SetActive(true);
+            }
+            else
+            {
+                go = Instantiate(prefab, from, Quaternion.identity, transform);
+            }
             go.name = $"Proj_{id}";
 
             string family = ResolveProjectileFamily(projectileType, damageType);
@@ -470,8 +483,15 @@ namespace CastleDefender.Game
             }
 
             if (view.go != null)
-                Destroy(view.go);
+                ReturnProjectileToPool(view.go, view.projectileType);
             _projs.Remove(projectileId);
+        }
+
+        void ReturnProjectileToPool(GameObject go, string projectileType)
+        {
+            go.SetActive(false);
+            bool isCannon = string.Equals(projectileType, "cannon", System.StringComparison.OrdinalIgnoreCase);
+            (isCannon ? _cannonPool : _projPool).Enqueue(go);
         }
 
         void TrySubscribeSnapshots()
@@ -513,7 +533,7 @@ namespace CastleDefender.Game
             foreach (var kv in _projs)
             {
                 if (kv.Value?.go != null)
-                    Destroy(kv.Value.go);
+                    ReturnProjectileToPool(kv.Value.go, kv.Value.projectileType);
             }
 
             _projs.Clear();
@@ -596,7 +616,7 @@ namespace CastleDefender.Game
                 return;
 
             if (view?.go != null)
-                Destroy(view.go);
+                ReturnProjectileToPool(view.go, view.projectileType);
 
             _projs.Remove(projectileId);
         }

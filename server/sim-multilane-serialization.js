@@ -126,6 +126,13 @@ function getSnapshotUnitAnchorDistance(unit) {
   return Math.sqrt((dx * dx) + (dy * dy));
 }
 
+function getSnapshotFeedDungeonCost(lane, deps = {}) {
+  if (typeof deps.getFeedDungeonCost === "function")
+    return deps.getFeedDungeonCost(lane);
+  const purchaseCount = Math.max(0, Math.floor(Number(lane && lane.feedDungeonCount) || 0));
+  return 500 + (purchaseCount * 100);
+}
+
 function resolveSnapshotCombatMetadata(game, lane, unit, deps) {
   const {
     resolveWaveCombatTarget,
@@ -344,6 +351,9 @@ function createMLSnapshot(game, deps) {
     transitionPhaseTotal: 0,
     waveTimerTicksRemaining,
     waveTimerTotalTicks,
+    dungeonHpMult: Math.max(0.01, Number(game.dungeonHpMult) || 1),
+    dungeonDmgMult: Math.max(0.01, Number(game.dungeonDmgMult) || 1),
+    totalDungeonScalingApplied: Math.max(0, Math.floor(Number(game.totalDungeonScalingApplied) || 0)),
     teamHp: game.teamHp || { left: game.teamHpMax || TEAM_HP_START, right: game.teamHpMax || TEAM_HP_START },
     teamHpMax: game.teamHpMax || TEAM_HP_START,
     lanes: game.lanes.map((lane) => {
@@ -562,6 +572,11 @@ function createMLSnapshot(game, deps) {
           ? getLaneTotalIncome(lane)
           : lane.income,
         buildValue: getSerializedLaneBuildValue(lane, barracksRoster, deps),
+        goldPerKillMult: Math.max(0.01, Number(lane.goldPerKillMult) || 1),
+        feedDungeonCount: Math.max(0, Math.floor(Number(lane.feedDungeonCount) || 0)),
+        feedDungeonPurchasedThisWave: !!lane.feedDungeonPurchasedThisWave,
+        totalGoldSpentOnFeedDungeon: Math.max(0, Math.floor(Number(lane.totalGoldSpentOnFeedDungeon) || 0)),
+        feedDungeonCost: getSnapshotFeedDungeonCost(lane, deps),
         lives: lane.lives,
         barracksLevel: Math.max(1, Math.floor(Number(lane.barracks && lane.barracks.level) || 1)),
         fortressPads: Array.isArray(lane.fortressPads)

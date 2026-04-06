@@ -1,6 +1,6 @@
 // LoginUI.cs — Mandatory sign-in screen. Shown before the Lobby.
 // If AuthManager already has a valid token, skips directly to Lobby.
-// Supports email/password, forgot-password, and Google SSO (WebGL only).
+// Supports email/password, forgot-password, and Google sign-in via device authorization.
 //
 // SCENE SETUP (Login.unity):
 //   -- Place AuthManager + NetworkManager GameObjects here (they DontDestroyOnLoad)
@@ -23,7 +23,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
@@ -63,11 +62,6 @@ namespace CastleDefender.UI
             public string email;
         }
 
-        [Preserve]
-        sealed class GoogleAuthRequest
-        {
-            public string idToken;
-        }
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Panels")]
         public GameObject PanelLogin;
@@ -233,10 +227,6 @@ namespace CastleDefender.UI
         }
 
         // ── WebGL jslib imports ───────────────────────────────────────────────
-#if UNITY_WEBGL && !UNITY_EDITOR
-        [DllImport("__Internal")]
-        static extern void JSIO_GoogleSignIn(string clientId, string gameObjectName);
-#endif
 
         // ─────────────────────────────────────────────────────────────────────
         void Awake()
@@ -2274,7 +2264,7 @@ namespace CastleDefender.UI
                 var resp = JsonConvert.DeserializeObject<AuthResponse>(req.downloadHandler.text);
                 if (resp?.requiresMfa == true)
                 {
-                    SetError("Multi-factor authentication is not supported in the app. Use the web client.");
+                    SetError("Multi-factor authentication is not supported in the app. Use the device authorization page instead.");
                     SetStatus("");
                     yield break;
                 }
@@ -2425,57 +2415,16 @@ namespace CastleDefender.UI
         {
             if (_busy) return;
             if (string.IsNullOrEmpty(_googleClientId)) return;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            _busy = true;
-            SetBusy(true);
-            SetError("");
-            SetStatus("Opening Google sign-in...");
-            JSIO_GoogleSignIn(_googleClientId, gameObject.name);
-#else
-            SetStatus("Google sign-in is only available in the browser build.");
-#endif
+            StartCoroutine(DoDeviceCodeFlow());
         }
 
-        // Called by SocketIOBridge.jslib via SendMessage when Google returns a credential
-        public void OnGoogleCredential(string credential)
-        {
-            if (string.IsNullOrEmpty(credential))
-            {
-                _busy = false;
-                SetBusy(false);
-                SetError("Google sign-in was cancelled or not available.");
-                SetStatus("");
-                return;
-            }
-            StartCoroutine(DoGoogleAuth(credential));
-        }
+        // Legacy browser Google sign-in path retained only as a retired reference stub.
 
         IEnumerator DoGoogleAuth(string idToken)
         {
-            _busy = true;
-            SetStatus("Verifying with Google...");
-            SetBusy(true);
+            yield break;
 
-            string url  = ResolvedBaseUrl + "/auth/google";
-            using var req = CreateJsonPostRequest(url, new GoogleAuthRequest
-            {
-                idToken = idToken,
-            });
-            req.timeout = 15;
-            yield return req.SendWebRequest();
-
-            _busy = false;
-            SetBusy(false);
-
-            if (req.result != UnityWebRequest.Result.Success)
-            {
-                string err = ParseErrorBody(req.downloadHandler.text, req.error);
-                SetError(err);
-                SetStatus("");
-                yield break;
-            }
-
+#if false
             try
             {
                 var resp = JsonConvert.DeserializeObject<AuthResponse>(req.downloadHandler.text);
@@ -2490,6 +2439,7 @@ namespace CastleDefender.UI
             {
                 SetError($"Unexpected response: {ex.Message}");
             }
+#endif
         }
 
         // ── Post-login ────────────────────────────────────────────────────────
@@ -2530,17 +2480,13 @@ namespace CastleDefender.UI
             ShowContentRetryAction(false);
             SetError("");
 
-            bool bootstrapAlreadyMarked = RemoteContentManager.HasRequiredGameBootstrapMarker();
             if (forceRefreshManifest)
             {
-                SetStatus("Retrying required game content download...");
+                SetStatus("Retrying lobby content setup...");
             }
             else
             {
-                SetStatus(
-                    bootstrapAlreadyMarked
-                        ? "Checking downloaded game content before entering the lobby..."
-                        : "Setting up required game content on this device. This is a one-time download before entering the game.");
+                SetStatus("Preparing lobby content before entering the command room...");
             }
 
             if (delay > 0f)
@@ -2561,7 +2507,7 @@ namespace CastleDefender.UI
             ReleaseLoginAudioListener();
             EnsurePersistentEventSystem();
             ShowContentRetryAction(false);
-            LoadingScreen.LoadSceneWithCriticalContentPreload("Lobby");
+            LoadingScreen.LoadSceneWithLobbyEntryPreparation("Lobby");
         }
 
         void EnsureLoginAudioListener()
@@ -2593,12 +2539,6 @@ namespace CastleDefender.UI
         }
 
         // ── Browser / Device-code flow (Editor + Standalone) ─────────────────
-
-        void OnBrowserSignIn()
-        {
-            if (_busy) return;
-            StartCoroutine(DoDeviceCodeFlow());
-        }
 
         IEnumerator DoDeviceCodeFlow()
         {
@@ -2637,7 +2577,7 @@ namespace CastleDefender.UI
             if (Txt_DeviceCode  != null) Txt_DeviceCode.text = dcr.userCode;
             if (Txt_DeviceStatus!= null) Txt_DeviceStatus.text = "Waiting for browser authorization...";
 
-            string authorizeUrl = ResolvedBaseUrl + "/?authorize=" + dcr.userCode;
+            string authorizeUrl = ResolvedBaseUrl + "/authorize?code=" + UnityWebRequest.EscapeURL(dcr.userCode);
             Application.OpenURL(authorizeUrl);
             SetStatus("");
             SetBusy(false);     // re-enable form while waiting
@@ -2770,19 +2710,9 @@ namespace CastleDefender.UI
         {
             get
             {
-#if UNITY_WEBGL && !UNITY_EDITOR
-                var page = new Uri(Application.absoluteURL);
-                bool standard = (page.Scheme == "https" && page.Port == 443)
-                             || (page.Scheme == "http"  && page.Port == 80)
-                             || page.Port < 0;
-                return standard
-                    ? $"{page.Scheme}://{page.Host}"
-                    : $"{page.Scheme}://{page.Host}:{page.Port}";
-#else
                 return NetworkManager.Instance != null
                     ? NetworkManager.Instance.ResolvedServerUrl
                     : "http://127.0.0.1:3000";
-#endif
             }
         }
 

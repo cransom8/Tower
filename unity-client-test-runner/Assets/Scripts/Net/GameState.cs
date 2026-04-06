@@ -1224,6 +1224,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class LeaderboardEntry
     {
+        public string id;
         public int    rank;
         public string display_name;     // server field
         public float  rating;
@@ -1235,7 +1236,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class LeaderboardSeason
     {
-        public int    id;
+        public string id;
         public string name;
         public string start_date;
     }
@@ -1255,7 +1256,7 @@ namespace CastleDefender.Net
     [Serializable]
     public class SeasonPayload
     {
-        public int    id;
+        public string id;
         public string name;
         public string end_date;     // ISO date string
         public bool   is_active;

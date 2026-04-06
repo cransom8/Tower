@@ -8,8 +8,8 @@
 //
 // Auth flow:
 //   1. Login endpoints return a short-lived access token plus a long-lived refresh token.
-//   2. The client stores the access token everywhere, and stores the refresh token
-//      only on native/editor builds. WebGL relies on the server's HttpOnly cookie.
+//   2. The client stores the access token and refresh token locally on supported
+//      native/editor platforms.
 //   3. On the next launch, the client silently restores the session through /auth/refresh.
 //
 // Guest path:
@@ -18,7 +18,6 @@
 
 using System;
 using System.Collections;
-using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -42,12 +41,6 @@ namespace CastleDefender.Net
         const string RefreshPrefKey = "castle_refresh_token";
         const string SessionHintPrefKey = "castle_has_saved_session";
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-        [DllImport("__Internal")] static extern string JSIO_GetJWT();
-        [DllImport("__Internal")] static extern void JSIO_SetJWT(string token);
-        [DllImport("__Internal")] static extern void JSIO_ClearJWT();
-#endif
-
         void Awake()
         {
             if (Instance != null && Instance != this)
@@ -64,29 +57,7 @@ namespace CastleDefender.Net
         void LoadPersistedAuthState()
         {
             LoadRefreshToken();
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            try
-            {
-                string fromStorage = JSIO_GetJWT();
-                if (!string.IsNullOrEmpty(fromStorage))
-                {
-                    Token = fromStorage;
-                    PlayerPrefs.SetString(AccessPrefKey, Token);
-                    PlayerPrefs.Save();
-                }
-                else
-                {
-                    Token = PlayerPrefs.GetString(AccessPrefKey, null);
-                }
-            }
-            catch
-            {
-                Token = PlayerPrefs.GetString(AccessPrefKey, null);
-            }
-#else
             Token = PlayerPrefs.GetString(AccessPrefKey, null);
-#endif
 
             if (!string.IsNullOrEmpty(Token))
                 TryDecodeAccessToken();
@@ -96,11 +67,7 @@ namespace CastleDefender.Net
 
         static void LoadRefreshToken()
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            RefreshToken = null;
-#else
             RefreshToken = PlayerPrefs.GetString(RefreshPrefKey, null);
-#endif
         }
 
         public static void SaveToken(string token)
@@ -150,7 +117,6 @@ namespace CastleDefender.Net
                 yield break;
             }
 
-#if !UNITY_WEBGL || UNITY_EDITOR
             if (string.IsNullOrWhiteSpace(RefreshToken))
             {
                 Debug.LogWarning("[Auth] Session hint exists, but no refresh token was stored.");
@@ -159,7 +125,6 @@ namespace CastleDefender.Net
                 onComplete?.Invoke(false, "Saved session metadata was incomplete.");
                 yield break;
             }
-#endif
 
             string url = baseUrl.TrimEnd('/') + "/auth/refresh";
             using var req = CreateJsonPostRequest(url, BuildRefreshRequestBody());
@@ -288,33 +253,16 @@ namespace CastleDefender.Net
             else
                 PlayerPrefs.SetString(AccessPrefKey, Token);
             PlayerPrefs.Save();
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            try
-            {
-                if (string.IsNullOrWhiteSpace(Token))
-                    JSIO_ClearJWT();
-                else
-                    JSIO_SetJWT(Token);
-            }
-            catch
-            {
-            }
-#endif
         }
 
         static void StoreRefreshToken(string refreshToken)
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            RefreshToken = null;
-#else
             RefreshToken = string.IsNullOrWhiteSpace(refreshToken) ? null : refreshToken;
             if (string.IsNullOrWhiteSpace(RefreshToken))
                 PlayerPrefs.DeleteKey(RefreshPrefKey);
             else
                 PlayerPrefs.SetString(RefreshPrefKey, RefreshToken);
             PlayerPrefs.Save();
-#endif
         }
 
         static void ClearCachedAccessToken(string reason)
@@ -323,10 +271,6 @@ namespace CastleDefender.Net
             ResetIdentity();
             PlayerPrefs.DeleteKey(AccessPrefKey);
             PlayerPrefs.Save();
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            try { JSIO_ClearJWT(); } catch { }
-#endif
 
             if (!string.IsNullOrWhiteSpace(reason))
                 Debug.Log($"[Auth] Cleared cached access token ({reason})");
@@ -370,22 +314,14 @@ namespace CastleDefender.Net
 
         static string BuildRefreshRequestBody()
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return "{}";
-#else
             return JsonConvert.SerializeObject(new RefreshRequest { refreshToken = RefreshToken });
-#endif
         }
 
         static string BuildLogoutRequestBody(string refreshToken)
         {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return "{}";
-#else
             return string.IsNullOrWhiteSpace(refreshToken)
                 ? "{}"
                 : JsonConvert.SerializeObject(new RefreshRequest { refreshToken = refreshToken });
-#endif
         }
 
         static string ParseErrorBody(string body, string fallback)

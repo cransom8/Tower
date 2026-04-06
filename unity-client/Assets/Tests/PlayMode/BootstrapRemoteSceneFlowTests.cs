@@ -96,7 +96,7 @@ public class BootstrapRemoteSceneFlowTests
         yield return WaitForActiveScene("Login");
 
         RemoteContentVerification.SetFailureCount(RemoteContentVerification.FaultKind.ManifestDownload, 1);
-        LoadingScreen.LoadSceneWithCriticalContentPreload("Lobby");
+        LoadingScreen.LoadSceneWithLobbyEntryPreparation("Lobby");
         yield return WaitForRetryUi("Content manifest failed to download.");
 
         Assert.That(SceneManager.GetActiveScene().name, Is.EqualTo("Login"), "Login should stay active when lobby entry content cannot be prepared.");

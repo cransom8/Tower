@@ -116,7 +116,7 @@ namespace CastleDefender.Editor
         public static void TransitionToLobby() => RunTransition(() => LoadingScreen.LoadScene("Lobby"));
 
         [MenuItem("Castle Defender/Remote Scene Validation/Transition/Lobby With T0 Gate")]
-        public static void TransitionToLobbyWithGate() => RunTransition(() => LoadingScreen.LoadSceneWithCriticalContentPreload("Lobby"));
+        public static void TransitionToLobbyWithGate() => RunTransition(() => LoadingScreen.LoadSceneWithLobbyEntryPreparation("Lobby"));
 
         [MenuItem("Castle Defender/Remote Scene Validation/Transition/Loadout")]
         public static void TransitionToLoadout() => RunTransition(() => LoadingScreen.LoadScene("Loadout"));

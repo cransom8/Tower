@@ -27,7 +27,7 @@ namespace CastleDefender.UI
 
         [Header("State")]
         [SerializeField] bool startCollapsed;
-        [SerializeField] string prefsKey = "hud.my_stats";
+        [SerializeField] string prefsKey = "hud.my_stats_widget.top_right_v4";
 
         RectTransform _parentRect;
         Canvas _canvas;
@@ -84,6 +84,11 @@ namespace CastleDefender.UI
             prefsKey = persistentKey;
             _defaultAnchoredPosition = rect != null ? rect.anchoredPosition : Vector2.zero;
             CacheParent();
+            BindToggle();
+            _loadedState = false;
+            LoadStateIfNeeded();
+            ApplyCollapseVisuals();
+            ClampToParent();
         }
 
         void Awake()
@@ -92,26 +97,27 @@ namespace CastleDefender.UI
                 widgetRect = GetComponent<RectTransform>();
             if (_canvas == null)
                 _canvas = GetComponentInParent<Canvas>();
+            _defaultAnchoredPosition = widgetRect != null ? widgetRect.anchoredPosition : Vector2.zero;
             CacheParent();
         }
 
         void OnEnable()
         {
-            if (toggleButton != null)
-            {
-                toggleButton.onClick.RemoveListener(ToggleCollapsed);
-                toggleButton.onClick.AddListener(ToggleCollapsed);
-            }
-
+            BindToggle();
             LoadStateIfNeeded();
             ApplyCollapseVisuals();
             ClampToParent();
         }
 
+        void OnRectTransformDimensionsChange()
+        {
+            CacheParent();
+            ClampToParent();
+        }
+
         void OnDisable()
         {
-            if (toggleButton != null)
-                toggleButton.onClick.RemoveListener(ToggleCollapsed);
+            UnbindToggle();
         }
 
         public void SetStats(string gold, string income, string secondary, string workers, string build, string target, float meterRatio, Color meterColor)
@@ -234,15 +240,34 @@ namespace CastleDefender.UI
                 return;
 
             var parentSize = _parentRect.rect.size;
+            if (parentSize.x <= 0.01f || parentSize.y <= 0.01f)
+                return;
+
             float width = widgetRect.rect.width;
             float height = widgetRect.rect.height;
-            float minX = 8f;
-            float maxX = Mathf.Max(8f, parentSize.x - width - 8f);
-            float minY = Mathf.Min(-8f, -parentSize.y + height + 8f);
-            float maxY = -8f;
-            float x = Mathf.Clamp(widgetRect.anchoredPosition.x, minX, maxX);
-            float y = Mathf.Clamp(widgetRect.anchoredPosition.y, minY, maxY);
-            widgetRect.anchoredPosition = new Vector2(x, y);
+            const float margin = 8f;
+
+            Vector2 parentPivot = _parentRect.pivot;
+            Vector2 anchorCenter = (widgetRect.anchorMin + widgetRect.anchorMax) * 0.5f;
+            Vector2 anchorLocal = new(
+                (anchorCenter.x - parentPivot.x) * parentSize.x,
+                (anchorCenter.y - parentPivot.y) * parentSize.y);
+
+            Vector2 minPivot = new(
+                -parentSize.x * parentPivot.x + width * widgetRect.pivot.x + margin,
+                -parentSize.y * parentPivot.y + height * widgetRect.pivot.y + margin);
+            Vector2 maxPivot = new(
+                parentSize.x * (1f - parentPivot.x) - width * (1f - widgetRect.pivot.x) - margin,
+                parentSize.y * (1f - parentPivot.y) - height * (1f - widgetRect.pivot.y) - margin);
+            if (maxPivot.x < minPivot.x)
+                maxPivot.x = minPivot.x;
+            if (maxPivot.y < minPivot.y)
+                maxPivot.y = minPivot.y;
+
+            Vector2 pivotLocal = anchorLocal + widgetRect.anchoredPosition;
+            pivotLocal.x = Mathf.Clamp(pivotLocal.x, minPivot.x, maxPivot.x);
+            pivotLocal.y = Mathf.Clamp(pivotLocal.y, minPivot.y, maxPivot.y);
+            widgetRect.anchoredPosition = pivotLocal - anchorLocal;
         }
 
         void SaveState()
@@ -254,6 +279,23 @@ namespace CastleDefender.UI
             PlayerPrefs.SetFloat($"{prefsKey}.y", widgetRect.anchoredPosition.y);
             PlayerPrefs.SetInt($"{prefsKey}.collapsed", _isCollapsed ? 1 : 0);
             PlayerPrefs.Save();
+        }
+
+        void BindToggle()
+        {
+            if (toggleButton == null)
+                return;
+
+            toggleButton.onClick.RemoveListener(ToggleCollapsed);
+            toggleButton.onClick.AddListener(ToggleCollapsed);
+        }
+
+        void UnbindToggle()
+        {
+            if (toggleButton == null)
+                return;
+
+            toggleButton.onClick.RemoveListener(ToggleCollapsed);
         }
     }
 }

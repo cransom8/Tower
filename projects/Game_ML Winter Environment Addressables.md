@@ -1,6 +1,6 @@
 # Game_ML Winter Environment Addressables
 
-Generated: `2026-04-04 01:44:49`
+Generated: `2026-04-06 11:32:21`
 
 ## Critical Content
 
@@ -58,7 +58,7 @@ Generated: `2026-04-04 01:44:49`
 ## Performance Notes
 
 - Optional props are collider-free so they do not affect gameplay pathing or collision.
-- Backdrop renderers have shadows disabled to keep the streamed dressing lighter for WebGL/mobile.
+- Backdrop renderers have shadows disabled to keep the streamed dressing lighter for Android and lower-tier mobile devices.
 - Reused a small curated subset of winter prefabs with scale and rotation variation instead of pulling the full demo scene.
 - Optional warm lights are limited to four non-shadowed point lights near focal landmarks.
 

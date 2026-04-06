@@ -320,6 +320,9 @@ function markUnitKillCredit(game, lane, targetUnit, source, deps = {}) {
 
 function applyUnitKillReward(game, deadUnit, deps = {}) {
   const getLaneByIndex = requireDepFunction(deps, "getLaneByIndex");
+  const isScheduledWaveUnit = typeof deps.isScheduledWaveUnit === "function"
+    ? deps.isScheduledWaveUnit
+    : ((unit) => !!(unit && unit.isWaveUnit));
   const killCredit = deadUnit && deadUnit.lastHostileKillCredit;
   const rewardLaneIndex = Number.isInteger(killCredit && killCredit.rewardLaneIndex)
     ? killCredit.rewardLaneIndex
@@ -329,11 +332,16 @@ function applyUnitKillReward(game, deadUnit, deps = {}) {
   const rewardLane = getLaneByIndex(game, rewardLaneIndex);
   if (!rewardLane)
     return null;
-  const bounty = Math.max(0, Number(deadUnit && deadUnit.bounty) || 0);
-  if (bounty <= 0)
+  const baseBounty = Math.max(0, Number(deadUnit && deadUnit.bounty) || 0);
+  if (baseBounty <= 0)
     return null;
+  const rewardMult = isScheduledWaveUnit(deadUnit)
+    ? Math.max(0.01, Number(rewardLane.goldPerKillMult) || 1)
+    : 1;
+  const bounty = Math.round((baseBounty * rewardMult + Number.EPSILON) * 100) / 100;
   rewardLane.gold = Math.max(0, Number(rewardLane.gold) || 0) + bounty;
   return {
+    baseBounty,
     bounty,
     killCredit,
     rewardLane,

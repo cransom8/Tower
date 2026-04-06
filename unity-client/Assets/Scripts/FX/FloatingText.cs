@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
 
@@ -21,6 +22,9 @@ public class FloatingText : MonoBehaviour
     public Color damageColor = new Color(1f, 0.3f, 0.3f);
     public Color lifeColor   = new Color(0.4f, 0.9f, 1f);
 
+    const int PoolSize = 12;
+    static readonly Queue<FloatingText> _pool = new Queue<FloatingText>(PoolSize);
+
     TextMeshProUGUI _tmp;
 
     void Awake() => _tmp = GetComponent<TextMeshProUGUI>();
@@ -31,9 +35,20 @@ public class FloatingText : MonoBehaviour
     public static void Spawn(string text, Vector3 worldPos, Kind kind = Kind.Gold)
     {
         if (Prefab == null) { Debug.LogWarning("[FloatingText] Prefab not set."); return; }
-        var go = Instantiate(Prefab.gameObject, worldPos, Quaternion.identity);
-        go.SetActive(true);
-        go.GetComponent<FloatingText>().Play(text, kind);
+
+        FloatingText instance;
+        if (_pool.Count > 0)
+        {
+            instance = _pool.Dequeue();
+            instance.transform.position = worldPos;
+            instance.gameObject.SetActive(true);
+        }
+        else
+        {
+            var go = Instantiate(Prefab.gameObject, worldPos, Quaternion.identity);
+            instance = go.GetComponent<FloatingText>();
+        }
+        instance.Play(text, kind);
     }
 
     void Play(string text, Kind kind)
@@ -64,6 +79,7 @@ public class FloatingText : MonoBehaviour
             _tmp.alpha = 1f - fadeN;
             yield return null;
         }
-        Destroy(gameObject);
+        gameObject.SetActive(false);
+        _pool.Enqueue(this);
     }
 }

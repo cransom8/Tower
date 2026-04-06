@@ -51,19 +51,9 @@ namespace CastleDefender.Net
         {
             get
             {
-#if UNITY_WEBGL && !UNITY_EDITOR
-                var page = new Uri(Application.absoluteURL);
-                bool standard = (page.Scheme == "https" && page.Port == 443)
-                             || (page.Scheme == "http" && page.Port == 80)
-                             || page.Port < 0;
-                return standard
-                    ? $"{page.Scheme}://{page.Host}"
-                    : $"{page.Scheme}://{page.Host}:{page.Port}";
-#else
                 return NetworkManager.Instance != null
                     ? NetworkManager.Instance.ResolvedServerUrl
                     : "http://localhost:3000";
-#endif
             }
         }
 

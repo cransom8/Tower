@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Android", "WebGL")]
+    [ValidateSet("Android")]
     [string]$Platform = "Android",
     [string]$Bucket,
     [string]$SourceDir,

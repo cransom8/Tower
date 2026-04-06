@@ -66,6 +66,12 @@ namespace CastleDefender.Game
             SendAction("buy_market_unit", new { unitKey, count });
         }
 
+        public static void FeedDungeon()
+        {
+            Debug.Log("[MarketTrace][ClientBuy] feed_dungeon");
+            SendAction("feed_dungeon");
+        }
+
         public static void SellBarracksUnit(string rosterKey, string barracksId = null)
         {
             if (string.IsNullOrWhiteSpace(barracksId))

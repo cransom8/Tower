@@ -59,6 +59,7 @@ namespace CastleDefender.UI
     {
         const string ResourcePath = "ClassicRpgRuntimeTheme";
         const float CompactWidthThreshold = 1320f;
+        const float CompactHeightThreshold = 760f;
         const float CompactAspectThreshold = 1.34f;
 
         struct SpriteSwapSet
@@ -126,7 +127,9 @@ namespace CastleDefender.UI
                 height = 1f;
 
             float aspect = width / height;
-            return width <= CompactWidthThreshold || aspect <= CompactAspectThreshold;
+            return width <= CompactWidthThreshold
+                || height <= CompactHeightThreshold
+                || aspect <= CompactAspectThreshold;
         }
 
         public static float PickByLayout(RectTransform canvasRect, float wideValue, float compactValue)

@@ -21,7 +21,7 @@ gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
   --member="allUsers" \
   --role="roles/storage.objectViewer"
 
-echo "==> Setting CORS policy (allows Unity WebGL to fetch bundles)"
+echo "==> Setting CORS policy for hosted remote content"
 cat > /tmp/cors.json <<EOF
 [
   {

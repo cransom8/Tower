@@ -163,7 +163,7 @@ namespace CastleDefender.Game
         static void CreateFillPiece(Transform parent, string name, Vector3 localPosition, Vector3 localScale, bool rounded)
         {
             // Avoid Sphere primitives here because they implicitly create a
-            // SphereCollider, which is unavailable in some WebGL player setups.
+            // Sphere primitives include an unnecessary collider for this UI-only anchor.
             var primitive = GameObject.CreatePrimitive(PrimitiveType.Cube);
             primitive.name = name;
             primitive.transform.SetParent(parent, false);
