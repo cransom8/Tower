@@ -17,8 +17,8 @@ namespace CastleDefender.Editor
         const string ReleaseMenuPath = "Castle Defender/Deploy Android";
         const string LocalMenuPath = "Castle Defender/Deploy Local Android";
         const string UploadScriptRelativePath = "../scripts/upload-addressables.ps1";
-        const string RepoDotEnvRelativePath = "../.env";
-        const string RepoDotEnvLocalRelativePath = "../.env.local";
+        const string RepoDotEnvRelativePath = ".env";
+        const string RepoDotEnvLocalRelativePath = ".env.local";
         const string AddressablesSourceRelativePath = "unity-client/ServerData/Android";
         const string UploadProgressPrefix = "##UPLOAD_PROGRESS|";
 
