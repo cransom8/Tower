@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS unit_types (
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Startup replays the full migration chain, so older content migrations must still
+-- be able to reference these legacy barracks scaling flags before 065 removes them.
+ALTER TABLE unit_types
+  ADD COLUMN IF NOT EXISTS barracks_scales_hp BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS barracks_scales_dmg BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ── Unit Type → Ability assignments ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS unit_type_ability_assignments (
   id           SERIAL PRIMARY KEY,
