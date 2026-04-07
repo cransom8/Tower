@@ -1299,15 +1299,12 @@ function getCombatSlotArrivalTolerance(attacker, target, deps = {}) {
 function isUnitInCombatContact(lane, attacker, target, deps = {}, context = null) {
   if (!attacker || !target)
     return false;
-
   const distance = getWaveUnitTargetDistance(attacker, target);
   const stopDistance = getUnitStopDistance(attacker, target, deps);
   if (!Number.isFinite(distance) || !Number.isFinite(stopDistance) || distance > stopDistance + getContactSlotTolerance(deps))
     return false;
-
   if (!lane || !shouldUseLaneControlledSurroundSlots(attacker, target, deps))
     return true;
-
   const slotPoint = getLaneControlledCombatPocketPoint(lane, attacker, target, stopDistance, null, deps, context);
   const slotDistance = Math.hypot(
     Number(attacker.posX) - Number(slotPoint.x),

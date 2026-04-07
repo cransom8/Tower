@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
 
@@ -92,12 +93,14 @@ public static class BuildAndroid
 
         string previousBundleVersion = PlayerSettings.bundleVersion;
         int previousVersionCode = PlayerSettings.Android.bundleVersionCode;
-        string previousApplicationIdentifier = PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android);
+        string previousApplicationIdentifier = PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android);
 
         try
         {
             if (previousTarget != BuildTarget.Android)
                 EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
+
+            RansomForgeBranding.ApplyAndroidBrandingOrThrow();
 
             if (buildRemoteContent)
             {
@@ -130,7 +133,7 @@ public static class BuildAndroid
             }
 
             string buildOptionsLabel = buildAppBundle ? "Android App Bundle" : "local Android APK";
-            string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(BuildTargetGroup.Android);
+            string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android);
             if (string.IsNullOrWhiteSpace(applicationIdentifier))
                 throw new InvalidOperationException($"Android application identifier is not configured. Set it in Player Settings before building the {buildOptionsLabel}.");
 
@@ -170,7 +173,7 @@ public static class BuildAndroid
         {
             PlayerSettings.bundleVersion = previousBundleVersion;
             PlayerSettings.Android.bundleVersionCode = previousVersionCode;
-            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, previousApplicationIdentifier);
+            PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Android, previousApplicationIdentifier);
 
             PlayerSettings.Android.useCustomKeystore = previousUseCustomKeystore;
             PlayerSettings.Android.keystoreName = previousKeystoreName;

@@ -175,34 +175,43 @@ namespace CastleDefender.Game
         public static void ForfeitMatch()
             => NetworkManager.Instance.Emit("ml_forfeit_match", null);
 
-        public static void QueueEnter(string gameType, string matchFormat, bool ranked, int[] unitTypeIds = null)
-            => NetworkManager.Instance.Emit("queue:enter_v2",
+        public static bool QueueEnter(string gameType, string matchFormat, bool ranked, int[] unitTypeIds = null)
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("queue:enter_v2",
                new { gameType, matchFormat, ranked, unitTypeIds });
 
-        public static void QueueLeave()
-            => NetworkManager.Instance.Emit("queue:leave", null);
+        public static bool QueueLeave()
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("queue:leave", null);
 
-        public static void LobbyCreate(string gameType, string matchFormat, string pvpMode = "ffa", string displayName = "Player", int[] unitTypeIds = null)
-            => NetworkManager.Instance.Emit("lobby:create",
+        public static bool LobbyCreate(string gameType, string matchFormat, string pvpMode = "ffa", string displayName = "Player", int[] unitTypeIds = null)
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:create",
                new { gameType, matchFormat, pvpMode, displayName, unitTypeIds });
 
-        public static void LobbyJoin(string code, string displayName = "Player")
-            => NetworkManager.Instance.Emit("lobby:join",
+        public static bool LobbyJoin(string code, string displayName = "Player")
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:join",
                new { code = code.ToUpper(), displayName });
 
-        public static void LobbyReady(bool ready)
-            => NetworkManager.Instance.Emit("lobby:ready", new { ready });
+        public static bool LobbyReady(bool ready)
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:ready", new { ready });
 
-        public static void LobbyLeave()
-            => NetworkManager.Instance.Emit("lobby:leave", null);
+        public static bool LobbyLeave()
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:leave", null);
 
-        public static void LobbyLaunch(int[] unitTypeIds = null)
-            => NetworkManager.Instance.Emit("lobby:launch", new { unitTypeIds });
+        public static bool LobbyLaunch(int[] unitTypeIds = null)
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:launch", new { unitTypeIds });
 
-        public static void LobbyAddBot(string difficulty = "medium")
-            => NetworkManager.Instance.Emit("lobby:add_bot", new { difficulty });
+        public static bool LobbyAddBot(string difficulty = "medium")
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:add_bot", new { difficulty });
 
-        public static void LobbyRemoveBot(int index)
-            => NetworkManager.Instance.Emit("lobby:remove_bot", new { index });
+        public static bool LobbyRemoveBot(int index)
+            => NetworkManager.Instance != null
+            && NetworkManager.Instance.TryEmit("lobby:remove_bot", new { index });
     }
 }

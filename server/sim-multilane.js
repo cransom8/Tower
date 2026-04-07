@@ -2511,6 +2511,9 @@ const SNAPSHOT_SERIALIZATION_DEPS = Object.freeze({
   getUnitStopDistance,
   getUnitAttackRange,
   isUnitInCombatContact,
+  resolveWaveForRound,
+  getUnitType,
+  WAVE_GROUP_INTERVAL_TICKS,
 });
 
 const PUBLIC_CONFIG_SERIALIZATION_DEPS = Object.freeze({

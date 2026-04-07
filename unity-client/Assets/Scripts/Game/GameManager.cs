@@ -386,6 +386,58 @@ namespace CastleDefender.Game
             return null;
         }
 
+        Canvas FindCanvasInScene()
+        {
+            var scene = gameObject.scene;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var canvas = root.GetComponentInChildren<Canvas>(true);
+                if (canvas != null)
+                    return canvas;
+            }
+
+            return null;
+        }
+
+        bool HasModernHudInScene()
+        {
+            const string ModernHudTypeName = "CastleDefender.UI.MobileMatchHud";
+
+            var scene = gameObject.scene;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                var behaviours = root.GetComponentsInChildren<MonoBehaviour>(true);
+                for (int i = 0; i < behaviours.Length; i++)
+                {
+                    var behaviour = behaviours[i];
+                    if (behaviour == null)
+                        continue;
+
+                    if (string.Equals(behaviour.GetType().FullName, ModernHudTypeName, System.StringComparison.Ordinal))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        static void RemoveLegacyWaveHudFromCanvas(Canvas canvas)
+        {
+            if (canvas == null)
+                return;
+
+            var hud = canvas.transform.Find("WaveHUD");
+            if (hud == null)
+                return;
+
+            hud.SetParent(null, false);
+
+            if (Application.isPlaying)
+                Destroy(hud.gameObject);
+            else
+                DestroyImmediate(hud.gameObject);
+        }
+
         static void EnsureWaveCombatRuntime()
         {
             WaveSnapshotRuntimeSpawner.EnsureRuntimeSpawner();
@@ -737,8 +789,14 @@ namespace CastleDefender.Game
         // ── Auto-create Wave HUD if not wired in Inspector ────────────────────
         void EnsureWaveHUD()
         {
-            var canvas = FindFirstObjectByType<Canvas>();
+            var canvas = FindCanvasInScene();
             if (canvas == null) return;
+
+            if (HasModernHudInScene())
+            {
+                RemoveLegacyWaveHudFromCanvas(canvas);
+                return;
+            }
 
             var existing = canvas.transform.Find("WaveHUD");
             GameObject hudGO = existing != null ? existing.gameObject : null;
@@ -790,8 +848,11 @@ namespace CastleDefender.Game
 
         void EnsureWaveHUDRefs()
         {
-            var canvas = FindFirstObjectByType<Canvas>();
+            var canvas = FindCanvasInScene();
             if (canvas == null) return;
+
+            if (HasModernHudInScene())
+                return;
 
             var hud = canvas.transform.Find("WaveHUD");
             if (hud == null) return;

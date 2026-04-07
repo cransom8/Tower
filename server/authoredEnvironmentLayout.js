@@ -3,10 +3,22 @@
 const fs = require("fs");
 const path = require("path");
 
-const PREFAB_PATH = path.resolve(
+const LIVE_PREFAB_PATH = path.resolve(
   __dirname,
   "../unity-client/Assets/AddressableContent/Environment/GameEnvironment.prefab"
 );
+const PACKAGED_SNAPSHOT_PATH = path.resolve(
+  __dirname,
+  "assets/authoredEnvironmentLayout.json"
+);
+const SNAPSHOT_SCHEMA_VERSION = 1;
+const SOURCE_OVERRIDE_ENV = "AUTHORED_ENVIRONMENT_LAYOUT_SOURCE";
+const SOURCE_KIND = Object.freeze({
+  LIVE_PREFAB: "live_prefab",
+  PACKAGED_SNAPSHOT: "packaged_snapshot",
+});
+const SOURCE_PREFAB_ASSET_PATH =
+  "Assets/AddressableContent/Environment/GameEnvironment.prefab";
 
 const LANE_COLOR_TO_KEY = Object.freeze({
   1: "red",
@@ -28,13 +40,18 @@ function loadAuthoredEnvironmentLayout() {
   if (s_cachedAuthoredEnvironmentLayout)
     return s_cachedAuthoredEnvironmentLayout;
 
-  if (!fs.existsSync(PREFAB_PATH)) {
-    throw new Error(
-      `[authoredEnvironmentLayout] Required environment prefab is missing at '${PREFAB_PATH}'.`
-    );
-  }
+  const source = resolveAuthoredEnvironmentLayoutSource();
+  const layout =
+    source.kind === SOURCE_KIND.PACKAGED_SNAPSHOT
+      ? loadPackagedAuthoredEnvironmentLayoutSnapshot(source.path)
+      : loadAuthoredEnvironmentLayoutFromPrefab(source.path);
 
-  const prefabText = fs.readFileSync(PREFAB_PATH, "utf8");
+  s_cachedAuthoredEnvironmentLayout = freezeAuthoredEnvironmentLayout(layout, source);
+  return s_cachedAuthoredEnvironmentLayout;
+}
+
+function loadAuthoredEnvironmentLayoutFromPrefab(prefabPath) {
+  const prefabText = fs.readFileSync(prefabPath, "utf8");
   const blocks = prefabText.split(/^--- /m).slice(1);
   const transforms = new Map();
   const gameObjects = new Map();
@@ -211,21 +228,286 @@ function loadAuthoredEnvironmentLayout() {
 
   validateRequiredLaneAnchors(lanes);
 
-  s_cachedAuthoredEnvironmentLayout = Object.freeze({
-    prefabPath: PREFAB_PATH,
-    mineCenter: Object.freeze({
+  return {
+    mineCenter: {
       x: roundWorldAxis(mineCenterWorld.x),
       y: roundWorldAxis(mineCenterWorld.z),
+    },
+    lanes,
+  };
+}
+
+function loadPackagedAuthoredEnvironmentLayoutSnapshot(snapshotPath) {
+  let snapshot = null;
+  try {
+    snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+  } catch (error) {
+    const details = error && error.message ? error.message : String(error);
+    throw new Error(
+      `[authoredEnvironmentLayout] Failed to parse packaged authored environment snapshot at '${snapshotPath}': ${details}.`
+    );
+  }
+
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot at '${snapshotPath}' must contain an object payload.`
+    );
+  }
+
+  if (snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot at '${snapshotPath}' has schemaVersion '${snapshot.schemaVersion}', expected '${SNAPSHOT_SCHEMA_VERSION}'.`
+    );
+  }
+
+  if (snapshot.sourcePrefabAssetPath !== SOURCE_PREFAB_ASSET_PATH) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot at '${snapshotPath}' has sourcePrefabAssetPath '${snapshot.sourcePrefabAssetPath}', expected '${SOURCE_PREFAB_ASSET_PATH}'.`
+    );
+  }
+
+  const rawLanes = snapshot.lanes;
+  if (!rawLanes || typeof rawLanes !== "object" || Array.isArray(rawLanes)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot at '${snapshotPath}' is missing a valid 'lanes' object.`
+    );
+  }
+
+  const lanes = {
+    red: normalizeSnapshotLaneLayout(rawLanes.red, "red"),
+    yellow: normalizeSnapshotLaneLayout(rawLanes.yellow, "yellow"),
+    blue: normalizeSnapshotLaneLayout(rawLanes.blue, "blue"),
+    green: normalizeSnapshotLaneLayout(rawLanes.green, "green"),
+  };
+
+  validateRequiredLaneAnchors(lanes);
+
+  return {
+    mineCenter: normalizeSnapshotPoint(snapshot.mineCenter, "mineCenter"),
+    lanes,
+  };
+}
+
+function resolveAuthoredEnvironmentLayoutSource() {
+  const override = normalizeSourceOverride(process.env[SOURCE_OVERRIDE_ENV]);
+  if (override)
+    return requireAuthoredEnvironmentLayoutSource(override);
+
+  if (isProductionRuntime())
+    return requireAuthoredEnvironmentLayoutSource(SOURCE_KIND.PACKAGED_SNAPSHOT);
+
+  if (fs.existsSync(LIVE_PREFAB_PATH)) {
+    return {
+      kind: SOURCE_KIND.LIVE_PREFAB,
+      path: LIVE_PREFAB_PATH,
+    };
+  }
+
+  if (fs.existsSync(PACKAGED_SNAPSHOT_PATH)) {
+    return {
+      kind: SOURCE_KIND.PACKAGED_SNAPSHOT,
+      path: PACKAGED_SNAPSHOT_PATH,
+    };
+  }
+
+  throw buildMissingAuthoredEnvironmentLayoutError();
+}
+
+function requireAuthoredEnvironmentLayoutSource(kind) {
+  const resolvedPath =
+    kind === SOURCE_KIND.PACKAGED_SNAPSHOT
+      ? PACKAGED_SNAPSHOT_PATH
+      : LIVE_PREFAB_PATH;
+
+  if (!fs.existsSync(resolvedPath)) {
+    if (kind === SOURCE_KIND.PACKAGED_SNAPSHOT && isProductionRuntime()) {
+      throw new Error(
+        `[authoredEnvironmentLayout] Production server requires packaged authored environment snapshot at '${PACKAGED_SNAPSHOT_PATH}'. Live Unity prefab '${LIVE_PREFAB_PATH}' is not a valid production runtime dependency.`
+      );
+    }
+
+    throw new Error(
+      `[authoredEnvironmentLayout] Requested authored environment source '${kind}' via ${SOURCE_OVERRIDE_ENV} but required file is missing at '${resolvedPath}'.`
+    );
+  }
+
+  return {
+    kind,
+    path: resolvedPath,
+  };
+}
+
+function normalizeSourceOverride(rawValue) {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  if (!normalized)
+    return "";
+
+  if (normalized === SOURCE_KIND.LIVE_PREFAB || normalized === SOURCE_KIND.PACKAGED_SNAPSHOT)
+    return normalized;
+
+  throw new Error(
+    `[authoredEnvironmentLayout] Invalid ${SOURCE_OVERRIDE_ENV}='${rawValue}'. Expected '${SOURCE_KIND.LIVE_PREFAB}' or '${SOURCE_KIND.PACKAGED_SNAPSHOT}'.`
+  );
+}
+
+function isProductionRuntime() {
+  return String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+}
+
+function buildMissingAuthoredEnvironmentLayoutError() {
+  return new Error(
+    `[authoredEnvironmentLayout] Missing authored environment data. Checked live prefab '${LIVE_PREFAB_PATH}' and packaged snapshot '${PACKAGED_SNAPSHOT_PATH}'.`
+  );
+}
+
+function freezeAuthoredEnvironmentLayout(layout, source) {
+  return Object.freeze({
+    sourceKind: source.kind,
+    sourcePath: source.path,
+    prefabPath: source.kind === SOURCE_KIND.LIVE_PREFAB ? source.path : null,
+    mineCenter: Object.freeze({
+      x: roundWorldAxis(layout.mineCenter.x),
+      y: roundWorldAxis(layout.mineCenter.y),
     }),
     lanes: Object.freeze({
-      red: freezeLaneLayout(lanes.red),
-      yellow: freezeLaneLayout(lanes.yellow),
-      blue: freezeLaneLayout(lanes.blue),
-      green: freezeLaneLayout(lanes.green),
+      red: freezeLaneLayout(layout.lanes.red),
+      yellow: freezeLaneLayout(layout.lanes.yellow),
+      blue: freezeLaneLayout(layout.lanes.blue),
+      green: freezeLaneLayout(layout.lanes.green),
     }),
   });
+}
 
-  return s_cachedAuthoredEnvironmentLayout;
+function normalizeSnapshotLaneLayout(rawLane, laneKey) {
+  if (!rawLane || typeof rawLane !== "object" || Array.isArray(rawLane)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot is missing a valid lane object for '${laneKey}'.`
+    );
+  }
+
+  return {
+    pads: normalizeSnapshotPads(rawLane.pads, laneKey),
+    barracks: normalizeSnapshotBarracks(rawLane.barracks, laneKey),
+    tradeOutpost: normalizeSnapshotTradeOutpost(rawLane.tradeOutpost, laneKey),
+  };
+}
+
+function normalizeSnapshotPads(rawPads, laneKey) {
+  if (!rawPads || typeof rawPads !== "object" || Array.isArray(rawPads)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' is missing a valid 'pads' object.`
+    );
+  }
+
+  const pads = {};
+  for (const [padId, entry] of Object.entries(rawPads)) {
+    if (!padId) {
+      throw new Error(
+        `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' contains a pad with an empty id.`
+      );
+    }
+
+    pads[padId] = normalizeSnapshotPadEntry(entry, laneKey, padId);
+  }
+
+  return pads;
+}
+
+function normalizeSnapshotPadEntry(entry, laneKey, padId) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' pad '${padId}' must be an object.`
+    );
+  }
+
+  return {
+    x: normalizeSnapshotAxis(entry.x, `lane '${laneKey}' pad '${padId}' x`),
+    y: normalizeSnapshotAxis(entry.y, `lane '${laneKey}' pad '${padId}' y`),
+    buildingType: normalizeSnapshotBuildingType(entry.buildingType, laneKey, padId),
+  };
+}
+
+function normalizeSnapshotBuildingType(buildingType, laneKey, padId) {
+  if (buildingType == null)
+    return null;
+
+  if (typeof buildingType !== "string" || !String(buildingType).trim()) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' pad '${padId}' has invalid buildingType '${buildingType}'.`
+    );
+  }
+
+  return String(buildingType).trim();
+}
+
+function normalizeSnapshotBarracks(rawBarracks, laneKey) {
+  if (!rawBarracks || typeof rawBarracks !== "object" || Array.isArray(rawBarracks)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' is missing a valid 'barracks' object.`
+    );
+  }
+
+  const barracks = {};
+  for (const [barracksId, entry] of Object.entries(rawBarracks)) {
+    if (!barracksId) {
+      throw new Error(
+        `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' contains a barracks entry with an empty id.`
+      );
+    }
+
+    barracks[barracksId] = normalizeSnapshotPoint(
+      entry,
+      `lane '${laneKey}' barracks '${barracksId}'`
+    );
+  }
+
+  return barracks;
+}
+
+function normalizeSnapshotTradeOutpost(entry, laneKey) {
+  if (entry == null)
+    return null;
+
+  if (typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' tradeOutpost must be an object or null.`
+    );
+  }
+
+  if (typeof entry.name !== "string" || !String(entry.name).trim()) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot lane '${laneKey}' tradeOutpost is missing a valid name.`
+    );
+  }
+
+  return {
+    ...normalizeSnapshotPoint(entry, `lane '${laneKey}' tradeOutpost`),
+    name: String(entry.name).trim(),
+  };
+}
+
+function normalizeSnapshotPoint(entry, label) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot ${label} must be an object.`
+    );
+  }
+
+  return {
+    x: normalizeSnapshotAxis(entry.x, `${label} x`),
+    y: normalizeSnapshotAxis(entry.y, `${label} y`),
+  };
+}
+
+function normalizeSnapshotAxis(value, label) {
+  const numeric = Number.parseFloat(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(
+      `[authoredEnvironmentLayout] Packaged authored environment snapshot ${label} must be a finite number, received '${value}'.`
+    );
+  }
+
+  return roundWorldAxis(numeric);
 }
 
 function extractScalar(block, key) {

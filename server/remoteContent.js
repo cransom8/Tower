@@ -270,6 +270,9 @@ function buildContentManifest({ unitTypes = [], skins = [], environmentEntries =
       ];
 
   for (const unit of units) {
+    if (unit.content_kind === 'skin_variant')
+      continue;
+
     const entry = buildManifestContentEntry('unit', unit.key, unit.remote_content);
     if (!entry) continue;
 

@@ -451,10 +451,7 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// GET /auth/session
-// Lightweight startup check for client bootstrapping.
-// Returns 200 in both signed-in and signed-out states to avoid noisy expected 401s.
-router.get('/session', async (req, res) => {
+async function sendSessionState(req, res) {
   try {
     const accessToken = req.cookies?.cd_access || '';
     if (!accessToken) {
@@ -495,7 +492,16 @@ router.get('/session', async (req, res) => {
     clearAuthCookies(res);
     return res.json({ signedIn: false });
   }
-});
+}
+
+// GET /auth/session
+// Lightweight startup check for client bootstrapping.
+// Returns 200 in both signed-in and signed-out states to avoid noisy expected 401s.
+router.get('/session', sendSessionState);
+
+// GET /auth/me
+// Compatibility alias for older device-auth pages that still check /auth/me.
+router.get('/me', sendSessionState);
 
 // POST /auth/logout
 // Revokes the refresh token (from cookie or body) and clears auth cookies.

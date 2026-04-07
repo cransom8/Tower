@@ -358,13 +358,39 @@ function renderDeviceAuthorizationPage({
       authorizeButton.disabled = authorizeInFlight || !sessionReady || !hasCode;
     }
 
+    async function readJsonResponse(response, fallbackMessage) {
+      const text = await response.text();
+      if (!text) {
+        return {};
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(fallbackMessage);
+      }
+    }
+
+    function resolveErrorMessage(payload, fallbackMessage) {
+      if (payload && typeof payload.error === "string" && payload.error.trim()) {
+        return payload.error.trim();
+      }
+      return fallbackMessage;
+    }
+
     async function refreshSession() {
       try {
-        const response = await fetch("/auth/me", {
+        const response = await fetch("/auth/session", {
           credentials: "include",
           cache: "no-store",
         });
-        const payload = await response.json();
+        const payload = await readJsonResponse(
+          response,
+          "The sign-in page received an unexpected session response."
+        );
+        if (!response.ok) {
+          throw new Error(resolveErrorMessage(payload, "Unable to verify the current session."));
+        }
         sessionReady = !!payload && payload.signedIn === true;
         if (sessionReady) {
           const name = payload.player && payload.player.displayName ? payload.player.displayName : "Player";
@@ -390,9 +416,12 @@ function renderDeviceAuthorizationPage({
         body: JSON.stringify({ credential }),
       });
 
-      const payload = await response.json().catch(() => ({}));
+      const payload = await readJsonResponse(
+        response,
+        "The server returned an unexpected response while finishing Google sign-in."
+      );
       if (!response.ok) {
-        throw new Error(payload && payload.error ? payload.error : "Google sign-in failed.");
+        throw new Error(resolveErrorMessage(payload, "Google sign-in failed."));
       }
     }
 
@@ -414,9 +443,12 @@ function renderDeviceAuthorizationPage({
           body: JSON.stringify({ userCode }),
         });
 
-        const payload = await response.json().catch(() => ({}));
+        const payload = await readJsonResponse(
+          response,
+          "The server returned an unexpected response while authorizing the device."
+        );
         if (!response.ok) {
-          throw new Error(payload && payload.error ? payload.error : "Device authorization failed.");
+          throw new Error(resolveErrorMessage(payload, "Device authorization failed."));
         }
 
         setMessage("Device approved. You can return to the Android or PC client now.", "success");

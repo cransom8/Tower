@@ -31,10 +31,17 @@ namespace CastleDefender.UI
 
         [Header("Role Icons")]
         public Sprite ActivityShieldIcon;
+        public Sprite ActivitySwordIcon;
+        public Sprite ActivitySpearIcon;
         public Sprite ActivityArcherIcon;
-        public Sprite ActivityInfantryIcon;
         public Sprite ActivityPriestIcon;
         public Sprite ActivityMageIcon;
+        public Sprite ActivityHeroIcon;
+
+        [Header("Stance Icons")]
+        public Sprite CommandAttackIcon;
+        public Sprite CommandDefendIcon;
+        public Sprite CommandRetreatIcon;
 
         [Header("Buttons - Long")]
         public Sprite ButtonLongNormal;

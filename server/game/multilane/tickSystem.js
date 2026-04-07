@@ -704,7 +704,7 @@ function processLane(game, lane, deps = {}) {
       }
       let directPreferredTarget = null;
       if (canReacquireUnitTarget && canSeekCombat) {
-        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit, unitTargetingContext);
+        directPreferredTarget = getWaveUnitPreferredTarget(game, lane, unit, deps, unitTargetingContext);
         if (directPreferredTarget
             && isRouteUnitTargetBlockedByStructure(game, lane, unit, directPreferredTarget, blockingTarget)) {
           directPreferredTarget = null;
@@ -844,7 +844,17 @@ function processLane(game, lane, deps = {}) {
           && directContactDistance <= stopDist + contactSlotTolerance
           && shouldUseLaneControlledSurroundSlots(unit, targetUnit)
         );
-        const inCombatContact = allowImmediateLaneContact || isUnitInCombatContact(lane, unit, targetUnit, unitTargetingContext);
+        // Sticky contact: once a unit has attacked (atkCd > 0) and is still physically
+        // close, keep it engaged even if the slot point has drifted. This prevents the
+        // "backing-up" oscillation that occurs when the target moves toward the unit
+        // during its attack cooldown and the ring slot shifts away faster than the unit
+        // can track it.
+        const inHoldContact = !!(
+          unit.atkCd > 0
+          && Number.isFinite(directContactDistance)
+          && directContactDistance <= stopDist * 2 + contactSlotTolerance
+        );
+        const inCombatContact = allowImmediateLaneContact || inHoldContact || isUnitInCombatContact(lane, unit, targetUnit, unitTargetingContext);
         if (inCombatContact) {
             if (unit.atkCd <= 0) {
               const attackStats = resolveUnitAttackStats(unit, deps);

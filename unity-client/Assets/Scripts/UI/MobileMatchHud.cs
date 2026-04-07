@@ -2371,11 +2371,13 @@ namespace CastleDefender.UI
             return ResolveUpcomingWaveQueueIconKind(entry) switch
             {
                 BarracksActivityIconKind.Shield => theme.ActivityShieldIcon,
+                BarracksActivityIconKind.Sword => theme.ActivitySwordIcon,
+                BarracksActivityIconKind.Spear => theme.ActivitySpearIcon,
                 BarracksActivityIconKind.Archer => theme.ActivityArcherIcon,
                 BarracksActivityIconKind.Priest => theme.ActivityPriestIcon,
                 BarracksActivityIconKind.Mage => theme.ActivityMageIcon,
-                BarracksActivityIconKind.Hero => theme.ActivityShieldIcon,
-                _ => theme.ActivityInfantryIcon,
+                BarracksActivityIconKind.Hero => theme.ActivityHeroIcon,
+                _ => theme.ActivitySwordIcon,
             };
         }
 
@@ -2384,6 +2386,8 @@ namespace CastleDefender.UI
             return ResolveUpcomingWaveQueueIconKind(entry) switch
             {
                 BarracksActivityIconKind.Shield => new Color(0.72f, 0.86f, 0.98f, 0.98f),
+                BarracksActivityIconKind.Sword => new Color(0.96f, 0.92f, 0.84f, 0.98f),
+                BarracksActivityIconKind.Spear => new Color(1.00f, 0.90f, 0.66f, 0.98f),
                 BarracksActivityIconKind.Archer => new Color(0.76f, 0.92f, 0.70f, 0.98f),
                 BarracksActivityIconKind.Priest => new Color(0.85f, 0.96f, 0.84f, 0.98f),
                 BarracksActivityIconKind.Mage => new Color(0.88f, 0.78f, 0.98f, 0.98f),
@@ -2437,6 +2441,19 @@ namespace CastleDefender.UI
                 return BarracksActivityIconKind.Archer;
             }
 
+            if (summary.Contains("spear")
+                || summary.Contains("pike")
+                || summary.Contains("pikeman")
+                || summary.Contains("pikemen")
+                || summary.Contains("polearm")
+                || summary.Contains("halberd")
+                || summary.Contains("lance")
+                || summary.Contains("lancer")
+                || summary.Contains("phalanx"))
+            {
+                return BarracksActivityIconKind.Spear;
+            }
+
             if (summary.Contains("shield")
                 || summary.Contains("guardian")
                 || summary.Contains("paladin")
@@ -2446,7 +2463,7 @@ namespace CastleDefender.UI
                 return BarracksActivityIconKind.Shield;
             }
 
-            return BarracksActivityIconKind.Infantry;
+            return BarracksActivityIconKind.Sword;
         }
 
         string BuildUpcomingWaveCardSummary(MLUpcomingWave upcomingWave)

@@ -3,15 +3,20 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { loadAuthoredEnvironmentLayout } = require("../authoredEnvironmentLayout");
-
 const LIVE_PREFAB_PATH = path.resolve(
   __dirname,
   "../../unity-client/Assets/AddressableContent/Environment/GameEnvironment.prefab"
 );
+const SNAPSHOT_PATH = path.resolve(
+  __dirname,
+  "../assets/authoredEnvironmentLayout.json"
+);
+const SOURCE_OVERRIDE_ENV = "AUTHORED_ENVIRONMENT_LAYOUT_SOURCE";
+const SOURCE_PREFAB_ASSET_PATH =
+  "Assets/AddressableContent/Environment/GameEnvironment.prefab";
 
 test("authored environment layout parses the current prefab and keeps widened fort spacing", () => {
-  const layout = loadAuthoredEnvironmentLayout();
+  const layout = loadLayoutFromSource("live_prefab");
 
   assert.ok(layout, "expected authored environment layout");
   assert.equal(typeof layout.mineCenter.x, "number", "mine center should expose an authored world x");
@@ -39,7 +44,7 @@ test("authored environment layout parses the current prefab and keeps widened fo
 });
 
 test("authored Town Core and center Barracks remain separate committed slots", () => {
-  const layout = loadAuthoredEnvironmentLayout();
+  const layout = loadLayoutFromSource("live_prefab");
 
   for (const laneKey of ["red", "yellow", "blue", "green"]) {
     const lane = layout.lanes[laneKey];
@@ -63,6 +68,60 @@ test("authored Town Core and center Barracks remain separate committed slots", (
       `expected Town Core and Barracks to remain distinct slots for '${laneKey}'`
     );
   }
+});
+
+test("packaged authored environment snapshot matches the live prefab layout", () => {
+  const liveLayout = loadLayoutFromSource("live_prefab");
+  const packagedLayout = loadLayoutFromSource("packaged_snapshot");
+  const snapshotPayload = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, "utf8"));
+
+  assert.equal(snapshotPayload.schemaVersion, 1, "expected packaged snapshot schema version 1");
+  assert.equal(
+    snapshotPayload.sourcePrefabAssetPath,
+    SOURCE_PREFAB_ASSET_PATH,
+    "expected packaged snapshot to record its live prefab source asset path"
+  );
+  assert.equal(
+    packagedLayout.sourceKind,
+    "packaged_snapshot",
+    "expected packaged snapshot override to load the packaged server asset"
+  );
+  assert.deepEqual(
+    {
+      mineCenter: packagedLayout.mineCenter,
+      lanes: packagedLayout.lanes,
+    },
+    {
+      mineCenter: liveLayout.mineCenter,
+      lanes: liveLayout.lanes,
+    },
+    "expected packaged snapshot runtime layout to stay byte-for-byte aligned with the live prefab layout"
+  );
+  assert.deepEqual(
+    snapshotPayload,
+    {
+      schemaVersion: 1,
+      sourcePrefabAssetPath: SOURCE_PREFAB_ASSET_PATH,
+      mineCenter: liveLayout.mineCenter,
+      lanes: liveLayout.lanes,
+    },
+    "expected packaged authored environment snapshot JSON to match the live prefab layout exactly"
+  );
+});
+
+test("production runtime defaults authored environment layout to the packaged snapshot", () => {
+  const layout = loadLayoutFromSource(null, "production");
+
+  assert.equal(
+    layout.sourceKind,
+    "packaged_snapshot",
+    "expected production runtime to load the packaged authored environment snapshot by default"
+  );
+  assert.equal(
+    path.resolve(layout.sourcePath),
+    SNAPSHOT_PATH,
+    "expected production runtime to resolve the packaged authored environment snapshot path"
+  );
 });
 
 test("live environment prefab keeps one shared-defense anchor per lane and pad id", () => {
@@ -235,4 +294,38 @@ function normalizeClassIdentifier(classIdentifier) {
 
 function capitalize(value) {
   return value ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+function loadLayoutFromSource(sourceKind, nodeEnv) {
+  const modulePath = require.resolve("../authoredEnvironmentLayout");
+  const previousOverride = process.env[SOURCE_OVERRIDE_ENV];
+  const previousNodeEnv = process.env.NODE_ENV;
+
+  if (sourceKind)
+    process.env[SOURCE_OVERRIDE_ENV] = sourceKind;
+  else
+    delete process.env[SOURCE_OVERRIDE_ENV];
+
+  if (nodeEnv == null)
+    delete process.env.NODE_ENV;
+  else
+    process.env.NODE_ENV = nodeEnv;
+
+  delete require.cache[modulePath];
+
+  try {
+    const { loadAuthoredEnvironmentLayout } = require("../authoredEnvironmentLayout");
+    return loadAuthoredEnvironmentLayout();
+  } finally {
+    delete require.cache[modulePath];
+    if (previousOverride == null)
+      delete process.env[SOURCE_OVERRIDE_ENV];
+    else
+      process.env[SOURCE_OVERRIDE_ENV] = previousOverride;
+
+    if (previousNodeEnv == null)
+      delete process.env.NODE_ENV;
+    else
+      process.env.NODE_ENV = previousNodeEnv;
+  }
 }

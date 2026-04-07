@@ -49,23 +49,40 @@ namespace CastleDefender.UI
         public int DesktopTopBottomPadding = 10;
         [Range(0.60f, 1.00f)] public float MobileVerticalUsagePercent = 0.84f;
         [Range(0.60f, 1.00f)] public float DesktopVerticalUsagePercent = 0.98f;
+        [Header("Lane Command Cluster")]
+        [Range(0.18f, 0.40f)] public float ClusterWidthPercentOfScreen = 0.31f;
+        [Range(0.28f, 0.60f)] public float MobileClusterWidthPercentOfSafeArea = 0.46f;
+        public float ClusterMinWidth = 408f;
+        public float ClusterMaxWidth = 620f;
+        public float MobileClusterMinWidth = 330f;
+        public float MobileClusterMaxWidth = 500f;
+        public float ClusterHeight = 184f;
+        public float MobileClusterHeight = 160f;
+        public float ClusterLeftInset = 6f;
+        public float ClusterTopInset = 12f;
+        public float ClusterPadding = 8f;
 
         [SerializeField] UnitPortraitCamera PortraitCam;
         [SerializeField] UnitPrefabRegistry PortraitRegistry;
 
         const float MissingLoadoutErrorDelaySeconds = 1.5f;
-        static readonly string[] BarracksOrder = { "center", "left", "right" };
+        const float ActivityDownTickFlashSeconds = 0.42f;
+        static readonly string[] BarracksOrder = { "left", "center", "right" };
         static readonly Color CommandButtonActive = new(0.18f, 0.55f, 0.46f, 0.98f);
         static readonly Color CommandButtonInactive = new(0.14f, 0.20f, 0.27f, 0.98f);
         static readonly Color CommandButtonDisabled = new(0.18f, 0.18f, 0.20f, 0.72f);
+        static readonly Color ActivityDownTickFlashColor = new(0.96f, 0.20f, 0.14f, 0.72f);
+        static readonly Color ActivityDownTickTextColor = new(1.00f, 0.76f, 0.72f, 1.00f);
+        static readonly Color InactiveActivityIconColor = new(0.84f, 0.88f, 0.95f, 0.70f);
+        static readonly Color InactiveActivityFallbackColor = new(0.82f, 0.86f, 0.92f, 0.76f);
         static readonly BarracksActivityIconKind[] ActivityIconOrder =
         {
             BarracksActivityIconKind.Shield,
-            BarracksActivityIconKind.Infantry,
+            BarracksActivityIconKind.Sword,
+            BarracksActivityIconKind.Spear,
             BarracksActivityIconKind.Archer,
             BarracksActivityIconKind.Priest,
             BarracksActivityIconKind.Mage,
-            BarracksActivityIconKind.Hero,
         };
 
         readonly Dictionary<string, Texture2D> _portraitCache = new(StringComparer.OrdinalIgnoreCase);
@@ -128,6 +145,7 @@ namespace CastleDefender.UI
 
             RefreshButtonPortraits();
             RefreshActivityPanel(false);
+            RefreshActivityRowEffects();
             RefreshActivityPortraits();
         }
 
@@ -207,6 +225,10 @@ namespace CastleDefender.UI
             if (rootLayout != null) rootLayout.enabled = false;
             var fitter = GetComponent<ContentSizeFitter>();
             if (fitter != null) fitter.enabled = false;
+            var layoutGroup = GetComponent<LayoutGroup>();
+            if (layoutGroup != null) layoutGroup.enabled = false;
+            var layoutElement = GetComponent<LayoutElement>();
+            if (layoutElement != null) layoutElement.ignoreLayout = true;
             var rootImage = GetComponent<Image>();
             if (rootImage != null)
             {
@@ -226,100 +248,81 @@ namespace CastleDefender.UI
         {
             if (_contentRoot != null) return;
 
-            _runtimeRoot = EnsureChildRect(transform, "BarracksActivityRoot");
-            _runtimeRoot.anchorMin = new Vector2(0f, 0f);
+            ApplyClusterRuntimeTuning();
+            RectTransform runtimeHost = ResolveCanvasRect();
+            if (runtimeHost == null)
+                runtimeHost = transform as RectTransform;
+
+            RectTransform existingRoot = transform.Find("LaneCommandClusterRoot") as RectTransform;
+            if (existingRoot == null && runtimeHost != null && runtimeHost != transform)
+                existingRoot = runtimeHost.Find("LaneCommandClusterRoot") as RectTransform;
+
+            _runtimeRoot = existingRoot ?? EnsureChildRect(runtimeHost != null ? runtimeHost : transform, "LaneCommandClusterRoot");
+            if (runtimeHost != null && _runtimeRoot.parent != runtimeHost)
+                _runtimeRoot.SetParent(runtimeHost, false);
+            _runtimeRoot.SetAsLastSibling();
+            _runtimeRoot.anchorMin = new Vector2(0f, 1f);
             _runtimeRoot.anchorMax = new Vector2(0f, 1f);
-            _runtimeRoot.pivot = new Vector2(0f, 0.5f);
-            _runtimeRoot.anchoredPosition = Vector2.zero;
-            _runtimeRoot.offsetMin = new Vector2(0f, 0f);
-            _runtimeRoot.offsetMax = new Vector2(0f, 0f);
+            _runtimeRoot.pivot = new Vector2(0f, 1f);
+            _runtimeRoot.anchoredPosition = new Vector2(ClusterLeftInset, -ClusterTopInset);
+            _runtimeRoot.sizeDelta = new Vector2(ClusterMinWidth, ClusterHeight);
             _runtimeBackground = _runtimeRoot.gameObject.GetComponent<Image>() ?? _runtimeRoot.gameObject.AddComponent<Image>();
-            _runtimeBackground.color = new Color(0.08f, 0.12f, 0.16f, 0.92f);
+            _runtimeBackground.color = Color.clear;
+            _runtimeBackground.raycastTarget = false;
+            _runtimeBackground.enabled = false;
+            ClearPanelChrome(_runtimeRoot.gameObject);
 
-            _runtimeHeaderRoot = EnsureChildRect(_runtimeRoot, "Header");
-            _runtimeHeaderRoot.anchorMin = new Vector2(0f, 1f);
-            _runtimeHeaderRoot.anchorMax = new Vector2(1f, 1f);
-            _runtimeHeaderRoot.pivot = new Vector2(0.5f, 1f);
-            _runtimeHeaderRoot.anchoredPosition = Vector2.zero;
-            _runtimeHeaderRoot.sizeDelta = new Vector2(0f, 36f);
+            _contentRoot = EnsureChildRect(_runtimeRoot, "Content");
+            Stretch(
+                _contentRoot,
+                new Vector2(ClusterPadding, ClusterPadding),
+                new Vector2(-ClusterPadding, -ClusterPadding));
 
-            _titleLabel = EnsureText(_runtimeHeaderRoot, "Title", GetResponsivePanelTitle(), 18f, FontStyles.Bold);
-            _titleLabel.alignment = TextAlignmentOptions.Left;
-            _titleLabel.enableAutoSizing = true;
-            _titleLabel.fontSizeMin = 12f;
-            _titleLabel.fontSizeMax = 18f;
-            _titleLabel.textWrappingMode = TextWrappingModes.NoWrap;
-            _titleLabel.overflowMode = TextOverflowModes.Ellipsis;
-            _titleLabel.rectTransform.anchorMin = new Vector2(0f, 0f);
-            _titleLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
-            _titleLabel.rectTransform.pivot = new Vector2(0f, 0.5f);
-            _titleLabel.rectTransform.offsetMin = new Vector2(10f, 6f);
-            _titleLabel.rectTransform.offsetMax = new Vector2(-(GetCollapseToggleWidth() + 10f), -6f);
-
-            _collapseButton = EnsureButton(_runtimeHeaderRoot, "CollapseButton");
-            var collapseImage = _collapseButton.targetGraphic as Image;
-            if (collapseImage != null)
-                collapseImage.color = new Color(0.12f, 0.18f, 0.24f, 0.98f);
-            var collapseColors = _collapseButton.colors;
-            collapseColors.normalColor = new Color(1f, 1f, 1f, 1f);
-            collapseColors.highlightedColor = new Color(1f, 1f, 1f, 1f);
-            collapseColors.pressedColor = new Color(0.90f, 0.90f, 0.90f, 1f);
-            collapseColors.selectedColor = collapseColors.highlightedColor;
-            _collapseButton.colors = collapseColors;
-            _collapseButton.onClick.RemoveAllListeners();
-            _collapseButton.onClick.AddListener(TogglePanelCollapsed);
-            var collapseRect = _collapseButton.GetComponent<RectTransform>();
-            collapseRect.anchorMin = new Vector2(1f, 0.5f);
-            collapseRect.anchorMax = new Vector2(1f, 0.5f);
-            collapseRect.pivot = new Vector2(1f, 0.5f);
-            collapseRect.sizeDelta = new Vector2(GetCollapseToggleWidth(), 28f);
-            collapseRect.anchoredPosition = new Vector2(-GetCollapseToggleInset(), 0f);
-            _collapseButtonLabel = EnsureText(_collapseButton.transform, "Label", "<", 18f, FontStyles.Bold);
-            _collapseButtonLabel.alignment = TextAlignmentOptions.Center;
-            Stretch(_collapseButtonLabel.rectTransform, Vector2.zero, Vector2.zero);
-
-            _runtimeViewport = EnsureChildRect(_runtimeRoot, "Viewport");
-            var viewportImage = _runtimeViewport.gameObject.GetComponent<Image>() ?? _runtimeViewport.gameObject.AddComponent<Image>();
-            viewportImage.color = new Color(0f, 0f, 0f, 0f);
-            if (_runtimeViewport.gameObject.GetComponent<RectMask2D>() == null)
-                _runtimeViewport.gameObject.AddComponent<RectMask2D>();
-            _runtimeViewport.anchorMin = Vector2.zero;
-            _runtimeViewport.anchorMax = Vector2.one;
-            _runtimeViewport.offsetMin = new Vector2(8f, 8f);
-            _runtimeViewport.offsetMax = new Vector2(-8f, -42f);
-
-            _contentCanvasGroup = _runtimeViewport.gameObject.GetComponent<CanvasGroup>() ?? _runtimeViewport.gameObject.AddComponent<CanvasGroup>();
-
-            _contentRoot = EnsureChildRect(_runtimeViewport, "Content");
-            _contentRoot.anchorMin = new Vector2(0f, 1f);
-            _contentRoot.anchorMax = new Vector2(1f, 1f);
-            _contentRoot.pivot = new Vector2(0.5f, 1f);
-
-            var layout = _contentRoot.gameObject.GetComponent<VerticalLayoutGroup>() ?? _contentRoot.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 10f;
+            var layout = _contentRoot.gameObject.GetComponent<HorizontalLayoutGroup>() ?? _contentRoot.gameObject.AddComponent<HorizontalLayoutGroup>();
+            layout.spacing = IsCompactPanel() ? 8f : 12f;
             layout.childAlignment = TextAnchor.UpperLeft;
-            layout.childForceExpandHeight = false;
+            layout.childForceExpandHeight = true;
             layout.childForceExpandWidth = true;
             layout.childControlHeight = true;
             layout.childControlWidth = true;
-            var contentFitter = _contentRoot.gameObject.GetComponent<ContentSizeFitter>() ?? _contentRoot.gameObject.AddComponent<ContentSizeFitter>();
-            contentFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            var scrollRect = _runtimeRoot.gameObject.GetComponent<ScrollRect>() ?? _runtimeRoot.gameObject.AddComponent<ScrollRect>();
-            scrollRect.content = _contentRoot;
-            scrollRect.viewport = _runtimeViewport;
-            scrollRect.horizontal = false;
-            scrollRect.vertical = true;
-            scrollRect.movementType = ScrollRect.MovementType.Clamped;
-
-            _emptyStateLabel = EnsureText(_contentRoot, "EmptyState", "Waiting for barracks activity...", 13f, FontStyles.Italic);
-            _emptyStateLabel.alignment = TextAlignmentOptions.Left;
-            _emptyStateLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
+            _emptyStateLabel = null;
 
             for (int i = 0; i < BarracksOrder.Length; i++) EnsureSection(BarracksOrder[i]);
             EnsureDefaultActivityRows();
             UpdateRuntimePanelSizing(immediate: true);
             RefreshResponsiveSectionLayout();
+        }
+
+        void ApplyClusterRuntimeTuning()
+        {
+            ClusterWidthPercentOfScreen = 0.31f;
+            MobileClusterWidthPercentOfSafeArea = 0.46f;
+            ClusterMinWidth = 408f;
+            ClusterMaxWidth = 620f;
+            MobileClusterMinWidth = 330f;
+            MobileClusterMaxWidth = 500f;
+            ClusterHeight = 184f;
+            MobileClusterHeight = 160f;
+            ClusterLeftInset = 6f;
+            ClusterTopInset = 12f;
+            ClusterPadding = 8f;
+        }
+
+        void EnsureRuntimeRootHost()
+        {
+            if (_runtimeRoot == null)
+                return;
+
+            RectTransform runtimeHost = ResolveCanvasRect();
+            if (runtimeHost == null || _runtimeRoot.parent == runtimeHost)
+                return;
+
+            _runtimeRoot.SetParent(runtimeHost, false);
+            _runtimeRoot.SetAsLastSibling();
+            _runtimeRoot.anchorMin = new Vector2(0f, 1f);
+            _runtimeRoot.anchorMax = new Vector2(0f, 1f);
+            _runtimeRoot.pivot = new Vector2(0f, 1f);
         }
 
         BarracksSectionView EnsureSection(string barracksId)
@@ -329,45 +332,39 @@ namespace CastleDefender.UI
 
             var root = EnsureChildRect(_contentRoot, $"{id}_section");
             var image = root.gameObject.GetComponent<Image>() ?? root.gameObject.AddComponent<Image>();
-            image.color = new Color(0.10f, 0.16f, 0.22f, 0.90f);
+            image.color = ResolveSectionFillColor(id, true);
+            image.raycastTarget = false;
+            ApplyPanelChrome(root.gameObject, ResolveSectionAccentColor(id, 0.72f), ResolveSectionAccentColor(id));
+
             var layout = root.gameObject.GetComponent<VerticalLayoutGroup>() ?? root.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(8, 8, 8, 8);
-            layout.spacing = 5f;
-            layout.childAlignment = TextAnchor.UpperLeft;
+            layout.padding = new RectOffset(8, 8, 12, 8);
+            layout.spacing = 6f;
+            layout.childAlignment = TextAnchor.UpperCenter;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
-            var rootFitter = root.gameObject.GetComponent<ContentSizeFitter>() ?? root.gameObject.AddComponent<ContentSizeFitter>();
-            rootFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             var rootLayout = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
             rootLayout.flexibleWidth = 1f;
+            rootLayout.flexibleHeight = 1f;
+            rootLayout.minHeight = 0f;
+            rootLayout.preferredHeight = 0f;
+            rootLayout.minWidth = 0f;
+            rootLayout.preferredWidth = 0f;
 
-            var header = EnsureText(root, "Header", GetResponsiveBarracksHeader(id), 16f, FontStyles.Bold);
-            header.alignment = TextAlignmentOptions.Left;
-            header.enableAutoSizing = true;
-            header.fontSizeMin = 11f;
-            header.fontSizeMax = 16f;
-            header.overflowMode = TextOverflowModes.Ellipsis;
-            ConfigureSectionTextLayout(header, 22f);
-
-            var ordersLabel = EnsureText(root, "OrdersLabel", "Lane Orders", 11f, FontStyles.Normal);
-            ordersLabel.alignment = TextAlignmentOptions.Left;
-            ordersLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            ordersLabel.textWrappingMode = TextWrappingModes.NoWrap;
-            ordersLabel.overflowMode = TextOverflowModes.Ellipsis;
-            ConfigureSectionTextLayout(ordersLabel, 14f);
+            var header = EnsureText(root, "Header", GetResponsiveBarracksHeader(id), 13f, FontStyles.Bold);
+            ClassicRpgUiRuntime.ApplyTextStyle(header, ClassicRpgTextStyle.SectionHeader, TextAlignmentOptions.Center, ResolveSectionAccentColor(id), allowWrap: false);
+            header.enableAutoSizing = false;
+            ConfigureSectionTextLayout(header, 18f);
 
             var controls = EnsureChildRect(root, "Controls");
-            var controlsLayout = controls.gameObject.GetComponent<VerticalLayoutGroup>() ?? controls.gameObject.AddComponent<VerticalLayoutGroup>();
-            controlsLayout.spacing = 6f;
-            controlsLayout.childAlignment = TextAnchor.UpperLeft;
+            var controlsLayout = controls.gameObject.GetComponent<HorizontalLayoutGroup>() ?? controls.gameObject.AddComponent<HorizontalLayoutGroup>();
+            controlsLayout.spacing = 8f;
+            controlsLayout.childAlignment = TextAnchor.MiddleCenter;
             controlsLayout.childForceExpandWidth = true;
             controlsLayout.childForceExpandHeight = false;
             controlsLayout.childControlWidth = true;
             controlsLayout.childControlHeight = true;
-            var controlsFitter = controls.gameObject.GetComponent<ContentSizeFitter>() ?? controls.gameObject.AddComponent<ContentSizeFitter>();
-            controlsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             bool compactControls = IsCompactPanel();
             float commandButtonHeight = GetCommandButtonHeight();
@@ -375,25 +372,26 @@ namespace CastleDefender.UI
             var defendButton = EnsureCommandButton(controls, "DefendButton", "Defend", compactControls, commandButtonHeight);
             var retreatButton = EnsureCommandButton(controls, "RetreatButton", "Retreat", compactControls, commandButtonHeight);
 
-            var troopsLabel = EnsureText(root, "TroopsLabel", "Active Troops", 11f, FontStyles.Normal);
-            troopsLabel.alignment = TextAlignmentOptions.Left;
-            troopsLabel.color = new Color(0.78f, 0.84f, 0.92f, 0.78f);
-            troopsLabel.textWrappingMode = TextWrappingModes.NoWrap;
-            troopsLabel.overflowMode = TextOverflowModes.Ellipsis;
-            ConfigureSectionTextLayout(troopsLabel, 14f);
-
             var rows = EnsureChildRect(root, "Rows");
-            var rowsLayout = rows.gameObject.GetComponent<VerticalLayoutGroup>() ?? rows.gameObject.AddComponent<VerticalLayoutGroup>();
-            rowsLayout.spacing = 6f;
-            rowsLayout.childAlignment = TextAnchor.UpperLeft;
-            rowsLayout.childForceExpandWidth = true;
-            rowsLayout.childForceExpandHeight = false;
-            rowsLayout.childControlWidth = true;
-            rowsLayout.childControlHeight = true;
-            var rowsFitter = rows.gameObject.GetComponent<ContentSizeFitter>() ?? rows.gameObject.AddComponent<ContentSizeFitter>();
-            rowsFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var legacyRowsLayout = rows.gameObject.GetComponent<HorizontalLayoutGroup>();
+            if (legacyRowsLayout != null)
+                legacyRowsLayout.enabled = false;
+            var rowsLayout = rows.gameObject.GetComponent<GridLayoutGroup>() ?? rows.gameObject.AddComponent<GridLayoutGroup>();
+            rowsLayout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            rowsLayout.constraintCount = 3;
+            rowsLayout.startAxis = GridLayoutGroup.Axis.Horizontal;
+            rowsLayout.startCorner = GridLayoutGroup.Corner.UpperLeft;
+            rowsLayout.childAlignment = TextAnchor.UpperCenter;
+            rowsLayout.padding = new RectOffset(0, 0, 0, 0);
+            rowsLayout.spacing = new Vector2(GetCommandColumnSpacing(compactControls), GetUnitGridVerticalSpacing(compactControls));
+            float initialUnitCardSize = GetUnitCardHeight(compactControls);
+            rowsLayout.cellSize = new Vector2(initialUnitCardSize, initialUnitCardSize);
+            var rowsLayoutElement = rows.gameObject.GetComponent<LayoutElement>() ?? rows.gameObject.AddComponent<LayoutElement>();
+            rowsLayoutElement.minHeight = GetUnitGridHeight();
+            rowsLayoutElement.preferredHeight = GetUnitGridHeight();
+            rowsLayoutElement.flexibleHeight = 0f;
 
-            var section = new BarracksSectionView(id, root, header, ordersLabel, controls, attackButton, defendButton, retreatButton, troopsLabel, rows);
+            var section = new BarracksSectionView(id, root, image, header, controls, attackButton, defendButton, retreatButton, rows);
             _sections[id] = section;
             ApplyResponsiveSectionLayout(section);
             return section;
@@ -412,8 +410,8 @@ namespace CastleDefender.UI
             if (!hasValidSnapshot)
             {
                 EnsureDefaultActivityRows();
-                if (_emptyStateLabel != null)
-                    _emptyStateLabel.gameObject.SetActive(false);
+                foreach (var section in _sections.Values)
+                    UpdateSectionControls(section, -1, null);
                 return;
             }
 
@@ -471,43 +469,12 @@ namespace CastleDefender.UI
 
         void SetSectionRows(BarracksSectionView section, BarracksActivityBucket bucket, int ownerLaneIndex)
         {
-            DetachAndDestroyChildren(section.RowsRoot);
-            section.RowViews.Clear();
-
             var displayRows = BuildDisplayRows(bucket);
-            int cardsPerRow = GetCardsPerRow();
-            for (int i = 0; i < displayRows.Count; i += cardsPerRow)
+            for (int i = 0; i < displayRows.Count; i++)
             {
-                var pairRoot = EnsureChildRect(section.RowsRoot, $"pair_{i}");
-                var pairLayout = pairRoot.gameObject.GetComponent<HorizontalLayoutGroup>() ?? pairRoot.gameObject.AddComponent<HorizontalLayoutGroup>();
-                pairLayout.spacing = IsCompactPanel() ? 4f : 6f;
-                pairLayout.childAlignment = TextAnchor.UpperLeft;
-                pairLayout.childForceExpandWidth = true;
-                pairLayout.childForceExpandHeight = false;
-                pairLayout.childControlWidth = true;
-                pairLayout.childControlHeight = true;
-                var pairFitter = pairRoot.gameObject.GetComponent<ContentSizeFitter>() ?? pairRoot.gameObject.AddComponent<ContentSizeFitter>();
-                pairFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-                for (int column = 0; column < cardsPerRow; column++)
-                {
-                    int rowIndex = i + column;
-                    if (rowIndex < displayRows.Count)
-                        section.RowViews.Add(CreateActivityRow(pairRoot, displayRows[rowIndex], ownerLaneIndex, bucket.BarracksId));
-                }
-            }
-        }
-
-        static void DetachAndDestroyChildren(Transform parent)
-        {
-            if (parent == null)
-                return;
-
-            for (int i = parent.childCount - 1; i >= 0; i--)
-            {
-                var child = parent.GetChild(i);
-                child.SetParent(null, false);
-                Destroy(child.gameObject);
+                var row = displayRows[i];
+                var view = EnsureActivityRowView(section, row.IconKind, i);
+                UpdateActivityRow(view, row, ownerLaneIndex, bucket.BarracksId);
             }
         }
 
@@ -567,12 +534,10 @@ namespace CastleDefender.UI
                     ? ownerLane.commandState.Trim().ToUpperInvariant()
                     : "DEFEND";
 
-            if (section.OrdersLabel != null)
-                section.OrdersLabel.text = GetResponsiveOrdersLabel(canIssueOrders);
-            if (section.ControlsRoot != null)
-                section.ControlsRoot.gameObject.SetActive(true);
-            if (section.TroopsLabel != null)
-                section.TroopsLabel.text = GetResponsiveTroopsLabel(commandState, canIssueOrders);
+            if (section.RootImage != null)
+                section.RootImage.color = ResolveSectionFillColor(section.BarracksId, canIssueOrders);
+            if (section.Header != null)
+                section.Header.color = canIssueOrders ? ResolveSectionAccentColor(section.BarracksId) : ResolveSectionAccentColor(section.BarracksId, 0.42f);
 
             ConfigureCommandButton(section.AttackButton, "Attack", commandState == "ATTACK", canIssueOrders, () => ActionSender.SetBarracksAttack(section.BarracksId));
             ConfigureCommandButton(
@@ -588,111 +553,270 @@ namespace CastleDefender.UI
         {
             if (buttonView?.Button == null) return;
 
+            Sprite commandSprite = ResolveCommandButtonSprite(label);
+            bool iconOnlyButton = commandSprite != null;
+            buttonView.Button.transition = Selectable.Transition.None;
             if (buttonView.Label != null)
+            {
                 buttonView.Label.text = label;
+                buttonView.Label.color = interactable
+                    ? (isActive ? Color.white : ClassicRpgUiRuntime.BrightText)
+                    : new Color(0.76f, 0.80f, 0.88f, 0.82f);
+            }
+            ApplyCommandButtonArtwork(buttonView.Button, buttonView.Label, label);
 
             buttonView.Button.onClick.RemoveAllListeners();
             if (interactable && onClick != null)
                 buttonView.Button.onClick.AddListener(() => onClick());
             buttonView.Button.interactable = interactable;
 
-            Color baseColor = interactable
-                ? (isActive ? CommandButtonActive : CommandButtonInactive)
-                : CommandButtonDisabled;
+            Color backgroundColor = iconOnlyButton
+                ? Color.clear
+                : ResolveCommandButtonColor(label, isActive, interactable);
+            Color iconColor = iconOnlyButton
+                ? ResolveCommandSpriteTint(label, isActive, interactable)
+                : new Color(1f, 1f, 1f, 0f);
             var image = buttonView.Button.targetGraphic as Image;
             if (image != null)
-                image.color = baseColor;
+                image.color = backgroundColor;
+
+            var iconImage = buttonView.Button.transform.Find("Icon")?.GetComponent<Image>();
+            if (iconImage != null)
+            {
+                float iconSize = GetStanceIconSize();
+                var iconRect = iconImage.rectTransform;
+                iconRect.anchorMin = new Vector2(0.5f, 0.5f);
+                iconRect.anchorMax = new Vector2(0.5f, 0.5f);
+                iconRect.pivot = new Vector2(0.5f, 0.5f);
+                iconRect.sizeDelta = new Vector2(iconSize, iconSize);
+                iconRect.anchoredPosition = Vector2.zero;
+                iconImage.transform.SetAsLastSibling();
+                iconImage.sprite = commandSprite;
+                iconImage.color = iconColor;
+                iconImage.preserveAspect = true;
+                iconImage.gameObject.SetActive(commandSprite != null);
+
+                var iconShadow = iconImage.GetComponent<Shadow>();
+                if (iconShadow != null)
+                {
+                    iconShadow.effectColor = interactable
+                        ? new Color(0f, 0f, 0f, isActive ? 0.52f : 0.34f)
+                        : new Color(0f, 0f, 0f, 0.24f);
+                    iconShadow.effectDistance = isActive ? new Vector2(2f, -2f) : new Vector2(1f, -1f);
+                }
+
+                var iconOutline = iconImage.GetComponent<Outline>();
+                if (iconOutline != null)
+                {
+                    iconOutline.effectColor = interactable
+                        ? new Color(1f, 0.96f, 0.90f, isActive ? 0.30f : 0.16f)
+                        : new Color(1f, 1f, 1f, 0.08f);
+                    iconOutline.effectDistance = isActive ? new Vector2(2f, -2f) : new Vector2(1f, -1f);
+                }
+            }
+
+            var shadow = buttonView.Button.GetComponent<Shadow>();
+            if (shadow != null)
+            {
+                shadow.effectColor = iconOnlyButton
+                    ? new Color(0f, 0f, 0f, 0f)
+                    : new Color(0f, 0f, 0f, 0.28f);
+                shadow.effectDistance = iconOnlyButton ? Vector2.zero : new Vector2(1f, -1f);
+            }
+
+            var outline = buttonView.Button.GetComponent<Outline>();
+            if (outline != null)
+            {
+                outline.effectColor = iconOnlyButton
+                    ? new Color(0f, 0f, 0f, 0f)
+                    : new Color(0f, 0f, 0f, 0.22f);
+                outline.effectDistance = new Vector2(1f, -1f);
+            }
 
             var colors = buttonView.Button.colors;
-            colors.normalColor = baseColor;
-            colors.highlightedColor = interactable ? Color.Lerp(baseColor, Color.white, 0.10f) : baseColor;
-            colors.pressedColor = interactable ? Color.Lerp(baseColor, Color.black, 0.14f) : baseColor;
+            colors.normalColor = backgroundColor;
+            colors.highlightedColor = backgroundColor;
+            colors.pressedColor = backgroundColor;
             colors.selectedColor = colors.highlightedColor;
-            colors.disabledColor = CommandButtonDisabled;
+            colors.disabledColor = iconOnlyButton
+                ? backgroundColor
+                : ResolveCommandButtonColor(label, isActive: false, interactable: false);
             buttonView.Button.colors = colors;
         }
 
-        BarracksActivityRowView CreateActivityRow(Transform parent, BarracksActivityDisplayRow row, int ownerLaneIndex, string barracksId)
+        BarracksActivityRowView EnsureActivityRowView(BarracksSectionView section, BarracksActivityIconKind iconKind, int siblingIndex)
         {
-            var root = EnsureChildRect(parent, $"{row.IconKind}_row");
+            if (section == null)
+                return null;
+
+            for (int i = 0; i < section.RowViews.Count; i++)
+            {
+                var existing = section.RowViews[i];
+                if (existing != null && existing.IconKind == iconKind)
+                {
+                    existing.Root.SetSiblingIndex(siblingIndex);
+                    return existing;
+                }
+            }
+
+            var created = CreateActivityRow(section.RowsRoot, iconKind);
+            ApplyResponsiveActivityRowLayout(created, IsCompactPanel());
+            created.Root.SetSiblingIndex(siblingIndex);
+            section.RowViews.Add(created);
+            return created;
+        }
+
+        BarracksActivityRowView CreateActivityRow(Transform parent, BarracksActivityIconKind iconKind)
+        {
+            var root = EnsureChildRect(parent, $"{iconKind}_row");
             var image = root.gameObject.GetComponent<Image>() ?? root.gameObject.AddComponent<Image>();
             var button = root.gameObject.GetComponent<Button>() ?? root.gameObject.AddComponent<Button>();
-            bool interactable = ownerLaneIndex >= 0;
-            button.transition = Selectable.Transition.ColorTint;
-            var colors = button.colors;
-            colors.normalColor = ResolveActivityCardColor(row.IconKind);
-            colors.highlightedColor = Color.Lerp(colors.normalColor, Color.white, 0.14f);
-            colors.pressedColor = Color.Lerp(colors.normalColor, Color.black, 0.16f);
-            colors.disabledColor = colors.normalColor;
-            colors.selectedColor = colors.highlightedColor;
-            button.colors = colors;
+            button.transition = Selectable.Transition.None;
             button.targetGraphic = image;
-            image.color = colors.normalColor;
-            button.onClick.RemoveAllListeners();
-            if (interactable)
-                button.onClick.AddListener(() => FortressSelectionController.OpenBarracksSite(ownerLaneIndex, barracksId));
-            button.interactable = interactable;
+            image.color = Color.clear;
+            image.raycastTarget = true;
 
             var layoutElement = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
-            float cardHeight = GetUnitCardHeight();
-            layoutElement.minHeight = cardHeight;
-            layoutElement.preferredHeight = cardHeight;
-            layoutElement.flexibleWidth = 1f;
+            float cardSize = GetUnitCardHeight();
+            layoutElement.minHeight = cardSize;
+            layoutElement.preferredHeight = cardSize;
             layoutElement.minWidth = 0f;
+            layoutElement.preferredWidth = 0f;
+            layoutElement.flexibleWidth = 0f;
 
-            var iconFrame = EnsureChildRect(root, "IconFrame");
-            iconFrame.anchorMin = new Vector2(0.5f, 0.5f);
-            iconFrame.anchorMax = new Vector2(0.5f, 0.5f);
-            iconFrame.pivot = new Vector2(0.5f, 0.5f);
-            float portraitSize = GetPortraitSize();
-            iconFrame.sizeDelta = new Vector2(portraitSize, portraitSize);
-            iconFrame.anchoredPosition = Vector2.zero;
-            var iconFrameImage = iconFrame.gameObject.GetComponent<Image>() ?? iconFrame.gameObject.AddComponent<Image>();
-            iconFrameImage.color = new Color(0.08f, 0.12f, 0.18f, 0.98f);
+            var slot = EnsureChildRect(root, "Slot");
+            slot.anchorMin = new Vector2(0.5f, 0.5f);
+            slot.anchorMax = new Vector2(0.5f, 0.5f);
+            slot.pivot = new Vector2(0.5f, 0.5f);
+            slot.anchoredPosition = Vector2.zero;
+            slot.sizeDelta = new Vector2(cardSize, cardSize);
+            var slotLayout = slot.gameObject.GetComponent<LayoutElement>() ?? slot.gameObject.AddComponent<LayoutElement>();
+            slotLayout.ignoreLayout = true;
 
-            var icon = EnsureChildRect(iconFrame, "Icon");
-            Stretch(icon, new Vector2(4f, 4f), new Vector2(-4f, -4f));
+            var icon = EnsureChildRect(slot, "Icon");
+            Stretch(icon, Vector2.zero, Vector2.zero);
             var iconImage = icon.gameObject.GetComponent<Image>() ?? icon.gameObject.AddComponent<Image>();
             iconImage.raycastTarget = false;
             iconImage.preserveAspect = true;
-            iconImage.sprite = ResolveActivityIconSprite(row.IconKind);
-            iconImage.color = iconImage.sprite != null ? Color.white : new Color(1f, 1f, 1f, 0f);
+            iconImage.sprite = ResolveActivityIconSprite(iconKind);
+            iconImage.color = iconImage.sprite != null
+                ? InactiveActivityIconColor
+                : new Color(1f, 1f, 1f, 0f);
+            var iconShadow = icon.gameObject.GetComponent<Shadow>() ?? icon.gameObject.AddComponent<Shadow>();
+            iconShadow.effectColor = new Color(0f, 0f, 0f, 0.38f);
+            iconShadow.effectDistance = new Vector2(1f, -1f);
+            var iconOutline = icon.gameObject.GetComponent<Outline>() ?? icon.gameObject.AddComponent<Outline>();
+            iconOutline.effectColor = new Color(1f, 1f, 1f, 0.12f);
+            iconOutline.effectDistance = new Vector2(1f, -1f);
 
-            var fallback = EnsureText(iconFrame, "FallbackLabel", BuildActivityIconFallbackLabel(row.IconKind), IsCompactPanel() ? 8.5f : 9.5f, FontStyles.Bold);
+            var fallback = EnsureText(slot, "FallbackLabel", BuildActivityIconFallbackLabel(iconKind), IsCompactPanel() ? 8.5f : 9.5f, FontStyles.Bold);
             fallback.alignment = TextAlignmentOptions.Center;
-            fallback.color = new Color(0.95f, 0.90f, 0.72f, 0.96f);
+            fallback.color = InactiveActivityFallbackColor;
+            fallback.raycastTarget = false;
             fallback.rectTransform.anchorMin = Vector2.zero;
             fallback.rectTransform.anchorMax = Vector2.one;
-            fallback.rectTransform.offsetMin = new Vector2(3f, 3f);
-            fallback.rectTransform.offsetMax = new Vector2(-3f, -3f);
+            fallback.rectTransform.offsetMin = new Vector2(1f, 1f);
+            fallback.rectTransform.offsetMax = new Vector2(-1f, -1f);
             fallback.gameObject.SetActive(iconImage.sprite == null);
 
-            bool compactCard = IsCompactPanel() && GetCardsPerRow() > 1;
-            var count = EnsureText(root, "Count", GetActivityCountLabel(row.Count), compactCard ? 9.5f : 14f, FontStyles.Bold);
-            count.alignment = compactCard ? TextAlignmentOptions.Center : TextAlignmentOptions.BottomRight;
-            count.color = new Color(0.96f, 0.92f, 0.74f, 1f);
-            count.enableAutoSizing = !compactCard;
-            count.fontSizeMin = compactCard ? 8f : (IsCompactPanel() ? 9f : 11f);
-            count.fontSizeMax = compactCard ? 9.5f : (IsCompactPanel() ? 12f : 14f);
+            var count = EnsureText(slot, "Count", GetActivityCountLabel(0), IsCompactPanel() ? 8.5f : 9.5f, FontStyles.Bold);
+            count.alignment = TextAlignmentOptions.BottomRight;
+            count.color = Color.white;
+            count.enableAutoSizing = false;
+            count.fontSizeMin = count.fontSize;
+            count.fontSizeMax = count.fontSize;
+            count.outlineWidth = 0.2f;
+            count.outlineColor = new Color(0f, 0f, 0f, 0.95f);
+            count.raycastTarget = false;
+            count.rectTransform.anchorMin = new Vector2(1f, 0f);
+            count.rectTransform.anchorMax = new Vector2(1f, 0f);
+            count.rectTransform.pivot = new Vector2(1f, 0f);
+            count.rectTransform.sizeDelta = new Vector2(20f, 12f);
+            count.rectTransform.anchoredPosition = new Vector2(-1f, 0f);
+            count.gameObject.SetActive(false);
 
-            if (compactCard)
+            return new BarracksActivityRowView(iconKind, root, image, button, slot, iconImage, fallback, count, null, null);
+        }
+
+        void UpdateActivityRow(BarracksActivityRowView view, BarracksActivityDisplayRow row, int ownerLaneIndex, string barracksId)
+        {
+            if (view == null || row == null)
+                return;
+
+            bool interactable = ownerLaneIndex >= 0;
+            if (view.Button != null)
             {
-                count.rectTransform.anchorMin = new Vector2(1f, 0f);
-                count.rectTransform.anchorMax = new Vector2(1f, 0f);
-                count.rectTransform.pivot = new Vector2(1f, 0f);
-                count.rectTransform.anchoredPosition = new Vector2(-3f, 3f);
-                count.rectTransform.sizeDelta = new Vector2(16f, 11f);
-            }
-            else
-            {
-                count.rectTransform.anchorMin = Vector2.zero;
-                count.rectTransform.anchorMax = Vector2.one;
-                count.rectTransform.pivot = new Vector2(0.5f, 0.5f);
-                count.rectTransform.offsetMin = new Vector2(4f, 4f);
-                count.rectTransform.offsetMax = new Vector2(-4f, -4f);
+                view.Button.onClick.RemoveAllListeners();
+                if (interactable)
+                    view.Button.onClick.AddListener(() => FortressSelectionController.OpenBarracksSite(ownerLaneIndex, barracksId));
+                view.Button.interactable = interactable;
             }
 
-            return new BarracksActivityRowView(root, null, null);
+            if (row.Count < view.CurrentCount)
+                view.DownTickFlashUntil = Mathf.Max(view.DownTickFlashUntil, Time.unscaledTime + ActivityDownTickFlashSeconds);
+
+            view.CurrentCount = Mathf.Max(0, row.Count);
+            if (view.CountLabel != null)
+                view.CountLabel.text = GetActivityCountLabel(view.CurrentCount);
+
+            ApplyActivityRowVisualState(view, Time.unscaledTime);
+        }
+
+        void RefreshActivityRowEffects()
+        {
+            float now = Time.unscaledTime;
+            foreach (var section in _sections.Values)
+            {
+                if (section == null)
+                    continue;
+
+                for (int i = 0; i < section.RowViews.Count; i++)
+                    ApplyActivityRowVisualState(section.RowViews[i], now);
+            }
+        }
+
+        void ApplyActivityRowVisualState(BarracksActivityRowView view, float now)
+        {
+            if (view == null)
+                return;
+
+            bool hasUnits = view.CurrentCount > 0;
+            bool flashing = view.DownTickFlashUntil > now;
+            float flashStrength = 0f;
+            if (flashing)
+            {
+                float elapsed = 1f - Mathf.Clamp01((view.DownTickFlashUntil - now) / ActivityDownTickFlashSeconds);
+                flashStrength = Mathf.Sin(elapsed * Mathf.PI);
+            }
+
+            if (view.RootImage != null)
+                view.RootImage.color = Color.Lerp(Color.clear, ActivityDownTickFlashColor, flashStrength);
+
+            Color baseIconColor = hasUnits ? ResolveActivityIconTint(view.IconKind) : InactiveActivityIconColor;
+            Color baseFallbackColor = hasUnits
+                ? new Color(0.95f, 0.90f, 0.72f, 0.96f)
+                : InactiveActivityFallbackColor;
+            if (view.IconImage != null)
+            {
+                view.IconImage.color = view.IconImage.sprite != null
+                    ? Color.Lerp(baseIconColor, ActivityDownTickTextColor, flashStrength * 0.70f)
+                    : new Color(1f, 1f, 1f, 0f);
+            }
+
+            if (view.FallbackLabel != null)
+            {
+                bool showFallback = view.IconImage == null || view.IconImage.sprite == null;
+                view.FallbackLabel.gameObject.SetActive(showFallback);
+                view.FallbackLabel.color = Color.Lerp(baseFallbackColor, ActivityDownTickTextColor, flashStrength);
+            }
+
+            if (view.CountLabel != null)
+            {
+                bool showCount = hasUnits || flashStrength > 0.01f;
+                view.CountLabel.gameObject.SetActive(showCount);
+                view.CountLabel.color = Color.Lerp(Color.white, ActivityDownTickTextColor, flashStrength);
+                view.CountLabel.outlineColor = Color.Lerp(new Color(0f, 0f, 0f, 0.95f), new Color(0.35f, 0f, 0f, 0.98f), flashStrength);
+            }
         }
 
         void RefreshActivityPortraits()
@@ -943,20 +1067,28 @@ namespace CastleDefender.UI
                 if (existingLabel != null)
                 {
                     existingLabel.text = label;
-                    existingLabel.fontSize = compact ? 11f : 12f;
+                    existingLabel.fontSize = compact ? 10f : 11f;
                     existingLabel.enableAutoSizing = false;
                     existingLabel.alignment = TextAlignmentOptions.Center;
-                    Stretch(existingLabel.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
+                    ClassicRpgUiRuntime.ApplyTextStyle(existingLabel, ClassicRpgTextStyle.ButtonLabel, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText, allowWrap: false);
+                    Stretch(existingLabel.rectTransform, new Vector2(4f, -2f), new Vector2(-4f, 2f));
                 }
+                ApplyCommandButtonArtwork(existingButton, existingLabel, label);
                 return new BarracksCommandButtonView(existingButton, existingLabel);
             }
 
             var root = EnsureChildRect(parent, name);
             var image = root.gameObject.GetComponent<Image>() ?? root.gameObject.AddComponent<Image>();
-            image.color = CommandButtonInactive;
+            image.color = Color.clear;
             var button = root.gameObject.GetComponent<Button>() ?? root.gameObject.AddComponent<Button>();
-            button.transition = Selectable.Transition.ColorTint;
+            button.transition = Selectable.Transition.None;
             button.targetGraphic = image;
+            var shadow = root.gameObject.GetComponent<Shadow>() ?? root.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.28f);
+            shadow.effectDistance = new Vector2(1f, -1f);
+            var outline = root.gameObject.GetComponent<Outline>() ?? root.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(0f, 0f, 0f, 0.22f);
+            outline.effectDistance = new Vector2(1f, -1f);
 
             var layout = root.gameObject.GetComponent<LayoutElement>() ?? root.gameObject.AddComponent<LayoutElement>();
             layout.minHeight = buttonHeight;
@@ -966,14 +1098,15 @@ namespace CastleDefender.UI
             layout.flexibleWidth = 1f;
 
             var text = EnsureText(root, "Label", label, compact ? 11f : 12f, FontStyles.Bold);
-            text.alignment = TextAlignmentOptions.Center;
-            text.color = new Color(0.96f, 0.98f, 1f, 1f);
+            ClassicRpgUiRuntime.ApplyTextStyle(text, ClassicRpgTextStyle.ButtonLabel, TextAlignmentOptions.Center, ClassicRpgUiRuntime.BrightText, allowWrap: false);
             text.enableAutoSizing = false;
+            text.fontSize = compact ? 10f : 11f;
             text.fontSizeMin = compact ? 10f : 11f;
-            text.fontSizeMax = compact ? 11f : 12f;
+            text.fontSizeMax = compact ? 10f : 11f;
             text.textWrappingMode = TextWrappingModes.NoWrap;
             text.overflowMode = TextOverflowModes.Ellipsis;
-            Stretch(text.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
+            Stretch(text.rectTransform, new Vector2(4f, -2f), new Vector2(-4f, 2f));
+            ApplyCommandButtonArtwork(button, text, label);
 
             return new BarracksCommandButtonView(button, text);
         }
@@ -1000,9 +1133,6 @@ namespace CastleDefender.UI
 
         void RefreshResponsiveSectionLayout()
         {
-            if (_titleLabel != null)
-                _titleLabel.text = GetResponsivePanelTitle();
-
             foreach (var section in _sections.Values)
             {
                 if (section?.Header != null)
@@ -1021,41 +1151,28 @@ namespace CastleDefender.UI
             var rootLayout = section.Root.GetComponent<VerticalLayoutGroup>();
             if (rootLayout != null)
             {
-                rootLayout.padding = compact ? new RectOffset(6, 6, 6, 6) : new RectOffset(8, 8, 8, 8);
-                rootLayout.spacing = compact ? 4f : 5f;
+                rootLayout.padding = compact ? new RectOffset(6, 6, 10, 6) : new RectOffset(8, 8, 12, 8);
+                rootLayout.spacing = compact ? 5f : 7f;
             }
 
             if (section.Header != null)
             {
-                section.Header.fontSizeMin = compact ? 10f : 11f;
-                section.Header.fontSizeMax = compact ? 13f : 16f;
+                section.Header.fontSize = compact ? 11f : 12f;
+                section.Header.fontSizeMin = compact ? 11f : 12f;
+                section.Header.fontSizeMax = compact ? 11f : 12f;
                 var headerLayout = section.Header.GetComponent<LayoutElement>();
                 if (headerLayout != null)
                 {
-                    headerLayout.minHeight = compact ? 20f : 22f;
-                    headerLayout.preferredHeight = compact ? 20f : 22f;
+                    headerLayout.minHeight = compact ? 16f : 18f;
+                    headerLayout.preferredHeight = compact ? 16f : 18f;
                 }
             }
 
-            if (section.OrdersLabel != null)
+            if (section.ControlsRoot != null)
             {
-                section.OrdersLabel.fontSize = compact ? 10f : 11f;
-                var ordersLayout = section.OrdersLabel.GetComponent<LayoutElement>();
-                if (ordersLayout != null)
-                {
-                    ordersLayout.minHeight = compact ? 14f : 14f;
-                    ordersLayout.preferredHeight = compact ? 14f : 14f;
-                }
-            }
-            if (section.TroopsLabel != null)
-            {
-                section.TroopsLabel.fontSize = compact ? 10f : 11f;
-                var troopsLayout = section.TroopsLabel.GetComponent<LayoutElement>();
-                if (troopsLayout != null)
-                {
-                    troopsLayout.minHeight = compact ? 14f : 14f;
-                    troopsLayout.preferredHeight = compact ? 14f : 14f;
-                }
+                var controlsLayout = section.ControlsRoot.GetComponent<HorizontalLayoutGroup>();
+                if (controlsLayout != null)
+                    controlsLayout.spacing = GetCommandColumnSpacing(compact);
             }
 
             float commandButtonHeight = GetCommandButtonHeight();
@@ -1063,9 +1180,33 @@ namespace CastleDefender.UI
             ApplyResponsiveCommandButtonLayout(section.DefendButton, compact, commandButtonHeight);
             ApplyResponsiveCommandButtonLayout(section.RetreatButton, compact, commandButtonHeight);
 
-            var rowsLayout = section.RowsRoot != null ? section.RowsRoot.GetComponent<VerticalLayoutGroup>() : null;
+            var legacyRowsLayout = section.RowsRoot != null ? section.RowsRoot.GetComponent<HorizontalLayoutGroup>() : null;
+            if (legacyRowsLayout != null)
+                legacyRowsLayout.enabled = false;
+            var rowsLayout = section.RowsRoot != null ? section.RowsRoot.GetComponent<GridLayoutGroup>() : null;
             if (rowsLayout != null)
-                rowsLayout.spacing = compact ? 4f : 6f;
+            {
+                float horizontalSpacing = GetCommandColumnSpacing(compact);
+                float verticalSpacing = GetUnitGridVerticalSpacing(compact);
+                rowsLayout.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+                rowsLayout.constraintCount = 3;
+                rowsLayout.startAxis = GridLayoutGroup.Axis.Horizontal;
+                rowsLayout.startCorner = GridLayoutGroup.Corner.UpperLeft;
+                rowsLayout.childAlignment = TextAnchor.UpperCenter;
+                rowsLayout.padding = new RectOffset(0, 0, 0, 0);
+                rowsLayout.spacing = new Vector2(horizontalSpacing, verticalSpacing);
+                rowsLayout.cellSize = GetUnitGridCellSize(section, compact);
+            }
+            var rowsLayoutElement = section.RowsRoot != null ? section.RowsRoot.GetComponent<LayoutElement>() : null;
+            if (rowsLayoutElement != null)
+            {
+                rowsLayoutElement.minHeight = GetUnitGridHeight(compact);
+                rowsLayoutElement.preferredHeight = GetUnitGridHeight(compact);
+                rowsLayoutElement.flexibleHeight = 0f;
+            }
+
+            for (int i = 0; i < section.RowViews.Count; i++)
+                ApplyResponsiveActivityRowLayout(section.RowViews[i], compact);
         }
 
         static void ApplyResponsiveCommandButtonLayout(BarracksCommandButtonView buttonView, bool compact, float buttonHeight)
@@ -1083,35 +1224,117 @@ namespace CastleDefender.UI
             if (buttonView.Label == null)
                 return;
 
-            buttonView.Label.fontSize = compact ? 11f : 12f;
+            buttonView.Label.fontSize = compact ? 10f : 11f;
             buttonView.Label.fontSizeMin = compact ? 10f : 11f;
-            buttonView.Label.fontSizeMax = compact ? 11f : 12f;
+            buttonView.Label.fontSizeMax = compact ? 10f : 11f;
             buttonView.Label.enableAutoSizing = false;
             buttonView.Label.alignment = TextAlignmentOptions.Center;
-            Stretch(buttonView.Label.rectTransform, new Vector2(6f, -2f), new Vector2(-6f, 2f));
+            Stretch(buttonView.Label.rectTransform, new Vector2(4f, -2f), new Vector2(-4f, 2f));
         }
 
         bool IsCompactPanel()
         {
-            float width = _runtimeRoot != null && _runtimeRoot.rect.width > 0f ? _runtimeRoot.rect.width : ResolveExpandedWidth();
-            float height = _runtimeRoot != null && _runtimeRoot.rect.height > 0f ? _runtimeRoot.rect.height : Screen.height;
-            return width <= 190f || height <= 760f;
+            RectTransform canvasRect = ResolveCanvasRect();
+            float width = canvasRect != null && canvasRect.rect.width > 0f ? canvasRect.rect.width : Screen.width;
+            float height = canvasRect != null && canvasRect.rect.height > 0f ? canvasRect.rect.height : Screen.height;
+            return width <= SmallScreenThreshold || height <= 820f;
         }
 
-        int GetCardsPerRow()
+        void ApplyResponsiveActivityRowLayout(BarracksActivityRowView rowView, bool compact)
         {
-            if (IsCompactPanel())
-                return 2;
+            if (rowView?.Root == null)
+                return;
 
-            float width = _runtimeRoot != null && _runtimeRoot.rect.width > 0f ? _runtimeRoot.rect.width : ResolveExpandedWidth();
-            return width >= 210f ? 2 : 1;
+            float cardSize = GetUnitCardHeight();
+            var layout = rowView.Root.GetComponent<LayoutElement>();
+            if (layout != null)
+            {
+                layout.minHeight = cardSize;
+                layout.preferredHeight = cardSize;
+                layout.minWidth = 0f;
+                layout.preferredWidth = 0f;
+                layout.flexibleWidth = 0f;
+            }
+
+            if (rowView.SlotRoot != null)
+            {
+                rowView.SlotRoot.anchorMin = new Vector2(0.5f, 0.5f);
+                rowView.SlotRoot.anchorMax = new Vector2(0.5f, 0.5f);
+                rowView.SlotRoot.pivot = new Vector2(0.5f, 0.5f);
+                rowView.SlotRoot.anchoredPosition = Vector2.zero;
+                rowView.SlotRoot.sizeDelta = new Vector2(cardSize, cardSize);
+            }
+
+            if (rowView.FallbackLabel != null)
+            {
+                float fallbackSize = compact ? 8.5f : 9.5f;
+                rowView.FallbackLabel.fontSize = fallbackSize;
+                rowView.FallbackLabel.fontSizeMin = fallbackSize;
+                rowView.FallbackLabel.fontSizeMax = fallbackSize;
+            }
+
+            if (rowView.CountLabel != null)
+            {
+                float countSize = compact ? 8.5f : 9.5f;
+                rowView.CountLabel.fontSize = countSize;
+                rowView.CountLabel.fontSizeMin = countSize;
+                rowView.CountLabel.fontSizeMax = countSize;
+                rowView.CountLabel.rectTransform.sizeDelta = compact ? new Vector2(18f, 10f) : new Vector2(20f, 12f);
+                rowView.CountLabel.rectTransform.anchoredPosition = compact ? new Vector2(-1f, 0f) : new Vector2(-1.5f, 0f);
+            }
         }
 
-        float GetCommandButtonHeight() => IsCompactPanel() ? 32f : 38f;
+        float GetCommandButtonHeight() => GetCommandButtonHeight(IsCompactPanel());
 
-        float GetUnitCardHeight() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 48f : 56f) : (IsCompactPanel() ? 42f : 60f);
+        float GetCommandButtonHeight(bool compact) => compact ? 51f : 55f;
 
-        float GetPortraitSize() => GetCardsPerRow() == 1 ? (IsCompactPanel() ? 28f : 34f) : (IsCompactPanel() ? 22f : 40f);
+        float GetStanceIconSize() => GetStanceIconSize(IsCompactPanel());
+
+        float GetStanceIconSize(bool compact)
+        {
+            float buttonHeight = GetCommandButtonHeight(compact);
+            return Mathf.Round(buttonHeight * (compact ? 0.76f : 0.80f));
+        }
+
+        float GetUnitCardHeight() => GetUnitCardHeight(IsCompactPanel());
+
+        float GetUnitCardHeight(bool compact) => Mathf.Round(GetStanceIconSize(compact) * 0.80f);
+
+        float GetCommandColumnSpacing(bool compact) => compact ? 5f : 8f;
+
+        float GetUnitGridVerticalSpacing() => GetUnitGridVerticalSpacing(IsCompactPanel());
+
+        float GetUnitGridVerticalSpacing(bool compact) => compact ? 4f : 5f;
+
+        float GetUnitGridHeight() => GetUnitGridHeight(IsCompactPanel());
+
+        float GetUnitGridHeight(bool compact) => (GetUnitCardHeight(compact) * 2f) + GetUnitGridVerticalSpacing(compact);
+
+        Vector2 GetUnitGridCellSize(BarracksSectionView section, bool compact)
+        {
+            float cardSize = GetUnitCardHeight(compact);
+            float horizontalSpacing = GetCommandColumnSpacing(compact);
+            float availableWidth = 0f;
+
+            if (section?.ControlsRoot != null && section.ControlsRoot.rect.width > 1f)
+                availableWidth = section.ControlsRoot.rect.width;
+            else if (section?.RowsRoot != null && section.RowsRoot.rect.width > 1f)
+                availableWidth = section.RowsRoot.rect.width;
+            else if (section?.Root != null && section.Root.rect.width > 1f)
+            {
+                availableWidth = section.Root.rect.width;
+                var rootLayout = section.Root.GetComponent<VerticalLayoutGroup>();
+                if (rootLayout != null)
+                    availableWidth -= rootLayout.padding.left + rootLayout.padding.right;
+            }
+
+            float minimumWidth = (cardSize * 3f) + (horizontalSpacing * 2f);
+            availableWidth = Mathf.Max(availableWidth, minimumWidth);
+            float columnWidth = Mathf.Max(cardSize, Mathf.Floor((availableWidth - (horizontalSpacing * 2f)) / 3f));
+            return new Vector2(columnWidth, cardSize);
+        }
+
+        float GetPortraitSize() => IsCompactPanel() ? 14f : 16f;
 
         static BarracksActivityIconKind ResolveActivityIconKind(BarracksActivityRow row)
         {
@@ -1158,6 +1381,19 @@ namespace CastleDefender.UI
                 return BarracksActivityIconKind.Archer;
             }
 
+            if (summary.Contains("spear")
+                || summary.Contains("pike")
+                || summary.Contains("pikeman")
+                || summary.Contains("pikemen")
+                || summary.Contains("polearm")
+                || summary.Contains("halberd")
+                || summary.Contains("lance")
+                || summary.Contains("lancer")
+                || summary.Contains("phalanx"))
+            {
+                return BarracksActivityIconKind.Spear;
+            }
+
             if (summary.Contains("shield")
                 || summary.Contains("guardian")
                 || summary.Contains("paladin")
@@ -1166,13 +1402,14 @@ namespace CastleDefender.UI
                 return BarracksActivityIconKind.Shield;
             }
 
-            return BarracksActivityIconKind.Infantry;
+            return BarracksActivityIconKind.Sword;
         }
 
         static string BuildActivityIconFallbackLabel(BarracksActivityIconKind iconKind) => iconKind switch
         {
             BarracksActivityIconKind.Shield => "SH",
-            BarracksActivityIconKind.Infantry => "INF",
+            BarracksActivityIconKind.Sword => "SWD",
+            BarracksActivityIconKind.Spear => "SPR",
             BarracksActivityIconKind.Archer => "ARC",
             BarracksActivityIconKind.Priest => "PRI",
             BarracksActivityIconKind.Mage => "MAG",
@@ -1183,13 +1420,225 @@ namespace CastleDefender.UI
         static Color ResolveActivityCardColor(BarracksActivityIconKind iconKind) => iconKind switch
         {
             BarracksActivityIconKind.Shield => new Color(0.12f, 0.21f, 0.28f, 0.98f),
-            BarracksActivityIconKind.Infantry => new Color(0.25f, 0.17f, 0.12f, 0.98f),
+            BarracksActivityIconKind.Sword => new Color(0.25f, 0.17f, 0.12f, 0.98f),
+            BarracksActivityIconKind.Spear => new Color(0.28f, 0.18f, 0.08f, 0.98f),
             BarracksActivityIconKind.Archer => new Color(0.15f, 0.24f, 0.17f, 0.98f),
             BarracksActivityIconKind.Priest => new Color(0.16f, 0.24f, 0.22f, 0.98f),
             BarracksActivityIconKind.Mage => new Color(0.18f, 0.16f, 0.30f, 0.98f),
             BarracksActivityIconKind.Hero => new Color(0.33f, 0.23f, 0.08f, 0.98f),
             _ => new Color(0.14f, 0.20f, 0.27f, 0.98f),
         };
+
+        static Color ResolveActivityIconTint(BarracksActivityIconKind iconKind) => iconKind switch
+        {
+            BarracksActivityIconKind.Shield => new Color(0.78f, 0.88f, 0.98f, 0.98f),
+            BarracksActivityIconKind.Sword => new Color(0.98f, 0.88f, 0.74f, 0.98f),
+            BarracksActivityIconKind.Spear => new Color(1.00f, 0.90f, 0.66f, 0.98f),
+            BarracksActivityIconKind.Archer => new Color(0.76f, 0.92f, 0.72f, 0.98f),
+            BarracksActivityIconKind.Priest => new Color(0.86f, 0.96f, 0.86f, 0.98f),
+            BarracksActivityIconKind.Mage => new Color(0.88f, 0.78f, 0.98f, 0.98f),
+            BarracksActivityIconKind.Hero => new Color(0.98f, 0.84f, 0.42f, 0.98f),
+            _ => new Color(0.92f, 0.95f, 0.98f, 0.98f),
+        };
+
+        static Color ResolveSectionAccentColor(string barracksId, float alpha = 0.98f)
+        {
+            var color = BarracksActivityUtility.NormalizeBarracksId(barracksId) switch
+            {
+                "left" => new Color(0.69f, 0.38f, 0.92f, alpha),
+                "center" => new Color(0.32f, 0.60f, 0.96f, alpha),
+                "right" => new Color(0.26f, 0.84f, 0.76f, alpha),
+                _ => ClassicRpgUiRuntime.WarmGold,
+            };
+            color.a = alpha;
+            return color;
+        }
+
+        static Color ResolveSectionFillColor(string barracksId, bool canIssueOrders)
+        {
+            Color accent = ResolveSectionAccentColor(barracksId, canIssueOrders ? 0.22f : 0.10f);
+            Color fill = Color.Lerp(ClassicRpgUiRuntime.DeepBluePanel, accent, canIssueOrders ? 0.28f : 0.18f);
+            fill.a = canIssueOrders ? 0.95f : 0.84f;
+            return fill;
+        }
+
+        static Color ResolveCommandButtonColor(string commandLabel, bool isActive, bool interactable)
+        {
+            if (!interactable)
+                return new Color(0.16f, 0.18f, 0.22f, 0.72f);
+
+            return commandLabel switch
+            {
+                "Attack" => isActive ? new Color(0.78f, 0.46f, 0.16f, 0.98f) : new Color(0.31f, 0.18f, 0.12f, 0.96f),
+                "Defend" => isActive ? new Color(0.70f, 0.63f, 0.28f, 0.98f) : new Color(0.26f, 0.24f, 0.16f, 0.96f),
+                "Retreat" => isActive ? new Color(0.24f, 0.47f, 0.70f, 0.98f) : new Color(0.14f, 0.21f, 0.31f, 0.96f),
+                _ => isActive ? CommandButtonActive : CommandButtonInactive,
+            };
+        }
+
+        static Sprite ResolveCommandButtonSprite(string commandLabel)
+        {
+            var theme = ClassicRpgUiRuntime.Theme;
+            if (theme == null)
+                return null;
+
+            return commandLabel switch
+            {
+                "Attack" => theme.CommandAttackIcon,
+                "Defend" => theme.CommandDefendIcon,
+                "Retreat" => theme.CommandRetreatIcon,
+                _ => null,
+            };
+        }
+
+        static Color ResolveCommandSpriteTint(string commandLabel, bool isActive, bool interactable)
+        {
+            if (!interactable)
+            {
+                return commandLabel switch
+                {
+                    "Attack" => new Color(0.94f, 0.68f, 0.52f, 0.86f),
+                    "Defend" => new Color(0.96f, 0.84f, 0.52f, 0.86f),
+                    "Retreat" => new Color(0.56f, 0.86f, 0.98f, 0.86f),
+                    _ => new Color(1f, 1f, 1f, 0.86f),
+                };
+            }
+
+            if (!isActive)
+            {
+                return commandLabel switch
+                {
+                    "Attack" => new Color(0.98f, 0.74f, 0.56f, 0.96f),
+                    "Defend" => new Color(1.00f, 0.88f, 0.56f, 0.96f),
+                    "Retreat" => new Color(0.62f, 0.90f, 1.00f, 0.96f),
+                    _ => new Color(1f, 1f, 1f, 0.96f),
+                };
+            }
+
+            return commandLabel switch
+            {
+                "Attack" => new Color(1.00f, 0.72f, 0.46f, 1.00f),
+                "Defend" => new Color(1.00f, 0.90f, 0.50f, 1.00f),
+                "Retreat" => new Color(0.58f, 0.90f, 1.00f, 1.00f),
+                _ => Color.white,
+            };
+        }
+
+        static Color ResolveCommandButtonBackplateColor(string commandLabel, bool isActive, bool interactable)
+        {
+            if (!interactable)
+                return new Color(0.10f, 0.12f, 0.15f, 0.20f);
+
+            return commandLabel switch
+            {
+                "Attack" => isActive ? new Color(0.42f, 0.20f, 0.08f, 0.56f) : new Color(0.16f, 0.10f, 0.08f, 0.26f),
+                "Defend" => isActive ? new Color(0.42f, 0.34f, 0.10f, 0.56f) : new Color(0.18f, 0.16f, 0.10f, 0.26f),
+                "Retreat" => isActive ? new Color(0.12f, 0.30f, 0.44f, 0.56f) : new Color(0.10f, 0.16f, 0.22f, 0.26f),
+                _ => isActive ? new Color(0.20f, 0.32f, 0.38f, 0.56f) : new Color(0.12f, 0.18f, 0.24f, 0.26f),
+            };
+        }
+
+        static Image EnsureCommandButtonIcon(Button button)
+        {
+            if (button == null)
+                return null;
+
+            var icon = EnsureChildRect(button.transform, "Icon");
+            Stretch(icon, new Vector2(2f, 2f), new Vector2(-2f, -2f));
+            icon.SetAsLastSibling();
+
+            var layout = icon.gameObject.GetComponent<LayoutElement>() ?? icon.gameObject.AddComponent<LayoutElement>();
+            layout.ignoreLayout = true;
+
+            var image = icon.gameObject.GetComponent<Image>() ?? icon.gameObject.AddComponent<Image>();
+            image.raycastTarget = false;
+            image.preserveAspect = true;
+
+            var shadow = icon.gameObject.GetComponent<Shadow>() ?? icon.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.42f);
+            shadow.effectDistance = new Vector2(1f, -1f);
+
+            var outline = icon.gameObject.GetComponent<Outline>() ?? icon.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(1f, 0.86f, 0.54f, 0.16f);
+            outline.effectDistance = new Vector2(1f, -1f);
+            return image;
+        }
+
+        static void ApplyCommandButtonArtwork(Button button, TMP_Text label, string commandLabel)
+        {
+            if (button == null)
+                return;
+
+            var image = button.targetGraphic as Image ?? button.GetComponent<Image>();
+            Sprite sprite = ResolveCommandButtonSprite(commandLabel);
+            Image iconImage = EnsureCommandButtonIcon(button);
+            if (image != null)
+            {
+                image.sprite = null;
+                image.type = Image.Type.Simple;
+                image.preserveAspect = false;
+                button.targetGraphic = image;
+            }
+
+            if (iconImage != null)
+            {
+                iconImage.sprite = sprite;
+                iconImage.color = sprite != null ? Color.white : new Color(1f, 1f, 1f, 0f);
+                iconImage.gameObject.SetActive(sprite != null);
+            }
+
+            if (label != null)
+            {
+                bool showLabel = sprite == null;
+                label.gameObject.SetActive(showLabel);
+                label.raycastTarget = false;
+            }
+        }
+
+        static void ApplyPanelChrome(GameObject target, Color outlineColor, Color accentColor)
+        {
+            if (target == null)
+                return;
+
+            var shadow = target.GetComponent<Shadow>() ?? target.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.34f);
+            shadow.effectDistance = new Vector2(2f, -2f);
+
+            var outline = target.GetComponent<Outline>() ?? target.AddComponent<Outline>();
+            outline.effectColor = new Color(outlineColor.r, outlineColor.g, outlineColor.b, 0.90f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var accent = EnsureChildRect(target.transform, "Accent");
+            accent.transform.SetAsFirstSibling();
+            accent.anchorMin = new Vector2(0f, 1f);
+            accent.anchorMax = new Vector2(1f, 1f);
+            accent.pivot = new Vector2(0.5f, 1f);
+            accent.sizeDelta = new Vector2(0f, 3f);
+            accent.anchoredPosition = Vector2.zero;
+            var accentLayout = accent.gameObject.GetComponent<LayoutElement>() ?? accent.gameObject.AddComponent<LayoutElement>();
+            accentLayout.ignoreLayout = true;
+            var accentImage = accent.gameObject.GetComponent<Image>() ?? accent.gameObject.AddComponent<Image>();
+            accentImage.color = accentColor;
+            accentImage.raycastTarget = false;
+        }
+
+        static void ClearPanelChrome(GameObject target)
+        {
+            if (target == null)
+                return;
+
+            var shadow = target.GetComponent<Shadow>();
+            if (shadow != null)
+                shadow.enabled = false;
+
+            var outline = target.GetComponent<Outline>();
+            if (outline != null)
+                outline.enabled = false;
+
+            var accent = target.transform.Find("Accent");
+            if (accent != null)
+                accent.gameObject.SetActive(false);
+        }
 
         static Sprite ResolveActivityIconSprite(BarracksActivityIconKind iconKind)
         {
@@ -1200,10 +1649,12 @@ namespace CastleDefender.UI
             return iconKind switch
             {
                 BarracksActivityIconKind.Shield => theme.ActivityShieldIcon,
-                BarracksActivityIconKind.Infantry => theme.ActivityInfantryIcon,
+                BarracksActivityIconKind.Sword => theme.ActivitySwordIcon,
+                BarracksActivityIconKind.Spear => theme.ActivitySpearIcon,
                 BarracksActivityIconKind.Archer => theme.ActivityArcherIcon,
                 BarracksActivityIconKind.Priest => theme.ActivityPriestIcon,
                 BarracksActivityIconKind.Mage => theme.ActivityMageIcon,
+                BarracksActivityIconKind.Hero => theme.ActivityHeroIcon,
                 _ => null,
             };
         }
@@ -1254,21 +1705,17 @@ namespace CastleDefender.UI
             if (_runtimeRoot == null)
                 return;
 
-            float targetWidth = GetTargetPanelWidth();
-            if (immediate)
-            {
-                ApplyPanelWidth(targetWidth);
-                ApplyPanelVisualState();
-                RefreshResponsiveSectionLayout();
-                return;
-            }
-
-            SetPanelCollapsed(_panelCollapsed, immediate: false);
+            ApplyClusterRuntimeTuning();
+            EnsureRuntimeRootHost();
+            ApplyPanelWidth(ResolveExpandedWidth());
+            ApplyPanelHeight(ResolvePanelHeight());
+            ApplyPanelVisualState();
+            RefreshResponsiveSectionLayout();
         }
 
         float GetTargetPanelWidth()
         {
-            return _panelCollapsed ? ResolveCollapsedWidth() : ResolveExpandedWidth();
+            return ResolveExpandedWidth();
         }
 
         float ResolveExpandedWidth()
@@ -1277,7 +1724,7 @@ namespace CastleDefender.UI
             float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
                 ? canvasRect.rect.width
                 : Mathf.Max(1f, Screen.width);
-            bool compact = IsSmallScreen();
+            bool compact = IsCompactPanel();
 
             float safeAreaWidth = canvasWidth;
             if (RespectSafeArea && Screen.width > 0f)
@@ -1287,21 +1734,16 @@ namespace CastleDefender.UI
             }
 
             float width = compact
-                ? safeAreaWidth * MobileWidthPercentOfSafeArea
-                : canvasWidth * WidthPercentOfScreen;
-            float min = compact ? MobileMinExpandedWidth : MinExpandedWidth;
-            float max = compact ? MobileMaxExpandedWidth : MaxExpandedWidth;
-            return Mathf.Clamp(width, compact ? Mathf.Max(min, 132f) : min, max);
+                ? safeAreaWidth * MobileClusterWidthPercentOfSafeArea
+                : canvasWidth * ClusterWidthPercentOfScreen;
+            float min = compact ? MobileClusterMinWidth : ClusterMinWidth;
+            float max = compact ? MobileClusterMaxWidth : ClusterMaxWidth;
+            return Mathf.Clamp(width, min, max);
         }
 
         float ResolveCollapsedWidth()
         {
-            RectTransform canvasRect = ResolveCanvasRect();
-            float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
-                ? canvasRect.rect.width
-                : Mathf.Max(1f, Screen.width);
-            float collapsedWidth = IsSmallScreen() ? MobileCollapsedWidth : CollapsedWidth;
-            return Mathf.Min(canvasWidth, collapsedWidth);
+            return ResolveExpandedWidth();
         }
 
         void ApplyPanelWidth(float width)
@@ -1310,11 +1752,20 @@ namespace CastleDefender.UI
                 _runtimeRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, Mathf.Max(0f, width));
         }
 
+        void ApplyPanelHeight(float height)
+        {
+            if (_runtimeRoot != null)
+                _runtimeRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, Mathf.Max(0f, height));
+        }
+
+        float ResolvePanelHeight() => IsCompactPanel() ? MobileClusterHeight : ClusterHeight;
+
         bool ApplyRuntimeSafeAreaLayout(bool force = false)
         {
             if (_runtimeRoot == null)
                 return false;
 
+            EnsureRuntimeRootHost();
             Rect safeArea = Screen.safeArea;
             if (!force && safeArea == _lastSafeArea)
                 return false;
@@ -1325,7 +1776,7 @@ namespace CastleDefender.UI
             float topInset = 0f;
             float bottomInset = 0f;
 
-            if (RespectSafeArea && Screen.width > 0 && Screen.height > 0)
+            if (RespectSafeArea && IsCompactPanel() && Screen.width > 0 && Screen.height > 0)
             {
                 RectTransform canvasRect = ResolveCanvasRect();
                 float canvasWidth = canvasRect != null && canvasRect.rect.width > 0f
@@ -1342,57 +1793,18 @@ namespace CastleDefender.UI
                 bottomInset = safeArea.yMin * heightScale;
             }
 
-            _runtimeRoot.anchoredPosition = new Vector2(leftInset, 0f);
-
-            Vector2 offsetMin = _runtimeRoot.offsetMin;
-            offsetMin.y = bottomInset;
-            _runtimeRoot.offsetMin = offsetMin;
-
-            Vector2 offsetMax = _runtimeRoot.offsetMax;
-            offsetMax.y = -topInset;
-            _runtimeRoot.offsetMax = offsetMax;
+            _runtimeRoot.anchoredPosition = new Vector2(leftInset + ClusterLeftInset, -(topInset + ClusterTopInset));
 
             return true;
         }
 
         void ApplyPanelVisualState()
         {
-            bool expanded = !_panelCollapsed;
             if (_runtimeBackground != null)
-                _runtimeBackground.color = expanded
-                    ? new Color(0.08f, 0.12f, 0.16f, 0.92f)
-                    : new Color(0.08f, 0.12f, 0.16f, 0f);
-            if (_titleLabel != null)
-                _titleLabel.gameObject.SetActive(expanded);
-            if (_runtimeViewport != null)
-                _runtimeViewport.gameObject.SetActive(expanded);
-            if (_contentCanvasGroup != null)
             {
-                _contentCanvasGroup.alpha = expanded ? 1f : 0f;
-                _contentCanvasGroup.interactable = expanded;
-                _contentCanvasGroup.blocksRaycasts = expanded;
+                _runtimeBackground.color = Color.clear;
+                _runtimeBackground.enabled = false;
             }
-
-            if (_runtimeHeaderRoot != null)
-                _runtimeHeaderRoot.sizeDelta = new Vector2(0f, expanded ? 36f : Mathf.Max(GetCollapseToggleHeight(), 64f));
-
-            if (_collapseButton != null)
-            {
-                var collapseRect = _collapseButton.GetComponent<RectTransform>();
-                if (collapseRect != null)
-                {
-                    collapseRect.anchorMin = expanded ? new Vector2(1f, 0.5f) : new Vector2(0.5f, 0.5f);
-                    collapseRect.anchorMax = expanded ? new Vector2(1f, 0.5f) : new Vector2(0.5f, 0.5f);
-                    collapseRect.pivot = expanded ? new Vector2(1f, 0.5f) : new Vector2(0.5f, 0.5f);
-                    collapseRect.sizeDelta = expanded
-                        ? new Vector2(GetCollapseToggleWidth(), 28f)
-                        : new Vector2(Mathf.Max(ResolveCollapsedWidth() - 6f, 12f), GetCollapseToggleHeight());
-                    collapseRect.anchoredPosition = expanded ? new Vector2(-GetCollapseToggleInset(), 0f) : Vector2.zero;
-                }
-            }
-
-            if (_collapseButtonLabel != null)
-                _collapseButtonLabel.text = expanded ? "<" : ">";
         }
 
         bool IsSmallScreen() => Screen.width <= SmallScreenThreshold;
@@ -1454,15 +1866,12 @@ namespace CastleDefender.UI
 
         string GetResponsiveBarracksHeader(string barracksId)
         {
-            if (!IsCompactPanel())
-                return BarracksActivityUtility.GetBarracksHeader(barracksId);
-
             return BarracksActivityUtility.NormalizeBarracksId(barracksId) switch
             {
-                "center" => "Center",
-                "left" => "Left",
-                "right" => "Right",
-                _ => "Barracks",
+                "left" => "LEFT",
+                "center" => "CENTER",
+                "right" => "RIGHT",
+                _ => "LANE",
             };
         }
 
@@ -1485,7 +1894,7 @@ namespace CastleDefender.UI
         string GetActivityCountLabel(int count)
         {
             int safeCount = Mathf.Max(0, count);
-            return IsCompactPanel() && GetCardsPerRow() > 1 ? safeCount.ToString() : $"x{safeCount}";
+            return $"x{safeCount}";
         }
 
         static float EstimateLaneHoldProgress(MLSnapshot snapshot, int ownerLaneIndex, MLLaneSnap ownerLane)
@@ -1654,45 +2063,74 @@ namespace CastleDefender.UI
         public BarracksSectionView(
             string barracksId,
             RectTransform root,
+            Image rootImage,
             TMP_Text header,
-            TMP_Text ordersLabel,
             RectTransform controlsRoot,
             BarracksCommandButtonView attackButton,
             BarracksCommandButtonView defendButton,
             BarracksCommandButtonView retreatButton,
-            TMP_Text troopsLabel,
             RectTransform rowsRoot)
         {
             BarracksId = barracksId;
             Root = root;
+            RootImage = rootImage;
             Header = header;
-            OrdersLabel = ordersLabel;
             ControlsRoot = controlsRoot;
             AttackButton = attackButton;
             DefendButton = defendButton;
             RetreatButton = retreatButton;
-            TroopsLabel = troopsLabel;
             RowsRoot = rowsRoot;
         }
         public string BarracksId { get; }
         public RectTransform Root { get; }
+        public Image RootImage { get; }
         public TMP_Text Header { get; }
-        public TMP_Text OrdersLabel { get; }
         public RectTransform ControlsRoot { get; }
         public BarracksCommandButtonView AttackButton { get; }
         public BarracksCommandButtonView DefendButton { get; }
         public BarracksCommandButtonView RetreatButton { get; }
-        public TMP_Text TroopsLabel { get; }
         public RectTransform RowsRoot { get; }
         public List<BarracksActivityRowView> RowViews { get; } = new();
     }
 
     internal sealed class BarracksActivityRowView
     {
-        public BarracksActivityRowView(RectTransform root, RawImage portrait, string portraitKey) { Root = root; Portrait = portrait; PortraitKey = portraitKey; }
+        public BarracksActivityRowView(
+            BarracksActivityIconKind iconKind,
+            RectTransform root,
+            Image rootImage,
+            Button button,
+            RectTransform slotRoot,
+            Image iconImage,
+            TMP_Text fallbackLabel,
+            TMP_Text countLabel,
+            RawImage portrait,
+            string portraitKey)
+        {
+            IconKind = iconKind;
+            Root = root;
+            RootImage = rootImage;
+            Button = button;
+            SlotRoot = slotRoot;
+            IconImage = iconImage;
+            FallbackLabel = fallbackLabel;
+            CountLabel = countLabel;
+            Portrait = portrait;
+            PortraitKey = portraitKey;
+        }
+
+        public BarracksActivityIconKind IconKind { get; }
         public RectTransform Root { get; }
+        public Image RootImage { get; }
+        public Button Button { get; }
+        public RectTransform SlotRoot { get; }
+        public Image IconImage { get; }
+        public TMP_Text FallbackLabel { get; }
+        public TMP_Text CountLabel { get; }
         public RawImage Portrait { get; }
         public string PortraitKey { get; }
+        public int CurrentCount { get; set; }
+        public float DownTickFlashUntil { get; set; }
     }
 
     internal sealed class BarracksActivityBucket
@@ -1719,7 +2157,8 @@ namespace CastleDefender.UI
     internal enum BarracksActivityIconKind
     {
         Shield,
-        Infantry,
+        Sword,
+        Spear,
         Archer,
         Priest,
         Mage,
@@ -1742,7 +2181,7 @@ namespace CastleDefender.UI
 
     internal static class BarracksActivityUtility
     {
-        static readonly string[] BarracksOrder = { "center", "left", "right" };
+        static readonly string[] BarracksOrder = { "left", "center", "right" };
 
         public static string NormalizeBarracksId(string barracksId) => string.IsNullOrWhiteSpace(barracksId) ? string.Empty : barracksId.Trim().ToLowerInvariant();
 

@@ -39,6 +39,10 @@ namespace CastleDefender.UI
 {
     public class LoginUI : MonoBehaviour
     {
+        const float MobileKeyboardClearancePixels = 96f;
+        const float MobileKeyboardFallbackHeightFactor = 0.36f;
+        const float MobileKeyboardShiftLerpSpeed = 14f;
+
         GameObject _runtimeAudioListener;
 
         [Preserve]
@@ -165,6 +169,11 @@ namespace CastleDefender.UI
         Coroutine _loginRevealRoutine;
         Coroutine _loginBackgroundFreezeRoutine;
         Coroutine _introTimedStopRoutine;
+        RectTransform _loginCanvasRect;
+        RectTransform _loginShellRect;
+        Vector2 _loginShellBasePosition;
+        TMP_InputField _activeInputField;
+        float _keyboardClosedScreenHeight;
 
         public bool IsReadyForFinalRuntimeScreenshot
         {
@@ -237,7 +246,9 @@ namespace CastleDefender.UI
         void Start()
         {
             EnsurePersistentEventSystem();
+            ApplyLoginOrientationPolicy();
             ApplyPremiumPresentation();
+            BindInputFieldCallbacks();
 
             // Hide Google button until config says it is available
             if (Btn_Google  != null) Btn_Google.gameObject.SetActive(false);
@@ -312,15 +323,20 @@ namespace CastleDefender.UI
 
         void Update()
         {
-            if (!_allowTapToSkipIntro || _loginPresentationVisible)
-                return;
+            UpdateKeyboardAvoidance();
 
-            if (Input.GetMouseButtonDown(0) || Input.touchCount > 0 || Input.anyKeyDown)
+            if (_allowTapToSkipIntro
+                && !_loginPresentationVisible
+                && (Input.GetMouseButtonDown(0) || Input.touchCount > 0 || Input.anyKeyDown))
+            {
                 SkipLoginIntro();
+            }
         }
 
         void OnDestroy()
         {
+            RestoreNonLoginOrientationPolicy();
+
             if (_cinematicVideoPlayer != null)
             {
                 _cinematicVideoPlayer.prepareCompleted -= HandleCinematicVideoPrepared;
@@ -429,6 +445,7 @@ namespace CastleDefender.UI
 
             var canvas = PanelLogin.GetComponentInParent<Canvas>();
             var canvasRect = canvas != null ? canvas.GetComponent<RectTransform>() : null;
+            _loginCanvasRect = canvasRect;
             if (canvas != null)
                 ClassicRpgUiRuntime.ApplyCanvasScaler(canvas.GetComponent<CanvasScaler>(), ClassicRpgUiRuntime.ReferenceResolution);
 
@@ -470,6 +487,43 @@ namespace CastleDefender.UI
             StyleDevicePanel(root, canvasRect, compact);
             BuildIntroOverlay(root, compact);
             ShowLoginPresentation(false, true);
+        }
+
+        void ApplyLoginOrientationPolicy()
+        {
+            if (!Application.isMobilePlatform)
+                return;
+
+            Screen.autorotateToPortrait = true;
+            Screen.autorotateToPortraitUpsideDown = false;
+            Screen.autorotateToLandscapeLeft = true;
+            Screen.autorotateToLandscapeRight = true;
+            Screen.orientation = ScreenOrientation.AutoRotation;
+        }
+
+        void RestoreNonLoginOrientationPolicy()
+        {
+            if (!Application.isMobilePlatform)
+                return;
+
+            Screen.autorotateToPortrait = false;
+            Screen.autorotateToPortraitUpsideDown = false;
+            Screen.autorotateToLandscapeLeft = true;
+            Screen.autorotateToLandscapeRight = true;
+            Screen.orientation = ResolveGameplayOrientationLock();
+        }
+
+        static ScreenOrientation ResolveGameplayOrientationLock()
+        {
+            if (Screen.orientation == ScreenOrientation.LandscapeRight)
+                return ScreenOrientation.LandscapeRight;
+
+            if (Screen.orientation == ScreenOrientation.LandscapeLeft)
+                return ScreenOrientation.LandscapeLeft;
+
+            return Input.deviceOrientation == DeviceOrientation.LandscapeRight
+                ? ScreenOrientation.LandscapeRight
+                : ScreenOrientation.LandscapeLeft;
         }
 
         void BuildCinematicBackdrop(RectTransform root, bool compact)
@@ -529,6 +583,8 @@ namespace CastleDefender.UI
             shell.pivot = new Vector2(0.5f, 1f);
             shell.anchoredPosition = compact ? new Vector2(0f, -528f) : new Vector2(0f, -364f);
             shell.sizeDelta = compact ? new Vector2(360f, 0f) : new Vector2(480f, 0f);
+            _loginShellRect = shell;
+            _loginShellBasePosition = shell.anchoredPosition;
 
             var fitter = shell.gameObject.AddComponent<ContentSizeFitter>();
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
@@ -1598,6 +1654,144 @@ namespace CastleDefender.UI
                 text.characterSpacing = 2.5f;
         }
 
+        void BindInputFieldCallbacks()
+        {
+            BindInputField(Input_Email);
+            BindInputField(Input_DisplayName);
+            BindInputField(Input_Password);
+        }
+
+        void BindInputField(TMP_InputField field)
+        {
+            if (field == null)
+                return;
+
+            field.onSelect.AddListener(_ => OnInputFieldSelected(field));
+            field.onDeselect.AddListener(_ => OnInputFieldDeselected(field));
+        }
+
+        void OnInputFieldSelected(TMP_InputField field)
+        {
+            _activeInputField = field;
+            UpdateKeyboardAvoidance();
+        }
+
+        void OnInputFieldDeselected(TMP_InputField field)
+        {
+            if (_activeInputField == field)
+                _activeInputField = null;
+        }
+
+        void UpdateKeyboardAvoidance()
+        {
+            if (_loginShellRect == null)
+                return;
+
+            float targetLift = CalculateKeyboardLift();
+            float targetY = Mathf.Min(0f, _loginShellBasePosition.y + targetLift);
+            var targetPosition = new Vector2(_loginShellBasePosition.x, targetY);
+
+            if (!Application.isPlaying || Time.unscaledDeltaTime <= 0f)
+            {
+                _loginShellRect.anchoredPosition = targetPosition;
+                return;
+            }
+
+            float lerpFactor = 1f - Mathf.Exp(-MobileKeyboardShiftLerpSpeed * Time.unscaledDeltaTime);
+            _loginShellRect.anchoredPosition = Vector2.Lerp(_loginShellRect.anchoredPosition, targetPosition, lerpFactor);
+
+            if (Vector2.SqrMagnitude(_loginShellRect.anchoredPosition - targetPosition) <= 0.01f)
+                _loginShellRect.anchoredPosition = targetPosition;
+        }
+
+        float CalculateKeyboardLift()
+        {
+            if (!_loginPresentationVisible
+                || !Application.isMobilePlatform
+                || _loginShellRect == null
+                || _loginCanvasRect == null
+                || !ClassicRpgUiRuntime.IsCompactLayout(_loginCanvasRect))
+            {
+                if (!TouchScreenKeyboard.visible)
+                    _keyboardClosedScreenHeight = Screen.height;
+
+                return 0f;
+            }
+
+            var focusedField = ResolveFocusedInputField();
+            if (focusedField == null || !focusedField.isFocused || !focusedField.gameObject.activeInHierarchy)
+            {
+                if (!TouchScreenKeyboard.visible)
+                    _keyboardClosedScreenHeight = Screen.height;
+
+                return 0f;
+            }
+
+            float keyboardTopPixels = GetKeyboardTopPixels();
+            if (keyboardTopPixels <= 0f)
+                return 0f;
+
+            var targetRect = GetInputVisibilityTarget(focusedField);
+            if (targetRect == null)
+                return 0f;
+
+            var canvas = _loginCanvasRect.GetComponentInParent<Canvas>();
+            Camera uiCamera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
+            var worldCorners = new Vector3[4];
+            targetRect.GetWorldCorners(worldCorners);
+            float fieldBottomPixels = RectTransformUtility.WorldToScreenPoint(uiCamera, worldCorners[0]).y;
+            float overlapPixels = keyboardTopPixels + MobileKeyboardClearancePixels - fieldBottomPixels;
+            if (overlapPixels <= 0f)
+                return 0f;
+
+            float canvasUnitsPerPixel = _loginCanvasRect.rect.height / Mathf.Max(1f, Screen.height);
+            float maxLift = Mathf.Max(0f, -_loginShellBasePosition.y);
+            return Mathf.Clamp(overlapPixels * canvasUnitsPerPixel, 0f, maxLift);
+        }
+
+        TMP_InputField ResolveFocusedInputField()
+        {
+            if (_activeInputField != null && _activeInputField.gameObject.activeInHierarchy)
+                return _activeInputField;
+
+            var selectedObject = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+            return selectedObject != null ? selectedObject.GetComponentInParent<TMP_InputField>() : null;
+        }
+
+        float GetKeyboardTopPixels()
+        {
+            if (!TouchScreenKeyboard.visible)
+            {
+                _keyboardClosedScreenHeight = Screen.height;
+                return 0f;
+            }
+
+            if (_keyboardClosedScreenHeight <= 0f)
+                _keyboardClosedScreenHeight = Screen.height;
+
+            var keyboardArea = TouchScreenKeyboard.area;
+            if (keyboardArea.height > 0f)
+                return Mathf.Max(keyboardArea.yMax, keyboardArea.height);
+
+            float resizeInset = Mathf.Max(0f, _keyboardClosedScreenHeight - Screen.height);
+            if (resizeInset > 0f)
+                return resizeInset;
+
+            return Mathf.Clamp(Screen.height * MobileKeyboardFallbackHeightFactor, 220f, Screen.height * 0.55f);
+        }
+
+        static RectTransform GetInputVisibilityTarget(TMP_InputField field)
+        {
+            if (field == null)
+                return null;
+
+            Transform row = field.transform.parent;
+            if (row is RectTransform rowRect && row.name.EndsWith("_Row", StringComparison.Ordinal))
+                return rowRect;
+
+            return field.transform as RectTransform;
+        }
+
         void PrepareField(TMP_InputField field, float preferredHeight, string placeholder, float preferredWidth = 0f)
         {
             if (field == null)
@@ -2507,6 +2701,7 @@ namespace CastleDefender.UI
             ReleaseLoginAudioListener();
             EnsurePersistentEventSystem();
             ShowContentRetryAction(false);
+            RestoreNonLoginOrientationPolicy();
             LoadingScreen.LoadSceneWithLobbyEntryPreparation("Lobby");
         }
 

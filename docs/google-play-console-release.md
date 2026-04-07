@@ -78,13 +78,15 @@ Notes for this project:
 
 ## Recommended repo-specific values
 
-- App name in Play Console: `Ransom Forge`
-- Unity product name: keep as-is unless you want the installed app label to change from `Castle Defender`
+- App name in Play Console: `RansomForge`
+- Unity product name: `RansomForge`
+- Android launcher icon source: `unity-client/Assets/Branding/RansomForgeAppIcon.png`
+- Google Play listing icon source: `unity-client/Assets/Branding/RansomForgePlayStoreIcon.png`
 - Support website: `https://app.ransomforge.com`
 - Privacy policy: use the hosted version of `PRIVACY_POLICY.md`
 - Support email: `support@ransomforge.com`
 
-If you want the installed Android app label to say `Ransom Forge`, also update the Unity product name before building.
+The installed Android app label now comes from Unity product name `RansomForge`, and the Android build step reapplies the committed launcher icons before building.
 
 ## Build order for this project
 

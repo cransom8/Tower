@@ -179,7 +179,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
             catch (Exception ex)
             {
-                McpLog.Warn($"[WebSocket] Verify ping failed: {ex.Message}");
+                LogSocketClosure("Verify ping failed", ex.Message);
                 return false;
             }
         }
@@ -592,7 +592,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 }
                 catch (Exception ex)
                 {
-                    McpLog.Warn($"[WebSocket] Keep-alive failed: {ex.Message}");
                     await HandleSocketClosureAsync(ex.Message).ConfigureAwait(false);
                     break;
                 }

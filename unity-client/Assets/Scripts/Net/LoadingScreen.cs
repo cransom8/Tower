@@ -19,7 +19,27 @@ namespace CastleDefender.Net
 public class LoadingScreen : MonoBehaviour
 {
     const string BootstrapSceneName = "Bootstrap";
+    const string WinterBackdropResourcePath = "UI/Lobby/WinterForestBackdrop";
+    const int OverlaySortingOrder = short.MaxValue - 1;
+    const int ProgressStageCount = 4;
     static readonly string[] LoadingDotLabels = { "Loading", "Loading.", "Loading..", "Loading..." };
+    static readonly string[] ProgressStageLabels = { "SYSTEM", "CONTENT", "SCENE", "READY" };
+    static readonly Color ProgressStagePendingColor = new(0.08f, 0.06f, 0.05f, 0.86f);
+    static readonly Color ProgressStageActiveColor = new(0.31f, 0.19f, 0.06f, 0.96f);
+    static readonly Color ProgressStageCompleteColor = new(0.81f, 0.61f, 0.18f, 0.97f);
+    static readonly Color ProgressStagePendingTextColor = new(0.72f, 0.70f, 0.66f, 0.94f);
+    static readonly Color ProgressStageActiveTextColor = new(0.99f, 0.90f, 0.74f, 1f);
+    static readonly Color ProgressStageCompleteTextColor = new(1f, 0.97f, 0.90f, 1f);
+    static Sprite _winterBackdropSprite;
+    static Sprite _progressFillSprite;
+
+    enum LoadingStage
+    {
+        System = 0,
+        Content = 1,
+        Scene = 2,
+        Ready = 3
+    }
 
     public static LoadingScreen Instance { get; private set; }
     public static bool IsTransitionInProgress => _transitionInProgress;
@@ -78,6 +98,12 @@ public class LoadingScreen : MonoBehaviour
     bool _retryRequested;
     Button _retryButton;
     TextMeshProUGUI _retryLabel;
+    TextMeshProUGUI _footerLoadingLabel;
+    TextMeshProUGUI _progressBarPercentLabel;
+    readonly Image[] _stagePanels = new Image[ProgressStageCount];
+    readonly TextMeshProUGUI[] _stageTitleLabels = new TextMeshProUGUI[ProgressStageCount];
+    readonly TextMeshProUGUI[] _stagePercentLabels = new TextMeshProUGUI[ProgressStageCount];
+    int _activeStageIndex;
 
     public static void LoadScene(string sceneName)
     {
@@ -197,6 +223,8 @@ public class LoadingScreen : MonoBehaviour
         _dotTimer = 0f;
         _dotCount = 0;
         ClearLoadingStatusText();
+        _activeStageIndex = 0;
+        SetProgressImmediate(0f);
 
         Debug.Log(
             $"[LoadingScreen] Begin transition to '{sceneName}' " +
@@ -226,6 +254,8 @@ public class LoadingScreen : MonoBehaviour
         ClearLoadingStatusText();
         _retryRequested = false;
         _transitionInProgress = true;
+        _activeStageIndex = 0;
+        SetProgressImmediate(0f);
         if (_activeTransition != null)
             StopCoroutine(_activeTransition);
         _activeTransition = StartCoroutine(LoadRoutine());
@@ -238,10 +268,11 @@ public class LoadingScreen : MonoBehaviour
         var remoteContent = RemoteContentManager.EnsureInstance();
         if (loadingLabel)
             loadingLabel.text = "Initializing remote content system";
+        SetStageProgressTarget(LoadingStage.System, 0f);
 
         yield return remoteContent.EnsureAddressablesReady((progress, status) =>
         {
-            SetProgressTarget(Mathf.Lerp(0.02f, 0.14f, Mathf.Clamp01(progress)));
+            SetStageProgressTarget(LoadingStage.System, progress);
             if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                 loadingLabel.text = status;
         }, requester: $"LoadingScreen.BootstrapInit:{_pendingScene}");
@@ -256,17 +287,24 @@ public class LoadingScreen : MonoBehaviour
             yield break;
         }
 
+        SetStageProgressTarget(LoadingStage.System, 1f);
+
         if (HasPendingRemotePreparation())
         {
+            SetStageProgressTarget(LoadingStage.Content, 0f);
             yield return StartCoroutine(PreparePendingRemoteContentWithRetry());
             if (!_transitionInProgress)
                 yield break;
+        }
+        else
+        {
+            SetStageProgressTarget(LoadingStage.Content, 1f);
         }
 
         float startTime = Time.realtimeSinceStartup;
         if (loadingLabel)
             loadingLabel.text = "Loading scene";
-        SetProgressTarget(0.68f);
+        SetStageProgressTarget(LoadingStage.Scene, 0f);
 
         if (RemoteContentVerification.ConsumeFailure(
                 RemoteContentVerification.FaultKind.RemoteSceneCatalogLookup,
@@ -326,6 +364,8 @@ public class LoadingScreen : MonoBehaviour
             yield break;
         }
 
+        SetStageProgressTarget(LoadingStage.Scene, 0.20f);
+
         if (RemoteContentVerification.ConsumeFailure(
                 RemoteContentVerification.FaultKind.RemoteSceneBundleDownload,
                 $"LoadingScreen.LoadSceneAsync:{_pendingScene}",
@@ -348,7 +388,7 @@ public class LoadingScreen : MonoBehaviour
 
         while (loadHandle.IsValid() && !loadHandle.IsDone)
         {
-            SetProgressTarget(Mathf.Lerp(0.72f, 0.92f, Mathf.Clamp01(loadHandle.PercentComplete)));
+            SetStageProgressTarget(LoadingStage.Scene, Mathf.Lerp(0.24f, 0.92f, Mathf.Clamp01(loadHandle.PercentComplete)));
             if (loadingLabel)
                 loadingLabel.text = "Loading scene";
             yield return null;
@@ -371,17 +411,21 @@ public class LoadingScreen : MonoBehaviour
             yield break;
         }
 
+        SetStageProgressTarget(LoadingStage.Scene, 1f);
+
         float elapsed = Time.realtimeSinceStartup - startTime;
         if (elapsed < minDisplayTime)
             yield return new WaitForSecondsRealtime(minDisplayTime - elapsed);
 
         if (loadingLabel)
             loadingLabel.text = "Finalizing scene";
-        SetProgressTarget(0.96f);
+        SetStageProgressTarget(LoadingStage.Ready, 0.12f);
 
         AsyncOperation activation = loadHandle.Result.ActivateAsync();
         while (activation != null && !activation.isDone)
             yield return null;
+
+        SetStageProgressTarget(LoadingStage.Ready, 0.42f);
 
         Scene newScene = loadHandle.Result.Scene;
         if (!newScene.IsValid())
@@ -410,6 +454,7 @@ public class LoadingScreen : MonoBehaviour
         }
 
         yield return StartCoroutine(UnloadPreviousScenesExcept(_pendingScene));
+        SetStageProgressTarget(LoadingStage.Ready, 0.78f);
         SetAudioListenersEnabledForScene(_pendingScene, true);
         RefreshGlobalAudioManagerLoopPlayback(restartCurrentClip: true);
 
@@ -486,7 +531,7 @@ public class LoadingScreen : MonoBehaviour
         {
             _retryRequested = false;
             HideRetryAction();
-            SetProgressImmediate(0f);
+            SetStageProgressImmediate(LoadingStage.Content, 0f);
 
             yield return StartCoroutine(PreparePendingRemoteContent());
             if (!HasPendingRemotePreparation())
@@ -499,6 +544,10 @@ public class LoadingScreen : MonoBehaviour
     IEnumerator PreparePendingRemoteContent()
     {
         var remoteContent = RemoteContentManager.EnsureInstance();
+        int totalPreparationSteps = CountPendingRemotePreparationSteps();
+        int completedPreparationSteps = 0;
+
+        SetStageProgressTarget(LoadingStage.Content, 0f);
 
         if (_pendingRequiredGameBootstrap)
         {
@@ -515,7 +564,7 @@ public class LoadingScreen : MonoBehaviour
 
             yield return remoteContent.PrepareRequiredGameContentForSession((progress, status) =>
             {
-                SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress));
                 SetLoadingStatusText(status);
             }, requester: "LoadingScreen.RequiredGameBootstrap");
 
@@ -530,6 +579,8 @@ public class LoadingScreen : MonoBehaviour
             }
 
             _pendingRequiredGameBootstrap = false;
+            completedPreparationSteps++;
+            SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, 0f));
             SetLoadingStatusText("Opening lobby...");
         }
 
@@ -540,7 +591,7 @@ public class LoadingScreen : MonoBehaviour
 
             yield return remoteContent.PrepareLobbyEntryContentForSession((progress, status) =>
             {
-                SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress));
                 if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                     loadingLabel.text = status;
             }, requester: "LoadingScreen.T0LobbyGate");
@@ -556,6 +607,8 @@ public class LoadingScreen : MonoBehaviour
             }
 
             _pendingLobbyEntryPreparation = false;
+            completedPreparationSteps++;
+            SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, 0f));
         }
 
         if (_pendingT1GameplayPreload)
@@ -567,11 +620,12 @@ public class LoadingScreen : MonoBehaviour
 
             yield return remoteContent.PreloadWaveContentForSession((progress, status) =>
             {
-                SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                float stageProgress = CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress);
+                SetStageProgressTarget(LoadingStage.Content, stageProgress);
                 if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                     loadingLabel.text = status;
                 NetworkManager.Instance?.Emit("ml_content_progress",
-                    new { percent = Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)), state = status ?? "Downloading match assets" });
+                    new { percent = stageProgress, state = status ?? "Downloading match assets" });
             }, requester: $"LoadingScreen.SceneGate:{_pendingScene}");
 
             if (!remoteContent.HasCompletedWavePreload)
@@ -585,6 +639,8 @@ public class LoadingScreen : MonoBehaviour
             }
 
             _pendingT1GameplayPreload = false;
+            completedPreparationSteps++;
+            SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, 0f));
         }
 
         if (_pendingPortraitKeys.Length > 0)
@@ -596,7 +652,7 @@ public class LoadingScreen : MonoBehaviour
 
             yield return remoteContent.EnsurePortraitsReady(_pendingPortraitKeys, (progress, status) =>
             {
-                SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress));
                 if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                     loadingLabel.text = status;
             }, requester: $"LoadingScreen.PortraitGate:{_pendingScene}");
@@ -612,6 +668,8 @@ public class LoadingScreen : MonoBehaviour
             }
 
             _pendingPortraitKeys = Array.Empty<string>();
+            completedPreparationSteps++;
+            SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, 0f));
         }
 
         if (_pendingEnvironmentPreload)
@@ -628,11 +686,12 @@ public class LoadingScreen : MonoBehaviour
                 expectedEnvironmentContentHash,
                 (progress, status) =>
                 {
-                    SetProgressTarget(Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)));
+                    float stageProgress = CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress);
+                    SetStageProgressTarget(LoadingStage.Content, stageProgress);
                     if (loadingLabel && !string.IsNullOrWhiteSpace(status))
                         loadingLabel.text = status;
                     NetworkManager.Instance?.Emit("ml_content_progress",
-                        new { percent = Mathf.Lerp(0f, 0.72f, Mathf.Clamp01(progress)), state = status ?? "Preparing environment" });
+                        new { percent = stageProgress, state = status ?? "Preparing environment" });
                 },
                 requester: $"LoadingScreen.EnvironmentGate:{_pendingScene}");
 
@@ -647,8 +706,11 @@ public class LoadingScreen : MonoBehaviour
             }
 
             _pendingEnvironmentPreload = false;
+            completedPreparationSteps++;
+            SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, 0f));
         }
 
+        SetStageProgressTarget(LoadingStage.Content, 1f);
         if (loadingLabel)
             loadingLabel.text = "Required content ready";
     }
@@ -809,13 +871,16 @@ public class LoadingScreen : MonoBehaviour
         if (canvas == null)
             canvas = gameObject.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 4000;
+        canvas.overrideSorting = true;
+        canvas.sortingOrder = OverlaySortingOrder;
 
         var scaler = GetComponent<CanvasScaler>();
         if (scaler == null)
             scaler = gameObject.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+        scaler.matchWidthOrHeight = 0.5f;
 
         if (GetComponent<GraphicRaycaster>() == null)
             gameObject.AddComponent<GraphicRaycaster>();
@@ -824,56 +889,147 @@ public class LoadingScreen : MonoBehaviour
         if (canvasGroup == null)
             canvasGroup = gameObject.AddComponent<CanvasGroup>();
 
-        var backdrop = CreatePanel(
-            "Backdrop",
-            transform,
-            new Color(0.05f, 0.06f, 0.09f, 0.94f),
-            Vector2.zero,
-            Vector2.one);
+        var backdrop = CreatePanel("Backdrop", transform, new Color(0.02f, 0.03f, 0.06f, 1f), Vector2.zero, Vector2.one);
+
+        var scenic = CreatePanel("ScenicBackdrop", backdrop.transform, Color.white, Vector2.zero, Vector2.one);
+        var scenicImage = scenic.GetComponent<Image>();
+        scenicImage.color = new Color(1f, 1f, 1f, 0.98f);
+        Sprite winterBackdrop = LoadWinterBackdropSprite();
+        if (winterBackdrop != null)
+        {
+            scenicImage.sprite = winterBackdrop;
+            scenicImage.type = Image.Type.Simple;
+            scenicImage.preserveAspect = true;
+
+            var fitter = scenic.AddComponent<AspectRatioFitter>();
+            fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
+            fitter.aspectRatio = winterBackdrop.rect.width / Mathf.Max(1f, winterBackdrop.rect.height);
+        }
+
+        CreateTintLayer(backdrop.transform, "BackdropWash", Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero, new Color(0.04f, 0.07f, 0.11f, 0.46f));
+        CreateTintLayer(backdrop.transform, "TopShade", new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -10f), new Vector2(0f, 250f), new Color(0.01f, 0.02f, 0.05f, 0.72f));
+        CreateTintLayer(backdrop.transform, "BottomShade", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 14f), new Vector2(0f, 250f), new Color(0.02f, 0.03f, 0.05f, 0.72f));
+        CreateTintLayer(backdrop.transform, "LeftShade", new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(160f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.46f));
+        CreateTintLayer(backdrop.transform, "RightShade", new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), Vector2.zero, new Vector2(160f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.52f));
+
+        var brandTitle = CreateText(
+            "BrandTitle",
+            backdrop.transform,
+            74f,
+            FontStyles.Bold,
+            TextAlignmentOptions.Center,
+            "RANSOM FORGE");
+        Stretch(brandTitle.rectTransform, new Vector2(0.16f, 0.84f), new Vector2(0.84f, 0.94f));
+        ApplyBrandTitleTreatment(brandTitle);
+
+        var brandTagline = CreateText(
+            "BrandTagline",
+            backdrop.transform,
+            22f,
+            FontStyles.Bold,
+            TextAlignmentOptions.Center,
+            "FORGED FOR WAR");
+        Stretch(brandTagline.rectTransform, new Vector2(0.28f, 0.79f), new Vector2(0.72f, 0.84f));
+        ApplyBrandTaglineTreatment(brandTagline);
 
         loadingLabel = CreateText(
             "LoadingLabel",
             backdrop.transform,
-            40f,
+            56f,
             FontStyles.Bold,
             TextAlignmentOptions.Center,
             "Loading");
-        Stretch(loadingLabel.rectTransform, new Vector2(0.15f, 0.60f), new Vector2(0.85f, 0.72f));
-
-        tipText = CreateText(
-            "TipText",
-            backdrop.transform,
-            24f,
-            FontStyles.Normal,
-            TextAlignmentOptions.Center,
-            "Preparing game...");
-        tipText.textWrappingMode = TextWrappingModes.Normal;
-        Stretch(tipText.rectTransform, new Vector2(0.14f, 0.34f), new Vector2(0.86f, 0.56f));
+        loadingLabel.textWrappingMode = TextWrappingModes.Normal;
+        loadingLabel.overflowMode = TextOverflowModes.Overflow;
+        Stretch(loadingLabel.rectTransform, new Vector2(0.14f, 0.48f), new Vector2(0.86f, 0.62f));
+        ApplyPhaseTitleTreatment(loadingLabel);
 
         loadingStatusText = CreateText(
             "LoadingStatusText",
             backdrop.transform,
-            20f,
+            23f,
             FontStyles.Normal,
             TextAlignmentOptions.Center,
             "");
         loadingStatusText.textWrappingMode = TextWrappingModes.Normal;
-        loadingStatusText.color = new Color(1f, 1f, 1f, 0.84f);
-        Stretch(loadingStatusText.rectTransform, new Vector2(0.18f, 0.25f), new Vector2(0.82f, 0.33f));
+        loadingStatusText.color = new Color(0.93f, 0.92f, 0.88f, 0.92f);
+        loadingStatusText.overflowMode = TextOverflowModes.Overflow;
+        Stretch(loadingStatusText.rectTransform, new Vector2(0.16f, 0.31f), new Vector2(0.84f, 0.41f));
         loadingStatusText.gameObject.SetActive(false);
+        AddTextShadow(loadingStatusText, new Color(0f, 0f, 0f, 0.32f), new Vector2(0f, -3f));
+
+        _footerLoadingLabel = null;
+
+        var stageStripGo = new GameObject("ProgressStageStrip", typeof(RectTransform));
+        stageStripGo.transform.SetParent(backdrop.transform, false);
+        Stretch(stageStripGo.GetComponent<RectTransform>(), new Vector2(0.18f, 0.215f), new Vector2(0.82f, 0.285f));
+        BuildProgressStageStrip(stageStripGo.transform);
 
         var progressBg = CreatePanel(
             "ProgressBackground",
             backdrop.transform,
-            new Color(1f, 1f, 1f, 0.12f),
-            new Vector2(0.23f, 0.21f),
-            new Vector2(0.77f, 0.25f));
+            new Color(0.06f, 0.04f, 0.03f, 0.90f),
+            new Vector2(0.23f, 0.15f),
+            new Vector2(0.77f, 0.20f));
+        var progressBgOutline = progressBg.AddComponent<Outline>();
+        progressBgOutline.effectColor = new Color(0.62f, 0.41f, 0.17f, 0.42f);
+        progressBgOutline.effectDistance = new Vector2(2f, -2f);
+
+        var progressInner = CreatePanel(
+            "ProgressInner",
+            progressBg.transform,
+            new Color(0.10f, 0.08f, 0.06f, 0.95f),
+            Vector2.zero,
+            Vector2.one);
+        StretchWithOffsets(progressInner.GetComponent<RectTransform>(), new Vector2(10f, 9f), new Vector2(-10f, -9f));
 
         var fillGo = new GameObject("ProgressFill", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-        fillGo.transform.SetParent(progressBg.transform, false);
+        fillGo.transform.SetParent(progressInner.transform, false);
         progressBar = fillGo.GetComponent<Image>();
-        progressBar.color = new Color(0.28f, 0.76f, 0.48f, 1f);
+        progressBar.sprite = GetProgressFillSprite();
+        progressBar.color = new Color(0.95f, 0.75f, 0.20f, 1f);
+        progressBar.raycastTarget = false;
         Stretch(progressBar.rectTransform, Vector2.zero, Vector2.one);
+        var progressShadow = progressBar.gameObject.AddComponent<Shadow>();
+        progressShadow.effectColor = new Color(1f, 0.63f, 0.18f, 0.24f);
+        progressShadow.effectDistance = new Vector2(0f, 0f);
+
+        CreateProgressDivider(progressInner.transform, 0.25f);
+        CreateProgressDivider(progressInner.transform, 0.50f);
+        CreateProgressDivider(progressInner.transform, 0.75f);
+
+        var progressPercentGo = new GameObject("ProgressPercentLabel", typeof(RectTransform), typeof(TextMeshProUGUI));
+        progressPercentGo.transform.SetParent(progressInner.transform, false);
+        _progressBarPercentLabel = progressPercentGo.GetComponent<TextMeshProUGUI>();
+        _progressBarPercentLabel.fontSize = 24f;
+        _progressBarPercentLabel.fontStyle = FontStyles.Bold;
+        _progressBarPercentLabel.alignment = TextAlignmentOptions.Center;
+        _progressBarPercentLabel.text = "0%";
+        _progressBarPercentLabel.raycastTarget = false;
+        Stretch(_progressBarPercentLabel.rectTransform, new Vector2(0.02f, 0.05f), new Vector2(0.98f, 0.95f));
+        ApplyProgressBarPercentTreatment(_progressBarPercentLabel);
+
+        var tipPlate = CreatePanel(
+            "TipPlate",
+            backdrop.transform,
+            new Color(0.03f, 0.03f, 0.04f, 0.68f),
+            new Vector2(0.18f, 0.05f),
+            new Vector2(0.82f, 0.11f));
+        var tipPlateOutline = tipPlate.AddComponent<Outline>();
+        tipPlateOutline.effectColor = new Color(0.18f, 0.12f, 0.05f, 0.38f);
+        tipPlateOutline.effectDistance = new Vector2(1f, -1f);
+
+        tipText = CreateText(
+            "TipText",
+            tipPlate.transform,
+            20f,
+            FontStyles.Normal,
+            TextAlignmentOptions.Center,
+            "Preparing game...");
+        tipText.textWrappingMode = TextWrappingModes.Normal;
+        tipText.color = new Color(0.94f, 0.90f, 0.83f, 0.96f);
+        StretchWithOffsets(tipText.rectTransform, new Vector2(18f, 8f), new Vector2(-18f, -8f));
+        AddTextShadow(tipText, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -3f));
     }
 
     static GameObject CreatePanel(string name, Transform parent, Color color, Vector2 anchorMin, Vector2 anchorMax)
@@ -885,7 +1041,9 @@ public class LoadingScreen : MonoBehaviour
         rect.anchorMax = anchorMax;
         rect.offsetMin = Vector2.zero;
         rect.offsetMax = Vector2.zero;
-        go.GetComponent<Image>().color = color;
+        var image = go.GetComponent<Image>();
+        image.color = color;
+        image.raycastTarget = false;
         return go;
     }
 
@@ -905,6 +1063,7 @@ public class LoadingScreen : MonoBehaviour
         text.alignment = alignment;
         text.color = Color.white;
         text.text = value;
+        text.raycastTarget = false;
         return text;
     }
 
@@ -914,6 +1073,251 @@ public class LoadingScreen : MonoBehaviour
         rect.anchorMax = anchorMax;
         rect.offsetMin = Vector2.zero;
         rect.offsetMax = Vector2.zero;
+    }
+
+    static void StretchWithOffsets(RectTransform rect, Vector2 offsetMin, Vector2 offsetMax)
+    {
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.offsetMin = offsetMin;
+        rect.offsetMax = offsetMax;
+        rect.anchoredPosition = Vector2.zero;
+    }
+
+    static Sprite LoadWinterBackdropSprite()
+    {
+        if (_winterBackdropSprite != null)
+            return _winterBackdropSprite;
+
+        var texture = Resources.Load<Texture2D>(WinterBackdropResourcePath);
+        if (texture == null)
+        {
+            Debug.LogWarning($"[LoadingScreen] Missing loading backdrop resource at Resources/{WinterBackdropResourcePath}.");
+            return null;
+        }
+
+        texture.wrapMode = TextureWrapMode.Clamp;
+        _winterBackdropSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f),
+            100f);
+        _winterBackdropSprite.name = "WinterForestBackdrop_LoadingRuntime";
+        return _winterBackdropSprite;
+    }
+
+    static Sprite GetProgressFillSprite()
+    {
+        if (_progressFillSprite != null)
+            return _progressFillSprite;
+
+        var texture = new Texture2D(4, 4, TextureFormat.RGBA32, false)
+        {
+            name = "LoadingProgressFillTexture",
+            hideFlags = HideFlags.HideAndDontSave,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var pixels = new Color[16];
+        for (int i = 0; i < pixels.Length; i++)
+            pixels[i] = Color.white;
+
+        texture.SetPixels(pixels);
+        texture.Apply(false, true);
+
+        _progressFillSprite = Sprite.Create(
+            texture,
+            new Rect(0f, 0f, texture.width, texture.height),
+            new Vector2(0.5f, 0.5f),
+            100f);
+        _progressFillSprite.name = "LoadingProgressFillSprite";
+        return _progressFillSprite;
+    }
+
+    static void CreateTintLayer(
+        Transform parent,
+        string name,
+        Vector2 anchorMin,
+        Vector2 anchorMax,
+        Vector2 pivot,
+        Vector2 anchoredPosition,
+        Vector2 sizeDelta,
+        Color color)
+    {
+        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        go.transform.SetParent(parent, false);
+
+        var rect = go.GetComponent<RectTransform>();
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMax;
+        rect.pivot = pivot;
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = sizeDelta;
+        rect.localScale = Vector3.one;
+        rect.localRotation = Quaternion.identity;
+
+        var image = go.GetComponent<Image>();
+        image.color = color;
+        image.raycastTarget = false;
+    }
+
+    void BuildProgressStageStrip(Transform parent)
+    {
+        for (int i = 0; i < ProgressStageCount; i++)
+        {
+            var cell = CreatePanel($"StageCell_{i}", parent, ProgressStagePendingColor, Vector2.zero, Vector2.one);
+            var rect = cell.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(i / (float)ProgressStageCount, 0f);
+            rect.anchorMax = new Vector2((i + 1) / (float)ProgressStageCount, 1f);
+            rect.offsetMin = new Vector2(i == 0 ? 0f : 5f, 0f);
+            rect.offsetMax = new Vector2(i == ProgressStageCount - 1 ? 0f : -5f, 0f);
+
+            var panel = cell.GetComponent<Image>();
+            panel.raycastTarget = false;
+            var outline = cell.AddComponent<Outline>();
+            outline.effectColor = new Color(0.44f, 0.28f, 0.10f, 0.40f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            var title = CreateText(
+                "Title",
+                cell.transform,
+                13f,
+                FontStyles.Bold,
+                TextAlignmentOptions.Center,
+                ProgressStageLabels[i]);
+            Stretch(title.rectTransform, new Vector2(0.08f, 0.52f), new Vector2(0.92f, 0.93f));
+            ApplyStageTitleTreatment(title);
+
+            var percent = CreateText(
+                "Percent",
+                cell.transform,
+                20f,
+                FontStyles.Bold,
+                TextAlignmentOptions.Center,
+                "0%");
+            Stretch(percent.rectTransform, new Vector2(0.08f, 0.10f), new Vector2(0.92f, 0.66f));
+            ApplyStagePercentTreatment(percent);
+
+            _stagePanels[i] = panel;
+            _stageTitleLabels[i] = title;
+            _stagePercentLabels[i] = percent;
+        }
+    }
+
+    static void CreateProgressDivider(Transform parent, float anchorX)
+    {
+        CreateTintLayer(
+            parent,
+            $"ProgressDivider_{Mathf.RoundToInt(anchorX * 100f)}",
+            new Vector2(anchorX, 0f),
+            new Vector2(anchorX, 1f),
+            new Vector2(0.5f, 0.5f),
+            Vector2.zero,
+            new Vector2(4f, 0f),
+            new Color(0.18f, 0.10f, 0.04f, 0.92f));
+    }
+
+    static void ApplyBrandTitleTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 2.8f;
+        text.enableVertexGradient = true;
+        text.colorGradient = new VertexGradient(
+            new Color(1.00f, 0.97f, 0.90f, 1f),
+            new Color(0.96f, 0.90f, 0.78f, 1f),
+            new Color(0.64f, 0.41f, 0.17f, 1f),
+            new Color(0.34f, 0.19f, 0.08f, 1f));
+        text.outlineColor = new Color(0.10f, 0.05f, 0.02f, 0.98f);
+        text.outlineWidth = 0.24f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.40f), new Vector2(0f, -7f));
+    }
+
+    static void ApplyBrandTaglineTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 4.8f;
+        text.color = new Color(0.88f, 0.90f, 0.95f, 0.96f);
+        text.outlineColor = new Color(0.04f, 0.05f, 0.07f, 0.80f);
+        text.outlineWidth = 0.14f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.32f), new Vector2(0f, -4f));
+    }
+
+    static void ApplyPhaseTitleTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.color = new Color(0.98f, 0.96f, 0.92f, 1f);
+        text.outlineColor = new Color(0.03f, 0.03f, 0.04f, 0.96f);
+        text.outlineWidth = 0.20f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.34f), new Vector2(0f, -5f));
+    }
+
+    static void ApplyFooterLoadingTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 1.6f;
+        text.color = new Color(0.94f, 0.72f, 0.39f, 0.98f);
+        text.outlineColor = new Color(0.12f, 0.08f, 0.04f, 0.92f);
+        text.outlineWidth = 0.18f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.32f), new Vector2(0f, -4f));
+    }
+
+    static void ApplyStageTitleTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 1.4f;
+        text.color = ProgressStagePendingTextColor;
+        text.outlineColor = new Color(0.06f, 0.04f, 0.02f, 0.94f);
+        text.outlineWidth = 0.16f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.26f), new Vector2(0f, -2f));
+    }
+
+    static void ApplyStagePercentTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.color = ProgressStagePendingTextColor;
+        text.outlineColor = new Color(0.06f, 0.04f, 0.02f, 0.94f);
+        text.outlineWidth = 0.18f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.28f), new Vector2(0f, -2f));
+    }
+
+    static void ApplyProgressBarPercentTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 1.2f;
+        text.color = new Color(1f, 0.97f, 0.90f, 1f);
+        text.outlineColor = new Color(0.08f, 0.05f, 0.02f, 0.96f);
+        text.outlineWidth = 0.18f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.32f), new Vector2(0f, -3f));
+    }
+
+    static void AddTextShadow(Graphic graphic, Color color, Vector2 distance)
+    {
+        if (graphic == null)
+            return;
+
+        var shadow = graphic.GetComponent<Shadow>();
+        if (shadow == null)
+            shadow = graphic.gameObject.AddComponent<Shadow>();
+
+        shadow.effectColor = color;
+        shadow.effectDistance = distance;
+        shadow.useGraphicAlpha = true;
     }
 
     void EnsureRetryAction()
@@ -929,11 +1333,14 @@ public class LoadingScreen : MonoBehaviour
         rect.anchorMin = new Vector2(0.5f, 0f);
         rect.anchorMax = new Vector2(0.5f, 0f);
         rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.sizeDelta = new Vector2(220f, 52f);
-        rect.anchoredPosition = new Vector2(0f, 84f);
+        rect.sizeDelta = new Vector2(240f, 56f);
+        rect.anchoredPosition = new Vector2(0f, 168f);
 
         var image = buttonGo.GetComponent<Image>();
-        image.color = new Color(0.18f, 0.55f, 0.28f, 0.96f);
+        image.color = new Color(0.14f, 0.09f, 0.05f, 0.94f);
+        var outline = buttonGo.AddComponent<Outline>();
+        outline.effectColor = new Color(0.70f, 0.48f, 0.18f, 0.48f);
+        outline.effectDistance = new Vector2(2f, -2f);
 
         _retryButton = buttonGo.GetComponent<Button>();
         _retryButton.targetGraphic = image;
@@ -951,8 +1358,11 @@ public class LoadingScreen : MonoBehaviour
         _retryLabel = labelGo.GetComponent<TextMeshProUGUI>();
         _retryLabel.alignment = TextAlignmentOptions.Center;
         _retryLabel.fontSize = 20f;
-        _retryLabel.color = Color.white;
+        _retryLabel.color = new Color(0.95f, 0.78f, 0.42f, 1f);
         _retryLabel.text = "Retry";
+        _retryLabel.outlineColor = new Color(0.10f, 0.06f, 0.03f, 0.92f);
+        _retryLabel.outlineWidth = 0.18f;
+        AddTextShadow(_retryLabel, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -3f));
     }
 
     void ShowRetryAction(string label)
@@ -1012,11 +1422,7 @@ public class LoadingScreen : MonoBehaviour
 
     void TickDots()
     {
-        if (_suppressDotAnimation)
-            return;
-        if (loadingStatusText != null && loadingStatusText.gameObject.activeSelf)
-            return;
-        if (!loadingLabel)
+        if (_suppressDotAnimation || _footerLoadingLabel == null)
             return;
 
         _dotTimer += Time.unscaledDeltaTime;
@@ -1024,7 +1430,7 @@ public class LoadingScreen : MonoBehaviour
         {
             _dotTimer = 0f;
             _dotCount = (_dotCount + 1) % 4;
-            loadingLabel.text = LoadingDotLabels[_dotCount];
+            _footerLoadingLabel.text = LoadingDotLabels[_dotCount].ToUpperInvariant();
         }
     }
 
@@ -1049,22 +1455,18 @@ public class LoadingScreen : MonoBehaviour
 
     void TickProgress()
     {
-        if (!progressBar)
-            return;
-
         _displayedProgress = Mathf.MoveTowards(
             _displayedProgress,
             _targetProgress,
             progressLerpSpeed * Time.unscaledDeltaTime);
-        progressBar.fillAmount = _displayedProgress;
+        RefreshProgressPresentation();
     }
 
     void SetProgressImmediate(float value)
     {
         _displayedProgress = Mathf.Clamp01(value);
         _targetProgress = _displayedProgress;
-        if (progressBar)
-            progressBar.fillAmount = _displayedProgress;
+        RefreshProgressPresentation();
     }
 
     void SetProgressTarget(float value)
@@ -1072,15 +1474,30 @@ public class LoadingScreen : MonoBehaviour
         _targetProgress = Mathf.Max(_targetProgress, Mathf.Clamp01(value));
     }
 
+    void SetStageProgressImmediate(LoadingStage stage, float value)
+    {
+        _activeStageIndex = Mathf.Clamp((int)stage, 0, ProgressStageCount - 1);
+        SetProgressImmediate(MapStageProgressToOverall(stage, value));
+    }
+
+    void SetStageProgressTarget(LoadingStage stage, float value)
+    {
+        _activeStageIndex = Mathf.Clamp((int)stage, 0, ProgressStageCount - 1);
+        SetProgressTarget(MapStageProgressToOverall(stage, value));
+    }
+
     void ConfigureProgressBar()
     {
         if (!progressBar)
             return;
 
+        if (progressBar.sprite == null)
+            progressBar.sprite = GetProgressFillSprite();
         progressBar.type = Image.Type.Filled;
         progressBar.fillMethod = Image.FillMethod.Horizontal;
         progressBar.fillOrigin = (int)Image.OriginHorizontal.Left;
         progressBar.fillClockwise = true;
+        progressBar.fillAmount = _displayedProgress;
     }
 
     void SetOverlayImmediate(bool visible)
@@ -1140,6 +1557,74 @@ public class LoadingScreen : MonoBehaviour
         }
 
         SetProgressImmediate(clampedTarget);
+    }
+
+    void RefreshProgressPresentation()
+    {
+        if (progressBar)
+            progressBar.fillAmount = _displayedProgress;
+
+        if (_progressBarPercentLabel)
+            _progressBarPercentLabel.text = $"{Mathf.RoundToInt(Mathf.Clamp01(_displayedProgress) * 100f)}%";
+
+        for (int i = 0; i < ProgressStageCount; i++)
+        {
+            float localProgress = Mathf.Clamp01((_displayedProgress * ProgressStageCount) - i);
+            bool isComplete = localProgress >= 0.999f;
+            bool isActive = !isComplete && _transitionInProgress && i == _activeStageIndex;
+
+            if (_stagePanels[i] != null)
+                _stagePanels[i].color = isComplete
+                    ? ProgressStageCompleteColor
+                    : isActive
+                        ? ProgressStageActiveColor
+                        : ProgressStagePendingColor;
+
+            Color textColor = isComplete
+                ? ProgressStageCompleteTextColor
+                : isActive
+                    ? ProgressStageActiveTextColor
+                    : ProgressStagePendingTextColor;
+
+            if (_stageTitleLabels[i] != null)
+                _stageTitleLabels[i].color = textColor;
+
+            if (_stagePercentLabels[i] != null)
+            {
+                _stagePercentLabels[i].color = textColor;
+                _stagePercentLabels[i].text = $"{Mathf.RoundToInt(localProgress * 100f)}%";
+            }
+        }
+    }
+
+    static float MapStageProgressToOverall(LoadingStage stage, float value)
+    {
+        int stageIndex = Mathf.Clamp((int)stage, 0, ProgressStageCount - 1);
+        return (stageIndex + Mathf.Clamp01(value)) / ProgressStageCount;
+    }
+
+    static int CountPendingRemotePreparationSteps()
+    {
+        int count = 0;
+        if (_pendingRequiredGameBootstrap)
+            count++;
+        if (_pendingLobbyEntryPreparation)
+            count++;
+        if (_pendingT1GameplayPreload)
+            count++;
+        if (_pendingPortraitKeys.Length > 0)
+            count++;
+        if (_pendingEnvironmentPreload)
+            count++;
+        return count;
+    }
+
+    static float CalculatePreparationStageProgress(int completedSteps, int totalSteps, float localProgress)
+    {
+        if (totalSteps <= 0)
+            return 1f;
+
+        return Mathf.Clamp01((completedSteps + Mathf.Clamp01(localProgress)) / totalSteps);
     }
 
     static string[] NormalizeKeys(IEnumerable<string> keys)

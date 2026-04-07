@@ -31,11 +31,16 @@ MonoBehaviour:
   FlagLittleGold: {fileID: 21300000, guid: 9d49172d1e2a0754fa8234675887aa6c, type: 3}
   InventoryTitle: {fileID: 21300000, guid: 7894723374441594ea51cb9aff485c14, type: 3}
   QuestTitleYellow: {fileID: 21300000, guid: 494888dbd774be74f89a70a0bc87dba2, type: 3}
-  ActivityShieldIcon: {fileID: 21300000, guid: e2e4bd04cf6b7414f90edb89ea2ef332, type: 3}
-  ActivityArcherIcon: {fileID: 21300000, guid: d49407281f4f2714885df08f8469f8a7, type: 3}
-  ActivityInfantryIcon: {fileID: 21300000, guid: 9567b5ed8f110a349b6dc5422f2dcb25, type: 3}
-  ActivityPriestIcon: {fileID: 21300000, guid: b988edf266dc38d46808415f02163f38, type: 3}
-  ActivityMageIcon: {fileID: 21300000, guid: 5ee2709b8f6d61148b3db9dfe7fb15e3, type: 3}
+  ActivityShieldIcon: {fileID: 21300000, guid: 9a1e8c413a0e3924eb6cba6ed94588e5, type: 3}
+  ActivitySwordIcon: {fileID: 21300000, guid: b4019e3406c2d204197a06b88c5eb5bf, type: 3}
+  ActivitySpearIcon: {fileID: 21300000, guid: 1a709e0967084978ab807db5ef0a2b09, type: 3}
+  ActivityArcherIcon: {fileID: 21300000, guid: d7c24df1a3797e94a8314768eb6be027, type: 3}
+  ActivityPriestIcon: {fileID: 21300000, guid: 8fee1027cd016404f8d27bd52e1979d5, type: 3}
+  ActivityMageIcon: {fileID: 21300000, guid: 0680d9f554b291044938cfe90dc32581, type: 3}
+  ActivityHeroIcon: {fileID: 21300000, guid: 7f8140c75488ef449b1580092eff024c, type: 3}
+  CommandAttackIcon: {fileID: 21300000, guid: 75ee77c9494f60e4aad496ba95bb3d83, type: 3}
+  CommandDefendIcon: {fileID: 21300000, guid: 467ab619fa5b92d44a987542eaece866, type: 3}
+  CommandRetreatIcon: {fileID: 21300000, guid: d4581220e85f72e46b94e2168be69cda, type: 3}
   ButtonLongNormal: {fileID: 21300000, guid: 70802c1964e7a794786a0c477b505879, type: 3}
   ButtonLongHovered: {fileID: 21300000, guid: 7d4fd1eb85df5464db00a57872b71e3a, type: 3}
   ButtonLongPressed: {fileID: 21300000, guid: e6669c318626d78478ce076a1c25ba7e, type: 3}

@@ -202,9 +202,9 @@ namespace CastleDefender.UI
             // Step 4B
             Btn_Ready.onClick.AddListener(OnToggleReady);
             Btn_Launch.onClick.AddListener(OnLaunch);
-            Btn_AddBot_Easy.onClick.AddListener(() => { ActionSender.LobbyAddBot("easy");   Play(AudioManager.SFX.ButtonClick); });
-            Btn_AddBot_Medium.onClick.AddListener(() => { ActionSender.LobbyAddBot("medium"); Play(AudioManager.SFX.ButtonClick); });
-            Btn_AddBot_Hard.onClick.AddListener(() => { ActionSender.LobbyAddBot("hard");   Play(AudioManager.SFX.ButtonClick); });
+            Btn_AddBot_Easy.onClick.AddListener(() => OnAddBot("easy"));
+            Btn_AddBot_Medium.onClick.AddListener(() => OnAddBot("medium"));
+            Btn_AddBot_Hard.onClick.AddListener(() => OnAddBot("hard"));
             Btn_Leave.onClick.AddListener(OnLeaveLobby);
 
             // Leaderboard (Phase U8)
@@ -216,7 +216,7 @@ namespace CastleDefender.UI
                 Txt_DisplayName.text = AuthManager.IsAuthenticated ? AuthManager.DisplayName : "Guest";
 
             GoToStep(2);
-            SetStatus(nm?.IsConnected == true ? "Choose a queue." : "Connecting...");
+            SetStatus(nm?.IsConnected == true ? "Choose a queue." : BuildConnectingStatus());
             BuildSettingsPanel();
             BuildProgressionButton();
             ApplyPremiumPresentation();
@@ -354,12 +354,14 @@ namespace CastleDefender.UI
         void EnterQueue()
         {
             _matchFormat = "ffa";
-            ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked);
-            _inQueue      = true;
+            string queueLabel = _pendingRanked ? "ranked" : "casual";
+            if (!TryStartRealtimeAction(
+                    ActionSender.QueueEnter(_gameType, _matchFormat, ranked: _pendingRanked),
+                    $"join the {queueLabel} queue"))
+                return;
+
             _queueElapsed = 0f;
-            GoToStep(4);
-            string queueLabel = _pendingRanked ? "public" : "casual";
-            SetStatus($"Finding {queueLabel} survival match...");
+            SetStatus($"Joining {queueLabel} survival queue...");
         }
 
         void OnCreatePrivateLobby()
@@ -371,7 +373,11 @@ namespace CastleDefender.UI
 
         void CreatePrivateLobby()
         {
-            ActionSender.LobbyCreate(_gameType, "ffa", "ffa", DisplayName);
+            if (!TryStartRealtimeAction(
+                    ActionSender.LobbyCreate(_gameType, "ffa", "ffa", DisplayName),
+                    "create a private lobby"))
+                return;
+
             SetStatus("Creating lobby...");
         }
 
@@ -405,7 +411,8 @@ namespace CastleDefender.UI
             string code = Input_JoinCode.text.Trim().ToUpper();
             if (code.Length != 6) { SetStatus("Code must be 6 characters."); Play(AudioManager.SFX.Error); return; }
             Play(AudioManager.SFX.ButtonClick);
-            ActionSender.LobbyJoin(code, DisplayName);
+            if (!TryStartRealtimeAction(ActionSender.LobbyJoin(code, DisplayName), $"join lobby {code}"))
+                return;
             SetStatus($"Joining lobby {code}...");
         }
 
@@ -413,11 +420,10 @@ namespace CastleDefender.UI
         void OnCancelQueue()
         {
             Play(AudioManager.SFX.ButtonClick);
-            ActionSender.QueueLeave();
-            _inQueue = false;
-            CloseProgressionViewer();
-            GoToStep(2);
-            SetStatus("Queue cancelled. Choose a queue.");
+            if (!TryStartRealtimeAction(ActionSender.QueueLeave(), "leave the queue"))
+                return;
+
+            SetStatus("Leaving queue...");
         }
 
         void RefreshQueueDisplay(QueueStatusPayload p)
@@ -474,28 +480,32 @@ namespace CastleDefender.UI
 
         void OnToggleReady()
         {
-            _isReady = !_isReady;
+            bool nextReady = !_isReady;
+            if (!TryStartRealtimeAction(ActionSender.LobbyReady(nextReady), nextReady ? "ready up" : "unready"))
+                return;
+
+            _isReady = nextReady;
             RefreshReadyButtonVisualState();
-            ActionSender.LobbyReady(_isReady);
             Play(AudioManager.SFX.ButtonClick);
         }
 
         void OnLaunch()
         {
             if (!_isHost) return;
+            if (!TryStartRealtimeAction(ActionSender.LobbyLaunch(), "launch the lobby"))
+                return;
+
             Play(AudioManager.SFX.ButtonClick);
-            ActionSender.LobbyLaunch();
             SetStatus("Launching...");
         }
 
         void OnLeaveLobby()
         {
+            if (!TryStartRealtimeAction(ActionSender.LobbyLeave(), "leave the lobby"))
+                return;
+
             Play(AudioManager.SFX.ButtonClick);
-            ActionSender.LobbyLeave();
-            _currentLobby = null;
-            _isReady = false;
-            GoToStep(2);
-            SetStatus("Left lobby.");
+            SetStatus("Leaving lobby...");
         }
 
         // ── NetworkManager event handlers ─────────────────────────────────────
@@ -534,7 +544,7 @@ namespace CastleDefender.UI
                 return;
             }
 
-            SetStatus("Disconnected. Reconnecting...");
+            SetStatus(BuildDisconnectedStatus());
         }
 
         void HandleQueueStatus(QueueStatusPayload p)
@@ -542,12 +552,16 @@ namespace CastleDefender.UI
             if (p.status == "idle")
             {
                 _inQueue = false;
+                CloseProgressionViewer();
                 GoToStep(2);
+                SetStatus("Choose a queue.");
                 return;
             }
+
             _inQueue = true;
-            if (_queueElapsed == 0f && p.elapsed > 0) _queueElapsed = p.elapsed;
-            if (Panel_Step4A_Queue.activeSelf) RefreshQueueDisplay(p);
+            _queueElapsed = Mathf.Max(0f, p.elapsed);
+            if (!Panel_Step4A_Queue.activeSelf) GoToStep(4);
+            RefreshQueueDisplay(p);
         }
 
         void HandleMatchFound(MatchFoundPayload p)
@@ -638,6 +652,7 @@ namespace CastleDefender.UI
             _currentLobby = null;
             _isReady = false;
             GoToStep(2);
+            SetStatus("Left lobby.");
         }
 
         void HandleLobbyError(LobbyErrorPayload p)
@@ -646,7 +661,54 @@ namespace CastleDefender.UI
             Play(AudioManager.SFX.Error);
         }
 
-        void HandleError(ErrorPayload p) => SetStatus($"Error: {p.message}");
+        void HandleError(ErrorPayload p)
+        {
+            SetStatus($"Error: {p.message}");
+            Play(AudioManager.SFX.Error);
+        }
+
+        void OnAddBot(string difficulty)
+        {
+            if (!TryStartRealtimeAction(ActionSender.LobbyAddBot(difficulty), $"add a {difficulty} bot"))
+                return;
+
+            Play(AudioManager.SFX.ButtonClick);
+        }
+
+        bool TryStartRealtimeAction(bool sent, string actionDescription)
+        {
+            if (sent)
+                return true;
+
+            string problem = NetworkManager.Instance?.LastConnectionProblem;
+            if (string.IsNullOrWhiteSpace(problem))
+                SetStatus($"Can't {actionDescription} while disconnected from {ResolveRealtimeTarget()}. Reconnecting...");
+            else
+                SetStatus($"Can't {actionDescription}. {problem} Reconnecting to {ResolveRealtimeTarget()}...");
+            Play(AudioManager.SFX.Error);
+            return false;
+        }
+
+        string BuildConnectingStatus()
+        {
+            string problem = NetworkManager.Instance?.LastConnectionProblem;
+            return string.IsNullOrWhiteSpace(problem)
+                ? $"Connecting to {ResolveRealtimeTarget()}..."
+                : $"Connecting to {ResolveRealtimeTarget()} ({problem})...";
+        }
+
+        string BuildDisconnectedStatus()
+        {
+            string problem = NetworkManager.Instance?.LastConnectionProblem;
+            return string.IsNullOrWhiteSpace(problem)
+                ? $"Disconnected from {ResolveRealtimeTarget()}. Reconnecting..."
+                : $"Disconnected from {ResolveRealtimeTarget()}. {problem} Reconnecting...";
+        }
+
+        string ResolveRealtimeTarget()
+            => NetworkManager.Instance != null && !string.IsNullOrWhiteSpace(NetworkManager.Instance.ResolvedServerUrl)
+                ? NetworkManager.Instance.ResolvedServerUrl
+                : "the lobby server";
 
         void BeginRankedEligibilityRefresh()
         {

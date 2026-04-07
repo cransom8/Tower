@@ -49,6 +49,83 @@ function getUnitSnapshotBarracksLevel(game, lane, unit, deps) {
   return Math.max(1, Math.floor(Number(sourceLane && sourceLane.barracks && sourceLane.barracks.level) || 1));
 }
 
+function computeLaneArmyPower(barracksRoster, resolveUnitDef, tickHz) {
+  if (!Array.isArray(barracksRoster))
+    return 0;
+
+  let total = 0;
+  const hz = Math.max(1, Number(tickHz) || 20);
+
+  for (const entry of barracksRoster) {
+    const ownedCount = Math.max(0, Math.floor(Number(entry && entry.ownedCount) || 0));
+    if (ownedCount <= 0)
+      continue;
+
+    const unitDef = typeof resolveUnitDef === "function"
+      ? resolveUnitDef(entry.catalogUnitKey || entry.unitTypeKey)
+      : null;
+    if (!unitDef)
+      continue;
+
+    const hp = Math.max(1, Number(unitDef.hp) || 1);
+    const dmg = Math.max(1, Number(unitDef.dmg) || 1);
+    const cdTicks = Math.max(1, Number(unitDef.atkCdTicks) || hz);
+    const speed = Math.max(0.01, Number(unitDef.pathSpeed) || 0.01);
+    const dps = dmg * (hz / cdTicks);
+    const power = hp + (dps * 10) + (speed * 18);
+    total += power * ownedCount;
+  }
+
+  return Math.round(total);
+}
+
+function computeDungeonThreatScore(game, deps) {
+  const {
+    resolveWaveForRound,
+    getUnitType,
+    TICK_HZ,
+    WAVE_TIMER_TICKS,
+    WAVE_GROUP_INTERVAL_TICKS,
+  } = deps;
+
+  if (typeof resolveWaveForRound !== "function" || typeof getUnitType !== "function")
+    return 0;
+
+  const upcomingRound = game.hasSpawnedWave
+    ? Math.max(1, Math.floor(Number(game.roundNumber) || 1)) + 1
+    : Math.max(1, Math.floor(Number(game.roundNumber) || 1));
+
+  const waveDef = resolveWaveForRound(game, upcomingRound);
+  if (!waveDef)
+    return 0;
+
+  const hz = Math.max(1, Number(TICK_HZ) || 20);
+  const waveDurationTicks = Math.max(1, Math.floor(Number(game.waveIntervalTicks) || Number(WAVE_TIMER_TICKS) || 2400));
+  const groupIntervalTicks = Math.max(1, Math.floor(Number(game.waveGroupIntervalTicks) || Number(WAVE_GROUP_INTERVAL_TICKS) || 600));
+  const groupsPerRound = Math.max(1, Math.ceil(waveDurationTicks / groupIntervalTicks));
+  const totalUnits = (Math.max(1, Math.floor(Number(waveDef.spawn_qty) || 1))) * groupsPerRound;
+
+  const dungHp = Math.max(1, Number(game.dungeonHpMult) || 1);
+  const dungDmg = Math.max(1, Number(game.dungeonDmgMult) || 1);
+  const waveHpMult = Math.max(0.01, Number(waveDef.hp_mult) || 1);
+  const waveDmgMult = Math.max(0.01, Number(waveDef.dmg_mult) || 1);
+  const waveSpeedMult = Math.max(0.01, Number(waveDef.speed_mult) || 1);
+
+  const unitType = getUnitType(String(waveDef.unit_type || ""));
+  const baseHp = Math.max(1, Number(unitType && unitType.hp) || 50);
+  const baseDmg = Math.max(1, Number(unitType && unitType.attack_damage) || 10);
+  const baseAtkSpeed = Math.max(0.01, Number(unitType && unitType.attack_speed) || 0.5);
+  const basePathSpeed = Math.max(0.01, Number(unitType && unitType.path_speed) || 0.2);
+
+  const hp = baseHp * waveHpMult * dungHp;
+  const cdTicks = Math.max(1, Math.round(hz / baseAtkSpeed));
+  const dps = (baseDmg * waveDmgMult * dungDmg) * (hz / cdTicks);
+  const speed = basePathSpeed * waveSpeedMult;
+
+  const perUnitPower = hp + (dps * 10) + (speed * 18);
+  return Math.round(perUnitPower * totalUnits);
+}
+
 function getSerializedLaneBuildValue(lane, barracksRoster, deps) {
   let total = 0;
 
@@ -354,6 +431,7 @@ function createMLSnapshot(game, deps) {
     dungeonHpMult: Math.max(0.01, Number(game.dungeonHpMult) || 1),
     dungeonDmgMult: Math.max(0.01, Number(game.dungeonDmgMult) || 1),
     totalDungeonScalingApplied: Math.max(0, Math.floor(Number(game.totalDungeonScalingApplied) || 0)),
+    dungeonThreatScore: computeDungeonThreatScore(game, deps),
     teamHp: game.teamHp || { left: game.teamHpMax || TEAM_HP_START, right: game.teamHpMax || TEAM_HP_START },
     teamHpMax: game.teamHpMax || TEAM_HP_START,
     lanes: game.lanes.map((lane) => {
@@ -572,6 +650,7 @@ function createMLSnapshot(game, deps) {
           ? getLaneTotalIncome(lane)
           : lane.income,
         buildValue: getSerializedLaneBuildValue(lane, barracksRoster, deps),
+        armyPower: computeLaneArmyPower(barracksRoster, resolveUnitDef, TICK_HZ),
         goldPerKillMult: Math.max(0.01, Number(lane.goldPerKillMult) || 1),
         feedDungeonCount: Math.max(0, Math.floor(Number(lane.feedDungeonCount) || 0)),
         feedDungeonPurchasedThisWave: !!lane.feedDungeonPurchasedThisWave,

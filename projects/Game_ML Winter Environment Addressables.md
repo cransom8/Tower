@@ -1,6 +1,6 @@
 # Game_ML Winter Environment Addressables
 
-Generated: `2026-04-06 11:32:21`
+Generated: `2026-04-06 19:14:52`
 
 ## Critical Content
 

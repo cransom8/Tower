@@ -36,6 +36,11 @@ namespace CastleDefender.Net
         public string MyRoomCode   { get; private set; }
         public bool   IsConnected  { get; private set; }
         public LobbySnapshot CurrentLobby { get; private set; }
+        public string LastConnectionProblem { get; private set; }
+        public string LastDisconnectReason { get; private set; }
+        public string LastSocketError { get; private set; }
+        public string LastConnectionAttemptUrl { get; private set; }
+        public string LastConnectionAttemptSummary { get; private set; }
 
         // ── Cross-scene loadout cache ─────────────────────────────────────────
         // Populated as soon as the per-player ml_match_config arrives, which
@@ -66,6 +71,8 @@ namespace CastleDefender.Net
         bool _pendingLoadoutReadySignal;
         bool _pendingGameplayReadySignal;
         bool _loggedFirstMLSnapshotForCurrentMatch;
+        int _connectionAttemptId;
+        Coroutine _connectWatchdogRoutine;
 
         // ── ML Lobby events ───────────────────────────────────────────────────
         public event Action<MLRoomCreatedPayload>     OnMLRoomCreated;
@@ -184,7 +191,8 @@ namespace CastleDefender.Net
         public void Connect()
         {
             string url = ResolvedServerUrl;
-            Debug.Log($"[NM] Connecting to {url}...");
+            RecordConnectionAttempt(url);
+            Debug.Log($"[NM] Connecting. {BuildConnectionDiagnosticSummary()}");
             ConnectNative(url);
         }
 
@@ -642,24 +650,49 @@ namespace CastleDefender.Net
 
             _socket.OnConnected += (_, __) =>
             {
-                IsConnected = true;
-                MySocketId  = _socket.Id;
-                Debug.Log($"[NM] Connected: {MySocketId}");
-                EmitReconnectIfPendingNative();
-                OnConnected?.Invoke();
+                RunSocketCallbackOnMainThread(() =>
+                {
+                    StopConnectWatchdog();
+                    IsConnected = true;
+                    MySocketId  = _socket != null ? _socket.Id : null;
+                    LastConnectionProblem = null;
+                    LastSocketError = null;
+                    LastDisconnectReason = null;
+                    Debug.Log($"[NM] Connected. {BuildConnectionDiagnosticSummary()}");
+                    EmitReconnectIfPendingNative();
+                    OnConnected?.Invoke();
+                });
             };
 
-            _socket.OnDisconnected += (_, __) =>
+            _socket.OnDisconnected += (_, disconnectReason) =>
             {
-                IsConnected = false;
-                CurrentLobby = null;
-                Debug.Log("[NM] Disconnected");
-                OnDisconnected?.Invoke();
+                string resolvedReason = DescribeDiagnosticValue(disconnectReason);
+                RunSocketCallbackOnMainThread(() =>
+                {
+                    StopConnectWatchdog();
+                    IsConnected = false;
+                    CurrentLobby = null;
+                    LastDisconnectReason = resolvedReason;
+                    LastConnectionProblem = string.IsNullOrWhiteSpace(LastDisconnectReason)
+                        ? "Socket disconnected."
+                        : $"Socket disconnected: {LastDisconnectReason}";
+                    Debug.LogWarning($"[NM] Disconnected. {BuildConnectionDiagnosticSummary()}");
+                    OnDisconnected?.Invoke();
+                });
             };
 
             _socket.OnError += (_, err) =>
             {
-                Debug.LogError($"[NM] Socket error: {err}");
+                string resolvedError = DescribeDiagnosticValue(err);
+                RunSocketCallbackOnMainThread(() =>
+                {
+                    StopConnectWatchdog();
+                    LastSocketError = resolvedError;
+                    LastConnectionProblem = string.IsNullOrWhiteSpace(LastSocketError)
+                        ? "Socket connection error."
+                        : $"Socket error: {LastSocketError}";
+                    Debug.LogError($"[NM] Socket error. {BuildConnectionDiagnosticSummary()}");
+                });
             };
 
             // ── ML Lobby ─────────────────────────────────────────────────────
@@ -1003,7 +1036,20 @@ namespace CastleDefender.Net
                 OnAllChatMessage?.Invoke(FromResp<MLAllChatMessagePayload>(resp));
             });
 
-            _socket.Connect();
+            StartConnectWatchdog();
+            try
+            {
+                _socket.Connect();
+            }
+            catch (Exception ex)
+            {
+                StopConnectWatchdog();
+                IsConnected = false;
+                LastSocketError = ex.Message;
+                LastConnectionProblem = $"Socket connect threw: {ex.Message}";
+                Debug.LogError($"[NM] Connect threw. {BuildConnectionDiagnosticSummary()}");
+                OnDisconnected?.Invoke();
+            }
         }
 
         void EmitReconnectIfPendingNative()
@@ -1160,6 +1206,7 @@ namespace CastleDefender.Net
         void ResetConnectionSessionState(string reason)
         {
             Debug.Log($"[NM] Clearing cached session state ({reason}).");
+            StopConnectWatchdog();
             IsConnected = false;
             MySocketId = null;
             MyLaneIndex = 0;
@@ -1173,8 +1220,105 @@ namespace CastleDefender.Net
             LastMLMatchReady = null;
             LastMLWaveStart = null;
             _loggedFirstMLSnapshotForCurrentMatch = false;
+            LastConnectionProblem = null;
+            LastDisconnectReason = null;
+            LastSocketError = null;
             ClearPostGameData();
             ResetPostGameFlowState(reason);
+        }
+
+        void RecordConnectionAttempt(string url)
+        {
+            _connectionAttemptId += 1;
+            LastConnectionAttemptUrl = url;
+            LastConnectionAttemptSummary =
+                $"attempt={_connectionAttemptId} target='{url}' " +
+                $"scene='{SceneManager.GetActiveScene().name}' platform='{Application.platform}' " +
+                $"reachability='{Application.internetReachability}' auth='{DescribeAuthMode()}'";
+        }
+
+        void StartConnectWatchdog()
+        {
+            StopConnectWatchdog();
+            _connectWatchdogRoutine = StartCoroutine(WatchConnectionAttempt(_connectionAttemptId));
+        }
+
+        void RunSocketCallbackOnMainThread(Action action)
+        {
+            if (action == null)
+                return;
+
+            // SocketIOUnity invokes connection lifecycle callbacks off the transport thread.
+            // Marshal them back to Unity before touching coroutines, scene state, or logs.
+            UnityThread.executeInUpdate(action);
+        }
+
+        void StopConnectWatchdog()
+        {
+            if (_connectWatchdogRoutine == null)
+                return;
+
+            StopCoroutine(_connectWatchdogRoutine);
+            _connectWatchdogRoutine = null;
+        }
+
+        System.Collections.IEnumerator WatchConnectionAttempt(int attemptId)
+        {
+            yield return new WaitForSecondsRealtime(8f);
+            if (IsConnected || _socket == null || attemptId != _connectionAttemptId)
+            {
+                _connectWatchdogRoutine = null;
+                yield break;
+            }
+
+            string unresolvedProblem = !string.IsNullOrWhiteSpace(LastSocketError)
+                ? $"Socket error: {LastSocketError}"
+                : "Connection attempt timed out before OnConnected fired.";
+            LastConnectionProblem = unresolvedProblem;
+            Debug.LogError($"[NM] Connect watchdog fired. {BuildConnectionDiagnosticSummary()}");
+            _connectWatchdogRoutine = null;
+        }
+
+        string DescribeAuthMode()
+        {
+            if (!AuthManager.IsAuthenticated)
+                return "guest";
+
+            int tokenLength = string.IsNullOrWhiteSpace(AuthManager.Token) ? 0 : AuthManager.Token.Length;
+            return $"token(len={tokenLength})";
+        }
+
+        static string DescribeDiagnosticValue(object value)
+        {
+            if (value == null)
+                return null;
+
+            if (value is string str)
+                return str;
+
+            try
+            {
+                return JsonConvert.SerializeObject(value);
+            }
+            catch
+            {
+                return value.ToString();
+            }
+        }
+
+        public string BuildConnectionDiagnosticSummary()
+        {
+            string target = string.IsNullOrWhiteSpace(LastConnectionAttemptUrl) ? ResolvedServerUrl : LastConnectionAttemptUrl;
+            string socketId = string.IsNullOrWhiteSpace(MySocketId) ? "<none>" : MySocketId;
+            string disconnectReason = string.IsNullOrWhiteSpace(LastDisconnectReason) ? "<none>" : LastDisconnectReason;
+            string socketError = string.IsNullOrWhiteSpace(LastSocketError) ? "<none>" : LastSocketError;
+            string problem = string.IsNullOrWhiteSpace(LastConnectionProblem) ? "<none>" : LastConnectionProblem;
+            string summary = string.IsNullOrWhiteSpace(LastConnectionAttemptSummary)
+                ? $"target='{target}'"
+                : LastConnectionAttemptSummary;
+            return
+                $"{summary} connected={IsConnected} socketId='{socketId}' " +
+                $"disconnectReason='{disconnectReason}' socketError='{socketError}' problem='{problem}'";
         }
 
         void ResetPostGameFlowState(string reason)
@@ -1323,13 +1467,15 @@ namespace CastleDefender.Net
             Emit("lobby:invite", new { targetPlayerId = playerId });
         }
 
-        /// <summary>Emit a socket event. Pass null to emit with no payload.</summary>
-        public void Emit(string eventName, object data = null)
+        public bool TryEmit(string eventName, object data = null)
         {
-            if (!IsConnected)
+            if (!IsConnected || _socket == null)
             {
-                Debug.LogWarning($"[NM] Emit '{eventName}' skipped — not connected");
-                return;
+                string resolvedUrl = string.IsNullOrWhiteSpace(ResolvedServerUrl) ? "<unset>" : ResolvedServerUrl;
+                string socketId = string.IsNullOrWhiteSpace(MySocketId) ? "<none>" : MySocketId;
+                Debug.LogWarning(
+                    $"[NM] Emit '{eventName}' blocked — socket is not connected. resolvedUrl='{resolvedUrl}' socketId='{socketId}'");
+                return false;
             }
 
             if (data == null)
@@ -1343,10 +1489,19 @@ namespace CastleDefender.Net
                 string json = JsonConvert.SerializeObject(data);
                 _socket.EmitStringAsJSON(eventName, json);
             }
+
+            return true;
+        }
+
+        /// <summary>Emit a socket event. Pass null to emit with no payload.</summary>
+        public void Emit(string eventName, object data = null)
+        {
+            TryEmit(eventName, data);
         }
 
         void DisconnectActiveSocket()
         {
+            StopConnectWatchdog();
             _socket?.Disconnect();
             _socket = null;
         }
