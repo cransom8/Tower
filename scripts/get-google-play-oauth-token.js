@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-require('dotenv').config();
+const dotenv = require('dotenv');
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 
 const http = require('http');
 const crypto = require('crypto');
@@ -45,13 +47,14 @@ Required:
   --client-id      or GOOGLE_PLAY_OAUTH_CLIENT_ID
   --client-secret  or GOOGLE_PLAY_OAUTH_CLIENT_SECRET
 
-Optional:
+  Optional:
+  --host           default localhost
   --port           default 53682
   --login-hint     Google account email to preselect
   --no-prompt      omit prompt=consent
   --help
 
-This script starts a local callback server on 127.0.0.1 and prints an
+This script starts a local callback server on localhost by default and prints an
 authorization URL for a Desktop app OAuth client. After you approve access,
 it exchanges the code and prints the refresh token and env vars to use.
 `.trim());
@@ -84,6 +87,7 @@ async function main() {
 
   const clientId = getOption(args, 'client-id', 'GOOGLE_PLAY_OAUTH_CLIENT_ID');
   const clientSecret = getOption(args, 'client-secret', 'GOOGLE_PLAY_OAUTH_CLIENT_SECRET');
+  const host = getOption(args, 'host', 'GOOGLE_PLAY_OAUTH_HOST') || 'localhost';
   const port = Number(getOption(args, 'port', 'GOOGLE_PLAY_OAUTH_PORT') || 53682);
   const loginHint = getOption(args, 'login-hint', 'GOOGLE_PLAY_OAUTH_LOGIN_HINT');
   const usePrompt = !args['no-prompt'];
@@ -94,8 +98,11 @@ async function main() {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error('Port must be an integer from 1 to 65535.');
   }
+  if (!/^[a-zA-Z0-9.\-]+$/.test(host)) {
+    throw new Error('Host must be a simple hostname or IP address.');
+  }
 
-  const redirectUri = `http://127.0.0.1:${port}/oauth2callback`;
+  const redirectUri = `http://${host}:${port}/oauth2callback`;
   const oauthClient = new OAuth2Client(clientId, clientSecret, redirectUri);
   const state = crypto.randomBytes(24).toString('hex');
 
@@ -111,7 +118,7 @@ async function main() {
   const tokenPromise = new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {
       try {
-        const requestUrl = new URL(req.url, `http://127.0.0.1:${port}`);
+        const requestUrl = new URL(req.url, `http://${host}:${port}`);
 
         if (requestUrl.pathname !== '/oauth2callback') {
           res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -155,7 +162,7 @@ async function main() {
       }
     });
 
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       console.log(`Listening for Google OAuth callback on ${redirectUri}`);
       console.log('');
       console.log('Open this URL in the browser while signed into the Google account you want to use:');

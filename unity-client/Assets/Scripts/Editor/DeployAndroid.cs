@@ -16,6 +16,7 @@ namespace CastleDefender.Editor
     public static class DeployAndroid
     {
         const string ReleaseMenuPath = "Castle Defender/Deploy Android";
+        const string ReleaseAndUploadMenuPath = "Castle Defender/Deploy Android and Upload to Google Play";
         const string LocalMenuPath = "Castle Defender/Deploy Local Android";
         const string UploadScriptRelativePath = "../scripts/upload-addressables.ps1";
         const string RepoDotEnvRelativePath = ".env";
@@ -32,7 +33,7 @@ namespace CastleDefender.Editor
 
             try
             {
-                RunReleasePipeline(context);
+                RunReleasePipeline(context, uploadToGooglePlay: false);
             }
             finally
             {
@@ -40,7 +41,24 @@ namespace CastleDefender.Editor
             }
         }
 
-        [MenuItem(LocalMenuPath, false, 6)]
+        [MenuItem(ReleaseAndUploadMenuPath, false, 6)]
+        public static void RunAndUploadToGooglePlay()
+        {
+            DeploymentContext context = PrepareDeploymentContext("[DeployAndroid+Play]");
+            if (context == null)
+                return;
+
+            try
+            {
+                RunReleasePipeline(context, uploadToGooglePlay: true);
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+        }
+
+        [MenuItem(LocalMenuPath, false, 7)]
         public static void RunLocal()
         {
             DeploymentContext context = PrepareDeploymentContext("[DeployLocalAndroid]");
@@ -57,9 +75,12 @@ namespace CastleDefender.Editor
             }
         }
 
-        static void RunReleasePipeline(DeploymentContext context)
+        static void RunReleasePipeline(DeploymentContext context, bool uploadToGooglePlay)
         {
-            const string progressTitle = "Deploy Android";
+            string progressTitle = uploadToGooglePlay
+                ? "Deploy Android + Google Play"
+                : "Deploy Android";
+            var envOverrides = LoadDotEnvFiles(context.RepoRoot, RepoDotEnvRelativePath, RepoDotEnvLocalRelativePath);
 
             EditorUtility.DisplayProgressBar(progressTitle, "Building Android addressables...", 0.15f);
             AddressablesBuildResult addressablesBuild = RemoteContentBuildAddressables.BuildForTarget(BuildTarget.Android, restorePreviousTarget: false);
@@ -105,10 +126,19 @@ namespace CastleDefender.Editor
             if (uploadFailure != null)
                 uploadFailure.Throw();
 
+            ProcessResult playUploadResult = null;
+            if (uploadToGooglePlay)
+            {
+                EditorUtility.DisplayProgressBar(progressTitle, "Uploading Android app bundle to Google Play...", 0.985f);
+                playUploadResult = RunGooglePlayUpload(context, androidBuild, envOverrides);
+                LogProcessOutput(playUploadResult);
+            }
+
             EditorUtility.DisplayProgressBar(progressTitle, "Finishing Android deploy...", 1f);
             Debug.Log(
                 $"[DeployAndroid] Finished. Addressables={addressablesBuild.PublishedPath ?? "unpublished"} " +
-                $"AAB={androidBuild.ArchivedOutputPath} Version={androidBuild.BundleVersion} ({androidBuild.VersionCode})");
+                $"AAB={androidBuild.ArchivedOutputPath} Version={androidBuild.BundleVersion} ({androidBuild.VersionCode}) " +
+                $"{(uploadToGooglePlay ? "PlayUpload=completed" : "PlayUpload=skipped")}");
         }
 
         static void RunLocalPipeline(DeploymentContext context)
@@ -220,6 +250,47 @@ namespace CastleDefender.Editor
                 context.RepoRoot,
                 "[DeployLocalAndroid] Database migration step failed.",
                 envOverrides);
+        }
+
+        static ProcessResult RunGooglePlayUpload(
+            DeploymentContext context,
+            AndroidBuildResult androidBuild,
+            IReadOnlyDictionary<string, string> envOverrides)
+        {
+            if (androidBuild == null)
+                throw new ArgumentNullException(nameof(androidBuild));
+
+            if (!androidBuild.IsAppBundle)
+                throw new InvalidOperationException("[DeployAndroid] Google Play uploads require an Android App Bundle (.aab).");
+
+            string npmCommandPath = TryResolveNpmCommandPath(envOverrides);
+            if (string.IsNullOrWhiteSpace(npmCommandPath))
+                throw new InvalidOperationException("[DeployAndroid] npm.cmd was not found. Install Node.js or set NPM_CMD_PATH before uploading to Google Play.");
+
+            var playUploadEnv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (envOverrides != null)
+            {
+                foreach (KeyValuePair<string, string> pair in envOverrides)
+                {
+                    if (string.IsNullOrWhiteSpace(pair.Key) || pair.Value == null)
+                        continue;
+
+                    playUploadEnv[pair.Key] = pair.Value;
+                }
+            }
+
+            playUploadEnv["GOOGLE_PLAY_AAB_PATH"] = androidBuild.OutputPath;
+            playUploadEnv["GOOGLE_PLAY_PACKAGE_NAME"] = androidBuild.ApplicationIdentifier;
+
+            if (!playUploadEnv.TryGetValue("GOOGLE_PLAY_RELEASE_NAME", out string releaseName) || string.IsNullOrWhiteSpace(releaseName))
+                playUploadEnv["GOOGLE_PLAY_RELEASE_NAME"] = $"Android {androidBuild.BundleVersion} ({androidBuild.VersionCode})";
+
+            return RunProcess(
+                "cmd.exe",
+                $"/d /s /c \"\"{npmCommandPath}\" run play:upload\"",
+                context.RepoRoot,
+                "[DeployAndroid] Google Play upload failed.",
+                playUploadEnv);
         }
 
         static ProcessResult RunUploadScript(
