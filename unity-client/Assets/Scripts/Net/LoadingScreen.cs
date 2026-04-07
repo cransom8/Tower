@@ -62,15 +62,15 @@ public class LoadingScreen : MonoBehaviour
     [TextArea(2, 4)]
     public string[] tips =
     {
-        "Warlocks reduce tower damage by 25% for 3 seconds.",
-        "Golems deal +25% damage to gates.",
-        "Ironclaids take 30% less pierce damage.",
-        "Runners take 25% less splash damage.",
-        "Upgrade Barracks to boost your income on every unit spawn.",
-        "Cannons have a 1.5-tile splash radius - great against clustered units.",
-        "Place defenders on your lane during the build phase - they respawn after each wave.",
-        "Barracks are the only source of outbound units, so build and stock them to keep pressure on the battlefield.",
-        "Ballistas outrange all other towers - great for back-line sniping.",
+        "Build Barracks sites early so each lane can keep sending reinforcements.",
+        "Attack pushes a lane forward, Defend holds the road, and Retreat pulls your forces back to safer ground.",
+        "If a lane starts to crumble, spend there before the enemy reaches your fortress.",
+        "Town Core upgrades open more branches and give you stronger battlefield options.",
+        "Use loadout time to review race progression and enter the match with a plan.",
+        "A lane with no Barracks pressure is easy for the enemy to reclaim.",
+        "Retreating early is cheaper than rebuilding after a full lane wipe.",
+        "Check every road between purchases so a quiet flank does not turn into a breach.",
+        "Winning one lane helps, but protecting your fortress keeps the whole war effort alive.",
     };
 
     static string _pendingScene;
@@ -551,19 +551,12 @@ public class LoadingScreen : MonoBehaviour
 
         if (_pendingRequiredGameBootstrap)
         {
-            bool bootstrapAlreadyMarked = RemoteContentManager.HasRequiredGameBootstrapMarker();
-            if (tipText)
-            {
-                tipText.text = bootstrapAlreadyMarked
-                    ? "Checking the game content already downloaded on this device so this session can start without another required in-game download."
-                    : "This one-time download sets up the required game content on this device. Future sessions reuse it unless the live game content changes or the app data is cleared.";
-            }
-            if (loadingLabel)
-                loadingLabel.text = bootstrapAlreadyMarked ? "Checking Downloaded Game Content" : "One-Time Game Download";
-            SetLoadingStatusText(bootstrapAlreadyMarked ? "Verifying cached game content..." : "Preparing the one-time game download...");
+            ApplyRequiredGameBootstrapMessaging(remoteContent);
+            SetLoadingStatusText("Checking downloaded game content...");
 
             yield return remoteContent.PrepareRequiredGameContentForSession((progress, status) =>
             {
+                ApplyRequiredGameBootstrapMessaging(remoteContent);
                 SetStageProgressTarget(LoadingStage.Content, CalculatePreparationStageProgress(completedPreparationSteps, totalPreparationSteps, progress));
                 SetLoadingStatusText(status);
             }, requester: "LoadingScreen.RequiredGameBootstrap");
@@ -573,7 +566,9 @@ public class LoadingScreen : MonoBehaviour
                 FailTransition(
                     BuildFailureTitle(remoteContent.LastFailureStage, "Required game content could not be prepared."),
                     string.IsNullOrWhiteSpace(remoteContent.LastError)
-                        ? "The game cannot safely continue until the one-time required content download finishes."
+                        ? remoteContent.RequiredGameBootstrapNeedsDownload
+                            ? "The game cannot safely continue until the one-time required content download finishes."
+                            : "The game cannot safely continue until required game content is verified on this device."
                         : remoteContent.LastError);
                 yield break;
             }
@@ -713,6 +708,20 @@ public class LoadingScreen : MonoBehaviour
         SetStageProgressTarget(LoadingStage.Content, 1f);
         if (loadingLabel)
             loadingLabel.text = "Required content ready";
+    }
+
+    void ApplyRequiredGameBootstrapMessaging(RemoteContentManager remoteContent)
+    {
+        bool needsDownload = remoteContent != null && remoteContent.RequiredGameBootstrapNeedsDownload;
+        if (tipText)
+        {
+            tipText.text = needsDownload
+                ? "This device is downloading and caching required game content one time. Future launches reuse it unless live content changes or the app data is cleared."
+                : "Checking the game content already downloaded on this device so the session can start without another long in-game download.";
+        }
+
+        if (loadingLabel)
+            loadingLabel.text = needsDownload ? "One-Time Game Download" : "Checking Downloaded Game Content";
     }
 
     static string BuildFailureTitle(RemoteContentManager.CriticalPreloadFailureStage stage, string fallback)
@@ -1030,6 +1039,16 @@ public class LoadingScreen : MonoBehaviour
         tipText.color = new Color(0.94f, 0.90f, 0.83f, 0.96f);
         StretchWithOffsets(tipText.rectTransform, new Vector2(18f, 8f), new Vector2(-18f, -8f));
         AddTextShadow(tipText, new Color(0f, 0f, 0f, 0.30f), new Vector2(0f, -3f));
+
+        var versionLabel = CreateText(
+            "VersionLabel",
+            backdrop.transform,
+            18f,
+            FontStyles.Bold,
+            TextAlignmentOptions.BottomLeft,
+            RuntimeVersionDisplay.VersionLabel);
+        Stretch(versionLabel.rectTransform, new Vector2(0.03f, 0.02f), new Vector2(0.32f, 0.07f));
+        ApplyFooterMetaTreatment(versionLabel);
     }
 
     static GameObject CreatePanel(string name, Transform parent, Color color, Vector2 anchorMin, Vector2 anchorMax)
@@ -1269,6 +1288,18 @@ public class LoadingScreen : MonoBehaviour
         text.outlineColor = new Color(0.12f, 0.08f, 0.04f, 0.92f);
         text.outlineWidth = 0.18f;
         AddTextShadow(text, new Color(0f, 0f, 0f, 0.32f), new Vector2(0f, -4f));
+    }
+
+    static void ApplyFooterMetaTreatment(TextMeshProUGUI text)
+    {
+        if (text == null)
+            return;
+
+        text.characterSpacing = 0.8f;
+        text.color = new Color(0.93f, 0.90f, 0.83f, 0.92f);
+        text.outlineColor = new Color(0.06f, 0.05f, 0.03f, 0.92f);
+        text.outlineWidth = 0.16f;
+        AddTextShadow(text, new Color(0f, 0f, 0f, 0.28f), new Vector2(0f, -3f));
     }
 
     static void ApplyStageTitleTreatment(TextMeshProUGUI text)

@@ -1046,6 +1046,7 @@ namespace CastleDefender.UI
             DestroyCanvasChild("PremiumLobbySafeArea");
             DestroyCanvasChild("PremiumLobbyStage");
             DestroyCanvasChild("PremiumLeaderboardDock");
+            DestroyCanvasChild("PremiumVersionBadge");
 
             BuildPremiumBackdrop(_premiumCompactLayout);
 
@@ -1056,6 +1057,7 @@ namespace CastleDefender.UI
                 _premiumCompactLayout ? 18f : 42f,
                 _premiumCompactLayout ? 18f : 34f,
                 _premiumCompactLayout ? 20f : 28f);
+            BuildVersionBadge(safeArea, _premiumCompactLayout);
 
             _premiumStageRoot = CreateUiRect("PremiumLobbyStage", safeArea);
             Stretch(_premiumStageRoot);
@@ -1115,6 +1117,37 @@ namespace CastleDefender.UI
             CreateTintLayer(root, "BottomShade", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, compact ? 0f : 12f), new Vector2(0f, compact ? 180f : 220f), new Color(0.02f, 0.03f, 0.05f, 0.60f));
             CreateTintLayer(root, "LeftShade", new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(compact ? 84f : 170f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.42f));
             CreateTintLayer(root, "RightShade", new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), Vector2.zero, new Vector2(compact ? 84f : 170f, 0f), new Color(0.01f, 0.02f, 0.04f, 0.48f));
+        }
+
+        void BuildVersionBadge(RectTransform parent, bool compact)
+        {
+            if (parent == null)
+                return;
+
+            var badge = CreateUiImage(
+                "PremiumVersionBadge",
+                parent,
+                ClassicRpgPanelSkin.MainMenuBar,
+                new Color(0.03f, 0.04f, 0.07f, 0.90f),
+                true);
+            var rect = badge.rectTransform;
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(0f, 0f);
+            rect.pivot = new Vector2(0f, 0f);
+            rect.anchoredPosition = compact ? new Vector2(0f, 6f) : new Vector2(4f, 10f);
+            rect.sizeDelta = compact ? new Vector2(160f, 42f) : new Vector2(196f, 46f);
+            rect.localScale = Vector3.one;
+            rect.localRotation = Quaternion.identity;
+
+            var label = CreateUiText(
+                "Label",
+                rect,
+                RuntimeVersionDisplay.VersionLabel,
+                compact ? 14f : 15f,
+                ClassicRpgTextTone.BodyStrong,
+                ClassicRpgUiRuntime.WarmGold);
+            label.alignment = TextAlignmentOptions.Center;
+            Stretch(label.rectTransform, new Vector2(16f, 6f), new Vector2(-16f, -8f));
         }
 
         void BuildPremiumHeader(Transform parent, bool compact)

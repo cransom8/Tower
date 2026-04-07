@@ -1,0 +1,7 @@
+*
+!.gcloudignore
+!Dockerfile
+!package.json
+!package-lock.json
+!server/
+!server/**

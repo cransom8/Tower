@@ -119,3 +119,55 @@ test("match abandonment persists telemetry and marks the row abandoned", async (
     "expected abandoned finalization state update query"
   );
 });
+
+test("match finalization upserts match_players rows with parameterized UUID values", async () => {
+  const queries = [];
+  const client = {
+    async query(text, params) {
+      queries.push({ text, params });
+      if (/SELECT finalization_state FROM matches/i.test(text))
+        return { rows: [{ finalization_state: "pending" }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    },
+    release() {},
+  };
+
+  const persistence = createMatchPersistence({
+    db: {
+      async getClient() {
+        return client;
+      },
+    },
+    log: {
+      info() {},
+      warn() {},
+      error() {},
+    },
+    ratingService: null,
+    seasonService: null,
+  });
+
+  const matchId = "55555555-5555-4555-8555-555555555555";
+  const playerA = "66666666-6666-4666-8666-666666666666";
+  const playerB = "77777777-7777-4777-8777-777777777777";
+
+  const result = await persistence.logMatchEnd(
+    Promise.resolve(matchId),
+    0,
+    [
+      { playerId: playerA, laneIndex: 0, result: "win" },
+      { playerId: playerB, laneIndex: 1, result: "loss" },
+    ],
+    { mode: "multilane" }
+  );
+
+  assert.equal(result.finalizationState, "completed");
+
+  const upsertQuery = queries.find((entry) => /INSERT INTO match_players/i.test(entry.text));
+  assert.ok(upsertQuery, "expected match_players upsert query");
+  assert.match(upsertQuery.text, /VALUES \(\$1, \$2, \$3, \$4\), \(\$1, \$5, \$6, \$7\)/i);
+  assert.deepEqual(
+    upsertQuery.params,
+    [matchId, playerA, 0, "win", playerB, 1, "loss"]
+  );
+});

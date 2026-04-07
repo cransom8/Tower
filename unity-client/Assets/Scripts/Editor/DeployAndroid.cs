@@ -27,13 +27,17 @@ namespace CastleDefender.Editor
         [MenuItem(ReleaseMenuPath, false, 5)]
         public static void Run()
         {
+            AndroidBuildPreview buildPreview = ConfirmReleaseBuildPreview(uploadToGooglePlay: false);
+            if (buildPreview == null)
+                return;
+
             DeploymentContext context = PrepareDeploymentContext("[DeployAndroid]");
             if (context == null)
                 return;
 
             try
             {
-                RunReleasePipeline(context, uploadToGooglePlay: false);
+                RunReleasePipeline(context, buildPreview, uploadToGooglePlay: false);
             }
             finally
             {
@@ -44,13 +48,17 @@ namespace CastleDefender.Editor
         [MenuItem(ReleaseAndUploadMenuPath, false, 6)]
         public static void RunAndUploadToGooglePlay()
         {
+            AndroidBuildPreview buildPreview = ConfirmReleaseBuildPreview(uploadToGooglePlay: true);
+            if (buildPreview == null)
+                return;
+
             DeploymentContext context = PrepareDeploymentContext("[DeployAndroid+Play]");
             if (context == null)
                 return;
 
             try
             {
-                RunReleasePipeline(context, uploadToGooglePlay: true);
+                RunReleasePipeline(context, buildPreview, uploadToGooglePlay: true);
             }
             finally
             {
@@ -61,13 +69,14 @@ namespace CastleDefender.Editor
         [MenuItem(LocalMenuPath, false, 7)]
         public static void RunLocal()
         {
+            AndroidBuildPreview buildPreview = BuildAndroid.PreviewLocalApkBuild();
             DeploymentContext context = PrepareDeploymentContext("[DeployLocalAndroid]");
             if (context == null)
                 return;
 
             try
             {
-                RunLocalPipeline(context);
+                RunLocalPipeline(context, buildPreview);
             }
             finally
             {
@@ -75,11 +84,11 @@ namespace CastleDefender.Editor
             }
         }
 
-        static void RunReleasePipeline(DeploymentContext context, bool uploadToGooglePlay)
+        static void RunReleasePipeline(DeploymentContext context, AndroidBuildPreview buildPreview, bool uploadToGooglePlay)
         {
-            string progressTitle = uploadToGooglePlay
-                ? "Deploy Android + Google Play"
-                : "Deploy Android";
+            string progressTitle = FormatProgressTitle(
+                uploadToGooglePlay ? "Deploy Android + Google Play" : "Deploy Android",
+                buildPreview);
             var envOverrides = LoadDotEnvFiles(context.RepoRoot, RepoDotEnvRelativePath, RepoDotEnvLocalRelativePath);
 
             EditorUtility.DisplayProgressBar(progressTitle, "Building Android addressables...", 0.15f);
@@ -138,12 +147,13 @@ namespace CastleDefender.Editor
             Debug.Log(
                 $"[DeployAndroid] Finished. Addressables={addressablesBuild.PublishedPath ?? "unpublished"} " +
                 $"AAB={androidBuild.ArchivedOutputPath} Version={androidBuild.BundleVersion} ({androidBuild.VersionCode}) " +
+                $"{(string.IsNullOrWhiteSpace(androidBuild.NativeSymbolsPath) ? "NativeSymbols=missing " : $"NativeSymbols={androidBuild.NativeSymbolsPath} ")}" +
                 $"{(uploadToGooglePlay ? "PlayUpload=completed" : "PlayUpload=skipped")}");
         }
 
-        static void RunLocalPipeline(DeploymentContext context)
+        static void RunLocalPipeline(DeploymentContext context, AndroidBuildPreview buildPreview)
         {
-            const string progressTitle = "Deploy Local Android";
+            string progressTitle = FormatProgressTitle("Deploy Local Android", buildPreview);
 
             var envOverrides = LoadDotEnvFiles(context.RepoRoot, RepoDotEnvRelativePath, RepoDotEnvLocalRelativePath);
 
@@ -204,6 +214,7 @@ namespace CastleDefender.Editor
             Debug.Log(
                 $"[DeployLocalAndroid] Finished. Addressables={addressablesBuild.PublishedPath ?? "unpublished"} " +
                 $"APK={androidBuild.ArchivedOutputPath} Version={androidBuild.BundleVersion} ({androidBuild.VersionCode}) " +
+                $"{(string.IsNullOrWhiteSpace(androidBuild.NativeSymbolsPath) ? "NativeSymbols=missing " : $"NativeSymbols={androidBuild.NativeSymbolsPath} ")}" +
                 $"{installResult.GetSummary()}");
         }
 
@@ -223,6 +234,35 @@ namespace CastleDefender.Editor
                 throw new FileNotFoundException($"{logPrefix} Upload script not found at '{uploadScriptPath}'.");
 
             return new DeploymentContext(unityProjectRoot, repoRoot, uploadScriptPath);
+        }
+
+        static AndroidBuildPreview ConfirmReleaseBuildPreview(bool uploadToGooglePlay)
+        {
+            AndroidBuildPreview buildPreview = BuildAndroid.PreviewReleaseBuild();
+            string title = uploadToGooglePlay
+                ? "Deploy Android + Google Play"
+                : "Deploy Android";
+            string primaryAction = uploadToGooglePlay ? "Build + Upload" : "Build";
+            string buildKind = buildPreview.IsAppBundle ? "App Bundle" : "APK";
+
+            bool shouldContinue = EditorUtility.DisplayDialog(
+                title,
+                $"{buildKind}: {buildPreview.BundleVersion} ({buildPreview.VersionCode})\n" +
+                $"Package: {buildPreview.ApplicationIdentifier}\n" +
+                $"Output: {buildPreview.OutputPath}\n\n" +
+                "Continue?",
+                primaryAction,
+                "Cancel");
+
+            return shouldContinue ? buildPreview : null;
+        }
+
+        static string FormatProgressTitle(string baseTitle, AndroidBuildPreview buildPreview)
+        {
+            if (buildPreview == null || buildPreview.VersionCode <= 0)
+                return baseTitle;
+
+            return $"{baseTitle} v{buildPreview.VersionCode}";
         }
 
         static void EnsureEditorReady(string logPrefix)

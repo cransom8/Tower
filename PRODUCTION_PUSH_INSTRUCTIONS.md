@@ -29,7 +29,7 @@ That pipeline now handles the Android release flow in one place:
    - stable path: `builds/android/forge-wars.aab`
    - archived release copy: `builds/android/releases/...`
 4. Uploads Android Addressables to Google Cloud Storage.
-5. Stages the Railway-facing Android catalog/hash/settings files in git so they can be committed and pushed.
+5. Stages the tracked Android catalog/hash/settings files in git so they can be committed and pushed.
 
 ## Supporting scripts
 
@@ -54,7 +54,7 @@ to:
 
 - `gs://castle-defender-assets/addressables/Android/`
 
-and stages the tracked metadata files for Railway.
+and stages the tracked metadata files in git. The parameter name still says `StageRailwayMetadata` for legacy reasons, but the active hosting path is Google Cloud.
 
 ## Standard release flow
 
@@ -64,7 +64,7 @@ and stages the tracked metadata files for Railway.
 4. Verify the output `.aab` exists under:
    - `builds/android/forge-wars.aab`
    - `builds/android/releases`
-5. Review the staged Railway metadata and any other release changes:
+5. Review the staged Android metadata and any other release changes:
 
 ```powershell
 git status --short
@@ -82,7 +82,7 @@ git commit -m "Deploy Android release"
 git push origin main
 ```
 
-8. Railway redeploys from the pushed repo.
+8. If the release includes server or admin-client changes, deploy Cloud Run using [docs/google-cloud-run.md](C:\Users\Crans\RansomForge\castle-defender\docs\google-cloud-run.md).
 
 ## Exact push behavior Codex should follow
 
@@ -96,3 +96,4 @@ When asked to "read push instructions and do a push", do this:
 6. Do not revert unrelated changes.
 7. Commit only what the user wants in the release.
 8. Push from the `castle-defender` repo.
+9. If server-hosted code changed, deploy the server with `scripts/deploy-cloud-run.ps1`.

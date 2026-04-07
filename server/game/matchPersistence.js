@@ -168,7 +168,7 @@ function createMatchPersistence({ db, log, ratingService, seasonService }) {
       }
       if (validSnapshots.length > 0) {
         const placeholders = validSnapshots
-          .map((_, i) => `($1, ${i * 3 + 2}, ${i * 3 + 3}, ${i * 3 + 4})`)
+          .map((_, i) => `($1, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4})`)
           .join(", ");
         const params = [matchId];
         for (const { playerId, laneIndex, result } of validSnapshots) {

@@ -14,12 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
   m_GroupName: Remote Environment Dressing
   m_GUID: 9e5f0c1d2b3a4f5687c9d0e1f2a3b4c5
-  m_SerializeEntries:
-  - m_GUID: d405f0515222641439f9d5717dcb4d9d
-    m_Address: environment/game_ml_dressing
-    m_ReadOnly: 0
-    m_SerializedLabels: []
-    FlaggedDuringContentUpdateRestriction: 0
+  m_SerializeEntries: []
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 732df38ddda489943aa0ab097b96f96e, type: 2}
   m_SchemaSet:

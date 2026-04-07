@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -14,11 +15,25 @@ namespace CastleDefender.Editor
     {
         static readonly Regex BundleNameRegex = new Regex("\"Name\":\"([^\"]+\\.bundle)\"", RegexOptions.Compiled | RegexOptions.CultureInvariant);
         static readonly Regex BuildStartTimeRegex = new Regex("\"BuildStartTime\":\"([^\"]+)\"", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
         [MenuItem("Castle Defender/Remote Content/Build Addressables Content")]
         static void BuildAddressablesContent()
         {
             BuildForTarget(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        [MenuItem("Castle Defender/Remote Content/Write Current Addressables Size Report")]
+        static void WriteCurrentAddressablesSizeReport()
+        {
+            BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
+            AddressablesSizeReportSnapshot report = WriteSizeReportForCurrentOutput(target);
+            if (report == null)
+                throw new InvalidOperationException($"[RemoteContentBuildAddressables] No published Addressables output was found for '{target}'.");
+
+            Debug.Log(
+                $"[RemoteContentBuildAddressables] Wrote current size report for {target}. " +
+                $"Total={FormatBytes(report.totalBytes)} Bundles={report.bundleCount} " +
+                $"Largest={report.largestBundleName ?? "none"} ({FormatBytes(report.largestBundleBytes)}) " +
+                $"Report={report.markdownReportPath}");
         }
 
         public static AddressablesBuildResult BuildForTarget(BuildTarget target, bool restorePreviousTarget = true)
@@ -72,10 +87,23 @@ namespace CastleDefender.Editor
                 string summary = DescribeResult(result);
                 string publishedPath = PublishBuildOutput(result, target, buildStartedAtUtc);
                 string[] catalogs = FindCatalogs(target);
+                AddressablesSizeReportSnapshot sizeReport = WriteSizeReport(target, publishedPath);
 
                 Debug.Log($"[RemoteContentBuildAddressables] Build complete for {target}. {summary} PublishedPath={publishedPath ?? "unpublished"}");
                 if (catalogs.Length > 0)
                     Debug.Log("[RemoteContentBuildAddressables] Catalogs:\n" + string.Join("\n", catalogs));
+                if (sizeReport != null)
+                {
+                    string totalDeltaText = FormatSignedBytes(sizeReport.totalDeltaBytes);
+                    string largestDeltaText = FormatSignedBytes(sizeReport.largestBundleDeltaBytes);
+                    Debug.Log(
+                        $"[RemoteContentBuildAddressables] Size report for {target}. " +
+                        $"Total={FormatBytes(sizeReport.totalBytes)} ({totalDeltaText}) " +
+                        $"Bundles={sizeReport.bundleCount} " +
+                        $"Largest={sizeReport.largestBundleName ?? "none"} " +
+                        $"({FormatBytes(sizeReport.largestBundleBytes)}, {largestDeltaText}) " +
+                        $"Report={sizeReport.markdownReportPath}");
+                }
 
                 return new AddressablesBuildResult(target, publishedPath, summary, catalogs);
             }
@@ -136,6 +164,292 @@ namespace CastleDefender.Editor
                 ?? resultType.GetField("OutputPath")?.GetValue(result) as string;
 
             return $"Duration={duration ?? "unknown"} OutputPath={outputPath ?? "unknown"}";
+        }
+
+        static AddressablesSizeReportSnapshot WriteSizeReportForCurrentOutput(BuildTarget target)
+        {
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string publishedPath = Path.Combine(unityProjectRoot, "ServerData", target.ToString());
+            return WriteSizeReport(target, Directory.Exists(publishedPath) ? publishedPath : null);
+        }
+
+        static AddressablesSizeReportSnapshot WriteSizeReport(BuildTarget target, string publishedPath)
+        {
+            if (string.IsNullOrWhiteSpace(publishedPath) || !Directory.Exists(publishedPath))
+                return null;
+
+            string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string repoRoot = Path.GetFullPath(Path.Combine(unityProjectRoot, ".."));
+            string reportsDirectory = Path.Combine(repoRoot, "projects", "addressables-size-reports", target.ToString());
+            Directory.CreateDirectory(reportsDirectory);
+
+            string latestJsonPath = Path.Combine(reportsDirectory, "latest.json");
+            AddressablesSizeReportSnapshot previousReport = LoadSizeReport(latestJsonPath);
+            AddressablesSizeEntrySnapshot[] currentEntries = CollectPublishedSizeEntries(publishedPath);
+
+            var previousEntriesByLogicalName = new Dictionary<string, AddressablesSizeEntrySnapshot>(StringComparer.OrdinalIgnoreCase);
+            if (previousReport?.entries != null)
+            {
+                foreach (AddressablesSizeEntrySnapshot previousEntry in previousReport.entries)
+                {
+                    if (previousEntry == null || string.IsNullOrWhiteSpace(previousEntry.logicalName))
+                        continue;
+
+                    previousEntriesByLogicalName[previousEntry.logicalName] = previousEntry;
+                }
+            }
+
+            foreach (AddressablesSizeEntrySnapshot entry in currentEntries)
+            {
+                if (entry == null || string.IsNullOrWhiteSpace(entry.logicalName))
+                    continue;
+
+                entry.previousBytes = previousEntriesByLogicalName.TryGetValue(entry.logicalName, out AddressablesSizeEntrySnapshot previousEntry)
+                    ? previousEntry.bytes
+                    : 0;
+                entry.deltaBytes = entry.bytes - entry.previousBytes;
+            }
+
+            long totalBytes = currentEntries.Sum(entry => entry?.bytes ?? 0);
+            long bundleBytes = currentEntries.Where(entry => entry != null && entry.isBundle).Sum(entry => entry.bytes);
+            long previousTotalBytes = previousReport?.totalBytes ?? 0;
+            long previousBundleBytes = previousReport?.bundleBytes ?? 0;
+
+            AddressablesSizeEntrySnapshot[] bundleEntries = currentEntries
+                .Where(entry => entry != null && entry.isBundle)
+                .OrderByDescending(entry => entry.bytes)
+                .ThenBy(entry => entry.logicalName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            AddressablesSizeEntrySnapshot largestBundle = bundleEntries.FirstOrDefault();
+
+            var report = new AddressablesSizeReportSnapshot
+            {
+                target = target.ToString(),
+                generatedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'"),
+                publishedPath = publishedPath,
+                totalBytes = totalBytes,
+                totalDeltaBytes = totalBytes - previousTotalBytes,
+                bundleBytes = bundleBytes,
+                bundleDeltaBytes = bundleBytes - previousBundleBytes,
+                fileCount = currentEntries.Length,
+                bundleCount = bundleEntries.Length,
+                previousGeneratedAtUtc = previousReport?.generatedAtUtc ?? string.Empty,
+                largestBundleName = largestBundle?.displayName ?? string.Empty,
+                largestBundleBytes = largestBundle?.bytes ?? 0,
+                largestBundleDeltaBytes = largestBundle?.deltaBytes ?? 0,
+                entries = currentEntries
+            };
+
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            string jsonPath = Path.Combine(reportsDirectory, $"{timestamp}.json");
+            string markdownPath = Path.Combine(reportsDirectory, $"{timestamp}.md");
+            report.jsonReportPath = jsonPath;
+            report.markdownReportPath = markdownPath;
+
+            string json = JsonUtility.ToJson(report, true);
+            string markdown = BuildSizeReportMarkdown(report);
+
+            File.WriteAllText(jsonPath, json);
+            File.WriteAllText(markdownPath, markdown);
+            File.WriteAllText(latestJsonPath, json);
+            File.WriteAllText(Path.Combine(reportsDirectory, "latest.md"), markdown);
+            return report;
+        }
+
+        static AddressablesSizeReportSnapshot LoadSizeReport(string jsonPath)
+        {
+            if (!File.Exists(jsonPath))
+                return null;
+
+            string json = File.ReadAllText(jsonPath);
+            if (string.IsNullOrWhiteSpace(json))
+                return null;
+
+            try
+            {
+                return JsonUtility.FromJson<AddressablesSizeReportSnapshot>(json);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[RemoteContentBuildAddressables] Failed to read previous size report '{jsonPath}': {ex.Message}");
+                return null;
+            }
+        }
+
+        static AddressablesSizeEntrySnapshot[] CollectPublishedSizeEntries(string publishedPath)
+        {
+            return Directory.EnumerateFiles(publishedPath, "*", SearchOption.AllDirectories)
+                .Select(filePath =>
+                {
+                    var info = new FileInfo(filePath);
+                    string relativePath = ToRelativePath(publishedPath, filePath);
+                    string logicalName = NormalizeLogicalName(relativePath);
+                    bool isBundle = string.Equals(Path.GetExtension(filePath), ".bundle", StringComparison.OrdinalIgnoreCase);
+                    return new AddressablesSizeEntrySnapshot
+                    {
+                        relativePath = relativePath,
+                        logicalName = logicalName,
+                        displayName = BuildDisplayName(logicalName, relativePath),
+                        bytes = info.Exists ? info.Length : 0,
+                        isBundle = isBundle
+                    };
+                })
+                .OrderByDescending(entry => entry.bytes)
+                .ThenBy(entry => entry.logicalName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        static string NormalizeLogicalName(string relativePath)
+        {
+            string normalized = relativePath.Replace('\\', '/');
+            if (!string.Equals(Path.GetExtension(normalized), ".bundle", StringComparison.OrdinalIgnoreCase))
+                return normalized;
+
+            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(normalized);
+            int finalUnderscoreIndex = fileNameWithoutExtension.LastIndexOf('_');
+            if (finalUnderscoreIndex <= 0)
+                return fileNameWithoutExtension;
+
+            string possibleHash = fileNameWithoutExtension.Substring(finalUnderscoreIndex + 1);
+            return LooksLikeBundleHash(possibleHash)
+                ? fileNameWithoutExtension.Substring(0, finalUnderscoreIndex)
+                : fileNameWithoutExtension;
+        }
+
+        static bool LooksLikeBundleHash(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length < 8)
+                return false;
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                char ch = value[i];
+                bool isHex = (ch >= '0' && ch <= '9')
+                    || (ch >= 'a' && ch <= 'f')
+                    || (ch >= 'A' && ch <= 'F');
+                if (!isHex)
+                    return false;
+            }
+
+            return true;
+        }
+
+        static string BuildDisplayName(string logicalName, string relativePath)
+        {
+            if (string.IsNullOrWhiteSpace(logicalName))
+                return relativePath;
+
+            if (logicalName.EndsWith(".bundle", StringComparison.OrdinalIgnoreCase)
+                || logicalName.Contains("/")
+                || logicalName.StartsWith("catalog", StringComparison.OrdinalIgnoreCase)
+                || logicalName.StartsWith("settings", StringComparison.OrdinalIgnoreCase))
+            {
+                return logicalName;
+            }
+
+            Match knownPrefixMatch = Regex.Match(
+                logicalName,
+                "^(remoteenvironmentshared|remoteenvironmentdressing|remoteenvironment|remoteportraits|remotescenes|remoteskinsshared|remoteskins|remoteunits|remoteaudio)(\\d*)_(assets|scenes)_all$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!knownPrefixMatch.Success)
+                return logicalName;
+
+            string prefix = knownPrefixMatch.Groups[1].Value.ToLowerInvariant();
+            string numericSuffix = knownPrefixMatch.Groups[2].Value;
+            string contentKind = knownPrefixMatch.Groups[3].Value.ToLowerInvariant();
+
+            string label = prefix switch
+            {
+                "remoteenvironmentshared" => "Remote Environment Shared",
+                "remoteenvironmentdressing" => "Remote Environment Dressing",
+                "remoteenvironment" => "Remote Environment",
+                "remoteportraits" => "Remote Portraits",
+                "remotescenes" => "Remote Scenes",
+                "remoteskinsshared" => "Remote Skins Shared",
+                "remoteskins" => "Remote Skins",
+                "remoteunits" => "Remote Units",
+                "remoteaudio" => "Remote Audio",
+                _ => logicalName
+            };
+
+            if (!string.IsNullOrWhiteSpace(numericSuffix))
+                label = $"{label} {numericSuffix}";
+
+            if (contentKind == "scenes")
+                label += " Scenes";
+
+            return label;
+        }
+
+        static string BuildSizeReportMarkdown(AddressablesSizeReportSnapshot report)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("# Addressables Size Report");
+            builder.AppendLine();
+            builder.AppendLine($"Generated: {report.generatedAtUtc}");
+            builder.AppendLine($"Target: `{report.target}`");
+            builder.AppendLine($"Published path: `{report.publishedPath}`");
+            builder.AppendLine();
+            builder.AppendLine("## Summary");
+            builder.AppendLine();
+            builder.AppendLine($"- Total published size: `{FormatBytes(report.totalBytes)}`");
+            builder.AppendLine($"- Total published delta vs previous snapshot: `{FormatSignedBytes(report.totalDeltaBytes)}`");
+            builder.AppendLine($"- Bundle-only size: `{FormatBytes(report.bundleBytes)}`");
+            builder.AppendLine($"- Bundle-only delta vs previous snapshot: `{FormatSignedBytes(report.bundleDeltaBytes)}`");
+            builder.AppendLine($"- Published file count: `{report.fileCount}`");
+            builder.AppendLine($"- Bundle count: `{report.bundleCount}`");
+            builder.AppendLine($"- Largest bundle: `{report.largestBundleName}` at `{FormatBytes(report.largestBundleBytes)}` ({FormatSignedBytes(report.largestBundleDeltaBytes)})");
+            if (!string.IsNullOrWhiteSpace(report.previousGeneratedAtUtc))
+                builder.AppendLine($"- Previous snapshot: `{report.previousGeneratedAtUtc}`");
+
+            AppendEntryTable(
+                builder,
+                "Largest Bundles",
+                report.entries
+                    .Where(entry => entry != null && entry.isBundle)
+                    .OrderByDescending(entry => entry.bytes)
+                    .Take(15)
+                    .ToArray());
+
+            AppendEntryTable(
+                builder,
+                "Largest Changes",
+                report.entries
+                    .Where(entry => entry != null && entry.deltaBytes != 0)
+                    .OrderByDescending(entry => Math.Abs(entry.deltaBytes))
+                    .Take(20)
+                    .ToArray());
+
+            AppendEntryTable(
+                builder,
+                "All Published Artifacts",
+                report.entries
+                    .Where(entry => entry != null)
+                    .OrderByDescending(entry => entry.bytes)
+                    .ToArray());
+
+            return builder.ToString();
+        }
+
+        static void AppendEntryTable(StringBuilder builder, string title, AddressablesSizeEntrySnapshot[] entries)
+        {
+            builder.AppendLine();
+            builder.AppendLine($"## {title}");
+            builder.AppendLine();
+
+            if (entries == null || entries.Length == 0)
+            {
+                builder.AppendLine("- No entries.");
+                return;
+            }
+
+            builder.AppendLine("| Artifact | Current Size | Delta | Previous Size | Source |");
+            builder.AppendLine("|---|---:|---:|---:|---|");
+            foreach (AddressablesSizeEntrySnapshot entry in entries)
+            {
+                builder.AppendLine(
+                    $"| `{entry.displayName}` | `{FormatBytes(entry.bytes)}` | `{FormatSignedBytes(entry.deltaBytes)}` | `{FormatBytes(entry.previousBytes)}` | `{entry.relativePath}` |");
+            }
         }
 
         static string ExtractError(object result)
@@ -308,6 +622,15 @@ namespace CastleDefender.Editor
             return unitIndex == 0 ? $"{size:0} {units[unitIndex]}" : $"{size:0.##} {units[unitIndex]}";
         }
 
+        static string FormatSignedBytes(long bytes)
+        {
+            if (bytes == 0)
+                return "0 B";
+
+            string sign = bytes > 0 ? "+" : "-";
+            return sign + FormatBytes(Math.Abs(bytes));
+        }
+
         static string[] FindCatalogs(BuildTarget target)
         {
             string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -338,6 +661,39 @@ namespace CastleDefender.Editor
         public string PublishedPath { get; }
         public string Summary { get; }
         public string[] Catalogs { get; }
+    }
+
+    [Serializable]
+    public sealed class AddressablesSizeReportSnapshot
+    {
+        public string target;
+        public string generatedAtUtc;
+        public string previousGeneratedAtUtc;
+        public string publishedPath;
+        public long totalBytes;
+        public long totalDeltaBytes;
+        public long bundleBytes;
+        public long bundleDeltaBytes;
+        public int fileCount;
+        public int bundleCount;
+        public string largestBundleName;
+        public long largestBundleBytes;
+        public long largestBundleDeltaBytes;
+        public string jsonReportPath;
+        public string markdownReportPath;
+        public AddressablesSizeEntrySnapshot[] entries;
+    }
+
+    [Serializable]
+    public sealed class AddressablesSizeEntrySnapshot
+    {
+        public string relativePath;
+        public string logicalName;
+        public string displayName;
+        public bool isBundle;
+        public long bytes;
+        public long previousBytes;
+        public long deltaBytes;
     }
 }
 #endif

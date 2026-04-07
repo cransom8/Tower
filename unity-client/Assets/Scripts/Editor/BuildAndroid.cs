@@ -12,6 +12,8 @@ public static class BuildAndroid
     const string DefaultBundleOutputRelativePath = "../builds/android/forge-wars.aab";
     const string DefaultLocalApkOutputRelativePath = "../builds/android/forge-wars-local.apk";
     const string DefaultSecretsRelativePath = "../.local-secrets/forge-wars-upload.env";
+    const string BundleVersionCodeSettingName = "ANDROID_BUNDLE_VERSION_CODE";
+    const string AutoIncrementReleaseVersionCodeSettingName = "ANDROID_AUTO_INCREMENT_VERSION_CODE";
 
     [MenuItem("Castle Defender/Build/Build Android App Bundle")]
     public static void BuildReleaseMenu() => BuildRelease();
@@ -21,6 +23,24 @@ public static class BuildAndroid
 
     [MenuItem("Castle Defender/Build/Build Local Android APK (Skip Addressables)")]
     public static void BuildLocalApkWithoutRemoteContentMenu() => BuildLocalApk(buildRemoteContent: false);
+
+    public static AndroidBuildPreview PreviewReleaseBuild()
+    {
+        return PreviewConfiguredPackage(
+            buildAppBundle: true,
+            developmentBuild: false,
+            outputSettingNames: new[] { "ANDROID_BUILD_OUTPUT" },
+            defaultOutputRelativePath: DefaultBundleOutputRelativePath);
+    }
+
+    public static AndroidBuildPreview PreviewLocalApkBuild()
+    {
+        return PreviewConfiguredPackage(
+            buildAppBundle: false,
+            developmentBuild: true,
+            outputSettingNames: new[] { "ANDROID_LOCAL_BUILD_OUTPUT", "ANDROID_APK_OUTPUT" },
+            defaultOutputRelativePath: DefaultLocalApkOutputRelativePath);
+    }
 
     public static AndroidBuildResult BuildRelease(bool buildRemoteContent = true)
     {
@@ -46,6 +66,36 @@ public static class BuildAndroid
             outputSettingNames: new[] { "ANDROID_LOCAL_BUILD_OUTPUT", "ANDROID_APK_OUTPUT" },
             defaultOutputRelativePath: DefaultLocalApkOutputRelativePath,
             requireCustomKeystore: false);
+    }
+
+    static AndroidBuildPreview PreviewConfiguredPackage(
+        bool buildAppBundle,
+        bool developmentBuild,
+        IReadOnlyList<string> outputSettingNames,
+        string defaultOutputRelativePath)
+    {
+        string unityProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        var localSettings = LoadLocalSettings(unityProjectRoot);
+        string outputPath = ResolveOutputPath(unityProjectRoot, localSettings, outputSettingNames, defaultOutputRelativePath);
+
+        string bundleVersion = ReadSetting("ANDROID_BUNDLE_VERSION", localSettings);
+        if (string.IsNullOrWhiteSpace(bundleVersion))
+            bundleVersion = PlayerSettings.bundleVersion;
+
+        int versionCode = ResolveVersionCode(
+            outputPath,
+            buildAppBundle,
+            developmentBuild,
+            PlayerSettings.Android.bundleVersionCode,
+            localSettings);
+
+        string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android);
+        return new AndroidBuildPreview(
+            outputPath,
+            string.IsNullOrWhiteSpace(bundleVersion) ? "unset" : bundleVersion.Trim(),
+            versionCode,
+            string.IsNullOrWhiteSpace(applicationIdentifier) ? "not configured" : applicationIdentifier,
+            buildAppBundle);
     }
 
     static AndroidBuildResult BuildConfiguredPackage(
@@ -123,14 +173,12 @@ public static class BuildAndroid
             if (!string.IsNullOrWhiteSpace(bundleVersion))
                 PlayerSettings.bundleVersion = bundleVersion.Trim();
 
-            string versionCodeValue = ReadSetting("ANDROID_BUNDLE_VERSION_CODE", localSettings);
-            if (!string.IsNullOrWhiteSpace(versionCodeValue))
-            {
-                if (!int.TryParse(versionCodeValue, out int parsedVersionCode) || parsedVersionCode <= 0)
-                    throw new InvalidOperationException("ANDROID_BUNDLE_VERSION_CODE must be a positive integer.");
-
-                PlayerSettings.Android.bundleVersionCode = parsedVersionCode;
-            }
+            PlayerSettings.Android.bundleVersionCode = ResolveVersionCode(
+                outputPath,
+                buildAppBundle,
+                developmentBuild,
+                previousVersionCode,
+                localSettings);
 
             string buildOptionsLabel = buildAppBundle ? "Android App Bundle" : "local Android APK";
             string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android);
@@ -158,12 +206,21 @@ public static class BuildAndroid
                 throw new InvalidOperationException($"Android build failed: {report.summary.result}");
 
             string archivedOutputPath = ArchiveBuildOutput(outputPath, PlayerSettings.bundleVersion, PlayerSettings.Android.bundleVersionCode);
+            string nativeSymbolsPath = TryFindNativeSymbolsZip(
+                outputPath,
+                PlayerSettings.bundleVersion,
+                PlayerSettings.Android.bundleVersionCode);
             Debug.Log($"[BuildAndroid] Success. Output: {outputPath}");
             Debug.Log($"[BuildAndroid] Archived release: {archivedOutputPath}");
+            if (!string.IsNullOrWhiteSpace(nativeSymbolsPath))
+                Debug.Log($"[BuildAndroid] Native symbols zip: {nativeSymbolsPath}");
+            else if (buildAppBundle)
+                Debug.LogWarning("[BuildAndroid] Native symbols zip was not found next to the Android build output. Google Play will warn about missing native debug symbols for IL2CPP/native code builds.");
             Debug.Log($"[BuildAndroid] Version: {PlayerSettings.bundleVersion} ({PlayerSettings.Android.bundleVersionCode})");
             return new AndroidBuildResult(
                 outputPath,
                 archivedOutputPath,
+                nativeSymbolsPath,
                 PlayerSettings.bundleVersion,
                 PlayerSettings.Android.bundleVersionCode,
                 applicationIdentifier,
@@ -222,6 +279,27 @@ public static class BuildAndroid
     {
         if (!string.Equals(Path.GetExtension(outputPath), expectedExtension, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Android build output '{outputPath}' must use the '{expectedExtension}' extension.");
+    }
+
+    static string TryFindNativeSymbolsZip(string outputPath, string bundleVersion, int versionCode)
+    {
+        string outputDirectory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory) || !Directory.Exists(outputDirectory))
+            return null;
+
+        string baseName = Path.GetFileNameWithoutExtension(outputPath);
+        if (string.IsNullOrWhiteSpace(baseName))
+            return null;
+
+        string safeBundleVersion = SanitizeFileNameSegment(string.IsNullOrWhiteSpace(bundleVersion) ? "unknown" : bundleVersion.Trim());
+        string exactMatch = Path.Combine(outputDirectory, $"{baseName}-{safeBundleVersion}-v{versionCode}-IL2CPP.symbols.zip");
+        if (File.Exists(exactMatch))
+            return exactMatch;
+
+        string pattern = $"*v{versionCode}-IL2CPP.symbols.zip";
+        return Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
     }
 
     static void ConfigureSigning(IReadOnlyDictionary<string, string> localSettings, bool requireCustomKeystore)
@@ -292,6 +370,123 @@ public static class BuildAndroid
             : Path.GetFullPath(Path.Combine(projectRoot, pathToResolve));
     }
 
+    static int ResolveVersionCode(
+        string outputPath,
+        bool buildAppBundle,
+        bool developmentBuild,
+        int currentVersionCode,
+        IReadOnlyDictionary<string, string> localSettings)
+    {
+        bool hasConfiguredVersionCode = TryReadPositiveIntegerSetting(BundleVersionCodeSettingName, localSettings, out int configuredVersionCode);
+        bool autoIncrementReleaseVersionCode = ReadBooleanSetting(AutoIncrementReleaseVersionCodeSettingName, localSettings, defaultValue: false);
+
+        if (!buildAppBundle || developmentBuild || !autoIncrementReleaseVersionCode)
+            return hasConfiguredVersionCode ? configuredVersionCode : currentVersionCode;
+
+        int highestArchivedVersionCode = FindHighestArchivedVersionCode(outputPath);
+        bool hasReleaseHistory = hasConfiguredVersionCode || highestArchivedVersionCode > 0;
+        if (!hasReleaseHistory)
+            return currentVersionCode;
+
+        int versionFloor = currentVersionCode;
+        if (hasConfiguredVersionCode)
+            versionFloor = Math.Max(versionFloor, configuredVersionCode);
+        if (highestArchivedVersionCode > 0)
+            versionFloor = Math.Max(versionFloor, highestArchivedVersionCode);
+
+        int nextVersionCode = versionFloor + 1;
+        Debug.Log(
+            $"[BuildAndroid] Auto-incremented Android bundle version code to {nextVersionCode}. " +
+            $"Floor={versionFloor} Configured={(hasConfiguredVersionCode ? configuredVersionCode.ToString() : "unset")} " +
+            $"Archived={(highestArchivedVersionCode > 0 ? highestArchivedVersionCode.ToString() : "none")}");
+        return nextVersionCode;
+    }
+
+    static int FindHighestArchivedVersionCode(string outputPath)
+    {
+        string outputDirectory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            return 0;
+
+        string releasesDirectory = Path.Combine(outputDirectory, "releases");
+        if (!Directory.Exists(releasesDirectory))
+            return 0;
+
+        string extension = Path.GetExtension(outputPath);
+        if (string.IsNullOrWhiteSpace(extension))
+            return 0;
+
+        int highestVersionCode = 0;
+        foreach (string archivedFilePath in Directory.EnumerateFiles(releasesDirectory, $"*{extension}", SearchOption.TopDirectoryOnly))
+        {
+            if (!TryParseArchivedVersionCode(archivedFilePath, out int versionCode))
+                continue;
+
+            highestVersionCode = Math.Max(highestVersionCode, versionCode);
+        }
+
+        return highestVersionCode;
+    }
+
+    static bool TryParseArchivedVersionCode(string archivedFilePath, out int versionCode)
+    {
+        versionCode = 0;
+        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(archivedFilePath);
+        if (string.IsNullOrWhiteSpace(fileNameWithoutExtension))
+            return false;
+
+        int markerIndex = fileNameWithoutExtension.LastIndexOf("-code", StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+            return false;
+
+        string versionCodeValue = fileNameWithoutExtension.Substring(markerIndex + "-code".Length);
+        return int.TryParse(versionCodeValue, out versionCode) && versionCode > 0;
+    }
+
+    static bool TryReadPositiveIntegerSetting(
+        string name,
+        IReadOnlyDictionary<string, string> localSettings,
+        out int parsedValue)
+    {
+        parsedValue = 0;
+        string value = ReadSetting(name, localSettings);
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        if (!int.TryParse(value, out parsedValue) || parsedValue <= 0)
+            throw new InvalidOperationException($"{name} must be a positive integer.");
+
+        return true;
+    }
+
+    static bool ReadBooleanSetting(
+        string name,
+        IReadOnlyDictionary<string, string> localSettings,
+        bool defaultValue)
+    {
+        string value = ReadSetting(name, localSettings);
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultValue;
+
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "1":
+            case "true":
+            case "yes":
+            case "on":
+                return true;
+
+            case "0":
+            case "false":
+            case "no":
+            case "off":
+                return false;
+
+            default:
+                throw new InvalidOperationException($"{name} must be a boolean value such as true/false.");
+        }
+    }
+
     static string ReadSetting(string name, IReadOnlyDictionary<string, string> localSettings)
     {
         string value = Environment.GetEnvironmentVariable(name);
@@ -335,6 +530,7 @@ public sealed class AndroidBuildResult
     public AndroidBuildResult(
         string outputPath,
         string archivedOutputPath,
+        string nativeSymbolsPath,
         string bundleVersion,
         int versionCode,
         string applicationIdentifier,
@@ -342,6 +538,7 @@ public sealed class AndroidBuildResult
     {
         OutputPath = outputPath ?? throw new ArgumentNullException(nameof(outputPath));
         ArchivedOutputPath = archivedOutputPath ?? throw new ArgumentNullException(nameof(archivedOutputPath));
+        NativeSymbolsPath = nativeSymbolsPath;
         BundleVersion = bundleVersion ?? throw new ArgumentNullException(nameof(bundleVersion));
         VersionCode = versionCode;
         ApplicationIdentifier = applicationIdentifier ?? throw new ArgumentNullException(nameof(applicationIdentifier));
@@ -350,6 +547,30 @@ public sealed class AndroidBuildResult
 
     public string OutputPath { get; }
     public string ArchivedOutputPath { get; }
+    public string NativeSymbolsPath { get; }
+    public string BundleVersion { get; }
+    public int VersionCode { get; }
+    public string ApplicationIdentifier { get; }
+    public bool IsAppBundle { get; }
+}
+
+public sealed class AndroidBuildPreview
+{
+    public AndroidBuildPreview(
+        string outputPath,
+        string bundleVersion,
+        int versionCode,
+        string applicationIdentifier,
+        bool isAppBundle)
+    {
+        OutputPath = outputPath ?? throw new ArgumentNullException(nameof(outputPath));
+        BundleVersion = bundleVersion ?? throw new ArgumentNullException(nameof(bundleVersion));
+        VersionCode = versionCode;
+        ApplicationIdentifier = applicationIdentifier ?? throw new ArgumentNullException(nameof(applicationIdentifier));
+        IsAppBundle = isAppBundle;
+    }
+
+    public string OutputPath { get; }
     public string BundleVersion { get; }
     public int VersionCode { get; }
     public string ApplicationIdentifier { get; }

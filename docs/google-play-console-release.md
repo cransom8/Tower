@@ -97,6 +97,7 @@ This project uses remote Addressables content, so release order matters:
 3. Build the Android player.
 4. Test the Android build against the same production or staging content endpoints you intend to use.
 5. Upload the tested `.aab` to Play Console.
+6. Upload the matching native debug symbols zip for the same version code if Unity produced one.
 
 See also:
 
@@ -108,20 +109,23 @@ See also:
 2. Use the permanent package name that matches the Unity Android package name.
 3. Accept Play App Signing during first release setup.
 4. Upload the signed `.aab` to `Internal testing`.
-5. Add testers and verify:
+5. Upload the matching native debug symbols zip if Play shows the native-symbol warning.
+   - For this repo's recent builds, Unity generated files like `builds/android/forge-wars-1.0-v6-IL2CPP.symbols.zip`.
+   - Match the zip to the same Android version code as the uploaded bundle.
+6. Add testers and verify:
    - install works from Play
    - login works
    - remote content downloads successfully
    - gameplay scenes load
    - no missing materials, prefabs or portraits
-6. Complete store listing assets:
+7. Complete store listing assets:
    - app icon
    - phone screenshots
    - short description
    - full description
    - category/tags
-7. Complete all App content tasks until nothing critical is blocked.
-8. Roll out to production, ideally with managed publishing if launch timing matters.
+8. Complete all App content tasks until nothing critical is blocked.
+9. Roll out to production, ideally with managed publishing if launch timing matters.
 
 ## Release gates before production
 
@@ -180,6 +184,15 @@ Optional:
 - `GOOGLE_PLAY_USER_FRACTION` for staged rollout
 - `GOOGLE_PLAY_IN_APP_UPDATE_PRIORITY` from `0` to `5`
 - `GOOGLE_PLAY_CHANGES_NOT_SENT_FOR_REVIEW`
+
+Android build note:
+
+- Release AAB builds can auto-increment the Play version code when `ANDROID_AUTO_INCREMENT_VERSION_CODE=true` is present in `.local-secrets/forge-wars-upload.env`.
+- `ANDROID_BUNDLE_VERSION_CODE` acts as the floor for that increment, and archived files in `builds/android/releases` are also considered.
+- Example: if the env file says `5` and the latest archived bundle is `forge-wars-v1.0-code5.aab`, the next release build will use version code `6`.
+- Local APK builds keep their current/manual version code behavior.
+- Unity IL2CPP builds in this repo also emit a native debug symbols zip next to the AAB, for example `builds/android/forge-wars-1.0-v6-IL2CPP.symbols.zip`.
+- Google Play's "missing deobfuscation file" warning can be ignored when Android minification is off. In this repo, `AndroidMinifyRelease` is currently disabled in `unity-client/ProjectSettings/ProjectSettings.asset`, so there is no ProGuard/R8 mapping file to upload for the current build.
 
 ### Example
 

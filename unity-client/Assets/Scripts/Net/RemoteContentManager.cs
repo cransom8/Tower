@@ -62,6 +62,8 @@ namespace CastleDefender.Net
         public string LastError { get; private set; }
         public float LastProgress { get; private set; }
         public string LastStatus { get; private set; } = "";
+        public bool RequiredGameBootstrapNeedsDownload { get; private set; }
+        public long RequiredGameBootstrapDownloadBytes { get; private set; }
         public CriticalPreloadFailureStage LastFailureStage { get; private set; }
         public bool HasRetryableFailure => LastFailureStage != CriticalPreloadFailureStage.None;
         public string LastAddressablesCallError { get; private set; }
@@ -259,6 +261,7 @@ namespace CastleDefender.Net
             }
 
             bool bootstrapAlreadyMarked = HasRequiredGameBootstrapMarker();
+            ResetRequiredGameBootstrapDownloadTracking();
             if (HasCompletedRequiredGameBootstrap && !forceRefreshManifest)
             {
                 ReportProgress(
@@ -278,9 +281,7 @@ namespace CastleDefender.Net
 
             try
             {
-                string introStatus = bootstrapAlreadyMarked
-                    ? "Checking downloaded game content..."
-                    : "One-time download: preparing required game content...";
+                const string introStatus = "Checking downloaded game content...";
                 ReportProgress(0f, introStatus, onProgress);
 
                 yield return EnsureManifestForSession((progress, status) =>
@@ -389,9 +390,11 @@ namespace CastleDefender.Net
                 PlayerPrefs.Save();
                 ReportProgress(
                     1f,
-                    bootstrapAlreadyMarked
+                    RequiredGameBootstrapNeedsDownload
+                        ? "One-time game download complete. Future sessions can reuse this content cache."
+                        : bootstrapAlreadyMarked
                         ? "Required game content verified."
-                        : "One-time game download complete. Future sessions can reuse this content cache.",
+                        : "Required game content prepared and verified.",
                     onProgress);
             }
             finally
@@ -840,6 +843,7 @@ namespace CastleDefender.Net
                     continue;
                 }
 
+                NoteRequiredGameBootstrapDownloadBytes(Math.Max(0L, sizeHandle.Result));
                 remainingSceneAddresses.Add(address);
 
                 if (sizeHandle.IsValid())
@@ -989,6 +993,7 @@ namespace CastleDefender.Net
                 else
                 {
                     requests[i].DownloadSizeBytes = Math.Max(0L, sizeHandle.Result);
+                    NoteRequiredGameBootstrapDownloadBytes(requests[i].DownloadSizeBytes);
                     totalDownloadBytes += requests[i].DownloadSizeBytes;
                 }
 
@@ -1515,55 +1520,105 @@ namespace CastleDefender.Net
                 }
 
                 string label = $"Preparing environment: {normalizedAddress}";
-                AsyncOperationHandle downloadHandle;
+                AsyncOperationHandle<long> sizeHandle;
                 try
                 {
-                    downloadHandle = Addressables.DownloadDependenciesAsync(normalizedAddress, false);
+                    sizeHandle = Addressables.GetDownloadSizeAsync(normalizedAddress);
                 }
                 catch (Exception ex)
                 {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    LastError = $"Failed to queue remote environment '{normalizedAddress}': {ex.Message}";
-                    ReportProgress(1f, "Environment download failed.", onProgress);
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    LastError = $"Could not estimate remote environment download size for '{normalizedAddress}': {ex.Message}";
+                    ReportProgress(1f, "Environment download sizing failed.", onProgress);
                     yield break;
                 }
 
-                if (!downloadHandle.IsValid())
+                if (!sizeHandle.IsValid())
                 {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    LastError = $"Failed to queue remote environment '{normalizedAddress}' because Addressables returned an invalid handle.";
-                    ReportProgress(1f, "Environment download failed.", onProgress);
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    LastError = $"Could not estimate remote environment download size for '{normalizedAddress}' because Addressables returned an invalid handle.";
+                    ReportProgress(1f, "Environment download sizing failed.", onProgress);
                     yield break;
                 }
 
-                while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                yield return sizeHandle;
+                if (!sizeHandle.IsValid())
                 {
-                    ReportProgress(Mathf.Lerp(0.15f, 0.85f, Mathf.Clamp01(downloadHandle.PercentComplete)), label, onProgress);
-                    yield return null;
-                }
-
-                if (!downloadHandle.IsValid())
-                {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
-                    LastError = $"Failed to download remote environment '{normalizedAddress}' because the Addressables handle became invalid.";
-                    ReportProgress(1f, "Environment download failed.", onProgress);
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
+                    LastError = $"Remote environment download size lookup for '{normalizedAddress}' became invalid before completion.";
+                    ReportProgress(1f, "Environment download sizing failed.", onProgress);
                     yield break;
                 }
 
-                if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
                 {
-                    LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                    LastFailureStage = CriticalPreloadFailureStage.DownloadSizing;
                     LastError = BuildHandleFailureMessage(
-                        $"Failed to download remote environment '{normalizedAddress}'.",
-                        downloadHandle);
+                        $"Could not estimate remote environment download size for '{normalizedAddress}'.",
+                        sizeHandle);
+                    if (sizeHandle.IsValid())
+                        Addressables.Release(sizeHandle);
+                    ReportProgress(1f, "Environment download sizing failed.", onProgress);
+                    yield break;
+                }
+
+                long environmentDownloadBytes = Math.Max(0L, sizeHandle.Result);
+                NoteRequiredGameBootstrapDownloadBytes(environmentDownloadBytes);
+                if (sizeHandle.IsValid())
+                    Addressables.Release(sizeHandle);
+
+                if (environmentDownloadBytes > 0L)
+                {
+                    AsyncOperationHandle downloadHandle;
+                    try
+                    {
+                        downloadHandle = Addressables.DownloadDependenciesAsync(normalizedAddress, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        LastError = $"Failed to queue remote environment '{normalizedAddress}': {ex.Message}";
+                        ReportProgress(1f, "Environment download failed.", onProgress);
+                        yield break;
+                    }
+
+                    if (!downloadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        LastError = $"Failed to queue remote environment '{normalizedAddress}' because Addressables returned an invalid handle.";
+                        ReportProgress(1f, "Environment download failed.", onProgress);
+                        yield break;
+                    }
+
+                    while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                    {
+                        ReportProgress(Mathf.Lerp(0.15f, 0.85f, Mathf.Clamp01(downloadHandle.PercentComplete)), label, onProgress);
+                        yield return null;
+                    }
+
+                    if (!downloadHandle.IsValid())
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        LastError = $"Failed to download remote environment '{normalizedAddress}' because the Addressables handle became invalid.";
+                        ReportProgress(1f, "Environment download failed.", onProgress);
+                        yield break;
+                    }
+
+                    if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                    {
+                        LastFailureStage = CriticalPreloadFailureStage.ContentDownload;
+                        LastError = BuildHandleFailureMessage(
+                            $"Failed to download remote environment '{normalizedAddress}'.",
+                            downloadHandle);
+                        if (downloadHandle.IsValid())
+                            Addressables.Release(downloadHandle);
+                        ReportProgress(1f, "Environment download failed.", onProgress);
+                        yield break;
+                    }
+
                     if (downloadHandle.IsValid())
                         Addressables.Release(downloadHandle);
-                    ReportProgress(1f, "Environment download failed.", onProgress);
-                    yield break;
                 }
-
-                if (downloadHandle.IsValid())
-                    Addressables.Release(downloadHandle);
 
                 AsyncOperationHandle<GameObject> loadHandle;
                 try
@@ -1738,52 +1793,98 @@ namespace CastleDefender.Net
                         yield break;
                     }
 
-                    AsyncOperationHandle downloadHandle;
+                    AsyncOperationHandle<long> sizeHandle;
                     try
                     {
-                        downloadHandle = Addressables.DownloadDependenciesAsync(address, false);
+                        sizeHandle = Addressables.GetDownloadSizeAsync(address);
                     }
                     catch (Exception ex)
                     {
-                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}': {ex.Message}");
-                        ReportProgress(1f, "Portrait download failed.", onProgress);
+                        RecordPortraitFailure(CriticalPreloadFailureStage.DownloadSizing, $"Could not estimate portrait download size for '{key}': {ex.Message}");
+                        ReportProgress(1f, "Portrait download sizing failed.", onProgress);
                         yield break;
                     }
 
-                    if (!downloadHandle.IsValid())
+                    if (!sizeHandle.IsValid())
                     {
-                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}' because Addressables returned an invalid handle.");
-                        ReportProgress(1f, "Portrait download failed.", onProgress);
+                        RecordPortraitFailure(CriticalPreloadFailureStage.DownloadSizing, $"Could not estimate portrait download size for '{key}' because Addressables returned an invalid handle.");
+                        ReportProgress(1f, "Portrait download sizing failed.", onProgress);
                         yield break;
                     }
 
-                    while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                    yield return sizeHandle;
+                    if (!sizeHandle.IsValid())
                     {
-                        float aggregateProgress = (completed + Mathf.Clamp01(downloadHandle.PercentComplete)) / portraitRequests.Count;
-                        ReportProgress(Mathf.Lerp(0.15f, 0.85f, aggregateProgress), label, onProgress);
-                        yield return null;
-                    }
-
-                    if (!downloadHandle.IsValid())
-                    {
-                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to download portrait content '{key}' because the Addressables handle became invalid.");
-                        ReportProgress(1f, "Portrait download failed.", onProgress);
+                        RecordPortraitFailure(CriticalPreloadFailureStage.DownloadSizing, $"Portrait download size lookup for '{key}' became invalid before completion.");
+                        ReportProgress(1f, "Portrait download sizing failed.", onProgress);
                         yield break;
                     }
 
-                    if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                    if (sizeHandle.Status != AsyncOperationStatus.Succeeded)
                     {
-                        RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, BuildHandleFailureMessage(
-                            $"Failed to download portrait content '{key}'.",
-                            downloadHandle));
+                        RecordPortraitFailure(CriticalPreloadFailureStage.DownloadSizing, BuildHandleFailureMessage(
+                            $"Could not estimate portrait download size for '{key}'.",
+                            sizeHandle));
+                        if (sizeHandle.IsValid())
+                            Addressables.Release(sizeHandle);
+                        ReportProgress(1f, "Portrait download sizing failed.", onProgress);
+                        yield break;
+                    }
+
+                    long portraitDownloadBytes = Math.Max(0L, sizeHandle.Result);
+                    NoteRequiredGameBootstrapDownloadBytes(portraitDownloadBytes);
+                    if (sizeHandle.IsValid())
+                        Addressables.Release(sizeHandle);
+
+                    if (portraitDownloadBytes > 0L)
+                    {
+                        AsyncOperationHandle downloadHandle;
+                        try
+                        {
+                            downloadHandle = Addressables.DownloadDependenciesAsync(address, false);
+                        }
+                        catch (Exception ex)
+                        {
+                            RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}': {ex.Message}");
+                            ReportProgress(1f, "Portrait download failed.", onProgress);
+                            yield break;
+                        }
+
+                        if (!downloadHandle.IsValid())
+                        {
+                            RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to queue portrait content '{key}' because Addressables returned an invalid handle.");
+                            ReportProgress(1f, "Portrait download failed.", onProgress);
+                            yield break;
+                        }
+
+                        while (downloadHandle.IsValid() && !downloadHandle.IsDone)
+                        {
+                            float aggregateProgress = (completed + Mathf.Clamp01(downloadHandle.PercentComplete)) / portraitRequests.Count;
+                            ReportProgress(Mathf.Lerp(0.15f, 0.85f, aggregateProgress), label, onProgress);
+                            yield return null;
+                        }
+
+                        if (!downloadHandle.IsValid())
+                        {
+                            RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, $"Failed to download portrait content '{key}' because the Addressables handle became invalid.");
+                            ReportProgress(1f, "Portrait download failed.", onProgress);
+                            yield break;
+                        }
+
+                        if (downloadHandle.Status != AsyncOperationStatus.Succeeded)
+                        {
+                            RecordPortraitFailure(CriticalPreloadFailureStage.ContentDownload, BuildHandleFailureMessage(
+                                $"Failed to download portrait content '{key}'.",
+                                downloadHandle));
+                            if (downloadHandle.IsValid())
+                                Addressables.Release(downloadHandle);
+                            ReportProgress(1f, "Portrait download failed.", onProgress);
+                            yield break;
+                        }
+
                         if (downloadHandle.IsValid())
                             Addressables.Release(downloadHandle);
-                        ReportProgress(1f, "Portrait download failed.", onProgress);
-                        yield break;
                     }
-
-                    if (downloadHandle.IsValid())
-                        Addressables.Release(downloadHandle);
 
                     AsyncOperationHandle<Texture2D> loadHandle;
                     try
@@ -3261,6 +3362,22 @@ namespace CastleDefender.Net
             LastProgress = Mathf.Clamp01(progress);
             LastStatus = status ?? "";
             callback?.Invoke(LastProgress, LastStatus);
+        }
+
+        void ResetRequiredGameBootstrapDownloadTracking()
+        {
+            RequiredGameBootstrapNeedsDownload = false;
+            RequiredGameBootstrapDownloadBytes = 0L;
+        }
+
+        void NoteRequiredGameBootstrapDownloadBytes(long downloadSizeBytes)
+        {
+            long normalizedBytes = Math.Max(0L, downloadSizeBytes);
+            if (normalizedBytes <= 0L)
+                return;
+
+            RequiredGameBootstrapNeedsDownload = true;
+            RequiredGameBootstrapDownloadBytes += normalizedBytes;
         }
 
         sealed class DownloadRequest

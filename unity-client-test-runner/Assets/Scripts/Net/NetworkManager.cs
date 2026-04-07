@@ -3,7 +3,7 @@
 // SETUP (Unity Inspector):
 //   1. Create empty GameObject "NetworkManager" in Lobby scene.
 //   2. Attach this script.
-//   3. Set ServerUrl to Railway URL or http://localhost:3000
+//   3. Set ServerUrl to the production URL or http://localhost:3000
 //
 // WebGL builds: uses native browser Socket.IO via SocketIOBridge.jslib.
 // Editor / Standalone: uses SocketIOUnity (itisnajim/SocketIOUnity).
@@ -26,7 +26,7 @@ namespace CastleDefender.Net
         // ── Inspector ─────────────────────────────────────────────────────────
         [Header("Connection")]
         [Tooltip("Production server URL (used in builds and WebGL)")]
-        public string ServerUrl = "https://castle-defender-production.up.railway.app";
+        public string ServerUrl = "https://app.ransomforge.com";
 
         [Tooltip("Server URL used when running in the Unity Editor (overrides ServerUrl)")]
         public string EditorServerUrl = "http://127.0.0.1:3000";
